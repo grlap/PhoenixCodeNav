@@ -190,30 +190,69 @@ public sealed partial class NavigationTools
             }
         }
 
-        object Node(SymbolHit s) => new
+        // includeMembers=false keeps only namespace/type nodes (the depth-1 view);
+        // true adds member leaves (methods, properties, ...) — the depth-2 view.
+        object Node(SymbolHit s, bool includeMembers)
         {
-            s.Name,
-            s.Kind,
-            s.Signature,
-            s.Accessibility,
-            s.StartLine,
-            s.EndLine,
-            isPartial = s.IsPartial ? true : (bool?)null,
-            attributes = s.AttrMarkers,
-            members = depth >= 2 && children.TryGetValue(s.Id, out var kids)
-                ? kids.Select(Node).ToList()
-                : depth == 1 && children.TryGetValue(s.Id, out var typeKids)
-                    ? typeKids.Where(k => TypeKinds.Contains(k.Kind) || k.Kind == "namespace").Select(Node).ToList()
-                    : null,
-        };
+            List<object>? memberNodes = null;
+            if (children.TryGetValue(s.Id, out var kids))
+            {
+                var kept = kids
+                    .Where(k => includeMembers || TypeKinds.Contains(k.Kind) || k.Kind == "namespace")
+                    .Select(k => Node(k, includeMembers))
+                    .ToList();
+                if (kept.Count > 0) memberNodes = kept;
+            }
+            return new
+            {
+                s.Name,
+                s.Kind,
+                s.Signature,
+                s.Accessibility,
+                s.StartLine,
+                s.EndLine,
+                isPartial = s.IsPartial ? true : (bool?)null,
+                attributes = s.AttrMarkers,
+                members = memberNodes,
+            };
+        }
 
         var meta = Meta.From(_manager.Health(), "indexed", "syntax");
-        return Json.WithListBudget(roots, (items, truncated) => new
+        bool generated = rows[0].FileIsGenerated;
+
+        string BuildNested(bool includeMembers, bool truncated) => Json.Serialize(new
         {
             path,
-            isGenerated = rows[0].FileIsGenerated,
-            symbols = items.Select(Node),
+            isGenerated = generated,
+            symbols = roots.Select(r => Node(r, includeMembers)).ToList(),
             truncated,
+            meta,
+        });
+
+        // The nested tree lives under one namespace root, so trimming the top-level list
+        // cannot bound it. Degrade instead: requested depth -> types-only -> flat capped.
+        string nested = BuildNested(includeMembers: depth >= 2, truncated: false);
+        if (nested.Length <= Json.HardBudgetBytes) return nested;
+
+        if (depth >= 2)
+        {
+            string typesOnly = BuildNested(includeMembers: false, truncated: true);
+            if (typesOnly.Length <= Json.HardBudgetBytes) return typesOnly;
+        }
+
+        // Pathological (thousands of types in one file): flatten namespace/type nodes to
+        // a bounded row list and let the list budget converge.
+        var flat = rows
+            .Where(r => r.Kind == "namespace" || TypeKinds.Contains(r.Kind))
+            .Select(r => (object)new { r.Name, r.Kind, ns = r.Ns, r.StartLine, r.EndLine })
+            .ToList();
+        return Json.WithListBudget(flat, (items, _) => new
+        {
+            path,
+            isGenerated = generated,
+            symbols = items,
+            truncated = true,
+            note = "File has too many top-level declarations for a full outline; showing a bounded flat list.",
             meta,
         });
     }
@@ -230,8 +269,13 @@ public sealed partial class NavigationTools
         path = NormalizePath(path);
         maxBytes = Math.Clamp(maxBytes, 256, Json.HardBudgetBytes);
 
+        // Reject paths that escape the workspace root before touching the filesystem.
+        if (!CodeNav.Core.WorkspacePaths.TryResolveInside(_manager.WorkspaceRoot, path, out string full))
+        {
+            return Json.Serialize(new { error = "path_outside_workspace", path, meta = Meta.From(_manager.Health(), "indexed", "text") });
+        }
+
         string freshness = "live";
-        string full = System.IO.Path.Combine(_manager.WorkspaceRoot, path.Replace('/', System.IO.Path.DirectorySeparatorChar));
         string? content = null;
         if (File.Exists(full))
         {
@@ -239,6 +283,8 @@ public sealed partial class NavigationTools
         }
         if (content is null)
         {
+            // Index fallback is keyed by relative path, so it can only ever return
+            // in-workspace content — a contained path that is simply not on disk.
             using var q = _manager.OpenQueries();
             content = q.ContentByPath(path);
             freshness = "index";
@@ -793,5 +839,5 @@ public sealed partial class NavigationTools
             ? null
             : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
-    private static string NormalizePath(string path) => path.Replace('\\', '/').TrimStart('/');
+    private static string NormalizePath(string path) => CodeNav.Core.WorkspacePaths.Normalize(path);
 }

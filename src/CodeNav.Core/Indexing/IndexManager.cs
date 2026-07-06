@@ -32,7 +32,12 @@ public sealed class IndexManager : IDisposable
     private Task? _pump;
     private volatile string _state = "missing";
     private volatile string? _error;
-    private string? _lastRefreshUtc;
+    // Index metadata is cached here so Health() (called on tool threads) never touches
+    // the single write connection, which only the opening thread and the pump may use.
+    // Read once at open, then _lastRefreshUtc is updated by the pump after each refresh.
+    private volatile string? _indexVersion;
+    private volatile string? _indexedAtUtc;
+    private volatile string? _lastRefreshUtc;
 
     public IndexManager(string workspaceRoot, string? dbPath = null, Action<string>? log = null)
     {
@@ -60,17 +65,22 @@ public sealed class IndexManager : IDisposable
                     _log($"Building index for {_workspaceRoot} ...");
                     var result = IndexBuilder.Build(_workspaceRoot, _dbPath, _log);
                     _log($"Index built: {result.CsFiles} files, {result.Symbols} symbols in {result.TotalTime.TotalSeconds:F0}s");
-                    _store = new IndexStore(_dbPath, createNew: false);
+                    var store = new IndexStore(_dbPath, createNew: false);
+                    CacheMeta(store);          // read meta before publishing the store
+                    _store = store;
                     _state = "ready";
+                    StartWatcher();
                 }
                 else
                 {
-                    _store = new IndexStore(_dbPath, createNew: false);
+                    var store = new IndexStore(_dbPath, createNew: false);
+                    CacheMeta(store);          // read meta before publishing the store or queuing work
+                    _store = store;
                     _state = "ready";
+                    StartWatcher();
                     _log("Existing index opened; running startup freshness sweep ...");
                     _refreshQueue.Writer.TryWrite(null); // detect-all
                 }
-                StartWatcher();
             }
             catch (Exception ex)
             {
@@ -79,6 +89,15 @@ public sealed class IndexManager : IDisposable
                 _log($"Index startup failed: {ex}");
             }
         });
+    }
+
+    /// <summary>Reads immutable-after-build index metadata into cached fields. Must be
+    /// called on the thread that owns <paramref name="store"/>, before it is published.</summary>
+    private void CacheMeta(IndexStore store)
+    {
+        _indexVersion = store.GetMeta("index_version");
+        _indexedAtUtc = store.GetMeta("indexed_at_utc");
+        _lastRefreshUtc ??= store.GetMeta("last_refresh_utc");
     }
 
     private void StartWatcher()
@@ -126,20 +145,17 @@ public sealed class IndexManager : IDisposable
 
     public IndexHealth Health()
     {
-        string? version = null, indexedAt = null;
+        // Reads only cached fields + filesystem — never the write connection, so it is
+        // safe to call from tool threads while the pump writes on the store.
         long dbBytes = 0;
-        if (File.Exists(_dbPath))
+        try
         {
-            dbBytes = new FileInfo(_dbPath).Length;
-            if (_store is { } store)
-            {
-                version = store.GetMeta("index_version");
-                indexedAt = store.GetMeta("indexed_at_utc");
-                _lastRefreshUtc ??= store.GetMeta("last_refresh_utc");
-            }
+            if (File.Exists(_dbPath)) dbBytes = new FileInfo(_dbPath).Length;
         }
+        catch (IOException) { /* transient; report 0 */ }
+
         return new IndexHealth(
-            _state, version, indexedAt, _lastRefreshUtc,
+            _state, _indexVersion, _indexedAtUtc, _lastRefreshUtc,
             _watcher?.PendingCount ?? 0, _error, dbBytes, _workspaceRoot, _dbPath);
     }
 

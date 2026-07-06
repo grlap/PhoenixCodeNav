@@ -60,7 +60,9 @@ public static class DeltaRefresher
         {
             foreach (var rel in candidates)
             {
-                string full = Path.Combine(workspaceRoot, rel.Replace('/', Path.DirectorySeparatorChar));
+                // Reject caller-supplied paths (e.g. from refresh_index) that escape the
+                // workspace root, so external files can never be read into the index.
+                if (!WorkspacePaths.TryResolveInside(workspaceRoot, rel, out string full)) continue;
                 bool exists = File.Exists(full);
                 bool known = stored.TryGetValue(rel, out var old);
                 string lang = LangOf(rel);
