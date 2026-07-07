@@ -78,6 +78,22 @@ public sealed partial class NavigationTools
         using var q = _manager.OpenQueries();
         var stats = q.Overview();
         var h = _manager.Health();
+
+        // Live HEAD lookup (occasional call — not in the per-response meta). When it differs
+        // from the indexed commit, a branch switch / pull is still reconciling; indexStatus
+        // already reports the transient lag.
+        string? headCommit = _manager.CurrentHeadCommit();
+        object? git = h.IndexedCommit is null && headCommit is null
+            ? null
+            : new
+            {
+                indexedCommit = h.IndexedCommit,
+                indexedBranch = h.IndexedBranch,
+                headCommit,
+                headMatchesIndex = headCommit is not null && h.IndexedCommit is not null
+                    && string.Equals(headCommit, h.IndexedCommit, StringComparison.OrdinalIgnoreCase),
+            };
+
         return Json.Serialize(new
         {
             workspaceRoot = h.WorkspaceRoot,
@@ -94,6 +110,7 @@ public sealed partial class NavigationTools
             symbols = stats.Symbols,
             generatedFiles = stats.GeneratedFiles,
             targetFrameworks = stats.TfmBreakdown,
+            git,
             meta = Meta.From(h, "indexed", "text"),
         });
     }
@@ -125,7 +142,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Ranked full-text search over indexed sources and configs. Each hit is graded: matchKind='precise' means the line contains ALL query tokens (contiguous or scattered); 'partial' means only some tokens (a lead — the query's tokens co-occur in the file but not on one line). Precise hits rank first. Right for literals, config keys, error messages, comments. For code facts prefer search_symbol/definition/references.")]
+    [Description("Ranked full-text search over the indexed C# surface only (.cs plus .csproj/.sln/config). Does NOT see .sql, .js, or other file types, and is token-based, not regex — use grep for those and for regex/alternation. Hits graded 'precise' (all tokens on the line) or 'partial' (some; a lead). For literals, config keys, error messages, comments. For code identifiers prefer search_symbol/definition/references.")]
     public string SearchText(
         [Description("Text to find. Multi-word queries are AND-ed by token; a line with all tokens is 'precise'.")] string query,
         [Description("Restrict to paths matching this glob (e.g. 'src/Billing/**').")] string? pathGlob = null,

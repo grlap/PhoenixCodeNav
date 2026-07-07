@@ -72,9 +72,13 @@ A hybrid: **watch git metadata files for the trigger, use the git CLI for the co
 `.git/` is currently excluded from both the scanner and the `WorkspaceWatcher`. Add a
 **separate, narrow** `GitWatcher` on the git metadata directory:
 
-- Watch: `HEAD` (branch switch, commit), `packed-refs` and `refs/heads/**` (pull, fetch,
-  merge, commit), `MERGE_HEAD` / `ORIG_HEAD` (merge/rebase/reset markers).
-- Ignore: `index`, `index.lock`, `objects/**`, `logs/**` (pure noise).
+- Watch (git dir top level, non-recursive): `HEAD`, `packed-refs`, `MERGE_HEAD`, `ORIG_HEAD`,
+  `FETCH_HEAD` — branch switch, fast-forward pull, merge/rebase/reset markers.
+- Watch (also): `logs/HEAD` — the HEAD reflog, appended on *every* HEAD move, including a plain
+  `git commit` or cherry-pick that only advances a nested loose branch ref (`refs/heads/<branch>`),
+  which a top-level-only watch cannot see. Requires reflogs (git's default for non-bare repos).
+- Ignore: `index`, `index.lock`, `objects/**`, and the rest of `logs/**` / loose `refs/**` (the
+  per-ref reflogs and loose refs are covered indirectly by `logs/HEAD` + `packed-refs`).
 - **`.git`-as-a-file** (linked worktrees, submodules): `.git` may be a file
   `gitdir: <path>`; resolve it to locate the real metadata dir. If it can't be resolved,
   disable the git watch and stay FSW-only.
