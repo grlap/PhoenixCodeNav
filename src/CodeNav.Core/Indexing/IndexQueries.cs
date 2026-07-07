@@ -544,6 +544,9 @@ public sealed class IndexQueries : IDisposable
     /// <summary>Types whose base list textually mentions the given name (heuristic implementations).</summary>
     public List<SymbolHit> ImplementationCandidates(string name, int limit)
     {
+        // An empty name would make the LIKE pattern collapse to '%: %' and match every type that has
+        // any base list — never run that catch-all.
+        if (string.IsNullOrEmpty(name)) return new();
         string esc = EscapeLike(name);
         return Query(
             $"""

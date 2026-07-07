@@ -116,6 +116,33 @@ public class SemanticTests : IClassFixture<IndexFixture>, IDisposable
         }
     }
 
+    // Coverage fix: an interface the index syntactically knows is implemented must never come back
+    // empty — either semantic covered the implementers (seeded), or the tool falls back to the
+    // index base-list implementers rather than returning an empty list.
+    [Fact]
+    public void ImplementationsDoesNotReturnEmptyWhenIndexKnowsImplementers()
+    {
+        using var q = _manager.OpenQueries();
+        var iface = q.SearchSymbols("I", "prefix", new[] { "interface" }, 100)
+            .FirstOrDefault(i => q.ImplementationCandidates(i.Name, 5).Count > 0);
+        Assert.True(iface is not null, "fixture has no interface with base-list implementers to exercise the case");
+
+        var tools = new NavigationTools(_manager, _semantic);
+        var json = JsonDocument.Parse(tools.Implementations(name: iface!.Name, timeoutMs: 60000)).RootElement;
+        Assert.True(json.GetProperty("implementations").GetArrayLength() > 0,
+            $"implementations({iface.Name}) was empty despite indexed base-list implementers");
+    }
+
+    // Guards the implementations empty-name fallback (position mode with no resolvable name): an
+    // empty name must not collapse the base-list LIKE into the '%: %' catch-all matching every type.
+    [Fact]
+    public void ImplementationCandidatesRejectsEmptyName()
+    {
+        using var q = _manager.OpenQueries();
+        Assert.Empty(q.ImplementationCandidates("", 50));
+        Assert.NotEmpty(q.ImplementationCandidates("IClock", 50)); // a real interface still matches
+    }
+
     [Fact]
     public void ReferencesToolFallsBackToIndexedWhenAskedFor()
     {

@@ -797,7 +797,7 @@ public sealed partial class NavigationTools
             var (result, reason) = _semantic
                 .ImplementationsAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
                 .GetAwaiter().GetResult();
-            if (result is not null)
+            if (result is { Implementations.Count: > 0 })
             {
                 var impls = result.Implementations; // already ranked concrete-first by the semantic layer
                 int concreteCount = impls.Count(r => !r.Declaration.IsAbstract);
@@ -809,6 +809,7 @@ public sealed partial class NavigationTools
                     {
                         symbol = SemanticSymbolJson(r.Declaration),
                         isAbstract = r.Declaration.IsAbstract ? true : (bool?)null, // omitted when concrete
+                        rank = r.Declaration.IsAbstract ? "abstract" : "concrete", // make the ranking legible to the model
                         via = r.Via, // the base type that introduces the interface, when implemented indirectly
                     }),
                     concreteCount,
@@ -820,18 +821,39 @@ public sealed partial class NavigationTools
                     coverage = CoverageJson(result.Coverage),
                     truncated,
                     hint = concreteCount == 1
-                        ? "One concrete implementation — likely the runtime target. Ranked concrete-first; isAbstract marks non-instantiable scaffolding."
+                        ? "One concrete implementation — likely the runtime target. Ranked concrete-first; isAbstract/rank mark non-instantiable scaffolding."
                         : null,
                     meta = meta0,
                 });
             }
-            failReason = reason;
+            // Semantic RESOLVED the symbol but found no implementers, OR it could not resolve. Be
+            // honest about which: bounded coverage (raising maxProjects may help) vs genuinely none.
+            failReason = result is null ? reason
+                : (result.Coverage.LoadedProjects < result.Coverage.RequestedProjects || result.Coverage.FailedProjects.Count > 0)
+                    ? "candidate_cluster_bounded"
+                    : "no_semantic_implementers";
         }
 
         // Heuristic fallback: types whose base list textually mentions the name — a naming
         // guess, not a compiler fact, so it is labeled confidence 'heuristic'.
         using var q = _manager.OpenQueries();
         string lookupName = name ?? hint ?? "";
+        // Position mode (path+line, no name): derive the name from the cursor so the fallback has a
+        // target — an empty name would otherwise match every type that has a base list.
+        if (lookupName.Length == 0 && path is not null)
+        {
+            var chain = q.SymbolAt(NormalizePath(path), line);
+            lookupName = chain.Count > 0 ? chain[0].Name : "";
+        }
+        if (lookupName.Length == 0)
+        {
+            return Json.Serialize(new
+            {
+                error = "symbol_not_resolved",
+                partialReason = failReason,
+                meta = Meta.From(_manager.Health(), "heuristic", "syntax"),
+            });
+        }
         var heuristic = q.ImplementationCandidates(lookupName, 50);
         var meta = Meta.From(_manager.Health(), "heuristic", "syntax");
         return Json.WithListBudget(heuristic, (items, truncated) => new

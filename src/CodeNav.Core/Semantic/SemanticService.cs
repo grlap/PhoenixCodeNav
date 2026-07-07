@@ -183,8 +183,21 @@ public sealed partial class SemanticService : IDisposable
             var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
             if (symbolA is null || owningProject is null) return (null, "symbol_not_resolved");
 
+            // Seed the scan-set with the projects that syntactically implement/derive the type (base-list
+            // match in the index). Without this a cross-project interface — declared in a core project,
+            // implemented in leaf projects — resolves to an empty list because the implementer projects
+            // never entered the semantic cluster (they name the interface too rarely to rank in).
+            List<string> implementerSeeds;
+            using (var q = _manager.OpenQueries())
+            {
+                implementerSeeds = q.ImplementationCandidates(symbolA.Name, 100)
+                    .SelectMany(c => q.ProjectsContaining(c.FilePath).Select(p => p.Name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
             var (solution, symbol, coverage, _) = await LoadScanSetAndResolveAsync(
-                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token).ConfigureAwait(false);
+                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token, implementerSeeds).ConfigureAwait(false);
             if (symbol is null) return (null, "symbol_not_resolved_in_scope");
 
             var results = new List<SemanticImplementation>();
@@ -352,7 +365,7 @@ public sealed partial class SemanticService : IDisposable
     /// </summary>
     private async Task<(Solution Solution, ISymbol? Symbol, ClusterCoverage Coverage, List<string> Skipped)> LoadScanSetAndResolveAsync(
         string symbolName, string owningProject, string path, int line, int? column, string? nameHint,
-        int maxProjects, CancellationToken ct)
+        int maxProjects, CancellationToken ct, IReadOnlyList<string>? prioritySeeds = null)
     {
         List<string> skipped;
         HashSet<string> scanSet;
@@ -360,11 +373,24 @@ public sealed partial class SemanticService : IDisposable
         {
             var dependents = q.DependentClosure(owningProject);
             dependents.Add(owningProject);
+            int budget = Math.Clamp(maxProjects, 1, 200);
+
+            var chosen = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // Priority seeds (e.g. the projects that syntactically IMPLEMENT the type) load first —
+            // they carry the answer even though they rank low on raw name-mention frequency (a class
+            // names the interface once, while heavy consumers name it dozens of times and would
+            // otherwise exhaust the budget first, leaving the implementers unloaded).
+            if (prioritySeeds is not null)
+                foreach (var p in prioritySeeds)
+                    if (chosen.Count < budget && seen.Add(p)) chosen.Add(p);
+
             var candidates = q.CandidateProjectsForName(symbolName)
                 .Where(c => dependents.Contains(c.Project))
                 .ToList();
-            var chosen = candidates.Take(Math.Clamp(maxProjects, 1, 200)).Select(c => c.Project).ToList();
-            skipped = candidates.Skip(chosen.Count).Select(c => c.Project).ToList();
+            foreach (var c in candidates)
+                if (chosen.Count < budget && seen.Add(c.Project)) chosen.Add(c.Project);
+            skipped = candidates.Select(c => c.Project).Where(p => !seen.Contains(p)).ToList();
 
             scanSet = q.DependencyClosure(new[] { owningProject });
             foreach (var p in chosen) scanSet.Add(p);
