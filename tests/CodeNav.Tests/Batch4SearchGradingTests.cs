@@ -186,7 +186,9 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
     {
         var tools = new NavigationTools(_manager, _semantic);
         var json = Parse(tools.ServerCapabilities());
-        var model = json.GetProperty("confidenceModel").EnumerateArray().Select(e => e.GetString()).ToList();
-        Assert.Contains("heuristic", model);
+        // confidenceModel is an object mapping each tier to its meaning (r2o steering).
+        var model = json.GetProperty("confidenceModel");
+        Assert.False(string.IsNullOrEmpty(model.GetProperty("heuristic").GetString()));
+        Assert.Contains("not compiler-verified", model.GetProperty("indexed").GetString());
     }
 }

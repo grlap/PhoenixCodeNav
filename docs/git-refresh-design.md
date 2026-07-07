@@ -1,7 +1,9 @@
 # Design: Git-aware index refresh (pull, branch switch, merge, rebase)
 
-Status: **Proposed** (design only — no implementation yet).
-Relates to: [`design.md`](./design.md) § Freshness. Backlog: PhoenixCodeNav git-aware refresh (P2).
+Status: **Implemented** — shipped as `GitInfo` + `GitWatcher` + `IndexManager` wiring
+(commits `5a435a1`, follow-up fixes tracked as PhoenixCodeNav-wll / -h99). This document is
+the design record; where it and the code disagree, the code wins.
+Relates to: [`design.md`](./design.md) § Freshness.
 
 ## Problem
 
@@ -150,8 +152,9 @@ one property already true of the pipeline:
 
 - `GitWatcher` (Core, alongside `WorkspaceWatcher`): resolves the git dir, watches the
   trigger files, debounces, and calls back into `IndexManager` with "HEAD changed."
-- `GitRefresh` (Core helper): `rev-parse`, `diff --name-only`, gitdir resolution — thin
-  shell-outs to `git`, each wrapped so any failure returns "scope unavailable → full sweep."
+- `GitInfo` (Core helper; named `GitRefresh` in earlier drafts): `rev-parse`,
+  `diff --name-only`, gitdir resolution — thin shell-outs to a PATH-resolved `git`, each
+  wrapped so any failure returns "scope unavailable → full sweep."
 - `IndexManager`: owns `indexed_commit`, wires the `GitWatcher` callback into the existing
   pump (as either a targeted batch or a `null` full-sweep signal), and reports git identity
   in `Health()`.

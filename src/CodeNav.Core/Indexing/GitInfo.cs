@@ -15,16 +15,17 @@ public static class GitInfo
     // directory), then spawn that path — so a git.exe planted in a workspace we navigate can
     // never be run in place of the real git via the Windows executable search order (which
     // searches the cwd before PATH for a bare name). CODENAV_GIT_EXE overrides the lookup.
-    private static readonly Lazy<string> GitExe = new(ResolveGitExe);
+    private static readonly Lazy<string?> GitExe = new(ResolveGitExe);
 
     private static readonly Lazy<bool> Available = new(() => Run(".", "--version") is not null);
 
     /// <summary>True if a git executable was resolved (found on PATH, or via CODENAV_GIT_EXE).</summary>
     public static bool GitAvailable => Available.Value;
 
-    /// <summary>Absolute git path resolved from CODENAV_GIT_EXE or PATH; the bare name "git" as a
-    /// last resort (in which case git is effectively absent and <see cref="GitAvailable"/> is false).</summary>
-    private static string ResolveGitExe()
+    /// <summary>Absolute git path resolved from CODENAV_GIT_EXE or PATH, or null when git is not
+    /// installed — never the bare name "git", which Windows would resolve through the
+    /// cwd-inclusive executable search order (the exact hole the absolute path closes).</summary>
+    private static string? ResolveGitExe()
     {
         string? overridePath = Environment.GetEnvironmentVariable("CODENAV_GIT_EXE");
         if (!string.IsNullOrWhiteSpace(overridePath) && File.Exists(overridePath)) return overridePath;
@@ -44,7 +45,7 @@ public static class GitInfo
                 catch { /* malformed PATH entry — skip */ }
             }
         }
-        return "git"; // not found on PATH; GitAvailable will resolve false
+        return null; // git absent: GitAvailable resolves false, git-aware refresh stays off
     }
 
     /// <summary>Absolute path to the resolved git metadata dir — handles the worktree/submodule
@@ -93,7 +94,8 @@ public static class GitInfo
     {
         try
         {
-            var psi = new ProcessStartInfo(GitExe.Value, args)
+            if (GitExe.Value is not { } gitExe) return null; // git not resolved — feature off
+            var psi = new ProcessStartInfo(gitExe, args)
             {
                 WorkingDirectory = Directory.Exists(cwd) ? cwd : Environment.CurrentDirectory,
                 RedirectStandardOutput = true,

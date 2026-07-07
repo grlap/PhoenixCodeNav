@@ -48,7 +48,12 @@ public sealed partial class NavigationTools
                 "project_graph", "projects_containing", "refresh_index",
             },
             budgets = new { softBytes = Json.SoftBudgetBytes, hardBytes = Json.HardBudgetBytes, defaultLimit = 20 },
-            confidenceModel = new[] { "exact", "indexed", "heuristic" },
+            confidenceModel = new
+            {
+                exact = "compiler-verified (Roslyn semantic resolution)",
+                indexed = "index/syntax-backed, not compiler-verified — confirm with source_context before edits",
+                heuristic = "naming/text inference — a lead, verify before relying on it",
+            },
             semantic = new
             {
                 engine = "roslyn-adhoc (no MSBuild dependency)",
@@ -176,6 +181,20 @@ public sealed partial class NavigationTools
             ? result.FilesMatchedAcrossLines.Take(10).ToList()
             : null;
 
+        // Best-effort owning symbol per hit (feedback: jump from a text match to the owning
+        // method/type without a follow-up symbol_at). Only .cs files carry symbols.
+        var owners = new Dictionary<(string Path, int Line), string>();
+        foreach (var h in hits)
+        {
+            if (!h.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) continue;
+            if (owners.ContainsKey((h.FilePath, h.Line))) continue;
+            var sym = q.InnermostSymbolAt(h.FilePath, h.Line);
+            if (sym is not null)
+            {
+                owners[(h.FilePath, h.Line)] = sym.Container is { Length: > 0 } c ? $"{c}.{sym.Name}" : sym.Name;
+            }
+        }
+
         var meta = Meta.From(_manager.Health(), "indexed", "text");
         return Json.WithListBudget(hits, (items, truncated) => new
         {
@@ -189,6 +208,7 @@ public sealed partial class NavigationTools
                 t.IsGenerated,
                 matchKind = t.MatchKind,
                 matched = t.MatchKind == "partial" ? t.Matched : null, // tokens only meaningful on partials
+                containingSymbol = owners.TryGetValue((t.FilePath, t.Line), out var cs) ? cs : null,
             }),
             filesMatchedAcrossLines = acrossLines,
             nextCursor = next,
@@ -207,8 +227,9 @@ public sealed partial class NavigationTools
         [Description("1 = namespaces + types, 2 = + members (default), 3 = reserved (currently same as 2).")] int depth = 2)
     {
         if (NotReady() is { } notReady) return notReady;
+        string normPath = NormalizePath(path);
         using var q = _manager.OpenQueries();
-        var rows = q.Outline(NormalizePath(path));
+        var rows = q.Outline(normPath);
         if (rows.Count == 0)
         {
             return Json.Serialize(new { error = "file_not_indexed", path, meta = Meta.From(_manager.Health(), "indexed", "syntax") });
@@ -229,6 +250,10 @@ public sealed partial class NavigationTools
             }
         }
 
+        // Memoized per type identity: BuildNested runs up to twice on budget degradation,
+        // and batch_outline multiplies calls — one lookup per unique partial type, total.
+        var partialCache = new Dictionary<(string Name, string? Ns, string Kind, string? Container), List<string>>();
+
         // includeMembers=false keeps only namespace/type nodes (the depth-1 view);
         // true adds member leaves (methods, properties, ...) — the depth-2 view.
         object Node(SymbolHit s, bool includeMembers)
@@ -242,6 +267,24 @@ public sealed partial class NavigationTools
                     .ToList();
                 if (kept.Count > 0) memberNodes = kept;
             }
+            // Partial-type cross-links (feedback): the other files declaring this type,
+            // so a caller need not run definition(name) just to find them.
+            List<string>? partialFiles = null;
+            bool partialFilesMore = false;
+            if (s.IsPartial && TypeKinds.Contains(s.Kind))
+            {
+                var key = (s.Name, s.Ns, s.Kind, s.Container);
+                if (!partialCache.TryGetValue(key, out var others))
+                {
+                    others = q.PartialDeclarationFiles(s.Name, s.Ns, s.Kind, s.Container, normPath); // up to 11
+                    partialCache[key] = others;
+                }
+                if (others.Count > 0)
+                {
+                    partialFilesMore = others.Count > 10;
+                    partialFiles = partialFilesMore ? others.Take(10).ToList() : others;
+                }
+            }
             return new
             {
                 s.Name,
@@ -251,6 +294,8 @@ public sealed partial class NavigationTools
                 s.StartLine,
                 s.EndLine,
                 isPartial = s.IsPartial ? true : (bool?)null,
+                partialFiles,
+                partialFilesTruncated = partialFilesMore ? true : (bool?)null,
                 attributes = s.AttrMarkers,
                 members = memberNodes,
             };
@@ -271,12 +316,12 @@ public sealed partial class NavigationTools
         // The nested tree lives under one namespace root, so trimming the top-level list
         // cannot bound it. Degrade instead: requested depth -> types-only -> flat capped.
         string nested = BuildNested(includeMembers: depth >= 2, truncated: false);
-        if (nested.Length <= Json.HardBudgetBytes) return nested;
+        if (Json.Utf8Bytes(nested) <= Json.HardBudgetBytes) return nested;
 
         if (depth >= 2)
         {
             string typesOnly = BuildNested(includeMembers: false, truncated: true);
-            if (typesOnly.Length <= Json.HardBudgetBytes) return typesOnly;
+            if (Json.Utf8Bytes(typesOnly) <= Json.HardBudgetBytes) return typesOnly;
         }
 
         // Pathological (thousands of types in one file): flatten namespace/type nodes to
@@ -302,7 +347,7 @@ public sealed partial class NavigationTools
         [Description("Workspace-relative file path.")] string path,
         [Description("Spans as 'start-end' or 'line', comma-separated (e.g. '42-88,120').")] string spans,
         [Description("Extra context lines around each span (default 2).")] int contextLines = 2,
-        [Description("Byte budget for returned source (default 8192, max 32768).")] int maxBytes = 8192)
+        [Description("Byte budget for returned source (default 8192, max 24576).")] int maxBytes = 8192)
     {
         if (NotReady() is { } notReady) return notReady;
         path = NormalizePath(path);
@@ -320,7 +365,8 @@ public sealed partial class NavigationTools
         // in-workspace link cannot be followed to external content; fall through to the index.
         if (File.Exists(full) && !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(_manager.WorkspaceRoot, full))
         {
-            try { content = File.ReadAllText(full); } catch (IOException) { }
+            try { content = File.ReadAllText(full); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         }
         if (content is null)
         {
@@ -336,42 +382,69 @@ public sealed partial class NavigationTools
         }
 
         var lines = content.Split('\n');
-        var spanResults = new List<object>();
-        long budget = maxBytes;
-        bool truncated = false;
 
-        foreach (var spec in spans.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        (List<object> Spans, bool Truncated) BuildSpans(long rawBudget)
         {
-            var parts = spec.Split('-');
-            if (!int.TryParse(parts[0], out int start)) continue;
-            int end = parts.Length > 1 && int.TryParse(parts[1], out int e) ? e : start;
-            start = Math.Max(1, start - contextLines);
-            end = Math.Min(lines.Length, end + contextLines);
-
-            var numbered = new List<string>();
-            for (int i = start; i <= end; i++)
+            var spanResults = new List<object>();
+            long budget = rawBudget;
+            bool truncated = false;
+            foreach (var spec in spans.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
-                string line = $"{i,5}| {lines[i - 1].TrimEnd('\r')}";
-                if (budget - line.Length < 0)
+                var parts = spec.Split('-');
+                if (!int.TryParse(parts[0], out int start)) continue;
+                int end = parts.Length > 1 && int.TryParse(parts[1], out int e) ? e : start;
+                start = Math.Max(1, start - contextLines);
+                end = Math.Min(lines.Length, end + contextLines);
+
+                var numbered = new List<string>();
+                for (int i = start; i <= end; i++)
                 {
-                    truncated = true;
-                    break;
+                    string line = $"{i,5}| {lines[i - 1].TrimEnd('\r')}";
+                    int cost = Json.Utf8Bytes(line) + 1; // budget is a UTF-8 byte contract
+                    if (budget - cost < 0) { truncated = true; break; }
+                    budget -= cost;
+                    numbered.Add(line);
                 }
-                budget -= line.Length + 1;
-                numbered.Add(line);
+                // Skip spans that yielded nothing (e.g. start past EOF) — no inverted ranges.
+                if (numbered.Count > 0)
+                    spanResults.Add(new { startLine = start, endLine = start + numbered.Count - 1, source = string.Join("\n", numbered) });
+                if (truncated) break;
             }
-            spanResults.Add(new { startLine = start, endLine = start + numbered.Count - 1, source = string.Join("\n", numbered) });
-            if (truncated) break;
+            return (spanResults, truncated);
         }
 
-        return Json.Serialize(new
+        string BuildResponse(long rawBudget)
         {
-            path,
-            freshness,
-            spans = spanResults,
-            truncated,
-            meta = Meta.From(_manager.Health(), freshness == "live" ? "exact" : "indexed", "text"),
-        });
+            var (spanResults, truncated) = BuildSpans(rawBudget);
+            // When JSON-escaping headroom forced rawBudget below the caller's maxBytes, "raise
+            // maxBytes" is unfollowable (they may already be at the max) — advise narrowing instead.
+            string? hint = !truncated ? null
+                : rawBudget < maxBytes
+                    ? $"cut at {rawBudget} bytes (escaping headroom below your maxBytes {maxBytes}) — narrow the spans"
+                    : maxBytes >= Json.HardBudgetBytes
+                        ? $"cut at {rawBudget} bytes (at the max) — narrow the spans"
+                        : $"cut at {rawBudget} bytes — raise maxBytes (max {Json.HardBudgetBytes}) or narrow the spans";
+            return Json.Serialize(new
+            {
+                path,
+                freshness,
+                spans = spanResults,
+                truncated,
+                hint,
+                meta = Meta.From(_manager.Health(), freshness == "live" ? "exact" : "indexed", "text"),
+            });
+        }
+
+        // Raw budget bounds the source bytes; JSON escaping still inflates, so shrink the raw
+        // budget until the SERIALIZED response fits the hard cap.
+        long effective = maxBytes;
+        string json = BuildResponse(effective);
+        while (Json.Utf8Bytes(json) > Json.HardBudgetBytes && effective > 256)
+        {
+            effective /= 2;
+            json = BuildResponse(effective);
+        }
+        return json;
     }
 
     // ---------------------------------------------------------------- symbols
@@ -426,6 +499,11 @@ public sealed partial class NavigationTools
             symbols = items.Select(SymbolJson),
             nextCursor = next,
             truncated,
+            // Steer the follow-up (feedback: nothing nudged toward references after a symbol
+            // hit). First page only — repeating it on cursored pages just burns budget.
+            hint = items.Count > 0 && cursor is null
+                ? "Next: references(name) for usages by project; definition(name, includeBody:true) for the declaration with source."
+                : null,
             meta,
         });
     }
@@ -454,7 +532,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "definition")]
-    [Description("Declaration site(s) for a symbol — all partial declarations included. Target by exact name (optionally 'container' to disambiguate) OR by position (path+line[,column]) from a usage site. Tries compiler-exact resolution first (confidence 'exact' with documentationCommentId), falling back to the name index.")]
+    [Description("Declaration site(s) for a symbol — all partial declarations included. Target by exact name (optionally 'container' to disambiguate) OR by position (path+line[,column]) from a usage site. Tries compiler-exact resolution first (confidence 'exact' with documentationCommentId), falling back to the name index. includeBody=true also returns the primary declaration's source inline — no follow-up source_context needed.")]
     public string Definition(
         [Description("Exact symbol name (case-insensitive). Optional when path+line given.")] string? name = null,
         [Description("Optional containing type or namespace fragment to disambiguate.")] string? container = null,
@@ -463,7 +541,9 @@ public sealed partial class NavigationTools
         [Description("1-based line for position mode.")] int line = 0,
         [Description("1-based column for position mode (optional).")] int column = 0,
         [Description("'auto' (semantic first, indexed fallback), 'semantic', or 'indexed'.")] string mode = "auto",
-        [Description("Semantic resolution deadline in ms (default 10000).")] int timeoutMs = 10000)
+        [Description("Semantic resolution deadline in ms (default 10000).")] int timeoutMs = 10000,
+        [Description("Also return the primary declaration's source body (numbered lines, budget-bounded).")] bool includeBody = false,
+        [Description("Byte budget for the inline body (default 12288, max 16384).")] int bodyMaxBytes = 12288)
     {
         if (NotReady() is { } notReady) return notReady;
         if (name is null && (path is null || line <= 0))
@@ -482,13 +562,32 @@ public sealed partial class NavigationTools
                     .GetAwaiter().GetResult();
                 if (decl is not null)
                 {
-                    return Json.Serialize(new
+                    // Order declarations largest-span-first (partial stubs lose), path as the
+                    // deterministic tie-break — so the body's declaration (d0) is always the first
+                    // shown and never trimmed out of the displayed set.
+                    var ordered = decl.Declarations
+                        .OrderByDescending(d => d.EndLine - d.StartLine)
+                        .ThenBy(d => d.Path, StringComparer.Ordinal)
+                        .ToList();
+                    var d0 = ordered.FirstOrDefault();
+                    int totalDecls = ordered.Count;
+                    var shown = ordered.Take(MaxDeclarationSites).ToList();
+                    // Declarations serialized ONCE here (symbol omits them) and adaptively
+                    // byte-bounded via WithListBudget — the semantic path no longer bypasses the
+                    // central budget, so even a bodyless response with long paths stays under cap.
+                    string BuildSemantic(object? body) => Json.WithListBudget(shown, (items, listTrunc) => new
                     {
                         name = name ?? decl.SymbolDisplay,
-                        symbol = SemanticSymbolJson(decl),
-                        declarations = decl.Declarations.Select(d => new { d.Path, d.StartLine, d.EndLine }),
+                        symbol = SemanticIdentityJson(decl),
+                        declarations = items.Select(d => new { d.Path, d.StartLine, d.EndLine }),
+                        declarationsTruncated = (listTrunc || totalDecls > MaxDeclarationSites) ? true : (bool?)null,
+                        body,
                         meta = Meta.From(_manager.Health(), "exact", "semantic"),
                     });
+                    // Semantic spans come from live sources — pair them with live content.
+                    object? MakeSemanticBody(int budget) =>
+                        d0 is null ? null : BuildDeclarationBody(d0.Path, d0.StartLine, d0.EndLine, budget, preferLive: true);
+                    return SerializeBodyBounded(BuildSemantic, includeBody ? MakeSemanticBody(bodyMaxBytes) : null, MakeSemanticBody, bodyMaxBytes);
                 }
                 failReason = reason;
             }
@@ -524,11 +623,22 @@ public sealed partial class NavigationTools
                 (h.Ns?.Contains(c, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
         }
 
+        // Same primary-declaration rule as the semantic path: largest span first (partial
+        // stubs lose), path as the deterministic tie-break — so the two paths agree.
+        var primary = hits
+            .OrderByDescending(h => h.EndLine - h.StartLine)
+            .ThenBy(h => h.FilePath, StringComparer.Ordinal)
+            .FirstOrDefault();
         var meta = Meta.From(_manager.Health(), "indexed", "syntax");
-        return Json.WithListBudget(hits, (items, truncated) => new
+        // Indexed spans come from the index — pair them with index content (consistent even
+        // when the working tree has drifted; freshness is reported on the body).
+        object? MakeBody(int budget) =>
+            primary is null ? null : BuildDeclarationBody(primary.FilePath, primary.StartLine, primary.EndLine, budget, preferLive: false);
+        string Build(object? body) => Json.WithListBudget(hits, (items, truncated) => new
         {
             name = lookupName,
             declarations = items.Select(SymbolJson),
+            body,
             partialReason = failReason,
             hint = items.Count == 0
                 ? "No declaration found. Try search_symbol with match='substring', or the name may come from a package/generated source."
@@ -536,6 +646,99 @@ public sealed partial class NavigationTools
             truncated,
             meta,
         });
+        return SerializeBodyBounded(Build, includeBody ? MakeBody(bodyMaxBytes) : null, MakeBody, bodyMaxBytes);
+    }
+
+    /// <summary>Numbered source for a declaration span, byte-bounded — what lets
+    /// definition(includeBody:true) replace a follow-up source_context call.
+    /// preferLive=true reads the working-tree file (the semantic path computed its spans from
+    /// live sources, so index content could mismatch them); preferLive=false uses index
+    /// content (the indexed path's spans come from the index, so that pairing is consistent).
+    /// Returns an { omitted, reason } object instead of null when no content is available.</summary>
+    private object BuildDeclarationBody(string path, int startLine, int endLine, int maxBytes, bool preferLive)
+    {
+        maxBytes = Math.Clamp(maxBytes, 512, 16 * 1024);
+
+        string? content = null;
+        string freshness = "index";
+        if (preferLive
+            && CodeNav.Core.WorkspacePaths.TryResolveInside(_manager.WorkspaceRoot, path, out string full)
+            && File.Exists(full)
+            && !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(_manager.WorkspaceRoot, full))
+        {
+            try
+            {
+                content = File.ReadAllText(full);
+                freshness = "live";
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* fall through to index content */ }
+        }
+        if (content is null)
+        {
+            using var q = _manager.OpenQueries();
+            content = q.ContentByPath(path);
+            freshness = "index";
+        }
+        if (content is null)
+        {
+            return new { omitted = true, reason = "content_unavailable", path };
+        }
+
+        var lines = content.Split('\n');
+        int start = Math.Max(1, startLine);
+        // Span beyond the (possibly stale) content: report it honestly instead of an inverted
+        // empty span (start past EOF is reachable when live spans are applied to shorter index content).
+        if (start > lines.Length)
+        {
+            return new { omitted = true, reason = "span_beyond_content", path, contentLines = lines.Length, freshness };
+        }
+        int end = Math.Min(lines.Length, Math.Max(endLine, start));
+        var numbered = new List<string>();
+        long budget = maxBytes;
+        bool truncated = false;
+        for (int i = start; i <= end; i++)
+        {
+            string lineText = $"{i,5}| {lines[i - 1].TrimEnd('\r')}";
+            int cost = Json.Utf8Bytes(lineText) + 1;
+            if (budget - cost < 0) { truncated = true; break; }
+            budget -= cost;
+            numbered.Add(lineText);
+        }
+        if (numbered.Count == 0)
+        {
+            // Even the first line overflowed the budget — nothing to show, but say so.
+            return new { omitted = true, reason = "first_line_exceeds_budget", path, freshness };
+        }
+        int lastIncluded = start + numbered.Count - 1;
+        return new
+        {
+            path,
+            startLine = start,
+            endLine = lastIncluded,
+            source = string.Join("\n", numbered),
+            truncated,
+            hint = truncated
+                ? $"body cut at line {lastIncluded} — source_context('{path}', '{lastIncluded + 1}-{end}', maxBytes: {Json.HardBudgetBytes}) resumes where this stopped"
+                : null,
+            freshness,
+        };
+    }
+
+    /// <summary>Re-serializes a body-carrying response until the ESCAPED payload fits the hard
+    /// budget, halving the body budget each pass and dropping the body as the last resort.
+    /// The line-loop budget counts raw chars; JSON escaping (quotes/backslashes) inflates, so
+    /// only measuring the serialized length makes the budget contract actually hold.</summary>
+    private static string SerializeBodyBounded(Func<object?, string> serialize, object? body, Func<int, object?> rebuildBody, int bodyMaxBytes)
+    {
+        string json = serialize(body);
+        int budget = Math.Clamp(bodyMaxBytes, 512, 16 * 1024); // seed matches BuildDeclarationBody's own clamp
+        while (Json.Utf8Bytes(json) > Json.HardBudgetBytes && body is not null)
+        {
+            budget /= 2;
+            body = budget >= 512 ? rebuildBody(budget) : null;
+            json = serialize(body);
+        }
+        return json;
     }
 
     [McpServerTool(Name = "implementations")]
@@ -581,7 +784,6 @@ public sealed partial class NavigationTools
         // guess, not a compiler fact, so it is labeled confidence 'heuristic'.
         using var q = _manager.OpenQueries();
         string lookupName = name ?? hint ?? "";
-        var candidates = q.SearchSymbols(lookupName, "exact", null, 5, includeGenerated: true);
         var heuristic = q.ImplementationCandidates(lookupName, 50);
         var meta = Meta.From(_manager.Health(), "heuristic", "syntax");
         return Json.WithListBudget(heuristic, (items, truncated) => new
@@ -816,16 +1018,37 @@ public sealed partial class NavigationTools
         return ((best.FilePath, best.StartLine, null), name);
     }
 
-    private static object SemanticSymbolJson(SemanticDeclaration d) => new
+    // Cap on declaration sites emitted for one symbol. A namespace or heavily-partial type can
+    // have hundreds of spans; this bounds the count for tools that serialize it via a plain
+    // Serialize (implementations/references/etc.). definition additionally routes its (single)
+    // declaration list through WithListBudget for a hard byte bound; this cap keeps the common
+    // case small and gives an early declarationsTruncated signal.
+    private const int MaxDeclarationSites = 20;
+
+    // Kept single-arg so method-group use (.Select(SemanticSymbolJson)) still binds.
+    private static object SemanticSymbolJson(SemanticDeclaration d) => SemanticSymbolCore(d, includeDeclarations: true);
+
+    // Identity without the declaration list — for definition, which renders declarations once
+    // in its own budgeted top-level array (avoids serializing the same sites twice).
+    private static object SemanticIdentityJson(SemanticDeclaration d) => SemanticSymbolCore(d, includeDeclarations: false);
+
+    private static object SemanticSymbolCore(SemanticDeclaration d, bool includeDeclarations)
     {
-        display = d.SymbolDisplay,
-        documentationCommentId = d.DocumentationCommentId,
-        d.Kind,
-        containingType = d.ContainingType,
-        ns = d.Namespace,
-        assembly = d.Assembly,
-        declarations = d.Declarations.Select(s => new { s.Path, s.StartLine, s.EndLine, project = s.Project }),
-    };
+        var sites = includeDeclarations ? d.Declarations.Take(MaxDeclarationSites + 1).ToList() : null;
+        return new
+        {
+            display = d.SymbolDisplay,
+            documentationCommentId = d.DocumentationCommentId,
+            d.Kind,
+            containingType = d.ContainingType,
+            ns = d.Namespace,
+            assembly = d.Assembly,
+            declarations = sites?.Take(MaxDeclarationSites).Select(s => new { s.Path, s.StartLine, s.EndLine, project = s.Project }),
+            declarationsTruncated = sites is { Count: > MaxDeclarationSites }
+                ? $"more than {MaxDeclarationSites} declaration sites — narrow the query or use references"
+                : (string?)null,
+        };
+    }
 
     private static object CoverageJson(ClusterCoverage c) => new
     {

@@ -356,7 +356,7 @@ public sealed partial class NavigationTools
                      ("primarySource", () => Json.Serialize(Build(true, true, true, true))),
                  })
         {
-            if (json.Length <= maxBytes) break;
+            if (Json.Utf8Bytes(json) <= maxBytes) break;
             omitted.Add(drop);
             json = apply();
         }

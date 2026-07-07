@@ -323,21 +323,10 @@ public sealed class IndexQueries : IDisposable
     {
         // Smallest containing symbol plus its ancestor chain, innermost first.
         var chain = new List<SymbolHit>();
-        var innermost = Query(
-            """
-            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
-            FROM symbols s JOIN files f ON f.id = s.file_id
-            WHERE f.path = $p AND s.start_line <= $l AND s.end_line >= $l
-            ORDER BY (s.end_line - s.start_line), s.start_line DESC
-            LIMIT 1
-            """,
-            ReadSymbol,
-            ("$p", filePath), ("$l", line));
-
-        if (innermost.Count == 0) return chain;
-        chain.Add(innermost[0]);
-        long? parent = innermost[0].ParentId;
+        var innermost = InnermostSymbolAt(filePath, line);
+        if (innermost is null) return chain;
+        chain.Add(innermost);
+        long? parent = innermost.ParentId;
         int guard = 0;
         while (parent is { } pid && guard++ < 16)
         {
@@ -355,6 +344,48 @@ public sealed class IndexQueries : IDisposable
             parent = next[0].ParentId;
         }
         return chain;
+    }
+
+    /// <summary>Innermost symbol containing the line — the single-query flavor of
+    /// <see cref="SymbolAt"/> (no ancestor walk), cheap enough to decorate search hits.</summary>
+    public SymbolHit? InnermostSymbolAt(string filePath, int line)
+    {
+        var hits = Query(
+            """
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE f.path = $p AND s.start_line <= $l AND s.end_line >= $l
+            ORDER BY (s.end_line - s.start_line), s.start_line DESC
+            LIMIT 1
+            """,
+            ReadSymbol,
+            ("$p", filePath), ("$l", line));
+        return hits.Count > 0 ? hits[0] : null;
+    }
+
+    /// <summary>Other files containing a PARTIAL declaration of the same type identity
+    /// (name + kind + namespace + containing type) — the partial-type cross-links for an
+    /// outline. is_partial=1 keeps an unrelated same-name non-partial type (legal in another
+    /// project) out; the container match keeps same-name nested types apart. Best-effort:
+    /// identity does not include project or generic arity. Returns up to 11 so the caller can
+    /// detect (and mark) the &gt;10 case rather than silently capping.</summary>
+    public List<string> PartialDeclarationFiles(string name, string? ns, string kind, string? container, string excludePath)
+    {
+        return Query(
+            """
+            SELECT DISTINCT f.path
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE s.name = $n AND s.kind = $k AND s.is_partial = 1
+              AND COALESCE(s.ns, '') = COALESCE($ns, '')
+              AND COALESCE(s.container, '') = COALESCE($c, '')
+              AND f.path <> $p
+            ORDER BY f.path
+            LIMIT 11
+            """,
+            r => r.GetString(0),
+            ("$n", name), ("$k", kind), ("$ns", (object?)ns ?? DBNull.Value),
+            ("$c", (object?)container ?? DBNull.Value), ("$p", excludePath));
     }
 
     // ---------------------------------------------------------------- reference candidates
