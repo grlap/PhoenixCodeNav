@@ -838,12 +838,17 @@ public sealed partial class NavigationTools
         // guess, not a compiler fact, so it is labeled confidence 'heuristic'.
         using var q = _manager.OpenQueries();
         string lookupName = name ?? hint ?? "";
-        // Position mode (path+line, no name): derive the name from the cursor so the fallback has a
-        // target — an empty name would otherwise match every type that has a base list.
-        if (lookupName.Length == 0 && path is not null)
+        string? targetKind = null;
+        // Position mode (path+line): resolve the cursor to a symbol so the fallback has a name AND so
+        // we know its kind — the base-list heuristic only makes sense for a TYPE target.
+        if (path is not null)
         {
             var chain = q.SymbolAt(NormalizePath(path), line);
-            lookupName = chain.Count > 0 ? chain[0].Name : "";
+            if (chain.Count > 0)
+            {
+                targetKind = chain[0].Kind;
+                if (lookupName.Length == 0) lookupName = chain[0].Name;
+            }
         }
         if (lookupName.Length == 0)
         {
@@ -854,8 +859,26 @@ public sealed partial class NavigationTools
                 meta = Meta.From(_manager.Health(), "heuristic", "syntax"),
             });
         }
-        var heuristic = q.ImplementationCandidates(lookupName, 50);
+        targetKind ??= q.SearchSymbols(lookupName, "exact", null, 1).FirstOrDefault()?.Kind;
         var meta = Meta.From(_manager.Health(), "heuristic", "syntax");
+
+        // The base-list heuristic is a TYPE operation (types implementing an interface / deriving a
+        // class). For a MEMBER target (e.g. an interface method) it would sweep in every type whose
+        // base list merely contains the member name — pure noise. Skip it and say so. (Proper fix:
+        // intersect with the declaring type's implementers, then find the member in each — follow-up.)
+        if (targetKind is not (null or "interface" or "class" or "struct" or "record" or "record_struct"))
+        {
+            return Json.Serialize(new
+            {
+                name = lookupName,
+                implementations = Array.Empty<object>(),
+                partialReason = failReason ?? "semantic_unavailable",
+                note = "No compiler-exact member implementations in the loaded cluster (possibly a type-twin identity mismatch). The syntactic fallback is type-only — run implementations on the declaring interface/type, then read this member in each implementer.",
+                meta,
+            });
+        }
+
+        var heuristic = q.ImplementationCandidates(lookupName, 50);
         return Json.WithListBudget(heuristic, (items, truncated) => new
         {
             name = lookupName,
@@ -864,7 +887,7 @@ public sealed partial class NavigationTools
             note = items.Count > 0 && failReason is "no_semantic_implementers" or "candidate_cluster_bounded"
                 ? "Compiler-exact resolution matched no implementers, but these types name it in their base list (confidence heuristic). Common cause: the type is declared in more than one assembly (e.g. a generated twin) and implementers reference a different declaration. Verify with source_context."
                 : "Base-list name matches from the index (confidence heuristic) — verify with source_context.",
-            truncated,
+            truncated = truncated || heuristic.Count >= 50, // count-capped even if the byte budget fit
             meta,
         });
     }

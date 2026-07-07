@@ -143,6 +143,19 @@ public class SemanticTests : IClassFixture<IndexFixture>, IDisposable
         Assert.NotEmpty(q.ImplementationCandidates("IClock", 50)); // a real interface still matches
     }
 
+    // The base-list heuristic is a TYPE operation; on a MEMBER target the fallback must not sweep in
+    // every type whose base list merely contains the member name (was "worse than useless" noise).
+    [Fact]
+    public void ImplementationsOnAMethodDoesNotSweepTypesByName()
+    {
+        var tools = new NavigationTools(_manager, _semantic);
+        // Guard.NotNull is a static method with no overrides → the tool falls back; a member fallback
+        // must return empty (not a name-swept type list).
+        var json = JsonDocument.Parse(tools.Implementations(name: "NotNull", timeoutMs: 30000)).RootElement;
+        if (json.GetProperty("meta").GetProperty("confidence").GetString() == "heuristic")
+            Assert.Equal(0, json.GetProperty("implementations").GetArrayLength());
+    }
+
     [Fact]
     public void ReferencesToolFallsBackToIndexedWhenAskedFor()
     {
