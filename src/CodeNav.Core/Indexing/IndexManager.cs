@@ -30,6 +30,8 @@ public sealed class IndexManager : IDisposable
     private IndexStore? _store;
     private WorkspaceWatcher? _watcher;
     private Task? _pump;
+    private Task? _startTask;
+    private volatile bool _disposed;
     private volatile string _state = "missing";
     private volatile string? _error;
     // Index metadata is cached here so Health() (called on tool threads) never touches
@@ -55,29 +57,36 @@ public sealed class IndexManager : IDisposable
     {
         _pump = Task.Run(PumpRefreshesAsync);
 
-        Task.Run(() =>
+        _startTask = Task.Run(() =>
         {
             try
             {
-                if (forceRebuild || !File.Exists(_dbPath))
+                if (_disposed) return;
+                bool build = forceRebuild || !File.Exists(_dbPath);
+                if (build)
                 {
                     _state = "building";
                     _log($"Building index for {_workspaceRoot} ...");
-                    var result = IndexBuilder.Build(_workspaceRoot, _dbPath, _log);
-                    _log($"Index built: {result.CsFiles} files, {result.Symbols} symbols in {result.TotalTime.TotalSeconds:F0}s");
-                    var store = new IndexStore(_dbPath, createNew: false);
-                    CacheMeta(store);          // read meta before publishing the store
-                    _store = store;
-                    _state = "ready";
-                    StartWatcher();
+                    var buildResult = IndexBuilder.Build(_workspaceRoot, _dbPath, _log);
+                    _log($"Index built: {buildResult.CsFiles} files, {buildResult.Symbols} symbols in {buildResult.TotalTime.TotalSeconds:F0}s");
                 }
-                else
+
+                var store = new IndexStore(_dbPath, createNew: false);
+                CacheMeta(store);              // read meta before publishing the store
+
+                // If Dispose ran while we were building/opening, don't publish or start the
+                // watcher — clean up the store we just opened and leave the manager stopped.
+                if (_disposed)
                 {
-                    var store = new IndexStore(_dbPath, createNew: false);
-                    CacheMeta(store);          // read meta before publishing the store or queuing work
-                    _store = store;
-                    _state = "ready";
-                    StartWatcher();
+                    store.Dispose();
+                    return;
+                }
+
+                _store = store;
+                _state = "ready";
+                StartWatcher();
+                if (!build)
+                {
                     _log("Existing index opened; running startup freshness sweep ...");
                     _refreshQueue.Writer.TryWrite(null); // detect-all
                 }
@@ -161,9 +170,28 @@ public sealed class IndexManager : IDisposable
 
     public void Dispose()
     {
+        _disposed = true;
+        _watcher?.Dispose();                 // stop new events reaching the queue
+        _refreshQueue.Writer.TryComplete();  // let the pump drain and exit its loop
+
+        // Let the startup task settle first (it may still be opening the store), then wait
+        // for the pump to actually stop using the store. Only dispose the store once both
+        // have finished — otherwise leak it (the process is tearing down) rather than risk
+        // a use-after-dispose on the single write connection.
+        bool startDone = true, pumpDone = true;
+        try { startDone = _startTask?.Wait(TimeSpan.FromSeconds(5)) ?? true; } catch { /* faulted/cancelled */ }
+        // The start task may have created the watcher after the first Dispose() call above
+        // saw null — tear that one down too (WorkspaceWatcher.Dispose is idempotent).
         _watcher?.Dispose();
-        _refreshQueue.Writer.TryComplete();
-        try { _pump?.Wait(TimeSpan.FromSeconds(2)); } catch { /* shutdown */ }
-        _store?.Dispose();
+        try { pumpDone = _pump?.Wait(TimeSpan.FromSeconds(5)) ?? true; } catch { /* faulted/cancelled */ }
+
+        if (startDone && pumpDone)
+        {
+            _store?.Dispose();
+        }
+        else
+        {
+            _log("IndexManager.Dispose: background work still running; leaving the index store open to avoid use-after-dispose.");
+        }
     }
 }

@@ -63,6 +63,11 @@ public static class DeltaRefresher
                 // Reject caller-supplied paths (e.g. from refresh_index) that escape the
                 // workspace root, so external files can never be read into the index.
                 if (!WorkspacePaths.TryResolveInside(workspaceRoot, rel, out string full)) continue;
+                // For targeted (caller/watcher) paths, skip any that reach outside through a
+                // symlink/junction on the target or an ancestor. The detect-all sweep's paths
+                // come from the scanner, which already excludes reparse points, so it needs
+                // no per-candidate walk.
+                if (!detectAll && WorkspacePaths.EscapesViaReparsePoint(workspaceRoot, full)) continue;
                 bool exists = File.Exists(full);
                 bool known = stored.TryGetValue(rel, out var old);
                 string lang = LangOf(rel);

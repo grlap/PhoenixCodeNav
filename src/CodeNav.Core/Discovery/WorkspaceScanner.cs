@@ -57,13 +57,19 @@ public static class WorkspaceScanner
                 if (entry is DirectoryInfo di)
                 {
                     if (excluded.Contains(di.Name)) continue;
-                    // Do not follow reparse points (symlink/junction escape protection).
-                    if ((di.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                    // Do not follow symlinks/junctions (escape protection). The cached
+                    // Attributes bit gates the handle-opening LinkTarget read so ordinary
+                    // dirs cost nothing; cloud-synced dirs (bit set, null LinkTarget) are walked.
+                    if ((di.Attributes & FileAttributes.ReparsePoint) != 0 && di.LinkTarget is not null) continue;
                     stack.Push(di.FullName);
                     continue;
                 }
 
                 var fi = (FileInfo)entry;
+                // Do not index symlinked files (target may be outside the workspace). Same
+                // attribute-gated LinkTarget check: ordinary files pay nothing, cloud
+                // placeholder source files (bit set, null LinkTarget) are still indexed.
+                if ((fi.Attributes & FileAttributes.ReparsePoint) != 0 && fi.LinkTarget is not null) continue;
                 string rel = Path.GetRelativePath(root, fi.FullName).Replace('\\', '/');
                 var scanned = new ScannedFile(rel, fi.Length, fi.LastWriteTimeUtc.Ticks);
 

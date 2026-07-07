@@ -7,14 +7,75 @@ namespace CodeNav.Core;
 /// tool layer (source_context) and the delta refresher (refresh_index).
 /// Does not own: index lookups keyed by relative path (those are inherently contained
 /// because only in-workspace files are ever indexed).
-/// Residual risk: containment is lexical. A symlink/NTFS-junction that lives inside the
-/// root but targets an external directory is NOT resolved here and can still escape at
-/// read time; reparse-point hardening is tracked separately (see backlog).
+/// Residual risk: containment is lexical (Path.GetFullPath does not resolve links). The
+/// read/scan sites additionally reject reparse-point files via <see cref="IsReparsePoint"/>,
+/// but an external target reached only through an ANCESTOR junction on a caller-supplied
+/// path is not fully resolved here; the scanner already excludes reparse-point directories,
+/// so such a path cannot enter the index that way.
 /// </summary>
 public static class WorkspacePaths
 {
     /// <summary>Normalizes to forward-slash, workspace-relative form (no leading slash).</summary>
     public static string Normalize(string path) => path.Replace('\\', '/').TrimStart('/');
+
+    /// <summary>
+    /// True if the path is a genuine symlink or NTFS junction (has a link target).
+    /// Deliberately uses <see cref="FileSystemInfo.LinkTarget"/> rather than the
+    /// ReparsePoint attribute bit: cloud placeholders (OneDrive Files On-Demand, Dropbox
+    /// Smart Sync, ...) also set that bit but are legitimate in-workspace files, not links
+    /// to external content — so the attribute bit would wrongly exclude real source files.
+    /// </summary>
+    public static bool IsReparsePoint(string fullPath)
+    {
+        try
+        {
+            // Cheap attribute check first (one GetFileAttributes syscall, no handle). Only
+            // the rare reparse-point entries pay for the LinkTarget handle-open that tells a
+            // genuine link from a cloud placeholder (OneDrive), which has a null LinkTarget.
+            var attrs = File.GetAttributes(fullPath);
+            if ((attrs & FileAttributes.ReparsePoint) == 0) return false;
+            FileSystemInfo info = (attrs & FileAttributes.Directory) != 0
+                ? new DirectoryInfo(fullPath)
+                : new FileInfo(fullPath);
+            return info.LinkTarget is not null;
+        }
+        catch
+        {
+            return false; // absent/unreadable — nothing to follow
+        }
+    }
+
+    /// <summary>
+    /// True if <paramref name="fullPath"/> reaches outside the workspace through a reparse
+    /// point (symlink/junction) on the target itself OR any ancestor directory up to the
+    /// root. Read/refresh sites use this on caller-supplied paths so an in-workspace link
+    /// cannot be followed to external content. Only existing components are checked; a
+    /// not-yet-created leaf under a clean tree is not an escape.
+    /// </summary>
+    public static bool EscapesViaReparsePoint(string workspaceRoot, string fullPath)
+    {
+        string root, current;
+        try
+        {
+            root = Path.GetFullPath(workspaceRoot);
+            current = Path.GetFullPath(fullPath);
+        }
+        catch
+        {
+            return true; // unresolvable — treat as unsafe
+        }
+
+        string rootWithSep = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        while (current.Length > rootWithSep.Length &&
+               current.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase))
+        {
+            if (IsReparsePoint(current)) return true; // symlink/junction — not a cloud placeholder
+            var parent = Path.GetDirectoryName(current);
+            if (string.IsNullOrEmpty(parent) || parent.Length >= current.Length) break;
+            current = parent;
+        }
+        return false;
+    }
 
     /// <summary>
     /// Resolves a workspace-relative path to a full filesystem path, guaranteeing the

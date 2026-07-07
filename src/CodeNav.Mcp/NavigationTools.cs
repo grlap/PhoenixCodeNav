@@ -277,7 +277,9 @@ public sealed partial class NavigationTools
 
         string freshness = "live";
         string? content = null;
-        if (File.Exists(full))
+        // Skip paths reaching outside via a symlink/junction (target or any ancestor) so an
+        // in-workspace link cannot be followed to external content; fall through to the index.
+        if (File.Exists(full) && !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(_manager.WorkspaceRoot, full))
         {
             try { content = File.ReadAllText(full); } catch (IOException) { }
         }
