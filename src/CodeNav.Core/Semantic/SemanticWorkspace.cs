@@ -31,7 +31,6 @@ public sealed class SemanticWorkspace : IDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, LoadedProject> _loaded = new(StringComparer.OrdinalIgnoreCase);
     private long _useCounter;
-    private IReadOnlyCollection<string>? _ensureReferenceTo;
 
     private sealed class LoadedProject
     {
@@ -64,19 +63,22 @@ public sealed class SemanticWorkspace : IDisposable
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            _ensureReferenceTo = ensureReferenceTo;
             using var q = new IndexQueries(_dbPath);
             var requested = new HashSet<string>(projectNames, StringComparer.OrdinalIgnoreCase);
             var failed = new List<string>();
             var skipped = new List<string>();
 
-            // Reload any requested project whose files changed since load.
+            // Reload any requested project whose files changed since load. Reuse its
+            // existing ProjectId so already-loaded dependents keep valid references — a
+            // fresh id would silently orphan them (Roslyn drops references to absent ids).
+            var reuseIds = new Dictionary<string, ProjectId>(StringComparer.OrdinalIgnoreCase);
             foreach (var name in requested.Where(_loaded.ContainsKey).ToList())
             {
                 var current = q.ProjectFingerprint(name);
                 if (_loaded[name].Fingerprint != current)
                 {
                     _log($"Semantic reload (files changed): {name}");
+                    reuseIds[name] = _loaded[name].Id;
                     _workspace.TryApplyChanges(_workspace.CurrentSolution.RemoveProject(_loaded[name].Id));
                     _loaded.Remove(name);
                 }
@@ -94,7 +96,8 @@ public sealed class SemanticWorkspace : IDisposable
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    if (LoadProject(q, name, frameworkRefs, requested) is { } lp)
+                    var reuseId = reuseIds.TryGetValue(name, out var rid) ? rid : null;
+                    if (LoadProject(q, name, frameworkRefs, reuseId, ensureReferenceTo) is { } lp)
                     {
                         _loaded[name] = lp;
                     }
@@ -131,14 +134,11 @@ public sealed class SemanticWorkspace : IDisposable
         }
     }
 
-    public ProjectId? LoadedProjectId(string name) =>
-        _loaded.TryGetValue(name, out var lp) ? lp.Id : null;
-
     // ---------------------------------------------------------------- loading
 
     private LoadedProject? LoadProject(
         IndexQueries q, string name, IReadOnlyList<MetadataReference> frameworkRefs,
-        HashSet<string> requestedSet)
+        ProjectId? reuseId, IReadOnlyCollection<string>? ensureReferenceTo)
     {
         var row = q.ProjectByName(name);
         if (row is null) return null;
@@ -150,7 +150,9 @@ public sealed class SemanticWorkspace : IDisposable
         if (files.Count == 0) return null;
 
         var docs = new List<DocumentInfo>();
-        var projectId = ProjectId.CreateNewId(debugName: name);
+        // Reuse the prior id on reload (keeps dependents' references valid); mint a new
+        // one only for a genuinely new project.
+        var projectId = reuseId ?? ProjectId.CreateNewId(debugName: name);
         foreach (var rel in files)
         {
             string full = Path.Combine(_workspaceRoot, rel.Replace('/', Path.DirectorySeparatorChar));
@@ -206,9 +208,9 @@ public sealed class SemanticWorkspace : IDisposable
         }
         // Guarantee visibility of the symbol-declaring project even when the dependency
         // path is transitive (SDK-style transitivity) — harmless when redundant.
-        if (_ensureReferenceTo is not null)
+        if (ensureReferenceTo is not null)
         {
-            foreach (var target in _ensureReferenceTo)
+            foreach (var target in ensureReferenceTo)
             {
                 if (!target.Equals(name, StringComparison.OrdinalIgnoreCase) &&
                     _loaded.TryGetValue(target, out var dep) && refIds.Add(dep.Id))
@@ -272,8 +274,19 @@ public sealed class SemanticWorkspace : IDisposable
     private void EvictBeyondCap(HashSet<string> keep)
     {
         if (_loaded.Count <= MaxLoadedProjects) return;
+
+        // Evict only projects that no currently-loaded project references, so eviction
+        // never leaves a dangling ProjectReference (Roslyn would silently drop it and
+        // corrupt the dependent's symbol visibility). This drains the graph from the top;
+        // if nothing is safely evictable we stay over the soft cap until it is.
+        var referenced = new HashSet<ProjectId>();
+        foreach (var p in _workspace.CurrentSolution.Projects)
+        {
+            foreach (var pr in p.ProjectReferences) referenced.Add(pr.ProjectId);
+        }
+
         var evictable = _loaded
-            .Where(kv => !keep.Contains(kv.Key))
+            .Where(kv => !keep.Contains(kv.Key) && !referenced.Contains(kv.Value.Id))
             .OrderBy(kv => kv.Value.LastUse)
             .Take(_loaded.Count - MaxLoadedProjects)
             .ToList();

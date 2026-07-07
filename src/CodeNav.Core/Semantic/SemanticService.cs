@@ -1,5 +1,6 @@
 using CodeNav.Core.Indexing;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Text;
 
@@ -80,7 +81,7 @@ public sealed partial class SemanticService : IDisposable
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 60000));
         try
         {
-            var (symbol, _, _) = await ResolveSymbolAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
+            var (_, symbol, _) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
             if (symbol is null) return (null, "symbol_not_resolved");
             return (Describe(symbol), null);
         }
@@ -103,34 +104,15 @@ public sealed partial class SemanticService : IDisposable
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         try
         {
-            var (symbol, declaringProject, _) = await ResolveSymbolAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
-            if (symbol is null || declaringProject is null) return (null, "symbol_not_resolved");
+            // Phase 1: load the owner closure and resolve, to learn the symbol name.
+            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
+            if (symbolA is null || owningProject is null) return (null, "symbol_not_resolved");
 
-            // Scope: projects that can see the symbol AND textually mention its name.
-            List<string> skipped;
-            HashSet<string> scanSet;
-            using (var q = _manager.OpenQueries())
-            {
-                var dependents = q.DependentClosure(declaringProject);
-                dependents.Add(declaringProject);
-                var candidates = q.CandidateProjectsForName(symbol.Name)
-                    .Where(c => dependents.Contains(c.Project))
-                    .ToList();
-                var chosen = candidates.Take(Math.Clamp(maxProjects, 1, 200)).Select(c => c.Project).ToList();
-                skipped = candidates.Skip(chosen.Count).Select(c => c.Project).ToList();
-
-                scanSet = q.DependencyClosure(new[] { declaringProject });
-                foreach (var p in chosen) scanSet.Add(p);
-            }
-
-            var (solution, coverage) = await Workspace
-                .EnsureLoadedAsync(scanSet, cts.Token, ensureReferenceTo: new[] { declaringProject })
-                .ConfigureAwait(false);
-
-            // Re-resolve the symbol against the (possibly reloaded) solution snapshot.
-            var (symbol2, _, _) = await ResolveSymbolAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
-            symbol = symbol2 ?? symbol;
-            solution = (await Workspace.EnsureLoadedAsync(scanSet, cts.Token, new[] { declaringProject }).ConfigureAwait(false)).Solution;
+            // Phase 2: load the dependent scan set and re-resolve IN that snapshot, then
+            // resolve + search against the SAME solution (no snapshot drift).
+            var (solution, symbol, coverage, skipped) = await LoadScanSetAndResolveAsync(
+                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token).ConfigureAwait(false);
+            if (symbol is null) return (null, "symbol_not_resolved_in_scope");
 
             var found = await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token).ConfigureAwait(false);
 
@@ -192,28 +174,12 @@ public sealed partial class SemanticService : IDisposable
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         try
         {
-            var (symbol, declaringProject, _) = await ResolveSymbolAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
-            if (symbol is null || declaringProject is null) return (null, "symbol_not_resolved");
+            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
+            if (symbolA is null || owningProject is null) return (null, "symbol_not_resolved");
 
-            HashSet<string> scanSet;
-            using (var q = _manager.OpenQueries())
-            {
-                var dependents = q.DependentClosure(declaringProject);
-                dependents.Add(declaringProject);
-                var candidates = q.CandidateProjectsForName(symbol.Name)
-                    .Where(c => dependents.Contains(c.Project))
-                    .Take(Math.Clamp(maxProjects, 1, 200))
-                    .Select(c => c.Project);
-                scanSet = q.DependencyClosure(new[] { declaringProject });
-                foreach (var p in candidates) scanSet.Add(p);
-            }
-
-            var (solution, coverage) = await Workspace
-                .EnsureLoadedAsync(scanSet, cts.Token, new[] { declaringProject })
-                .ConfigureAwait(false);
-            var (symbol2, _, _) = await ResolveSymbolAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
-            symbol = symbol2 ?? symbol;
-            solution = (await Workspace.EnsureLoadedAsync(scanSet, cts.Token, new[] { declaringProject }).ConfigureAwait(false)).Solution;
+            var (solution, symbol, coverage, _) = await LoadScanSetAndResolveAsync(
+                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token).ConfigureAwait(false);
+            if (symbol is null) return (null, "symbol_not_resolved_in_scope");
 
             var results = new List<SemanticDeclaration>();
             if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface)
@@ -250,10 +216,13 @@ public sealed partial class SemanticService : IDisposable
     // ---------------------------------------------------------------- resolution
 
     /// <summary>
-    /// Resolves the symbol at (path, line[, column]) — or the declaration named nameHint
-    /// on that line — loading the owning project's dependency closure first.
+    /// Determines the owning project of a file position, loads its dependency closure,
+    /// and resolves the symbol — all against a single Solution snapshot returned to the
+    /// caller. Callers that then run SymbolFinder MUST use the returned Solution so that
+    /// resolution and search share one snapshot (otherwise a reload/eviction between them
+    /// silently orphans the symbol and yields empty "exact" results).
     /// </summary>
-    private async Task<(ISymbol? Symbol, string? DeclaringProject, Document? Document)> ResolveSymbolAsync(
+    private async Task<(Solution? Solution, ISymbol? Symbol, string? OwningProject)> LoadOwnerAndResolveAsync(
         string path, int line, int? column, string? nameHint, CancellationToken ct)
     {
         string relPath = path.Replace('\\', '/').TrimStart('/');
@@ -268,40 +237,37 @@ public sealed partial class SemanticService : IDisposable
         }
 
         var (solution, _) = await Workspace.EnsureLoadedAsync(closure, ct).ConfigureAwait(false);
-        var projectId = Workspace.LoadedProjectId(owningProject);
-        if (projectId is null) return (null, owningProject, null);
+        var symbol = await ResolveInSolutionAsync(solution, owningProject, relPath, line, column, nameHint, ct)
+            .ConfigureAwait(false);
+        return (solution, symbol, owningProject);
+    }
+
+    /// <summary>
+    /// Resolves the symbol at (path, line[, column]) — or the declaration named nameHint
+    /// on that line — against a caller-provided Solution snapshot. Does not load or mutate
+    /// the workspace, so the returned symbol is valid for SymbolFinder on the same snapshot.
+    /// </summary>
+    private async Task<ISymbol?> ResolveInSolutionAsync(
+        Solution solution, string owningProject, string relPath, int line, int? column, string? nameHint, CancellationToken ct)
+    {
+        var project = solution.Projects.FirstOrDefault(p =>
+            string.Equals(p.Name, owningProject, StringComparison.OrdinalIgnoreCase));
+        if (project is null) return null;
 
         string fullPath = Path.GetFullPath(Path.Combine(_manager.WorkspaceRoot, relPath.Replace('/', Path.DirectorySeparatorChar)));
-        var docId = solution.GetDocumentIdsWithFilePath(fullPath).FirstOrDefault(d => d.ProjectId == projectId)
+        var docId = solution.GetDocumentIdsWithFilePath(fullPath).FirstOrDefault(d => d.ProjectId == project.Id)
                     ?? solution.GetDocumentIdsWithFilePath(fullPath).FirstOrDefault();
-        if (docId is null) return (null, owningProject, null);
+        if (docId is null) return null;
         var document = solution.GetDocument(docId);
-        if (document is null) return (null, owningProject, null);
+        if (document is null) return null;
 
         var text = await document.GetTextAsync(ct).ConfigureAwait(false);
-        if (line < 1 || line > text.Lines.Count) return (null, owningProject, document);
-        var textLine = text.Lines[line - 1];
+        if (line < 1 || line > text.Lines.Count) return null;
+        int position = ComputePosition(text.Lines[line - 1], column, nameHint);
 
-        int position;
-        if (column is { } col && col >= 1)
-        {
-            position = Math.Min(textLine.Start + col - 1, Math.Max(textLine.Start, textLine.End - 1));
-        }
-        else if (nameHint is not null)
-        {
-            string lineText = textLine.ToString();
-            int idx = lineText.IndexOf(nameHint, StringComparison.Ordinal);
-            position = idx >= 0 ? textLine.Start + idx : SkipIndentation(textLine);
-        }
-        else
-        {
-            position = SkipIndentation(textLine);
-        }
-
-        // Prefer the declared symbol when the position sits on a declaration.
         var root = await document.GetSyntaxRootAsync(ct).ConfigureAwait(false);
         var model = await document.GetSemanticModelAsync(ct).ConfigureAwait(false);
-        if (root is null || model is null) return (null, owningProject, document);
+        if (root is null || model is null) return null;
 
         var token = root.FindToken(position);
         for (SyntaxNode? node = token.Parent; node is not null; node = node.Parent)
@@ -311,24 +277,67 @@ public sealed partial class SemanticService : IDisposable
                 (nameHint is null || declared.Name.Equals(nameHint, StringComparison.Ordinal) ||
                  token.ValueText == declared.Name))
             {
-                return (declared, owningProject, document);
+                return declared;
             }
-            if (node is Microsoft.CodeAnalysis.CSharp.Syntax.StatementSyntax or Microsoft.CodeAnalysis.CSharp.Syntax.MemberDeclarationSyntax)
+            if (node is StatementSyntax or MemberDeclarationSyntax)
             {
                 break;
             }
         }
 
-        var symbol = await SymbolFinder.FindSymbolAtPositionAsync(document, position, ct).ConfigureAwait(false);
-        return (symbol, owningProject, document);
+        return await SymbolFinder.FindSymbolAtPositionAsync(document, position, ct).ConfigureAwait(false);
+    }
 
-        int SkipIndentation(TextLine tl)
+    private static int ComputePosition(TextLine textLine, int? column, string? nameHint)
+    {
+        if (column is { } col && col >= 1)
         {
-            string s = tl.ToString();
-            int i = 0;
-            while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
-            return tl.Start + Math.Min(i, Math.Max(0, s.Length - 1));
+            return Math.Min(textLine.Start + col - 1, Math.Max(textLine.Start, textLine.End - 1));
         }
+        if (nameHint is not null)
+        {
+            int idx = textLine.ToString().IndexOf(nameHint, StringComparison.Ordinal);
+            if (idx >= 0) return textLine.Start + idx;
+        }
+        string s = textLine.ToString();
+        int i = 0;
+        while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
+        return textLine.Start + Math.Min(i, Math.Max(0, s.Length - 1));
+    }
+
+    /// <summary>
+    /// Shared phase-2 for dependent-scanning ops (references/implementations/callers/
+    /// hierarchy): given the symbol name and owning project, loads the FTS-candidate
+    /// dependent scan set and re-resolves the symbol IN the loaded snapshot. The returned
+    /// symbol and solution are one consistent snapshot for SymbolFinder.
+    /// </summary>
+    private async Task<(Solution Solution, ISymbol? Symbol, ClusterCoverage Coverage, List<string> Skipped)> LoadScanSetAndResolveAsync(
+        string symbolName, string owningProject, string path, int line, int? column, string? nameHint,
+        int maxProjects, CancellationToken ct)
+    {
+        List<string> skipped;
+        HashSet<string> scanSet;
+        using (var q = _manager.OpenQueries())
+        {
+            var dependents = q.DependentClosure(owningProject);
+            dependents.Add(owningProject);
+            var candidates = q.CandidateProjectsForName(symbolName)
+                .Where(c => dependents.Contains(c.Project))
+                .ToList();
+            var chosen = candidates.Take(Math.Clamp(maxProjects, 1, 200)).Select(c => c.Project).ToList();
+            skipped = candidates.Skip(chosen.Count).Select(c => c.Project).ToList();
+
+            scanSet = q.DependencyClosure(new[] { owningProject });
+            foreach (var p in chosen) scanSet.Add(p);
+        }
+
+        var (solution, coverage) = await Workspace
+            .EnsureLoadedAsync(scanSet, ct, ensureReferenceTo: new[] { owningProject })
+            .ConfigureAwait(false);
+        var symbol = await ResolveInSolutionAsync(
+            solution, owningProject, path.Replace('\\', '/').TrimStart('/'), line, column, nameHint, ct)
+            .ConfigureAwait(false);
+        return (solution, symbol, coverage, skipped);
     }
 
     // ---------------------------------------------------------------- shaping

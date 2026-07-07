@@ -26,28 +26,12 @@ public sealed partial class SemanticService
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         try
         {
-            var (symbol, declaringProject, _) = await ResolveSymbolAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
-            if (symbol is null || declaringProject is null) return (null, null, "symbol_not_resolved");
+            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
+            if (symbolA is null || owningProject is null) return (null, null, "symbol_not_resolved");
 
-            HashSet<string> scanSet;
-            using (var q = _manager.OpenQueries())
-            {
-                var dependents = q.DependentClosure(declaringProject);
-                dependents.Add(declaringProject);
-                var chosen = q.CandidateProjectsForName(symbol.Name)
-                    .Where(c => dependents.Contains(c.Project))
-                    .Take(Math.Clamp(maxProjects, 1, 200))
-                    .Select(c => c.Project);
-                scanSet = q.DependencyClosure(new[] { declaringProject });
-                foreach (var p in chosen) scanSet.Add(p);
-            }
-
-            var (solution, coverage) = await Workspace
-                .EnsureLoadedAsync(scanSet, cts.Token, new[] { declaringProject })
-                .ConfigureAwait(false);
-            var (symbol2, _, _) = await ResolveSymbolAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
-            symbol = symbol2 ?? symbol;
-            solution = (await Workspace.EnsureLoadedAsync(scanSet, cts.Token, new[] { declaringProject }).ConfigureAwait(false)).Solution;
+            var (solution, symbol, coverage, _) = await LoadScanSetAndResolveAsync(
+                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token).ConfigureAwait(false);
+            if (symbol is null) return (null, null, "symbol_not_resolved_in_scope");
 
             var callers = await SymbolFinder.FindCallersAsync(symbol, solution, cts.Token).ConfigureAwait(false);
             var testFlags = ProjectTestFlags();
@@ -86,14 +70,14 @@ public sealed partial class SemanticService
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         try
         {
-            var (symbol, declaringProject, document) = await ResolveSymbolAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
-            if (symbol is null || document is null) return (null, "symbol_not_resolved");
+            var (solution, symbol, _) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
+            if (symbol is null || solution is null) return (null, "symbol_not_resolved");
 
             var byTarget = new Dictionary<ISymbol, List<int>>(SymbolEqualityComparer.Default);
             foreach (var syntaxRef in symbol.DeclaringSyntaxReferences)
             {
                 var node = await syntaxRef.GetSyntaxAsync(cts.Token).ConfigureAwait(false);
-                var declDoc = document.Project.Solution.GetDocument(syntaxRef.SyntaxTree);
+                var declDoc = solution.GetDocument(syntaxRef.SyntaxTree);
                 if (declDoc is null) continue;
                 var model = await declDoc.GetSemanticModelAsync(cts.Token).ConfigureAwait(false);
                 if (model is null) continue;
@@ -133,30 +117,16 @@ public sealed partial class SemanticService
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         try
         {
-            var (symbol, declaringProject, _) = await ResolveSymbolAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
-            if (symbol is not INamedTypeSymbol type || declaringProject is null)
-            {
-                return (null, null, symbol is null ? "symbol_not_resolved" : "not_a_type");
-            }
+            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
+            if (symbolA is null || owningProject is null) return (null, null, "symbol_not_resolved");
+            if (symbolA is not INamedTypeSymbol) return (null, null, "not_a_type");
 
-            HashSet<string> scanSet;
-            using (var q = _manager.OpenQueries())
+            var (solution, symbol, coverage, _) = await LoadScanSetAndResolveAsync(
+                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token).ConfigureAwait(false);
+            if (symbol is not INamedTypeSymbol type)
             {
-                var dependents = q.DependentClosure(declaringProject);
-                dependents.Add(declaringProject);
-                var chosen = q.CandidateProjectsForName(type.Name)
-                    .Where(c => dependents.Contains(c.Project))
-                    .Take(Math.Clamp(maxProjects, 1, 200))
-                    .Select(c => c.Project);
-                scanSet = q.DependencyClosure(new[] { declaringProject });
-                foreach (var p in chosen) scanSet.Add(p);
+                return (null, null, symbol is null ? "symbol_not_resolved_in_scope" : "not_a_type");
             }
-            var (solution, coverage) = await Workspace
-                .EnsureLoadedAsync(scanSet, cts.Token, new[] { declaringProject })
-                .ConfigureAwait(false);
-            var (symbol2, _, _) = await ResolveSymbolAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
-            type = symbol2 as INamedTypeSymbol ?? type;
-            solution = (await Workspace.EnsureLoadedAsync(scanSet, cts.Token, new[] { declaringProject }).ConfigureAwait(false)).Solution;
 
             var baseTypes = new List<SemanticDeclaration>();
             for (var b = type.BaseType; b is not null && b.SpecialType != SpecialType.System_Object; b = b.BaseType)
