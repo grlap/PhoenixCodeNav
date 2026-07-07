@@ -274,9 +274,11 @@ public sealed partial class SemanticService : IDisposable
         {
             var declared = model.GetDeclaredSymbol(node, ct);
             if (declared is not null &&
-                (nameHint is null || declared.Name.Equals(nameHint, StringComparison.Ordinal) ||
-                 token.ValueText == declared.Name))
+                (nameHint is null || declared.Name.Equals(nameHint, StringComparison.Ordinal)))
             {
+                // With a name hint we require an exact name match: the old `token.ValueText ==
+                // declared.Name` fallback accepted a sibling declarator on a multi-variable line
+                // (e.g. resolving "Height" to "HeightRatio"), returning the wrong symbol as 'exact'.
                 return declared;
             }
             if (node is StatementSyntax or MemberDeclarationSyntax)
@@ -296,7 +298,9 @@ public sealed partial class SemanticService : IDisposable
         }
         if (nameHint is not null)
         {
-            int idx = textLine.ToString().IndexOf(nameHint, StringComparison.Ordinal);
+            // Whole-identifier match so a hint like "Height" does not land inside "HeightRatio"
+            // on a multi-declarator line and resolve the wrong sibling.
+            int idx = IndexOfWholeIdentifier(textLine.ToString(), nameHint);
             if (idx >= 0) return textLine.Start + idx;
         }
         string s = textLine.ToString();
@@ -304,6 +308,26 @@ public sealed partial class SemanticService : IDisposable
         while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
         return textLine.Start + Math.Min(i, Math.Max(0, s.Length - 1));
     }
+
+    /// <summary>Index of <paramref name="token"/> in <paramref name="line"/> where it occurs as a
+    /// whole identifier (bounded by non-identifier characters), or -1. Prevents a name hint from
+    /// matching inside a longer identifier (e.g. "Height" inside "HeightRatio").</summary>
+    internal static int IndexOfWholeIdentifier(string line, string token)
+    {
+        if (token.Length == 0) return -1;
+        int from = 0;
+        while ((from = line.IndexOf(token, from, StringComparison.Ordinal)) >= 0)
+        {
+            bool leftOk = from == 0 || !IsIdentifierChar(line[from - 1]);
+            int end = from + token.Length;
+            bool rightOk = end >= line.Length || !IsIdentifierChar(line[end]);
+            if (leftOk && rightOk) return from;
+            from = end;
+        }
+        return -1;
+    }
+
+    private static bool IsIdentifierChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
     /// <summary>
     /// Shared phase-2 for dependent-scanning ops (references/implementations/callers/

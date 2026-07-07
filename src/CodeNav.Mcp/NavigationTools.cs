@@ -353,12 +353,24 @@ public sealed partial class NavigationTools
     [McpServerTool(Name = "source_context")]
     [Description("Bounded live source read around one or more line spans (the bridge from navigation results to actual code). Use spans from outline/definition/search results instead of reading whole files.")]
     public string SourceContext(
-        [Description("Workspace-relative file path.")] string path,
-        [Description("Spans as 'start-end' or 'line', comma-separated (e.g. '42-88,120').")] string spans,
+        [Description("Workspace-relative file path. Optional when symbolId is given.")] string? path = null,
+        [Description("Spans as 'start-end' or 'line', comma-separated (e.g. '42-88,120'). Optional when symbolId is given (defaults to the symbol's own declaration span).")] string spans = "",
         [Description("Extra context lines around each span (default 2).")] int contextLines = 2,
-        [Description("Byte budget for returned source (default 8192, max 24576).")] int maxBytes = 8192)
+        [Description("Byte budget for returned source (default 8192, max 24576).")] int maxBytes = 8192,
+        [Description("Show one symbol's source by handle instead of path+spans: 'idx:NNN' from a prior result. Overrides path/spans with the symbol's declaration span. Note: 'idx:' handles are index-local and change on reindex.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        if (symbolId is { Length: > 0 })
+        {
+            var (hit, error) = ResolveSymbolIdHandle(symbolId);
+            if (error is not null) return error;
+            path = hit!.FilePath;
+            spans = $"{hit.StartLine}-{hit.EndLine}";
+        }
+        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(spans))
+        {
+            return Json.Serialize(new { error = "bad_request", detail = "Provide 'symbolId', or 'path'+'spans'." });
+        }
         path = NormalizePath(path);
         maxBytes = Math.Clamp(maxBytes, 256, Json.HardBudgetBytes);
 
@@ -554,12 +566,22 @@ public sealed partial class NavigationTools
         [Description("'auto' (semantic first, indexed fallback), 'semantic', or 'indexed'.")] string mode = "auto",
         [Description("Semantic resolution deadline in ms (default 10000).")] int timeoutMs = 10000,
         [Description("Also return the primary declaration's source body (numbered lines, budget-bounded).")] bool includeBody = false,
-        [Description("Byte budget for the inline body (default 12288, max 16384).")] int bodyMaxBytes = 12288)
+        [Description("Byte budget for the inline body (default 12288, max 16384).")] int bodyMaxBytes = 12288,
+        [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex; a documentationCommentId is not yet accepted here.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        if (symbolId is { Length: > 0 })
+        {
+            var (hit, error) = ResolveSymbolIdHandle(symbolId);
+            if (error is not null) return error;
+            name = hit!.Name; path = hit.FilePath; line = hit.StartLine; column = 0;
+            // The handle already disambiguated the symbol — caller kinds/container filters exist to
+            // narrow a bare name, so applying them here can only wrongly suppress the resolved hit.
+            kinds = null; container = null;
+        }
         if (name is null && (path is null || line <= 0))
         {
-            return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
+            return Json.Serialize(new { error = "bad_request", detail = "Provide 'symbolId', 'name', or 'path'+'line'." });
         }
 
         string? failReason = null;
@@ -823,12 +845,19 @@ public sealed partial class NavigationTools
         [Description("Max candidate files scanned in indexed mode (default 500).")] int maxFiles = 500,
         [Description("Max projects loaded semantically (default 24; raise for hot symbols).")] int maxProjects = 24,
         [Description("Sample lines per project group (default 3).")] int samplesPerGroup = 3,
-        [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000)
+        [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000,
+        [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex; a documentationCommentId is not yet accepted here.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        if (symbolId is { Length: > 0 })
+        {
+            var (hit, error) = ResolveSymbolIdHandle(symbolId);
+            if (error is not null) return error;
+            name = hit!.Name; path = hit.FilePath; line = hit.StartLine; column = 0;
+        }
         if (name is null && (path is null || line <= 0))
         {
-            return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
+            return Json.Serialize(new { error = "bad_request", detail = "Provide 'symbolId', 'name', or 'path'+'line'." });
         }
 
         // Path filters are honored precisely only on the indexed candidate path (semantic counts
@@ -1086,6 +1115,34 @@ public sealed partial class NavigationTools
         if (excludePath is { Length: > 0 } ex) list.Add(ex);
         if (firstPartyOnly) list.AddRange(IndexQueries.VendorExcludeGlobs());
         return list.Count > 0 ? list.Distinct(StringComparer.OrdinalIgnoreCase).ToList() : null;
+    }
+
+    /// <summary>Resolves a symbolId handle to its indexed declaration row. Accepts the idx:NNN
+    /// handle (from any search_symbol / symbol_at / definition result) — index-local, so it changes
+    /// on reindex. A documentationCommentId is not yet accepted as an input handle. Returns the hit
+    /// on success, or an error-JSON string to hand straight back to the caller.</summary>
+    private (SymbolHit? Hit, string? Error) ResolveSymbolIdHandle(string symbolId)
+    {
+        if (!symbolId.StartsWith("idx:", StringComparison.Ordinal) ||
+            !long.TryParse(symbolId.AsSpan(4), out long id))
+        {
+            return (null, Json.Serialize(new
+            {
+                error = "bad_request",
+                detail = "symbolId must be an 'idx:NNN' handle (from a prior search_symbol / symbol_at / definition result). A documentationCommentId (e.g. 'T:Ns.Type') is not yet accepted as input — use name, or path+line.",
+            }));
+        }
+        using var q = _manager.OpenQueries();
+        var hit = q.SymbolById(id);
+        if (hit is null)
+        {
+            return (null, Json.Serialize(new
+            {
+                error = "symbol_not_found",
+                detail = $"No indexed symbol with id {id}. 'idx:' handles are index-local and change on reindex — re-run search_symbol for a current handle.",
+            }));
+        }
+        return (hit, null);
     }
 
     private static object SymbolJson(SymbolHit s) => new

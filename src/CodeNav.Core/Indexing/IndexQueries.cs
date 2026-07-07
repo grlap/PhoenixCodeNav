@@ -353,6 +353,21 @@ public sealed class IndexQueries : IDisposable
         return chain;
     }
 
+    /// <summary>Fetches a single symbol row by its indexed id — the backing of the <c>idx:NNN</c>
+    /// symbolId handle. Null when no such row exists (ids are index-local and change on reindex).</summary>
+    public SymbolHit? SymbolById(long id)
+    {
+        var hits = Query(
+            """
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE s.id = $id
+            """,
+            ReadSymbol, ("$id", id));
+        return hits.Count > 0 ? hits[0] : null;
+    }
+
     /// <summary>Innermost symbol containing the line — the single-query flavor of
     /// <see cref="SymbolAt"/> (no ancestor walk), cheap enough to decorate search hits.</summary>
     public SymbolHit? InnermostSymbolAt(string filePath, int line)
