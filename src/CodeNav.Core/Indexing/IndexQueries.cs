@@ -50,21 +50,27 @@ public sealed class IndexQueries : IDisposable
 
     // ---------------------------------------------------------------- find_file
 
-    public List<FileHit> FindFiles(string nameOrGlob, int limit, int offset = 0)
+    public List<FileHit> FindFiles(string nameOrGlob, int limit,
+        IReadOnlyList<string>? excludePaths = null, int offset = 0)
     {
-        bool pathQuery = nameOrGlob.Contains('/');
-        string like = GlobToLike(nameOrGlob);
-        string pattern = pathQuery ? like : $"%/{like}";
+        // An empty include is "nothing to find" → no match (matching the pre-filter behavior).
+        // Without this, AppendPathFilter would add no include predicate and the query would
+        // collapse to WHERE 1=1 (a full-table listing), not the empty result callers expect.
+        if (string.IsNullOrEmpty(nameOrGlob)) return new();
+        // Include (nameOrGlob) and exclude share the same glob semantics as search_symbol via
+        // AppendPathFilter — a bare name matches at any depth (root included), a '/'-glob anchors.
+        var args = new List<(string, object)> { ("$lim", limit), ("$off", offset) };
+        var where = new System.Text.StringBuilder("WHERE 1=1");
+        AppendPathFilter(where, args, nameOrGlob, excludePaths);
 
-        var hits = Query(
-            """
-            SELECT id, path, size, line_count, is_generated FROM files
-            WHERE path LIKE $p ESCAPE '\' OR path LIKE $bare ESCAPE '\'
-            ORDER BY is_generated, length(path), path LIMIT $lim OFFSET $off
+        return Query(
+            $"""
+            SELECT f.id, f.path, f.size, f.line_count, f.is_generated FROM files f
+            {where}
+            ORDER BY f.is_generated, length(f.path), f.path LIMIT $lim OFFSET $off
             """,
             r => new FileHit(r.GetInt64(0), r.GetString(1), r.GetInt64(2), r.GetInt32(3), r.GetBoolean(4)),
-            ("$p", pattern), ("$bare", like), ("$lim", limit), ("$off", offset));
-        return hits;
+            args.ToArray());
     }
 
     // ---------------------------------------------------------------- search_text
@@ -74,7 +80,8 @@ public sealed class IndexQueries : IDisposable
         string? Project = null,
         bool IncludeGenerated = false,
         bool? TestsOnly = null,          // null = both, true = tests only, false = production only
-        string? Lang = null);
+        string? Lang = null,
+        IReadOnlyList<string>? ExcludePaths = null);
 
     /// <summary>Convenience overload returning just the graded hits (auto partials mode).</summary>
     public List<TextHit> SearchText(string query, int limit, TextFilter? filter = null,
@@ -102,7 +109,7 @@ public sealed class IndexQueries : IDisposable
         if (!filter.IncludeGenerated) where.Append(" AND f.is_generated = 0");
         // Shared path predicate — same glob semantics as search_symbol/find_file (bare
         // names match at any depth, workspace-root files included).
-        AppendPathFilter(where, args, filter.PathGlob, null);
+        AppendPathFilter(where, args, filter.PathGlob, filter.ExcludePaths);
         if (filter.Lang is { } lang)
         {
             where.Append(" AND f.lang = $lang");
@@ -263,7 +270,7 @@ public sealed class IndexQueries : IDisposable
 
     public List<SymbolHit> SearchSymbols(string query, string mode, IReadOnlyList<string>? kinds, int limit,
         bool includeGenerated = false, int offset = 0,
-        string? pathGlob = null, string? excludePath = null, string? ns = null)
+        string? pathGlob = null, IReadOnlyList<string>? excludePaths = null, string? ns = null)
     {
         string esc = EscapeLike(query);
         string pattern = mode switch
@@ -281,7 +288,7 @@ public sealed class IndexQueries : IDisposable
         string kindFilter = KindFilter(kinds);
         if (kindFilter.Length > 0) where.Append(' ').Append(kindFilter);
         if (!includeGenerated) where.Append(" AND f.is_generated = 0");
-        AppendPathFilter(where, args, pathGlob, excludePath);
+        AppendPathFilter(where, args, pathGlob, excludePaths);
         if (ns is { Length: > 0 } nsFilter)
         {
             // Namespace subtree: the exact namespace OR anything nested under it.
@@ -391,18 +398,27 @@ public sealed class IndexQueries : IDisposable
     // ---------------------------------------------------------------- reference candidates
 
     public (int TotalHits, List<ReferenceGroup> Groups) ReferenceCandidates(
-        string symbolName, int maxCandidateFiles = 500, int samplesPerProject = 3)
+        string symbolName, int maxCandidateFiles = 500, int samplesPerProject = 3,
+        string? pathGlob = null, IReadOnlyList<string>? excludePaths = null)
     {
+        var args = new List<(string, object)>
+        {
+            ("$q", $"\"{symbolName.Replace("\"", "")}\""), ("$lim", maxCandidateFiles),
+        };
+        // Same include/exclude glob semantics as search_symbol; lets references drop vendored
+        // third-party candidate files precisely (counts reflect the filtered set).
+        var where = new System.Text.StringBuilder("WHERE fts_content MATCH $q");
+        AppendPathFilter(where, args, pathGlob, excludePaths);
         var candidates = Query(
-            """
+            $"""
             SELECT f.id, f.path, f.is_generated FROM fts_content
             JOIN files f ON f.id = fts_content.rowid
-            WHERE fts_content MATCH $q
+            {where}
             ORDER BY f.is_generated, bm25(fts_content)
             LIMIT $lim
             """,
             r => (Id: r.GetInt64(0), Path: r.GetString(1), Gen: r.GetBoolean(2)),
-            ("$q", $"\"{symbolName.Replace("\"", "")}\""), ("$lim", maxCandidateFiles));
+            args.ToArray());
 
         // Resolve project ownership for all candidate files in one query per batch.
         var fileProjects = FileProjects(candidates.Select(c => c.Id).ToList());
@@ -889,15 +905,16 @@ public sealed class IndexQueries : IDisposable
         return sb.ToString();
     }
 
-    /// <summary>Appends include (<paramref name="pathGlob"/>) and exclude (<paramref name="excludePath"/>)
+    /// <summary>Appends include (<paramref name="pathGlob"/>) and exclude (<paramref name="excludePaths"/>)
     /// path predicates onto a WHERE builder over <c>f.path</c>. A glob containing '/' is matched against
     /// the workspace-relative path as-is; a bare glob (no '/') is matched starting at any path-segment
     /// boundary, root included — note '*'/'?' cross '/' in LIKE, so a wildcarded bare glob can span
     /// directory segments, not just the file name. The bare form is OR-ed in (and De Morgan'd for
-    /// exclude) the way FindFiles does. Binds $incPath/$incBare and $excPath/$excBare, so a single
-    /// query must not rebind those.</summary>
+    /// exclude) the way FindFiles does. Each exclude glob is a whole AND-ed <c>NOT LIKE</c> (a path is
+    /// dropped if it matches ANY exclude). Binds $incPath/$incBare for the include and $ex{n}p/$ex{n}b
+    /// per exclude, so a single query must not rebind those.</summary>
     private static void AppendPathFilter(System.Text.StringBuilder where, List<(string, object)> args,
-        string? pathGlob, string? excludePath)
+        string? pathGlob, IReadOnlyList<string>? excludePaths)
     {
         if (pathGlob is { Length: > 0 } inc)
         {
@@ -914,21 +931,112 @@ public sealed class IndexQueries : IDisposable
                 args.Add(("$incBare", like));
             }
         }
-        if (excludePath is { Length: > 0 } exc)
+        if (excludePaths is null) return;
+        int n = 0;
+        foreach (var raw in excludePaths)
         {
-            string like = GlobToLike(exc);
-            if (exc.Contains('/'))
+            if (string.IsNullOrEmpty(raw)) continue;
+            string like = GlobToLike(raw);
+            string pPath = $"$ex{n}p", pBare = $"$ex{n}b"; // distinct binds per exclude
+            n++;
+            if (raw.Contains('/'))
             {
-                where.Append(" AND f.path NOT LIKE $excPath ESCAPE '\\'");
-                args.Add(("$excPath", like));
+                where.Append($" AND f.path NOT LIKE {pPath} ESCAPE '\\'");
+                args.Add((pPath, like));
             }
             else
             {
-                where.Append(" AND f.path NOT LIKE $excPath ESCAPE '\\' AND f.path NOT LIKE $excBare ESCAPE '\\'");
-                args.Add(("$excPath", $"%/{like}"));
-                args.Add(("$excBare", like));
+                where.Append($" AND f.path NOT LIKE {pPath} ESCAPE '\\' AND f.path NOT LIKE {pBare} ESCAPE '\\'");
+                args.Add((pPath, $"%/{like}"));
+                args.Add((pBare, like));
             }
         }
+    }
+
+    // ---------------------------------------------------------------- vendor / first-party
+
+    // Directory names that mark checked-in third-party or generated source that IS in the index.
+    // Matched as a whole path segment (case-insensitive), at any depth. Deliberately conservative —
+    // path-based, not a namespace heuristic — and surfaced (not silently applied) so callers can see
+    // them. Intentionally disjoint from WorkspaceScanner.DefaultExcludedDirs (bin/obj/packages/
+    // node_modules/...): those are never indexed at all, so listing them here would be dead weight —
+    // this set is exactly the vendored/generated dirs that survive the scan and become noise.
+    private static readonly string[] VendorSegments =
+    {
+        "3rdparty", "thirdparty", "third-party", "third_party",
+        "vendor", "vendored", "external", "externals", "generated",
+    };
+
+    /// <summary>Exclude globs for the checked-in vendor/generated directories actually present in
+    /// the index (e.g. "3rdparty/**", "src/vendor/**") — the repo_overview discovery hint. The
+    /// vendor-segment test is pushed into SQL so ALL paths are considered (not a sampled window),
+    /// yet only vendor paths come back to walk. Ordinal-sorted; the 50-cap bounds only pathological
+    /// output. Empty when none are present. (firstPartyOnly does NOT use this — it excludes vendor
+    /// segments directly via <see cref="VendorExcludeGlobs"/>, so it never depends on this scan.)</summary>
+    public List<string> SuggestedExcludes()
+    {
+        // Whole-segment match per marker: at the path start ("marker/…") or after a slash
+        // ("…/marker/…"). EscapeLike neutralizes the '_' in markers like third_party (LIKE wildcard).
+        var clauses = new List<string>();
+        var args = new List<(string, object)>();
+        for (int i = 0; i < VendorSegments.Length; i++)
+        {
+            string esc = EscapeLike(VendorSegments[i]);
+            string a = $"$va{i}", b = $"$vb{i}";
+            clauses.Add($"f.path LIKE {a} ESCAPE '\\' OR f.path LIKE {b} ESCAPE '\\'");
+            args.Add((a, esc + "/%"));    // marker at path start
+            args.Add((b, $"%/{esc}/%"));  // marker after a slash
+        }
+        var dirs = Query(
+            $"SELECT f.path FROM files f WHERE {string.Join(" OR ", clauses)} ORDER BY f.path",
+            r => r.GetString(0), args.ToArray());
+
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in dirs)
+        {
+            var segs = path.Split('/');
+            for (int i = 0; i < segs.Length - 1; i++) // exclude the file name (last segment)
+            {
+                if (Array.Exists(VendorSegments, v => string.Equals(v, segs[i], StringComparison.OrdinalIgnoreCase)))
+                {
+                    found.Add(string.Join('/', segs.Take(i + 1)) + "/**");
+                    break; // shallowest vendor dir on this path is enough
+                }
+            }
+            if (found.Count >= 50) break; // bound the set
+        }
+        return found.OrderBy(s => s, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>Whole-segment exclude globs for the known vendor/generated directory names, at any
+    /// depth — two per marker: "<c>name/**</c>" (workspace root) and "<c>**/name/**</c>" (nested).
+    /// Powers firstPartyOnly: a complete, scan-free exclusion that matches exactly the paths
+    /// <see cref="IsVendorPath"/> flags as noise, so the two signals never diverge.</summary>
+    public static IReadOnlyList<string> VendorExcludeGlobs()
+    {
+        var globs = new List<string>(VendorSegments.Length * 2);
+        foreach (var seg in VendorSegments)
+        {
+            globs.Add(seg + "/**");         // marker directory at the workspace root
+            globs.Add("**/" + seg + "/**"); // marker directory at any depth
+        }
+        return globs;
+    }
+
+    /// <summary>True if any directory segment of the path (excluding the file name) is a known
+    /// vendor/generated marker — the per-hit "noise" signal. Segment-exact, case-insensitive,
+    /// at any depth. Best-effort and purely path-based, matching <see cref="VendorSegments"/>.</summary>
+    public static bool IsVendorPath(string path)
+    {
+        var segs = path.Split('/');
+        for (int i = 0; i < segs.Length - 1; i++) // skip the file name (last segment)
+        {
+            foreach (var v in VendorSegments)
+            {
+                if (string.Equals(v, segs[i], StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>Splits a query into index tokens (letter/digit/underscore runs), matching the FTS tokenizer.</summary>

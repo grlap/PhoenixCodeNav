@@ -115,6 +115,9 @@ public sealed partial class NavigationTools
             symbols = stats.Symbols,
             generatedFiles = stats.GeneratedFiles,
             targetFrameworks = stats.TfmBreakdown,
+            // Vendored/generated directory globs detected in the index — pass to search_symbol /
+            // search_text excludePath (or firstPartyOnly) to drop third-party noise. [] when none.
+            suggestedExcludes = q.SuggestedExcludes(),
             git,
             meta = Meta.From(h, "indexed", "text"),
         });
@@ -126,13 +129,15 @@ public sealed partial class NavigationTools
     [Description("Find files by name or glob (e.g. 'InvoiceService.cs', '*Controller.cs', 'src/Billing/**/*.csproj'). Cheap path-only lookup; use search_symbol for code symbols.")]
     public string FindFile(
         [Description("File name or glob pattern. '*' matches any characters including '/'.")] string nameOrGlob,
+        [Description("Exclude paths matching this glob (e.g. '3rdparty/**' to drop vendored third-party files).")] string? excludePath = null,
         [Description("Max results (default 20, max 100).")] int limit = 20,
         [Description("Opaque cursor from a previous call to fetch the next page.")] string? cursor = null)
     {
         if (NotReady() is { } notReady) return notReady;
         (limit, int offset) = Page(limit, cursor);
         using var q = _manager.OpenQueries();
-        var files = q.FindFiles(nameOrGlob, limit + 1, offset);
+        var excludes = excludePath is { Length: > 0 } ex ? new[] { ex } : null;
+        var files = q.FindFiles(nameOrGlob, limit + 1, excludes, offset);
         string? next = files.Count > limit ? $"o:{offset + limit}" : null;
         if (next is not null) files.RemoveAt(files.Count - 1);
 
@@ -151,6 +156,8 @@ public sealed partial class NavigationTools
     public string SearchText(
         [Description("Text to find. Multi-word queries are AND-ed by token; a line with all tokens is 'precise'.")] string query,
         [Description("Restrict to paths matching this glob (e.g. 'src/Billing/**').")] string? pathGlob = null,
+        [Description("Exclude paths matching this glob (e.g. '3rdparty/**' to drop vendored third-party source).")] string? excludePath = null,
+        [Description("Drop hits under known vendor/generated dir names (3rdparty, vendor, external, generated...) at ANY depth. Matches the per-hit noise flag; convenience over excludePath.")] bool firstPartyOnly = false,
         [Description("Restrict to files compiled by this project name.")] string? project = null,
         [Description("'all' (default), 'production' (exclude tests), or 'tests'.")] string scope = "all",
         [Description("Restrict by file language: cs | csproj | sln | config.")] string? lang = null,
@@ -168,7 +175,8 @@ public sealed partial class NavigationTools
             Project: project,
             IncludeGenerated: includeGenerated,
             TestsOnly: scope switch { "tests" => true, "production" => false, _ => null },
-            Lang: lang);
+            Lang: lang,
+            ExcludePaths: BuildExcludes(excludePath, firstPartyOnly));
         var result = q.SearchTextGraded(query, limit + 1, filter, maxCandidateFiles: 300, offset: offset, partialsMode: mode);
         var hits = result.Hits;
         string? next = hits.Count > limit ? $"o:{offset + limit}" : null;
@@ -209,6 +217,7 @@ public sealed partial class NavigationTools
                 matchKind = t.MatchKind,
                 matched = t.MatchKind == "partial" ? t.Matched : null, // tokens only meaningful on partials
                 containingSymbol = owners.TryGetValue((t.FilePath, t.Line), out var cs) ? cs : null,
+                noise = IndexQueries.IsVendorPath(t.FilePath) ? true : (bool?)null, // under a vendored/generated dir
             }),
             filesMatchedAcrossLines = acrossLines,
             nextCursor = next,
@@ -458,6 +467,7 @@ public sealed partial class NavigationTools
         [Description("Include symbols in generated files (default false).")] bool includeGenerated = false,
         [Description("Restrict to file paths matching this glob (e.g. 'SOAPAPI/**'); a bare name matches at any depth.")] string? pathGlob = null,
         [Description("Exclude file paths matching this glob (e.g. '3rdparty/**' to drop vendored third-party source).")] string? excludePath = null,
+        [Description("Drop hits under known vendor/generated dir names (3rdparty, vendor, external, generated...) at ANY depth. Matches the per-hit noise flag; convenience over excludePath. See repo_overview.suggestedExcludes for the dirs actually present.")] bool firstPartyOnly = false,
         [Description("Restrict to a namespace subtree: the exact namespace or anything nested under it (e.g. 'ExactTarget.Integration'). Distinct from a containing type.")] string? @namespace = null,
         [Description("Max results (default 20, max 100).")] int limit = 20,
         [Description("Opaque cursor from a previous call.")] string? cursor = null)
@@ -466,27 +476,28 @@ public sealed partial class NavigationTools
         (limit, int offset) = Page(limit, cursor);
         var kindList = SplitCsv(kinds);
         using var q = _manager.OpenQueries();
+        var excludes = BuildExcludes(excludePath, firstPartyOnly);
 
         List<SymbolHit> hits;
         string effectiveMatch = match;
         if (match == "auto")
         {
-            hits = q.SearchSymbols(query, "exact", kindList, limit + 1, includeGenerated, offset, pathGlob, excludePath, @namespace);
+            hits = q.SearchSymbols(query, "exact", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
             effectiveMatch = "exact";
             if (hits.Count == 0 && offset == 0)
             {
-                hits = q.SearchSymbols(query, "prefix", kindList, limit + 1, includeGenerated, offset, pathGlob, excludePath, @namespace);
+                hits = q.SearchSymbols(query, "prefix", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
                 effectiveMatch = "prefix";
             }
             if (hits.Count == 0 && offset == 0)
             {
-                hits = q.SearchSymbols(query, "substring", kindList, limit + 1, includeGenerated, offset, pathGlob, excludePath, @namespace);
+                hits = q.SearchSymbols(query, "substring", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
                 effectiveMatch = "substring";
             }
         }
         else
         {
-            hits = q.SearchSymbols(query, match, kindList, limit + 1, includeGenerated, offset, pathGlob, excludePath, @namespace);
+            hits = q.SearchSymbols(query, match, kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
         }
 
         string? next = hits.Count > limit ? $"o:{offset + limit}" : null;
@@ -798,7 +809,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "references")]
-    [Description("Where a symbol is used across the workspace, grouped by project with counts and sample lines. mode='auto' tries compiler-exact references (target by position path+line, or by name) scoped to candidate projects, falling back to index candidates. Call before changing behavior.")]
+    [Description("Where a symbol is used across the workspace, grouped by project with counts and sample lines. mode='auto' tries compiler-exact references (target by position path+line, or by name) scoped to candidate projects, falling back to index candidates. Pass pathGlob/excludePath to scope candidates (e.g. excludePath='3rdparty/**'); a path filter runs the indexed candidate path so counts reflect the filter. Call before changing behavior.")]
     public string References(
         [Description("Symbol name (whole-identifier). Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of a usage or declaration (position mode — most precise).")] string? path = null,
@@ -807,6 +818,8 @@ public sealed partial class NavigationTools
         [Description("'auto' (semantic first), 'semantic', or 'indexed' (fast candidates).")] string mode = "auto",
         [Description("Include usages in test projects (default true).")] bool includeTests = true,
         [Description("Include usages in generated files (default false).")] bool includeGenerated = false,
+        [Description("Restrict candidate paths to this glob (supplying a path filter runs indexed candidates).")] string? pathGlob = null,
+        [Description("Exclude candidate paths matching this glob, e.g. '3rdparty/**' (supplying a path filter runs indexed candidates).")] string? excludePath = null,
         [Description("Max candidate files scanned in indexed mode (default 500).")] int maxFiles = 500,
         [Description("Max projects loaded semantically (default 24; raise for hot symbols).")] int maxProjects = 24,
         [Description("Sample lines per project group (default 3).")] int samplesPerGroup = 3,
@@ -818,8 +831,11 @@ public sealed partial class NavigationTools
             return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
         }
 
-        string? failReason = null;
-        if (mode is "auto" or "semantic")
+        // Path filters are honored precisely only on the indexed candidate path (semantic counts
+        // are project-level and cannot be re-derived per path), so a filter forces indexed mode.
+        bool hasPathFilter = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 };
+        string? failReason = hasPathFilter && mode != "indexed" ? "path_filter_ran_indexed_candidates" : null;
+        if (mode is "auto" or "semantic" && !hasPathFilter)
         {
             var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column);
             if (target is { } t)
@@ -887,7 +903,9 @@ public sealed partial class NavigationTools
         {
             return Json.Serialize(new { error = "symbol_not_resolved", partialReason = failReason });
         }
-        var (total, groups) = q.ReferenceCandidates(name, Math.Clamp(maxFiles, 10, 2000), Math.Clamp(samplesPerGroup, 0, 10));
+        var excludes = excludePath is { Length: > 0 } ex ? new[] { ex } : null;
+        var (total, groups) = q.ReferenceCandidates(
+            name, Math.Clamp(maxFiles, 10, 2000), Math.Clamp(samplesPerGroup, 0, 10), pathGlob, excludes);
         if (!includeTests) groups = groups.Where(g => !g.IsTestProject).ToList();
         if (!includeGenerated)
         {
@@ -1058,6 +1076,18 @@ public sealed partial class NavigationTools
         frameworkRefsAvailable = c.FrameworkRefsAvailable,
     };
 
+    /// <summary>Combines an explicit excludePath glob with firstPartyOnly's whole-segment vendor
+    /// globs into one exclude list (null when empty, so callers pass null for "no filter").
+    /// firstPartyOnly uses <see cref="IndexQueries.VendorExcludeGlobs"/> — a complete, scan-free
+    /// exclusion that matches exactly what the per-hit noise flag reports.</summary>
+    private static IReadOnlyList<string>? BuildExcludes(string? excludePath, bool firstPartyOnly)
+    {
+        var list = new List<string>();
+        if (excludePath is { Length: > 0 } ex) list.Add(ex);
+        if (firstPartyOnly) list.AddRange(IndexQueries.VendorExcludeGlobs());
+        return list.Count > 0 ? list.Distinct(StringComparer.OrdinalIgnoreCase).ToList() : null;
+    }
+
     private static object SymbolJson(SymbolHit s) => new
     {
         symbolId = $"idx:{s.Id}",
@@ -1072,6 +1102,9 @@ public sealed partial class NavigationTools
         s.EndLine,
         isPartial = s.IsPartial ? true : (bool?)null,
         isGenerated = s.FileIsGenerated ? true : (bool?)null,
+        // Best-effort "this hit lives under a vendored/generated dir" signal (only present when
+        // true). Lets a caller spot third-party noise without firstPartyOnly, or excludePath it.
+        noise = IndexQueries.IsVendorPath(s.FilePath) ? true : (bool?)null,
         attributes = s.AttrMarkers,
     };
 

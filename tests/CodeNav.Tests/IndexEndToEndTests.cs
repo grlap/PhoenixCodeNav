@@ -149,13 +149,13 @@ public class IndexEndToEndTests : IClassFixture<IndexFixture>
         Assert.Single(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, pathGlob: $"{topDir}/**"));
         Assert.Empty(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, pathGlob: "no_such_dir_zz/**"));
 
-        // excludePath: excluding the owning subtree drops it; excluding elsewhere keeps it.
-        Assert.Empty(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, excludePath: $"{topDir}/**"));
-        Assert.Single(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, excludePath: "no_such_dir_zz/**"));
+        // excludePaths: excluding the owning subtree drops it; excluding elsewhere keeps it.
+        Assert.Empty(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, excludePaths: new[] { $"{topDir}/**" }));
+        Assert.Single(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, excludePaths: new[] { "no_such_dir_zz/**" }));
 
         // Bare name (no '/') matches the file at any depth for both include and exclude.
         Assert.Single(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, pathGlob: "Guard.cs"));
-        Assert.Empty(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, excludePath: "Guard.cs"));
+        Assert.Empty(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, excludePaths: new[] { "Guard.cs" }));
     }
 
     [Fact]
@@ -177,7 +177,7 @@ public class IndexEndToEndTests : IClassFixture<IndexFixture>
             // Only the bare $incBare/$excBare arms can reach a root file — reverting them
             // to the single '%/name' pattern fails these (mutation guard).
             Assert.Single(q.SearchSymbols("RootMarkerClass", "exact", null, 5, pathGlob: rel));
-            Assert.Empty(q.SearchSymbols("RootMarkerClass", "exact", null, 5, excludePath: rel));
+            Assert.Empty(q.SearchSymbols("RootMarkerClass", "exact", null, 5, excludePaths: new[] { rel }));
             // Sanity: the file really is at root — a nested-only pattern must not see it.
             Assert.Empty(q.SearchSymbols("RootMarkerClass", "exact", null, 5, pathGlob: $"*/{rel}"));
 
@@ -280,7 +280,7 @@ public class McpToolLayerTests : IClassFixture<IndexFixture>
         foreach (var json in new[]
                  {
                      tools.RepoOverview(),
-                     tools.FindFile("*.cs", 5),
+                     tools.FindFile("*.cs", limit: 5),
                      tools.SearchSymbol("Guard"),
                      tools.References("Guard", mode: "indexed", maxFiles: 100),
                  })
@@ -321,7 +321,7 @@ public class McpToolLayerTests : IClassFixture<IndexFixture>
     public void SourceContextReadsLiveSpans()
     {
         var tools = Tools();
-        var guardPath = Parse(tools.FindFile("Guard.cs", 1))
+        var guardPath = Parse(tools.FindFile("Guard.cs", limit: 1))
             .GetProperty("files").EnumerateArray().First().GetProperty("path").GetString()!;
         var ctx = Parse(tools.SourceContext(guardPath, "5-8", contextLines: 0));
         Assert.Equal("live", ctx.GetProperty("freshness").GetString());
@@ -333,7 +333,7 @@ public class McpToolLayerTests : IClassFixture<IndexFixture>
     public void OutlineDepthOneOmitsMembers()
     {
         var tools = Tools();
-        var guardPath = Parse(tools.FindFile("Guard.cs", 1))
+        var guardPath = Parse(tools.FindFile("Guard.cs", limit: 1))
             .GetProperty("files").EnumerateArray().First().GetProperty("path").GetString()!;
 
         string shallow = tools.Outline(guardPath, depth: 1);
