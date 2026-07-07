@@ -169,7 +169,9 @@ public sealed partial class NavigationTools
             }
         }
         var groups = q.RelatedTests(name, owningProject, Math.Clamp(limit, 1, 50));
-        var meta = Meta.From(_manager.Health(), "indexed", "text");
+        // Test association is inferred from naming conventions, project references, and
+        // symbol-name co-occurrence — leads, not compiler facts: confidence 'heuristic'.
+        var meta = Meta.From(_manager.Health(), "heuristic", "text");
         return Json.WithListBudget(groups, (items, truncated) => new
         {
             name,
@@ -219,7 +221,16 @@ public sealed partial class NavigationTools
         return Json.WithListBudget(hits, (items, truncated) => new
         {
             key,
-            hits = items.Select(h => new { path = h.FilePath, h.Line, text = h.LineText }),
+            // Surface the same match grading as search_text so a multi-token key whose parts
+            // sit on separate config lines is not presented as a full (precise) hit.
+            hits = items.Select(h => new
+            {
+                path = h.FilePath,
+                h.Line,
+                text = h.LineText,
+                matchKind = h.MatchKind,
+                matched = h.MatchKind == "partial" ? h.Matched : null,
+            }),
             truncated,
             meta,
         });
@@ -324,7 +335,11 @@ public sealed partial class NavigationTools
                 topProjects = refGroups.Take(6).Select(g => new { project = g.Project, g.Count, isTest = g.IsTestProject }),
                 confidence = "indexed",
             },
-            relatedTests = dropTests ? null : tests.Select(g => new { project = g.TestProject, g.Reason, g.MatchingFiles }),
+            relatedTests = dropTests ? null : new
+            {
+                confidence = "heuristic", // naming/project inference, not a compiler fact
+                groups = tests.Select(g => new { project = g.TestProject, g.Reason, g.MatchingFiles }),
+            },
             ownerProjectEdges = dropEdges ? null : edges.Select(e => new { from = e.FromProject, to = e.ToProject }),
             siblings = dropSiblings ? null : siblings,
             omittedBecauseBudget = omitted.Count > 0 ? omitted : null,
@@ -399,7 +414,11 @@ public sealed partial class NavigationTools
                 topProjects = refGroups.Take(8).Select(g => new { project = g.Project, g.Count }),
             },
             transitiveDependentProjects = dependents,
-            relatedTests = tests.Select(g => new { project = g.TestProject, g.Reason }),
+            relatedTests = new
+            {
+                confidence = "heuristic", // naming/project inference, not a compiler fact
+                groups = tests.Select(g => new { project = g.TestProject, g.Reason }),
+            },
             publicApi = isPublic,
             risks,
             note = "Reference counts are indexed candidates; run references(mode='semantic') for compiler-exact counts before risky changes.",

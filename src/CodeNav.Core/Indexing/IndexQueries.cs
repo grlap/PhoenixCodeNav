@@ -9,7 +9,18 @@ public sealed record SymbolHit(
 
 public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated);
 
-public sealed record TextHit(string FilePath, int Line, string LineText, bool IsGenerated);
+public sealed record TextHit(
+    string FilePath, int Line, string LineText, bool IsGenerated,
+    string MatchKind = "precise", IReadOnlyList<string>? Matched = null);
+
+/// <summary>
+/// Graded text-search result. Hits are ordered precise-first (contiguous phrase before
+/// scattered), then token-covering partials. Counts reflect the full candidate set before
+/// paging. FilesMatchedAcrossLines are files where every query token occurs but never on a
+/// single line (the file-level co-occurrence signal).
+/// </summary>
+public sealed record TextSearchResult(
+    List<TextHit> Hits, int TotalPrecise, int TotalPartial, List<string> FilesMatchedAcrossLines);
 
 public sealed record ProjectRow(long Id, string Path, string Name, string Style, string Tfms, bool IsTest, string LoadStatus);
 
@@ -65,11 +76,23 @@ public sealed class IndexQueries : IDisposable
         bool? TestsOnly = null,          // null = both, true = tests only, false = production only
         string? Lang = null);
 
+    /// <summary>Convenience overload returning just the graded hits (auto partials mode).</summary>
     public List<TextHit> SearchText(string query, int limit, TextFilter? filter = null,
         int maxCandidateFiles = 200, int offset = 0)
+        => SearchTextGraded(query, limit, filter, maxCandidateFiles, offset, "auto").Hits;
+
+    /// <summary>
+    /// Full-text search that grades each returned line: <c>precise</c> = the line contains
+    /// ALL query tokens (contiguous phrase ranked before scattered), <c>partial</c> = the
+    /// line covers only some tokens (token-covering, at most one line per otherwise-unmatched
+    /// token). There is no silent single-token substitution. partialsMode: "auto" (default —
+    /// partials only fill space precise did not), "never", or "always".
+    /// </summary>
+    public TextSearchResult SearchTextGraded(string query, int limit, TextFilter? filter,
+        int maxCandidateFiles, int offset, string partialsMode)
     {
         string fts = FtsQuery(query);
-        if (fts.Length == 0) return new();
+        if (fts.Length == 0) return new TextSearchResult(new(), 0, 0, new());
         filter ??= new TextFilter();
 
         var args = new List<(string, object)> { ("$q", fts), ("$lim", maxCandidateFiles) };
@@ -123,21 +146,121 @@ public sealed class IndexQueries : IDisposable
             r => (Id: r.GetInt64(0), Path: r.GetString(1), Gen: r.GetBoolean(2)),
             args.ToArray());
 
-        var results = new List<TextHit>(Math.Min(limit, 64));
-        int skipped = 0;
+        // Distinct query tokens, preserving order (case-insensitive).
+        var distinctTokens = new List<string>();
+        var seenTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in Tokenize(query))
+        {
+            if (seenTokens.Add(t)) distinctTokens.Add(t);
+        }
+        string rawQuery = query.Trim();
+
+        var precise = new List<TextHit>();
+        var partial = new List<TextHit>();
+        var filesAcross = new List<string>();
         foreach (var c in candidates)
         {
             string? content = ContentById(c.Id);
             if (content is null) continue;
-            foreach (int lineNo in LocateLines(content, query, out var lines))
+            var (filePrecise, filePartial) = GradeFile(c.Path, content, c.Gen, distinctTokens, rawQuery);
+            precise.AddRange(filePrecise);
+            if (filePrecise.Count == 0 && filePartial.Count > 0)
             {
-                if (skipped < offset) { skipped++; continue; }
-                results.Add(new TextHit(c.Path, lineNo, Snippet(lines[lineNo - 1]), c.Gen));
-                if (results.Count >= limit) return results;
+                partial.AddRange(filePartial);
+                filesAcross.Add(c.Path);
             }
         }
-        return results;
+
+        bool includePartials = partialsMode switch
+        {
+            "never" => false,
+            "always" => true,
+            _ => precise.Count < offset + limit, // auto: only when precise did not fill through this page
+        };
+        var ordered = includePartials ? precise.Concat(partial).ToList() : precise;
+        var page = ordered.Skip(offset).Take(limit).ToList();
+        return new TextSearchResult(page, precise.Count, partial.Count, filesAcross);
     }
+
+    /// <summary>
+    /// Grades one file's lines against the query tokens. Returns precise lines (all tokens,
+    /// contiguous phrase first) OR — only when the file has no precise line — token-covering
+    /// partial lines (one per otherwise-unmatched token). A file contributes to exactly one tier.
+    /// </summary>
+    private static (List<TextHit> Precise, List<TextHit> Partial) GradeFile(
+        string path, string content, bool gen, IReadOnlyList<string> tokens, string rawQuery)
+    {
+        var lines = content.Split('\n');
+        bool multi = tokens.Count > 1;
+        var phrase = new List<TextHit>();
+        var scattered = new List<TextHit>();
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i];
+            bool all = true;
+            foreach (var t in tokens)
+            {
+                // Whole-token match (identifier-bounded), matching the FTS tokenizer that
+                // selected this file — so 'Order' does NOT satisfy the token inside 'OrderId'.
+                if (!ContainsWholeToken(line, t)) { all = false; break; }
+            }
+            if (!all) continue;
+            bool isPhrase = multi && line.IndexOf(rawQuery, StringComparison.OrdinalIgnoreCase) >= 0;
+            (isPhrase ? phrase : scattered).Add(new TextHit(path, i + 1, Snippet(line), gen, "precise"));
+        }
+
+        if (phrase.Count + scattered.Count > 0)
+        {
+            phrase.AddRange(scattered); // contiguous-phrase precise ranked before scattered precise
+            return (phrase, new List<TextHit>());
+        }
+
+        // No precise line. For multi-token queries, surface where each token lives (one line
+        // per otherwise-unmatched token) so the caller sees the co-occurrence spread.
+        var partial = new List<TextHit>();
+        if (multi)
+        {
+            var covered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < lines.Length && covered.Count < tokens.Count; i++)
+            {
+                string line = lines[i];
+                List<string>? here = null;
+                foreach (var t in tokens)
+                {
+                    if (!covered.Contains(t) && ContainsWholeToken(line, t))
+                    {
+                        (here ??= new()).Add(t);
+                    }
+                }
+                if (here is not null)
+                {
+                    foreach (var t in here) covered.Add(t);
+                    partial.Add(new TextHit(path, i + 1, Snippet(line), gen, "partial", here));
+                }
+            }
+        }
+        return (new List<TextHit>(), partial);
+    }
+
+    /// <summary>True if <paramref name="token"/> occurs in <paramref name="line"/> as a whole
+    /// identifier token (bounded by non-identifier characters), case-insensitive — matching the
+    /// FTS tokenizer so grading agrees with candidacy.</summary>
+    private static bool ContainsWholeToken(string line, string token)
+    {
+        int idx = 0;
+        while ((idx = line.IndexOf(token, idx, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            bool leftOk = idx == 0 || !IsIdentChar(line[idx - 1]);
+            int end = idx + token.Length;
+            bool rightOk = end >= line.Length || !IsIdentChar(line[end]);
+            if (leftOk && rightOk) return true;
+            idx = end;
+        }
+        return false;
+    }
+
+    private static bool IsIdentChar(char c) => char.IsLetterOrDigit(c) || c == '_';
 
     // ---------------------------------------------------------------- symbols
 
@@ -721,8 +844,8 @@ public sealed class IndexQueries : IDisposable
         return sb.ToString().Replace("%%", "%");
     }
 
-    /// <summary>Builds an FTS5 query: each token quoted, implicit AND.</summary>
-    public static string FtsQuery(string query)
+    /// <summary>Splits a query into index tokens (letter/digit/underscore runs), matching the FTS tokenizer.</summary>
+    public static List<string> Tokenize(string query)
     {
         var tokens = new List<string>();
         var current = new System.Text.StringBuilder();
@@ -739,28 +862,12 @@ public sealed class IndexQueries : IDisposable
             }
         }
         if (current.Length > 0) tokens.Add(current.ToString());
-        return string.Join(" ", tokens.Select(t => $"\"{t}\""));
+        return tokens;
     }
 
-    /// <summary>Lines (1-based) containing the raw query case-insensitively; falls back to first token.</summary>
-    private static List<int> LocateLines(string content, string query, out string[] lines)
-    {
-        lines = content.Split('\n');
-        var result = new List<int>();
-        for (int i = 0; i < lines.Length; i++)
-        {
-            if (lines[i].Contains(query, StringComparison.OrdinalIgnoreCase)) result.Add(i + 1);
-        }
-        if (result.Count > 0) return result;
-
-        string fts = FtsQuery(query);
-        string firstToken = fts.Length > 0 ? fts.Split(' ')[0].Trim('"') : query;
-        for (int i = 0; i < lines.Length; i++)
-        {
-            if (lines[i].Contains(firstToken, StringComparison.OrdinalIgnoreCase)) result.Add(i + 1);
-        }
-        return result;
-    }
+    /// <summary>Builds an FTS5 query: each token quoted, implicit AND.</summary>
+    public static string FtsQuery(string query) =>
+        string.Join(" ", Tokenize(query).Select(t => $"\"{t}\""));
 
     /// <summary>Lines (1-based) where the name occurs as a whole identifier token.</summary>
     private static List<int> LocateTokenLines(string content, string name, out string[] lines)

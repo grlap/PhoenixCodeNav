@@ -6,9 +6,10 @@ using ModelContextProtocol.Server;
 namespace CodeNav.Mcp;
 
 /// <summary>
-/// Owns: the MCP tool surface (Phase-1 core tools) — argument handling, result shaping,
-/// budgets, and confidence/freshness metadata. All results here are index-backed
-/// ("indexed" confidence); exact semantic tools arrive with the Roslyn layer (M3).
+/// Owns: the MCP tool surface — argument handling, result shaping, budgets, and
+/// confidence/freshness metadata. Results carry the confidence they earn: "exact" for
+/// compiler-backed semantic answers, "indexed" for index/syntax-backed facts, and
+/// "heuristic" for naming/text inferences (implementations fallback, related_tests).
 /// Does not own: index building/queries (CodeNav.Core).
 /// </summary>
 [McpServerToolType]
@@ -47,7 +48,7 @@ public sealed partial class NavigationTools
                 "project_graph", "projects_containing", "refresh_index",
             },
             budgets = new { softBytes = Json.SoftBudgetBytes, hardBytes = Json.HardBudgetBytes, defaultLimit = 20 },
-            confidenceModel = new[] { "exact", "indexed" },
+            confidenceModel = new[] { "exact", "indexed", "heuristic" },
             semantic = new
             {
                 engine = "roslyn-adhoc (no MSBuild dependency)",
@@ -124,19 +125,21 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Ranked full-text search over indexed sources and configs (token-based, like grep with ranking). Right for literals, config keys, error messages, comments. For code facts (symbols, references) prefer search_symbol/definition/references.")]
+    [Description("Ranked full-text search over indexed sources and configs. Each hit is graded: matchKind='precise' means the line contains ALL query tokens (contiguous or scattered); 'partial' means only some tokens (a lead — the query's tokens co-occur in the file but not on one line). Precise hits rank first. Right for literals, config keys, error messages, comments. For code facts prefer search_symbol/definition/references.")]
     public string SearchText(
-        [Description("Text to find. Tokens are AND-ed; exact substring match is preferred when locating lines.")] string query,
+        [Description("Text to find. Multi-word queries are AND-ed by token; a line with all tokens is 'precise'.")] string query,
         [Description("Restrict to paths matching this glob (e.g. 'src/Billing/**').")] string? pathGlob = null,
         [Description("Restrict to files compiled by this project name.")] string? project = null,
         [Description("'all' (default), 'production' (exclude tests), or 'tests'.")] string scope = "all",
         [Description("Restrict by file language: cs | csproj | sln | config.")] string? lang = null,
         [Description("Include generated files (default false).")] bool includeGenerated = false,
+        [Description("Partial (some-token) hits: 'auto' (default — only fill space precise did not), 'never', or 'always'.")] string partials = "auto",
         [Description("Max hits (default 20, max 100).")] int limit = 20,
         [Description("Opaque cursor from a previous call.")] string? cursor = null)
     {
         if (NotReady() is { } notReady) return notReady;
         (limit, int offset) = Page(limit, cursor);
+        string mode = partials is "never" or "always" ? partials : "auto";
         using var q = _manager.OpenQueries();
         var filter = new IndexQueries.TextFilter(
             PathGlob: pathGlob,
@@ -144,17 +147,36 @@ public sealed partial class NavigationTools
             IncludeGenerated: includeGenerated,
             TestsOnly: scope switch { "tests" => true, "production" => false, _ => null },
             Lang: lang);
-        var hits = q.SearchText(query, limit + 1, filter, maxCandidateFiles: 300, offset: offset);
+        var result = q.SearchTextGraded(query, limit + 1, filter, maxCandidateFiles: 300, offset: offset, partialsMode: mode);
+        var hits = result.Hits;
         string? next = hits.Count > limit ? $"o:{offset + limit}" : null;
         if (next is not null) hits.RemoveAt(hits.Count - 1);
+
+        // Only surface the file-level "tokens co-occur but not on one line" signal when the
+        // page shows no precise hits — that is exactly when it changes the caller's read.
+        bool anyPrecise = hits.Any(h => h.MatchKind == "precise");
+        var acrossLines = !anyPrecise && result.FilesMatchedAcrossLines.Count > 0
+            ? result.FilesMatchedAcrossLines.Take(10).ToList()
+            : null;
 
         var meta = Meta.From(_manager.Health(), "indexed", "text");
         return Json.WithListBudget(hits, (items, truncated) => new
         {
-            hits = items.Select(t => new { path = t.FilePath, t.Line, text = t.LineText, t.IsGenerated }),
+            preciseCount = result.TotalPrecise,
+            partialCount = result.TotalPartial,
+            hits = items.Select(t => new
+            {
+                path = t.FilePath,
+                t.Line,
+                text = t.LineText,
+                t.IsGenerated,
+                matchKind = t.MatchKind,
+                matched = t.MatchKind == "partial" ? t.Matched : null, // tokens only meaningful on partials
+            }),
+            filesMatchedAcrossLines = acrossLines,
             nextCursor = next,
             truncated,
-            note = "Token-based candidate search; not a regex engine. A hit proves bytes matched, not symbol identity.",
+            note = "Token-based, not a regex engine. 'precise' = all query tokens on the line; 'partial' = a lead (tokens co-occur in the file, not on one line).",
             meta,
         });
     }
@@ -497,7 +519,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "implementations")]
-    [Description("Implementations of an interface (or interface member), derived classes, and overrides. Compiler-exact within the loaded cluster; falls back to base-list name matching (confidence 'indexed').")]
+    [Description("Implementations of an interface (or interface member), derived classes, and overrides. Compiler-exact within the loaded cluster; falls back to base-list name matching (confidence 'heuristic').")]
     public string Implementations(
         [Description("Interface/type/member name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration or a usage (position mode).")] string? path = null,
@@ -535,12 +557,13 @@ public sealed partial class NavigationTools
             failReason = reason;
         }
 
-        // Indexed fallback: types whose base list mentions the name.
+        // Heuristic fallback: types whose base list textually mentions the name — a naming
+        // guess, not a compiler fact, so it is labeled confidence 'heuristic'.
         using var q = _manager.OpenQueries();
         string lookupName = name ?? hint ?? "";
         var candidates = q.SearchSymbols(lookupName, "exact", null, 5, includeGenerated: true);
         var heuristic = q.ImplementationCandidates(lookupName, 50);
-        var meta = Meta.From(_manager.Health(), "indexed", "syntax");
+        var meta = Meta.From(_manager.Health(), "heuristic", "syntax");
         return Json.WithListBudget(heuristic, (items, truncated) => new
         {
             name = lookupName,
