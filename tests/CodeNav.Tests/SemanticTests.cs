@@ -133,6 +133,23 @@ public class SemanticTests : IClassFixture<IndexFixture>, IDisposable
             $"implementations({iface.Name}) was empty despite indexed base-list implementers");
     }
 
+    // Parity: type_hierarchy must not report a bare exact derivedOrImplementing:[] for an interface
+    // the index knows is implemented — exact (semantic) or the heuristic fallback, but not empty.
+    [Fact]
+    public void TypeHierarchyDerivedNotEmptyWhenIndexKnowsImplementers()
+    {
+        using var q = _manager.OpenQueries();
+        var iface = q.SearchSymbols("I", "prefix", new[] { "interface" }, 100)
+            .FirstOrDefault(i => q.ImplementationCandidates(i.Name, 5).Count > 0);
+        Assert.True(iface is not null, "fixture has no interface with base-list implementers");
+
+        var tools = new NavigationTools(_manager, _semantic);
+        var json = JsonDocument.Parse(tools.TypeHierarchy(name: iface!.Name, timeoutMs: 60000)).RootElement;
+        if (!json.TryGetProperty("error", out _))
+            Assert.True(json.GetProperty("derivedOrImplementing").GetArrayLength() > 0,
+                $"type_hierarchy({iface.Name}).derivedOrImplementing was empty despite indexed implementers");
+    }
+
     // Guards the implementations empty-name fallback (position mode with no resolvable name): an
     // empty name must not collapse the base-list LIKE into the '%: %' catch-all matching every type.
     [Fact]

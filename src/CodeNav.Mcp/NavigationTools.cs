@@ -872,7 +872,10 @@ public sealed partial class NavigationTools
             {
                 name = lookupName,
                 implementations = Array.Empty<object>(),
-                partialReason = failReason ?? "semantic_unavailable",
+                // A policy reason, not the transient semantic one (timeout/bounded): the syntactic
+                // fallback is type-only BY DESIGN, so retrying won't help — the note gives the real path.
+                partialReason = "member_fallback_type_scoped",
+                semanticReason = failReason, // why the exact path returned nothing (context, not actionable)
                 note = "No compiler-exact member implementations in the loaded cluster (possibly a type-twin identity mismatch). The syntactic fallback is type-only — run implementations on the declaring interface/type, then read this member in each implementer.",
                 meta,
             });

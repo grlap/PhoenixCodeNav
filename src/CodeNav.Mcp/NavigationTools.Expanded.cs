@@ -137,6 +137,46 @@ public sealed partial class NavigationTools
         }
         var down = result.DerivedOrImplementing;
         var meta1 = Meta.From(_manager.Health(), "exact", "semantic");
+
+        // Parity with implementations: when compiler-exact finds no derived/implementing types — often
+        // a type-twin identity mismatch across assemblies, or bounded coverage — surface the index
+        // base-list implementers with an honest note instead of a bare exact []. Only
+        // derivedOrImplementing becomes heuristic; baseTypes/interfaces stay exact.
+        if (down.Count == 0)
+        {
+            using var q0 = _manager.OpenQueries();
+            string lookupName = name ?? hint ?? "";
+            string? targetKind = null;
+            if (path is not null)
+            {
+                var chain = q0.SymbolAt(NormalizePath(path), line);
+                if (chain.Count > 0) { targetKind = chain[0].Kind; if (lookupName.Length == 0) lookupName = chain[0].Name; }
+            }
+            targetKind ??= lookupName.Length > 0 ? q0.SearchSymbols(lookupName, "exact", null, 1).FirstOrDefault()?.Kind : null;
+            // Only a TYPE has a meaningful base-list implementer set — guard the member-position edge
+            // so we don't sweep in every type whose base list contains a member name.
+            bool isType = targetKind is null or "interface" or "class" or "struct" or "record" or "record_struct";
+            var heuristic = isType && lookupName.Length > 0 ? q0.ImplementationCandidates(lookupName, 50) : new List<SymbolHit>();
+            if (heuristic.Count > 0)
+            {
+                bool bounded = coverage is not null &&
+                    (coverage.LoadedProjects < coverage.RequestedProjects || coverage.FailedProjects.Count > 0);
+                return Json.WithListBudget(heuristic, (items, truncated) => new
+                {
+                    symbol = SemanticSymbolJson(result.Symbol),
+                    baseTypes = result.BaseTypes.Select(SemanticSymbolJson),
+                    interfaces = result.Interfaces.Select(SemanticSymbolJson),
+                    derivedOrImplementing = items.Select(SymbolJson),
+                    derivedConfidence = "heuristic",
+                    partialReason = bounded ? "candidate_cluster_bounded" : "no_semantic_derived",
+                    note = "Compiler-exact resolution found no derived/implementing types, but these name it in their base list (derivedOrImplementing is heuristic here). Common cause: the type is declared in more than one assembly (e.g. a generated twin) and implementers reference a different declaration. baseTypes/interfaces remain exact. Verify with source_context.",
+                    coverage = coverage is null ? null : CoverageJson(coverage),
+                    truncated = truncated || heuristic.Count >= 50,
+                    meta = meta1,
+                });
+            }
+        }
+
         return Json.WithListBudget(down, (items, truncated) => new
         {
             symbol = SemanticSymbolJson(result.Symbol),
