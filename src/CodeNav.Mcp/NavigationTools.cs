@@ -861,7 +861,9 @@ public sealed partial class NavigationTools
             name = lookupName,
             implementations = items.Select(SymbolJson),
             partialReason = failReason ?? "semantic_unavailable",
-            note = "Base-list name matches from the index — verify with source_context.",
+            note = items.Count > 0 && failReason is "no_semantic_implementers" or "candidate_cluster_bounded"
+                ? "Compiler-exact resolution matched no implementers, but these types name it in their base list (confidence heuristic). Common cause: the type is declared in more than one assembly (e.g. a generated twin) and implementers reference a different declaration. Verify with source_context."
+                : "Base-list name matches from the index (confidence heuristic) — verify with source_context.",
             truncated,
             meta,
         });

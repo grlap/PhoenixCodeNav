@@ -410,14 +410,17 @@ public sealed partial class SemanticService : IDisposable
     private SemanticDeclaration Describe(ISymbol symbol)
     {
         var spans = new List<DeclarationSpan>();
+        var seenSpans = new HashSet<(string, int, int)>();
         foreach (var syntaxRef in symbol.DeclaringSyntaxReferences)
         {
             var lineSpan = syntaxRef.SyntaxTree.GetLineSpan(syntaxRef.Span);
-            spans.Add(new DeclarationSpan(
-                ToRelPath(syntaxRef.SyntaxTree.FilePath),
-                lineSpan.StartLinePosition.Line + 1,
-                lineSpan.EndLinePosition.Line + 1,
-                symbol.ContainingAssembly?.Name ?? ""));
+            string rel = ToRelPath(syntaxRef.SyntaxTree.FilePath);
+            int start = lineSpan.StartLinePosition.Line + 1;
+            int end = lineSpan.EndLinePosition.Line + 1;
+            // A file linked into more than one project can surface the SAME declaration span through
+            // different project graphs; dedupe so declarations[] has no duplicate path+span entry.
+            if (seenSpans.Add((rel, start, end)))
+                spans.Add(new DeclarationSpan(rel, start, end, symbol.ContainingAssembly?.Name ?? ""));
         }
         return new SemanticDeclaration(
             symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
