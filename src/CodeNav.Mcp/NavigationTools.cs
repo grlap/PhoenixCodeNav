@@ -838,15 +838,15 @@ public sealed partial class NavigationTools
         // guess, not a compiler fact, so it is labeled confidence 'heuristic'.
         using var q = _manager.OpenQueries();
         string lookupName = name ?? hint ?? "";
-        string? targetKind = null;
-        // Position mode (path+line): resolve the cursor to a symbol so the fallback has a name AND so
-        // we know its kind — the base-list heuristic only makes sense for a TYPE target.
+        SymbolHit? targetSym = null;
+        // Position mode (path+line): resolve the cursor so the fallback has a name AND the target's
+        // kind + declaring type — the base-list heuristic only makes sense for a TYPE target.
         if (path is not null)
         {
             var chain = q.SymbolAt(NormalizePath(path), line);
             if (chain.Count > 0)
             {
-                targetKind = chain[0].Kind;
+                targetSym = chain[0];
                 if (lookupName.Length == 0) lookupName = chain[0].Name;
             }
         }
@@ -859,24 +859,51 @@ public sealed partial class NavigationTools
                 meta = Meta.From(_manager.Health(), "heuristic", "syntax"),
             });
         }
-        targetKind ??= q.SearchSymbols(lookupName, "exact", null, 1).FirstOrDefault()?.Kind;
+        targetSym ??= q.SearchSymbols(lookupName, "exact", null, 1).FirstOrDefault();
+        string? targetKind = targetSym?.Kind;
         var meta = Meta.From(_manager.Health(), "heuristic", "syntax");
 
-        // The base-list heuristic is a TYPE operation (types implementing an interface / deriving a
-        // class). For a MEMBER target (e.g. an interface method) it would sweep in every type whose
-        // base list merely contains the member name — pure noise. Skip it and say so. (Proper fix:
-        // intersect with the declaring type's implementers, then find the member in each — follow-up.)
+        // The base-list heuristic is a TYPE operation. For a MEMBER target, scope to the declaring
+        // type's syntactic implementers and return the SAME-named member in each — not the type-only
+        // base-list sweep (pure noise), and not a bare empty when the members are actually there.
         if (targetKind is not (null or "interface" or "class" or "struct" or "record" or "record_struct"))
         {
+            List<SymbolHit> memberImpls = new();
+            if (targetSym?.Container is { Length: > 0 } declType)
+            {
+                // Key on (namespace, type name) — not the bare simple name — so a same-named member of
+                // an UNRELATED type in another namespace can't masquerade as an implementer's member.
+                var implementerTypes = q.ImplementationCandidates(declType, 100)
+                    .Select(t => (t.Ns ?? "", t.Name))
+                    .ToHashSet();
+                if (implementerTypes.Count > 0)
+                    memberImpls = q.SearchSymbols(lookupName, "exact", null, 500, includeGenerated: true)
+                        .Where(m => m.Container is { } c && implementerTypes.Contains((m.Ns ?? "", c)))
+                        .Take(50)
+                        .ToList();
+            }
+            if (memberImpls.Count > 0)
+            {
+                return Json.WithListBudget(memberImpls, (items, truncated) => new
+                {
+                    name = lookupName,
+                    declaringType = targetSym!.Container,
+                    implementations = items.Select(SymbolJson),
+                    partialReason = "member_scoped_syntactic",
+                    note = $"Same-named members of the syntactic implementers of {targetSym!.Container} (confidence heuristic — compiler-exact override resolution found none, likely a type-twin identity mismatch). Verify with source_context.",
+                    truncated = truncated || memberImpls.Count >= 50,
+                    meta,
+                });
+            }
+            // Nothing to scope to — honest empty + the recovery note. Policy reason, not the transient
+            // semantic one: the type-only heuristic won't help on retry.
             return Json.Serialize(new
             {
                 name = lookupName,
                 implementations = Array.Empty<object>(),
-                // A policy reason, not the transient semantic one (timeout/bounded): the syntactic
-                // fallback is type-only BY DESIGN, so retrying won't help — the note gives the real path.
                 partialReason = "member_fallback_type_scoped",
                 semanticReason = failReason, // why the exact path returned nothing (context, not actionable)
-                note = "No compiler-exact member implementations in the loaded cluster (possibly a type-twin identity mismatch). The syntactic fallback is type-only — run implementations on the declaring interface/type, then read this member in each implementer.",
+                note = "No compiler-exact member implementations in the loaded cluster (possibly a type-twin identity mismatch), and no same-named member found in the declaring type's implementers. Run implementations on the declaring interface/type, then read this member in each implementer.",
                 meta,
             });
         }
