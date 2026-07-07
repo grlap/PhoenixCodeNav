@@ -1123,8 +1123,13 @@ public sealed partial class NavigationTools
     /// on success, or an error-JSON string to hand straight back to the caller.</summary>
     private (SymbolHit? Hit, string? Error) ResolveSymbolIdHandle(string symbolId)
     {
-        if (!symbolId.StartsWith("idx:", StringComparison.Ordinal) ||
-            !long.TryParse(symbolId.AsSpan(4), out long id))
+        // Handle shape: idx:<rowid>[~<fingerprint>]. The fingerprint is optional so a hand-typed
+        // idx:<rowid> still resolves (best-effort, unverified); emitted handles always carry it.
+        string body = symbolId.StartsWith("idx:", StringComparison.Ordinal) ? symbolId[4..] : "";
+        string? fp = null;
+        int tilde = body.IndexOf('~');
+        if (tilde >= 0) { fp = body[(tilde + 1)..]; body = body[..tilde]; }
+        if (body.Length == 0 || !long.TryParse(body, out long id))
         {
             return (null, Json.Serialize(new
             {
@@ -1139,15 +1144,39 @@ public sealed partial class NavigationTools
             return (null, Json.Serialize(new
             {
                 error = "symbol_not_found",
-                detail = $"No indexed symbol with id {id}. 'idx:' handles are index-local and change on reindex — re-run search_symbol for a current handle.",
+                detail = $"No indexed symbol with id {id}. 'idx:' handles are index-local — re-run search_symbol for a current handle.",
+            }));
+        }
+        if (fp is not null && !string.Equals(fp, Fingerprint(hit), StringComparison.Ordinal))
+        {
+            // The rowid still exists but now holds a DIFFERENT symbol (a reindex reused it). Refuse
+            // rather than return the wrong symbol as if the handle were exact.
+            return (null, Json.Serialize(new
+            {
+                error = "stale_handle",
+                detail = $"symbolId 'idx:{id}' now refers to a different symbol ({hit.Name}) — the index changed since the handle was issued. Re-run search_symbol for a current handle.",
             }));
         }
         return (hit, null);
     }
 
+    /// <summary>Short, stable (cross-process) identity hash of a symbol row — FNV-1a over
+    /// name/kind/line/path. Embedded in the idx: handle so a rowid the index later reuses for a
+    /// different symbol fails the check instead of resolving silently.</summary>
+    private static string Fingerprint(SymbolHit s)
+    {
+        string identity = $"{s.Name}{s.Kind}{s.StartLine}{s.FilePath}";
+        uint h = 2166136261u;
+        foreach (char c in identity) h = (h ^ c) * 16777619u;
+        return h.ToString("x8");
+    }
+
     private static object SymbolJson(SymbolHit s) => new
     {
-        symbolId = $"idx:{s.Id}",
+        // idx:<rowid>~<identity fingerprint>. The fingerprint lets a rowid that delta refresh
+        // reused/reassigned be DETECTED on the way back in (stale_handle) rather than silently
+        // resolving to a different symbol — the id alone is not stable across reindex.
+        symbolId = $"idx:{s.Id}~{Fingerprint(s)}",
         s.Name,
         s.Kind,
         ns = s.Ns,

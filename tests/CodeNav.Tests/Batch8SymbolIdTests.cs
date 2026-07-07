@@ -136,4 +136,24 @@ public class Batch8SymbolIdTests : IClassFixture<IndexFixture>
         Assert.Contains(decls.EnumerateArray(),
             d => d.GetProperty("name").GetString() == "Guard" && d.GetProperty("kind").GetString() == "class");
     }
+
+    // fkv: the handle carries an identity fingerprint so a rowid the index reused for a different
+    // symbol is detected (stale_handle) instead of resolving silently to the wrong symbol.
+    [Fact]
+    public void IdxHandleCarriesFingerprintAndDetectsTampering()
+    {
+        var tools = Tools();
+        var (id, _, _) = GuardHandle(tools);
+        int tilde = id.IndexOf('~');
+        Assert.True(tilde > 0, "emitted idx handle should carry a ~fingerprint");
+
+        // A fingerprint that no longer matches the row (as if the rowid were reused) is refused.
+        Assert.Equal("stale_handle",
+            Parse(tools.Definition(symbolId: id[..tilde] + "~deadbeef")).GetProperty("error").GetString());
+
+        // A bare idx:N (no fingerprint — e.g. hand-typed) still resolves best-effort.
+        string raw = tools.Definition(symbolId: id[..tilde], mode: "indexed");
+        Assert.DoesNotContain("\"error\"", raw);
+        Assert.Contains("Guard", raw);
+    }
 }
