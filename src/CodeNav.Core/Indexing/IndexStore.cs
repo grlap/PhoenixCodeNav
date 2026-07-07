@@ -35,9 +35,20 @@ public sealed class IndexStore : IDisposable
     private SqliteConnection Open()
     {
         var conn = new SqliteConnection($"Data Source={_dbPath}");
-        conn.Open();
-        Exec(conn, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-65536;");
-        return conn;
+        try
+        {
+            conn.Open();
+            // First op that touches the header — throws on a corrupt/non-SQLite file. Dispose the
+            // connection on failure so its OS handle is released (ClearAllPools can then free it,
+            // letting a stale/corrupt-index rebuild delete the file rather than fail on a lock).
+            Exec(conn, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-65536;");
+            return conn;
+        }
+        catch
+        {
+            conn.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Opens a read connection (SQLite WAL supports many readers alongside the writer).</summary>

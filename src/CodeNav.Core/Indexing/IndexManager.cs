@@ -79,6 +79,27 @@ public sealed class IndexManager : IDisposable
             {
                 if (_disposed) return;
                 bool build = forceRebuild || !File.Exists(_dbPath);
+                if (!build)
+                {
+                    // Rebuild when the on-disk index predates the current schema/indexer format —
+                    // otherwise a freshly deployed binary would query columns the old index lacks,
+                    // or trust field values (accessibility, signatures) the old indexer got wrong.
+                    try
+                    {
+                        using var check = new IndexStore(_dbPath, createNew: false);
+                        string? onDisk = check.GetMeta("schema_version");
+                        if (!string.Equals(onDisk, IndexBuilder.SchemaVersion, StringComparison.Ordinal))
+                        {
+                            _log($"Index format stale (have {onDisk ?? "none"}, need {IndexBuilder.SchemaVersion}); rebuilding.");
+                            build = true;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _log($"Index open/version-check failed ({ex.Message}); rebuilding.");
+                        build = true;
+                    }
+                }
                 if (build)
                 {
                     _state = "building";

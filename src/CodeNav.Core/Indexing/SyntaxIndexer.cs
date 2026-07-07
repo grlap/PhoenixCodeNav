@@ -53,7 +53,10 @@ public static class SyntaxIndexer
         var symbols = new List<SymbolRow>();
         bool hasTestAttrs = false;
 
-        void Walk(SyntaxNode node, int parentOrdinal, string? ns, string? container)
+        // memberDefault = the default accessibility for MEMBERS of the current container:
+        // "public" inside an interface, "private" inside a class/struct/record (unused at the top
+        // level / in a namespace, where only types live and each computes its own default).
+        void Walk(SyntaxNode node, int parentOrdinal, string? ns, string? container, string memberDefault)
         {
             foreach (var member in Members(node))
             {
@@ -65,7 +68,7 @@ public static class SyntaxIndexer
                         string full = ns is null ? name : $"{ns}.{name}";
                         int ord = Add(symbols, text, member, parentOrdinal, "namespace", full, ns, null,
                             $"namespace {full}", "public", isPartial: false, arity: 0, attrs: null);
-                        Walk(nsDecl, ord, full, null);
+                        Walk(nsDecl, ord, full, null, memberDefault);
                         break;
                     }
                     case BaseTypeDeclarationSyntax typeDecl:
@@ -88,17 +91,21 @@ public static class SyntaxIndexer
                         string sig = $"{kind} {name}{TypeParams(typeDecl)}{baseList}";
 
                         int ord = Add(symbols, text, member, parentOrdinal, kind, name, ns, container,
-                            sig, Access(typeDecl.Modifiers, defaultAcc: container is null ? "internal" : "private"),
+                            // A nested type's default follows its container: public inside an interface
+                            // (memberDefault), private inside a class/struct/record; internal at top level.
+                            sig, Access(typeDecl.Modifiers, defaultAcc: container is null ? "internal" : memberDefault),
                             partial, arity, attrs);
 
                         string childContainer = container is null ? name : $"{container}.{name}";
-                        Walk(typeDecl, ord, ns, childContainer);
+                        // Interface members are implicitly public; other type members default to private.
+                        string childMemberDefault = kind == "interface" ? "public" : "private";
+                        Walk(typeDecl, ord, ns, childContainer, childMemberDefault);
                         break;
                     }
                     case DelegateDeclarationSyntax del:
                         Add(symbols, text, member, parentOrdinal, "delegate", del.Identifier.ValueText, ns, container,
                             $"delegate {Compact(del.ReturnType.ToString())} {del.Identifier.ValueText}{ParamSig(del.ParameterList)}",
-                            Access(del.Modifiers, "internal"), false,
+                            Access(del.Modifiers, container is null ? "internal" : memberDefault), false,
                             del.TypeParameterList?.Parameters.Count ?? 0, null);
                         break;
                     case EnumMemberDeclarationSyntax enumMember:
@@ -110,7 +117,7 @@ public static class SyntaxIndexer
                         string? attrs = AttrMarkers(method.AttributeLists, ref hasTestAttrs);
                         Add(symbols, text, member, parentOrdinal, "method", method.Identifier.ValueText, ns, container,
                             $"{Compact(method.ReturnType.ToString())} {method.Identifier.ValueText}{TypeParams(method)}{ParamSig(method.ParameterList)}",
-                            Access(method.Modifiers, "private"),
+                            Access(method.Modifiers, memberDefault),
                             method.Modifiers.Any(SyntaxKind.PartialKeyword),
                             method.TypeParameterList?.Parameters.Count ?? 0, attrs);
                         break;
@@ -118,29 +125,29 @@ public static class SyntaxIndexer
                     case ConstructorDeclarationSyntax ctor:
                         Add(symbols, text, member, parentOrdinal, "constructor", ctor.Identifier.ValueText, ns, container,
                             $"{ctor.Identifier.ValueText}{ParamSig(ctor.ParameterList)}",
-                            Access(ctor.Modifiers, "private"), false, 0, null);
+                            Access(ctor.Modifiers, memberDefault), false, 0, null);
                         break;
                     case PropertyDeclarationSyntax prop:
                         Add(symbols, text, member, parentOrdinal, "property", prop.Identifier.ValueText, ns, container,
                             $"{Compact(prop.Type.ToString())} {prop.Identifier.ValueText}",
-                            Access(prop.Modifiers, "private"), false, 0, null);
+                            Access(prop.Modifiers, memberDefault), false, 0, null);
                         break;
                     case IndexerDeclarationSyntax indexer:
                         Add(symbols, text, member, parentOrdinal, "indexer", "this[]", ns, container,
                             $"{Compact(indexer.Type.ToString())} this{ParamSig(indexer.ParameterList)}",
-                            Access(indexer.Modifiers, "private"), false, 0, null);
+                            Access(indexer.Modifiers, memberDefault), false, 0, null);
                         break;
                     case EventDeclarationSyntax evt:
                         Add(symbols, text, member, parentOrdinal, "event", evt.Identifier.ValueText, ns, container,
                             $"event {Compact(evt.Type.ToString())} {evt.Identifier.ValueText}",
-                            Access(evt.Modifiers, "private"), false, 0, null);
+                            Access(evt.Modifiers, memberDefault), false, 0, null);
                         break;
                     case EventFieldDeclarationSyntax evtField:
                         foreach (var v in evtField.Declaration.Variables)
                         {
                             Add(symbols, text, member, parentOrdinal, "event", v.Identifier.ValueText, ns, container,
                                 $"event {Compact(evtField.Declaration.Type.ToString())} {v.Identifier.ValueText}",
-                                Access(evtField.Modifiers, "private"), false, 0, null);
+                                Access(evtField.Modifiers, memberDefault), false, 0, null);
                         }
                         break;
                     case FieldDeclarationSyntax field:
@@ -148,7 +155,7 @@ public static class SyntaxIndexer
                         {
                             Add(symbols, text, member, parentOrdinal, "field", v.Identifier.ValueText, ns, container,
                                 $"{Compact(field.Declaration.Type.ToString())} {v.Identifier.ValueText}",
-                                Access(field.Modifiers, "private"), false, 0, null);
+                                Access(field.Modifiers, memberDefault), false, 0, null);
                         }
                         break;
                     case OperatorDeclarationSyntax op:
@@ -160,7 +167,7 @@ public static class SyntaxIndexer
             }
         }
 
-        Walk(root, -1, null, null);
+        Walk(root, -1, null, null, "private");
 
         int lineCount = text.Lines.Count;
         bool looksGenerated = FileClassifier.LooksGenerated(relPath, content);
@@ -244,7 +251,13 @@ public static class SyntaxIndexer
     private static string ParamSig(BaseParameterListSyntax? list)
     {
         if (list is null || list.Parameters.Count == 0) return "()";
-        var parts = list.Parameters.Select(p => Compact($"{p.Type} {p.Identifier.ValueText}").Trim());
+        var parts = list.Parameters.Select(p =>
+        {
+            // Keep parameter modifiers (ref/out/in/params/this/scoped) — they are part of the
+            // signature and often the overload disambiguator.
+            string mods = p.Modifiers.Count > 0 ? Compact(p.Modifiers.ToString()) + " " : "";
+            return Compact($"{mods}{p.Type} {p.Identifier.ValueText}").Trim();
+        });
         return $"({string.Join(", ", parts)})";
     }
 

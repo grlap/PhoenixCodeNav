@@ -30,6 +30,11 @@ public static class IndexBuilder
     public static string DefaultDbPath(string workspaceRoot) =>
         Path.Combine(workspaceRoot, ".codenav", "index.db");
 
+    /// <summary>Rebuild-trigger version: bump whenever the schema OR the indexer's stored output
+    /// changes, so a deployed binary rebuilds a stale on-disk index instead of trusting old rows.
+    /// v2: ref/out/in/params modifiers in signatures; interface members default to public.</summary>
+    public const string SchemaVersion = "2";
+
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null)
     {
         var total = Stopwatch.StartNew();
@@ -197,7 +202,7 @@ public static class IndexBuilder
             tx.Commit();
         }
 
-        store.SetMeta("schema_version", "1");
+        store.SetMeta("schema_version", SchemaVersion);
         store.SetMeta("index_version", Guid.NewGuid().ToString("N"));
         store.SetMeta("indexed_at_utc", DateTime.UtcNow.ToString("O"));
         store.SetMeta("workspace_root", Path.GetFullPath(workspaceRoot));
