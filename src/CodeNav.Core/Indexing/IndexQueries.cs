@@ -100,12 +100,9 @@ public sealed class IndexQueries : IDisposable
         string join = "";
 
         if (!filter.IncludeGenerated) where.Append(" AND f.is_generated = 0");
-        if (filter.PathGlob is { } glob)
-        {
-            where.Append(" AND f.path LIKE $glob ESCAPE '\\'");
-            string like = GlobToLike(glob);
-            args.Add(("$glob", glob.Contains('/') ? like : $"%/{like}"));
-        }
+        // Shared path predicate — same glob semantics as search_symbol/find_file (bare
+        // names match at any depth, workspace-root files included).
+        AppendPathFilter(where, args, filter.PathGlob, null);
         if (filter.Lang is { } lang)
         {
             where.Append(" AND f.lang = $lang");
@@ -265,7 +262,8 @@ public sealed class IndexQueries : IDisposable
     // ---------------------------------------------------------------- symbols
 
     public List<SymbolHit> SearchSymbols(string query, string mode, IReadOnlyList<string>? kinds, int limit,
-        bool includeGenerated = false, int offset = 0)
+        bool includeGenerated = false, int offset = 0,
+        string? pathGlob = null, string? excludePath = null, string? ns = null)
     {
         string esc = EscapeLike(query);
         string pattern = mode switch
@@ -274,15 +272,30 @@ public sealed class IndexQueries : IDisposable
             "prefix" => esc + "%",
             _ => "%" + esc + "%",
         };
+
+        var args = new List<(string, object)>
+        {
+            ("$pat", pattern), ("$q", query), ("$pre", esc + "%"), ("$lim", limit), ("$off", offset),
+        };
+        var where = new System.Text.StringBuilder("WHERE s.name LIKE $pat ESCAPE '\\'");
         string kindFilter = KindFilter(kinds);
-        string genFilter = includeGenerated ? "" : "AND f.is_generated = 0";
+        if (kindFilter.Length > 0) where.Append(' ').Append(kindFilter);
+        if (!includeGenerated) where.Append(" AND f.is_generated = 0");
+        AppendPathFilter(where, args, pathGlob, excludePath);
+        if (ns is { Length: > 0 } nsFilter)
+        {
+            // Namespace subtree: the exact namespace OR anything nested under it.
+            where.Append(" AND (s.ns = $ns COLLATE NOCASE OR s.ns LIKE $nsp ESCAPE '\\')");
+            args.Add(("$ns", nsFilter));
+            args.Add(("$nsp", EscapeLike(nsFilter) + ".%"));
+        }
 
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
                    s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
             FROM symbols s JOIN files f ON f.id = s.file_id
-            WHERE s.name LIKE $pat ESCAPE '\' {kindFilter} {genFilter}
+            {where}
             ORDER BY
               CASE WHEN s.name = $q COLLATE NOCASE THEN 0
                    WHEN s.name LIKE $pre ESCAPE '\' THEN 1 ELSE 2 END,
@@ -290,7 +303,7 @@ public sealed class IndexQueries : IDisposable
             LIMIT $lim OFFSET $off
             """,
             ReadSymbol,
-            ("$pat", pattern), ("$q", query), ("$pre", esc + "%"), ("$lim", limit), ("$off", offset));
+            args.ToArray());
     }
 
     public List<SymbolHit> Outline(string filePath)
@@ -840,8 +853,51 @@ public sealed class IndexQueries : IDisposable
                 default: sb.Append(c); break;
             }
         }
-        // "**/" globs collapse naturally because % crosses '/' in LIKE.
-        return sb.ToString().Replace("%%", "%");
+        // No %%->% collapse: '%%' matches identically to '%' in LIKE (so '**' stays correct),
+        // and collapsing is escaping-blind — it would merge a wildcard onto an escaped literal '\%'.
+        return sb.ToString();
+    }
+
+    /// <summary>Appends include (<paramref name="pathGlob"/>) and exclude (<paramref name="excludePath"/>)
+    /// path predicates onto a WHERE builder over <c>f.path</c>. A glob containing '/' is matched against
+    /// the workspace-relative path as-is; a bare glob (no '/') is matched starting at any path-segment
+    /// boundary, root included — note '*'/'?' cross '/' in LIKE, so a wildcarded bare glob can span
+    /// directory segments, not just the file name. The bare form is OR-ed in (and De Morgan'd for
+    /// exclude) the way FindFiles does. Binds $incPath/$incBare and $excPath/$excBare, so a single
+    /// query must not rebind those.</summary>
+    private static void AppendPathFilter(System.Text.StringBuilder where, List<(string, object)> args,
+        string? pathGlob, string? excludePath)
+    {
+        if (pathGlob is { Length: > 0 } inc)
+        {
+            string like = GlobToLike(inc);
+            if (inc.Contains('/'))
+            {
+                where.Append(" AND f.path LIKE $incPath ESCAPE '\\'");
+                args.Add(("$incPath", like));
+            }
+            else
+            {
+                where.Append(" AND (f.path LIKE $incPath ESCAPE '\\' OR f.path LIKE $incBare ESCAPE '\\')");
+                args.Add(("$incPath", $"%/{like}"));
+                args.Add(("$incBare", like));
+            }
+        }
+        if (excludePath is { Length: > 0 } exc)
+        {
+            string like = GlobToLike(exc);
+            if (exc.Contains('/'))
+            {
+                where.Append(" AND f.path NOT LIKE $excPath ESCAPE '\\'");
+                args.Add(("$excPath", like));
+            }
+            else
+            {
+                where.Append(" AND f.path NOT LIKE $excPath ESCAPE '\\' AND f.path NOT LIKE $excBare ESCAPE '\\'");
+                args.Add(("$excPath", $"%/{like}"));
+                args.Add(("$excBare", like));
+            }
+        }
     }
 
     /// <summary>Splits a query into index tokens (letter/digit/underscore runs), matching the FTS tokenizer.</summary>

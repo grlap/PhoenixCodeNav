@@ -128,6 +128,73 @@ public class IndexEndToEndTests : IClassFixture<IndexFixture>
     }
 
     [Fact]
+    public void SearchSymbolHonorsPathAndNamespaceFilters()
+    {
+        using var q = _fx.Open();
+
+        // Baseline: exactly one Guard class, in namespace Acme.Platform.Common.
+        var baseline = q.SearchSymbols("Guard", "exact", new[] { "class" }, 10);
+        Assert.Single(baseline);
+        string guardPath = baseline[0].FilePath;
+        string topDir = guardPath.Split('/')[0];
+
+        // namespace subtree: exact namespace and a parent prefix both match; a foreign one does not.
+        Assert.Single(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, ns: "Acme.Platform.Common"));
+        Assert.Single(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, ns: "Acme.Platform"));
+        Assert.Empty(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, ns: "Acme.Nonexistent"));
+        // A prefix that is not a namespace *segment* boundary must not match (trailing dot guards it).
+        Assert.Empty(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, ns: "Acme.Plat"));
+
+        // pathGlob include: the owning subtree matches; a bogus subtree does not.
+        Assert.Single(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, pathGlob: $"{topDir}/**"));
+        Assert.Empty(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, pathGlob: "no_such_dir_zz/**"));
+
+        // excludePath: excluding the owning subtree drops it; excluding elsewhere keeps it.
+        Assert.Empty(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, excludePath: $"{topDir}/**"));
+        Assert.Single(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, excludePath: "no_such_dir_zz/**"));
+
+        // Bare name (no '/') matches the file at any depth for both include and exclude.
+        Assert.Single(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, pathGlob: "Guard.cs"));
+        Assert.Empty(q.SearchSymbols("Guard", "exact", new[] { "class" }, 10, excludePath: "Guard.cs"));
+    }
+
+    [Fact]
+    public void BareGlobsReachWorkspaceRootFiles()
+    {
+        // A symbol-bearing file at depth 0. Kept OUT of the shared fixture on purpose:
+        // several tests pick FindFiles("*.cs", 1) and assume a parent directory exists.
+        const string rel = "RootMarker.cs";
+        string full = Path.Combine(_fx.Root, rel);
+        File.WriteAllText(full, "namespace RootNs { public class RootMarkerClass { } }");
+        try
+        {
+            using (var store = new IndexStore(_fx.DbPath, createNew: false))
+            {
+                DeltaRefresher.Refresh(store, _fx.Root, new[] { rel });
+            }
+
+            using var q = _fx.Open();
+            // Only the bare $incBare/$excBare arms can reach a root file — reverting them
+            // to the single '%/name' pattern fails these (mutation guard).
+            Assert.Single(q.SearchSymbols("RootMarkerClass", "exact", null, 5, pathGlob: rel));
+            Assert.Empty(q.SearchSymbols("RootMarkerClass", "exact", null, 5, excludePath: rel));
+            // Sanity: the file really is at root — a nested-only pattern must not see it.
+            Assert.Empty(q.SearchSymbols("RootMarkerClass", "exact", null, 5, pathGlob: $"*/{rel}"));
+
+            // search_text shares AppendPathFilter — same root reach (consistency pin).
+            var rootHits = q.SearchText("RootMarkerClass", 10, new IndexQueries.TextFilter(PathGlob: rel));
+            Assert.NotEmpty(rootHits);
+            Assert.All(rootHits, h => Assert.Equal(rel, h.FilePath));
+        }
+        finally
+        {
+            File.Delete(full);
+            using var store = new IndexStore(_fx.DbPath, createNew: false);
+            DeltaRefresher.Refresh(store, _fx.Root, new[] { rel });
+        }
+    }
+
+    [Fact]
     public void DeltaRefreshHandlesEditAddDelete()
     {
         using var store = new IndexStore(_fx.DbPath, createNew: false);
@@ -274,5 +341,37 @@ public class McpToolLayerTests : IClassFixture<IndexFixture>
 
         string deep = tools.Outline(guardPath, depth: 2);
         Assert.Contains("NotNull", deep);
+    }
+
+    [Fact]
+    public void SearchSymbolToolAppliesFilters()
+    {
+        var tools = Tools();
+        static int Count(JsonElement r) => r.GetProperty("symbols").GetArrayLength();
+        static bool AnyUnder(JsonElement r, string dir) =>
+            r.GetProperty("symbols").EnumerateArray().Any(s => s.GetProperty("path").GetString()!.StartsWith(dir + "/"));
+
+        var all = Parse(tools.SearchSymbol("Guard", kinds: "class", match: "exact"));
+        Assert.True(Count(all) >= 1);
+        string topDir = all.GetProperty("symbols").EnumerateArray().First().GetProperty("path").GetString()!.Split('/')[0];
+
+        // excludePath drops the owning subtree.
+        Assert.Equal(0, Count(Parse(tools.SearchSymbol("Guard", kinds: "class", match: "exact", excludePath: $"{topDir}/**"))));
+
+        // pathGlob include: owning subtree matches, bogus subtree drops.
+        Assert.True(Count(Parse(tools.SearchSymbol("Guard", kinds: "class", match: "exact", pathGlob: $"{topDir}/**"))) >= 1);
+        Assert.Equal(0, Count(Parse(tools.SearchSymbol("Guard", kinds: "class", match: "exact", pathGlob: "no_such_dir_zz/**"))));
+
+        // namespace subtree keeps it; a foreign namespace drops it (discriminating, not a tautology).
+        Assert.True(Count(Parse(tools.SearchSymbol("Guard", kinds: "class", match: "exact", @namespace: "Acme.Platform"))) >= 1);
+        Assert.Equal(0, Count(Parse(tools.SearchSymbol("Guard", kinds: "class", match: "exact", @namespace: "Acme.Nonexistent"))));
+
+        // Auto-mode fallthrough (exact 'Guar' -> prefix) must still honor excludePath.
+        Assert.True(AnyUnder(Parse(tools.SearchSymbol("Guar", kinds: "class")), topDir));
+        Assert.False(AnyUnder(Parse(tools.SearchSymbol("Guar", kinds: "class", excludePath: $"{topDir}/**")), topDir));
+
+        // Auto-mode EXACT hit (no match arg) must honor filters too — guards the first
+        // auto-mode call site, not just the fallthrough ones.
+        Assert.Equal(0, Count(Parse(tools.SearchSymbol("Guard", kinds: "class", excludePath: $"{topDir}/**"))));
     }
 }

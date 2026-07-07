@@ -377,12 +377,15 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- symbols
 
     [McpServerTool(Name = "search_symbol")]
-    [Description("Find declared symbols by name across the workspace (types, methods, properties...). Prefer this over search_text for anything that is a code identifier.")]
+    [Description("Find declared symbols by name across the workspace (types, methods, properties...). Prefer this over search_text for anything that is a code identifier. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored third-party source).")]
     public string SearchSymbol(
         [Description("Symbol name. Match behavior set by 'match'.")] string query,
         [Description("Comma-separated kind filter: class,interface,struct,record,enum,delegate,method,constructor,property,field,event,enum_member. Empty = all.")] string? kinds = null,
         [Description("'auto' (exact, then prefix, then substring), 'exact', 'prefix', or 'substring'.")] string match = "auto",
         [Description("Include symbols in generated files (default false).")] bool includeGenerated = false,
+        [Description("Restrict to file paths matching this glob (e.g. 'SOAPAPI/**'); a bare name matches at any depth.")] string? pathGlob = null,
+        [Description("Exclude file paths matching this glob (e.g. '3rdparty/**' to drop vendored third-party source).")] string? excludePath = null,
+        [Description("Restrict to a namespace subtree: the exact namespace or anything nested under it (e.g. 'ExactTarget.Integration'). Distinct from a containing type.")] string? @namespace = null,
         [Description("Max results (default 20, max 100).")] int limit = 20,
         [Description("Opaque cursor from a previous call.")] string? cursor = null)
     {
@@ -395,22 +398,22 @@ public sealed partial class NavigationTools
         string effectiveMatch = match;
         if (match == "auto")
         {
-            hits = q.SearchSymbols(query, "exact", kindList, limit + 1, includeGenerated, offset);
+            hits = q.SearchSymbols(query, "exact", kindList, limit + 1, includeGenerated, offset, pathGlob, excludePath, @namespace);
             effectiveMatch = "exact";
             if (hits.Count == 0 && offset == 0)
             {
-                hits = q.SearchSymbols(query, "prefix", kindList, limit + 1, includeGenerated, offset);
+                hits = q.SearchSymbols(query, "prefix", kindList, limit + 1, includeGenerated, offset, pathGlob, excludePath, @namespace);
                 effectiveMatch = "prefix";
             }
             if (hits.Count == 0 && offset == 0)
             {
-                hits = q.SearchSymbols(query, "substring", kindList, limit + 1, includeGenerated, offset);
+                hits = q.SearchSymbols(query, "substring", kindList, limit + 1, includeGenerated, offset, pathGlob, excludePath, @namespace);
                 effectiveMatch = "substring";
             }
         }
         else
         {
-            hits = q.SearchSymbols(query, match, kindList, limit + 1, includeGenerated, offset);
+            hits = q.SearchSymbols(query, match, kindList, limit + 1, includeGenerated, offset, pathGlob, excludePath, @namespace);
         }
 
         string? next = hits.Count > limit ? $"o:{offset + limit}" : null;
