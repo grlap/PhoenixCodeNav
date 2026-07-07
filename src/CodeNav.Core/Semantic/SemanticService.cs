@@ -15,7 +15,8 @@ public sealed record SemanticDeclaration(
     string? ContainingType,
     string? Namespace,
     string? Assembly,
-    List<DeclarationSpan> Declarations);
+    List<DeclarationSpan> Declarations,
+    bool IsAbstract = false);
 
 public sealed record SemanticLocation(string Path, int Line, string LineText, string Project, bool IsTestProject);
 
@@ -28,9 +29,14 @@ public sealed record SemanticReferences(
     ClusterCoverage Coverage,
     List<string> SkippedCandidateProjects);
 
+/// <summary>One implementation / derived class / override, tagged for hierarchy ranking.
+/// <paramref name="Via"/> names the base type that introduces the queried interface when the type
+/// implements it indirectly (null = implements it directly, or not applicable to the query).</summary>
+public sealed record SemanticImplementation(SemanticDeclaration Declaration, string? Via);
+
 public sealed record SemanticImplementations(
     SemanticDeclaration Symbol,
-    List<SemanticDeclaration> Implementations,
+    List<SemanticImplementation> Implementations,   // concrete (instantiable) leaves first, then abstract scaffolding
     ClusterCoverage Coverage);
 
 /// <summary>
@@ -181,24 +187,33 @@ public sealed partial class SemanticService : IDisposable
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token).ConfigureAwait(false);
             if (symbol is null) return (null, "symbol_not_resolved_in_scope");
 
-            var results = new List<SemanticDeclaration>();
+            var results = new List<SemanticImplementation>();
             if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface)
             {
                 var impls = await SymbolFinder.FindImplementationsAsync(iface, solution, cancellationToken: cts.Token).ConfigureAwait(false);
-                results.AddRange(impls.OfType<ISymbol>().Select(Describe));
+                foreach (var impl in impls)
+                    results.Add(new SemanticImplementation(Describe(impl), DerivationVia(impl, iface)));
             }
             else if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Class } cls)
             {
                 var derived = await SymbolFinder.FindDerivedClassesAsync(cls, solution, cancellationToken: cts.Token).ConfigureAwait(false);
-                results.AddRange(derived.OfType<ISymbol>().Select(Describe));
+                foreach (var d in derived)
+                    results.Add(new SemanticImplementation(Describe(d), DerivationVia(d, cls)));
             }
             else
             {
                 var impls = await SymbolFinder.FindImplementationsAsync(symbol, solution, cancellationToken: cts.Token).ConfigureAwait(false);
-                results.AddRange(impls.Select(Describe));
+                results.AddRange(impls.Select(s => new SemanticImplementation(Describe(s), null)));
                 var overrides = await SymbolFinder.FindOverridesAsync(symbol, solution, cancellationToken: cts.Token).ConfigureAwait(false);
-                results.AddRange(overrides.Select(Describe));
+                results.AddRange(overrides.Select(s => new SemanticImplementation(Describe(s), null)));
             }
+
+            // Hierarchy ranking: concrete (instantiable) leaves first — the actual runtime targets —
+            // then abstract scaffolding; stable by display within each tier.
+            results = results
+                .OrderBy(r => r.Declaration.IsAbstract ? 1 : 0)
+                .ThenBy(r => r.Declaration.SymbolDisplay, StringComparer.Ordinal)
+                .ToList();
 
             return (new SemanticImplementations(Describe(symbol), results, coverage), null);
         }
@@ -385,7 +400,35 @@ public sealed partial class SemanticService : IDisposable
             symbol.ContainingType?.Name,
             symbol.ContainingNamespace?.ToDisplayString(),
             symbol.ContainingAssembly?.Name,
-            spans);
+            spans,
+            symbol.IsAbstract);
+    }
+
+    /// <summary>The base type that introduces <paramref name="contract"/> into
+    /// <paramref name="type"/>'s hierarchy when it is implemented/inherited indirectly (so the caller
+    /// sees "via BarBase"); null when <paramref name="type"/> declares it directly or the link cannot
+    /// be pinpointed. Powers the derivation path in implementations ranking.</summary>
+    private static string? DerivationVia(ISymbol type, INamedTypeSymbol contract)
+    {
+        if (type is not INamedTypeSymbol named) return null;
+        var target = contract.OriginalDefinition;
+
+        if (contract.TypeKind == TypeKind.Interface)
+        {
+            if (named.Interfaces.Any(i => SymbolEqualityComparer.Default.Equals(i.OriginalDefinition, target)))
+                return null; // declares the interface directly
+            for (var b = named.BaseType; b is not null && b.SpecialType != SpecialType.System_Object; b = b.BaseType)
+            {
+                if (b.Interfaces.Any(i => SymbolEqualityComparer.Default.Equals(i.OriginalDefinition, target)))
+                    return b.Name; // the base that introduces the interface
+            }
+            return null; // inherited but not pinpointable (e.g. through another interface)
+        }
+
+        // Derived-class query: direct when contract is the immediate base; else name that base.
+        if (named.BaseType is { } bt && SymbolEqualityComparer.Default.Equals(bt.OriginalDefinition, target))
+            return null;
+        return named.BaseType?.Name;
     }
 
     private Dictionary<string, bool> ProjectTestFlags()

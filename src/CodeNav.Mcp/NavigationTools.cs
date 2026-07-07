@@ -775,7 +775,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "implementations")]
-    [Description("Implementations of an interface (or interface member), derived classes, and overrides. Compiler-exact within the loaded cluster; falls back to base-list name matching (confidence 'heuristic').")]
+    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to base-list name matching (confidence 'heuristic', unranked).")]
     public string Implementations(
         [Description("Interface/type/member name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration or a usage (position mode).")] string? path = null,
@@ -799,14 +799,29 @@ public sealed partial class NavigationTools
                 .GetAwaiter().GetResult();
             if (result is not null)
             {
-                var impls = result.Implementations;
+                var impls = result.Implementations; // already ranked concrete-first by the semantic layer
+                int concreteCount = impls.Count(r => !r.Declaration.IsAbstract);
                 var meta0 = Meta.From(_manager.Health(), "exact", "semantic");
                 return Json.WithListBudget(impls, (items, truncated) => new
                 {
                     symbol = SemanticSymbolJson(result.Symbol),
-                    implementations = items.Select(SemanticSymbolJson),
+                    implementations = items.Select(r => new
+                    {
+                        symbol = SemanticSymbolJson(r.Declaration),
+                        isAbstract = r.Declaration.IsAbstract ? true : (bool?)null, // omitted when concrete
+                        via = r.Via, // the base type that introduces the interface, when implemented indirectly
+                    }),
+                    concreteCount,
+                    // High-signal case: exactly one instantiable implementation is very likely THE
+                    // runtime type; anything else is abstract scaffolding.
+                    likelyImplementation = concreteCount == 1
+                        ? impls.First(r => !r.Declaration.IsAbstract).Declaration.SymbolDisplay
+                        : null,
                     coverage = CoverageJson(result.Coverage),
                     truncated,
+                    hint = concreteCount == 1
+                        ? "One concrete implementation — likely the runtime target. Ranked concrete-first; isAbstract marks non-instantiable scaffolding."
+                        : null,
                     meta = meta0,
                 });
             }

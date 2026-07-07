@@ -82,7 +82,38 @@ public class SemanticTests : IClassFixture<IndexFixture>, IDisposable
             iface.FilePath, iface.StartLine, null, "IClock", maxProjects: 30, timeoutMs: 60000);
 
         Assert.True(result is not null, $"semantic implementations failed: {reason}");
-        Assert.Contains(result!.Implementations, i => i.SymbolDisplay.EndsWith("SystemClock"));
+        Assert.Contains(result!.Implementations, i => i.Declaration.SymbolDisplay.EndsWith("SystemClock"));
+
+        // Hierarchy ranking: concrete (instantiable) leaves are ordered before abstract scaffolding.
+        var abstractFlags = result.Implementations.Select(i => i.Declaration.IsAbstract).ToList();
+        Assert.Equal(abstractFlags.OrderBy(a => a).ToList(), abstractFlags);
+        var systemClock = result.Implementations.First(i => i.Declaration.SymbolDisplay.EndsWith("SystemClock"));
+        Assert.False(systemClock.Declaration.IsAbstract);
+    }
+
+    [Fact]
+    public void ImplementationsToolRanksConcreteFirstAndFlagsLikelyTarget()
+    {
+        var tools = new NavigationTools(_manager, _semantic);
+        var json = JsonDocument.Parse(tools.Implementations(name: "IClock", timeoutMs: 60000)).RootElement;
+        // Ranking is an exact-path feature; the heuristic fallback is unranked, so only assert there.
+        if (json.GetProperty("meta").GetProperty("confidence").GetString() != "exact") return;
+
+        var impls = json.GetProperty("implementations").EnumerateArray().ToList();
+        Assert.NotEmpty(impls);
+        // Concrete-first: no concrete implementation may appear after an abstract one.
+        bool sawAbstract = false;
+        foreach (var i in impls)
+        {
+            bool isAbstract = i.TryGetProperty("isAbstract", out var a) && a.GetBoolean();
+            if (isAbstract) sawAbstract = true;
+            else Assert.False(sawAbstract, "a concrete implementation appeared after an abstract one");
+        }
+        // The fixture's IClock has a single concrete implementation (SystemClock) → flagged as likely.
+        if (json.GetProperty("concreteCount").GetInt32() == 1)
+        {
+            Assert.EndsWith("SystemClock", json.GetProperty("likelyImplementation").GetString());
+        }
     }
 
     [Fact]
