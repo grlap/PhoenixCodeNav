@@ -137,11 +137,12 @@ two honest caveats:
    sweep). This is robust in practice but not *guaranteed* for every git plumbing path.
 
 **Planned hardening (git-aware refresh):** watch `.git/HEAD` (+ `MERGE_HEAD`, packed-refs)
-and, on any HEAD change, deterministically enqueue a targeted sweep — replacing "infer a
-branch switch from thousands of file events" with "the branch changed, reconcile now." This
-also lets `repo_overview` report the commit the index reflects. Tracked in the backlog; a
-manual `refresh_index()` (full sweep) is the current workaround if you ever suspect drift
-right after a big pull.
+and, on any HEAD change, deterministically enqueue a `git diff`-scoped refresh — replacing
+"infer a branch switch from thousands of file events" with "the branch changed, reconcile
+now." This also lets `repo_overview` report the commit the index reflects. Full design in
+[`git-refresh-design.md`](./git-refresh-design.md). Until it ships, a manual
+`refresh_index()` (full sweep) is the workaround if you ever suspect drift right after a big
+pull.
 
 ## Result discipline
 
