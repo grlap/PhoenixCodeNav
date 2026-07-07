@@ -9,7 +9,11 @@ compact context packs — with strict response budgets so results never flood th
 > Named after **Phoenix A**, the most massive known black hole — built to navigate the
 > heaviest repositories. No relation to Apache Phoenix.
 
-Implements the design in `docs/features/code-navigation-mcp.md` (TermAl feature brief).
+**Docs:** [`docs/intro.md`](docs/intro.md) — why it exists, and how it compares to grep,
+Cursor, and other tools · [`docs/design.md`](docs/design.md) — architecture, projects, and
+how freshness (incl. git branch switch / pull) is handled ·
+[`docs/agent-instructions.md`](docs/agent-instructions.md) — the snippet for your repo's
+`CLAUDE.md` / `AGENTS.md`.
 
 ## Why not just grep?
 
