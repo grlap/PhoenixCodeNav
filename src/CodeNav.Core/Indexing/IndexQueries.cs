@@ -39,7 +39,7 @@ public sealed record OverviewStats(
 /// instantiate per operation). Does not own: writes (IndexStore) or result budgeting/
 /// shaping for MCP responses (M2 tool layer).
 /// </summary>
-public sealed class IndexQueries : IDisposable
+public sealed partial class IndexQueries : IDisposable
 {
     private readonly SqliteConnection _conn;
 

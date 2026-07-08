@@ -173,7 +173,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Ranked full-text search over the indexed C# surface (.cs plus .csproj/.sln/config) — NOT .sql/.js/other file types. WHOLE-WORD and token-based, not regex: 'Batch' does NOT match 'Batching', and there is no \\s / alternation / character classes — use grep for regex or non-C# files. Returns 'precise' hits (all query tokens on one line) by default; set partials='always' for weaker co-occurrence leads. Use context (or contextBefore/contextAfter) for surrounding lines, like grep -C/-B/-A. Best for literals, config keys, error messages, comments; for code identifiers prefer search_symbol/definition/references.")]
+    [Description("Ranked full-text search over the indexed C# surface (.cs plus .csproj/.sln/config) — NOT .sql/.js/other file types. WHOLE-WORD and token-based by default: 'Batch' does NOT match 'Batching'. For \\s / alternation / character classes set regex:true (.NET regex, line-based, scoped by pathGlob) — still not rust/ripgrep syntax; other file types need grep. Returns 'precise' hits (all query tokens on one line) by default; set partials='always' for weaker co-occurrence leads. Use context (or contextBefore/contextAfter) for surrounding lines, like grep -C/-B/-A. Best for literals, config keys, error messages, comments; for code identifiers prefer search_symbol/definition/references.")]
     public string SearchText(
         [Description("Text to find. Multi-word queries are AND-ed by token; a line with all tokens is 'precise'.")] string query,
         [Description("Restrict to paths matching this glob (e.g. 'src/Billing/**').")] string? pathGlob = null,
@@ -187,6 +187,7 @@ public sealed partial class NavigationTools
         [Description("Lines of context around each hit, like grep -C (0-20, default 0 = just the line). Applies both before and after.")] int context = 0,
         [Description("Context lines BEFORE each hit (grep -B); overrides 'context' when set.")] int? contextBefore = null,
         [Description("Context lines AFTER each hit (grep -A); overrides 'context' when set.")] int? contextAfter = null,
+        [Description("Treat 'query' as a .NET regex (line-based, case-sensitive; prefix (?i) for insensitive) instead of tokens — NOT rust/ripgrep syntax. Scope with pathGlob; ReDoS-guarded (per-match timeout + overall budget), so results may be partial (timedOut:true). Overrides whole-word/partials.")] bool regex = false,
         [Description("Max hits (default 20, max 100).")] int limit = 20,
         [Description("Opaque cursor from a previous call.")] string? cursor = null)
     {
@@ -198,6 +199,8 @@ public sealed partial class NavigationTools
         int ctxBefore = Math.Clamp(contextBefore ?? context, 0, 20);
         int ctxAfter = Math.Clamp(contextAfter ?? context, 0, 20);
         using var q = _manager.OpenQueries();
+        if (regex)
+            return RegexResponse(q, query, pathGlob, excludePath, firstPartyOnly, project, scope, lang, includeGenerated, limit, offset, ctxBefore, ctxAfter);
         var filter = new IndexQueries.TextFilter(
             PathGlob: pathGlob,
             Project: project,
@@ -253,6 +256,64 @@ public sealed partial class NavigationTools
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
             truncated,
             note = "Whole-word, token-based (not regex): 'Batch' does not match 'Batching'. 'precise' = all tokens on the line (default); 'partial' (opt-in via partials='always') = tokens co-occur in the file, not one line. Add context for surrounding lines; use grep for regex or non-C# files.",
+            meta,
+        });
+    }
+
+    // Regex mode for search_text (Batch B): .NET regex over indexed content, FTS-narrowed by required
+    // literals when possible, else a bounded scan; ReDoS-guarded. Mirrors the token response shape
+    // (context lines, containingSymbol, noise) so callers get one consistent hit format.
+    private string RegexResponse(IndexQueries q, string pattern, string? pathGlob, string? excludePath,
+        bool firstPartyOnly, string? project, string scope, string? lang, bool includeGenerated,
+        int limit, int offset, int ctxBefore, int ctxAfter)
+    {
+        var filter = new IndexQueries.TextFilter(
+            PathGlob: pathGlob, Project: project, IncludeGenerated: includeGenerated,
+            TestsOnly: scope switch { "tests" => true, "production" => false, _ => null },
+            Lang: lang, ExcludePaths: BuildExcludes(excludePath, firstPartyOnly));
+        var res = q.SearchRegex(pattern, filter, maxCandidateFiles: 300, offset, limit + 1, ctxBefore, ctxAfter);
+        if (res.Error is not null)
+            return Json.Serialize(new { error = "bad_request", detail = res.Error, meta = Meta.From(_manager.Health(), "indexed", "text") });
+
+        var hits = res.Hits;
+        bool hadMore = hits.Count > limit;
+        if (hadMore) hits.RemoveAt(hits.Count - 1);
+
+        // Owning symbol per .cs hit — parity with token search_text (feedback loved containingSymbol).
+        var owners = new Dictionary<(string Path, int Line), string>();
+        foreach (var h in hits)
+        {
+            if (!h.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) continue;
+            if (owners.ContainsKey((h.FilePath, h.Line))) continue;
+            var sym = q.InnermostSymbolAt(h.FilePath, h.Line);
+            if (sym is not null)
+                owners[(h.FilePath, h.Line)] = sym.Container is { Length: > 0 } c ? $"{c}.{sym.Name}" : sym.Name;
+        }
+
+        var meta = Meta.From(_manager.Health(), "indexed", "text");
+        return Json.WithListBudget(hits, (items, truncated) => new
+        {
+            mode = "regex",
+            matchCount = res.TotalMatches,
+            filesScanned = res.FilesScanned,
+            narrowed = res.Narrowed,                 // FTS-pre-narrowed by required literals, vs a full scan
+            timedOut = res.TimedOut ? true : (bool?)null,
+            hits = items.Select(t => new
+            {
+                path = t.FilePath,
+                t.Line,
+                text = t.LineText,
+                before = t.Before,
+                after = t.After,
+                t.IsGenerated,
+                containingSymbol = owners.TryGetValue((t.FilePath, t.Line), out var cs) ? cs : null,
+                noise = IndexQueries.IsVendorPath(t.FilePath) ? true : (bool?)null,
+            }),
+            nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
+            truncated,
+            note = res.TimedOut
+                ? ".NET regex (line-based); results PARTIAL — the scan hit its time budget. Narrow with pathGlob or add a literal substring to the pattern."
+                : ".NET regex (line-based, case-sensitive; (?i) for insensitive) — not rust/ripgrep syntax. Scoped by pathGlob; use grep for non-C# file types.",
             meta,
         });
     }
