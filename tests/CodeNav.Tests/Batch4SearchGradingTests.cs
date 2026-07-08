@@ -235,4 +235,56 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
     [InlineData(null, "unknown")]
     public void BuildInfoParsesCommitOrFallsBackToUnknown(string? informationalVersion, string expected)
         => Assert.Equal(expected, BuildInfo.ParseCommit(informationalVersion));
+
+    // search_text context lines (grep -C): hits carry surrounding lines only when context is requested;
+    // by default before/after are omitted (no byte cost). The agent's #1 "biggest single win".
+    [Fact]
+    public void SearchTextReturnsContextLinesOnlyWhenRequested()
+    {
+        var tools = new NavigationTools(_manager, _semantic);
+        var hits = Parse(tools.SearchText("NotNull", context: 2)).GetProperty("hits").EnumerateArray().ToList();
+        Assert.NotEmpty(hits);
+        foreach (var h in hits)
+        {
+            if (h.TryGetProperty("before", out var b)) Assert.InRange(b.GetArrayLength(), 1, 2);
+            if (h.TryGetProperty("after", out var a)) Assert.InRange(a.GetArrayLength(), 1, 2);
+        }
+        // Guard.NotNull sits inside a namespace+class (and call sites inside methods), so some hit has lines above it.
+        Assert.Contains(hits, h => h.TryGetProperty("before", out var b) && b.GetArrayLength() > 0);
+        // Default (no context) omits before/after entirely.
+        var plain = Parse(tools.SearchText("NotNull")).GetProperty("hits").EnumerateArray().ToList();
+        Assert.All(plain, h => Assert.False(h.TryGetProperty("before", out _) || h.TryGetProperty("after", out _)));
+    }
+
+    // ContextSlice is byte-bounded so a single context-heavy (e.g. CJK) hit can't breach the response
+    // hard-byte budget (which floors at one item), and returns null (omitted) at file edges — never [].
+    [Fact]
+    public void ContextSliceIsByteBoundedAndEdgeSafe()
+    {
+        // 50 wide (multi-byte) lines; Snippet caps each at 240 chars => ~723 UTF-8 bytes/line.
+        var wide = Enumerable.Range(0, 50).Select(_ => new string('中', 300)).ToArray();
+        var (before, after) = IndexQueries.ContextSlice(wide, 25, before: 20, after: 20);
+        // 4KB/side over ~723-byte lines => far fewer than the 20 requested (the byte cap bit).
+        Assert.InRange(before!.Count, 1, 10);
+        Assert.InRange(after!.Count, 1, 10);
+        // Edge safety: no 'before' on the first line, no 'after' on the last — null, not [].
+        Assert.Null(IndexQueries.ContextSlice(wide, 0, 5, 5).Before);
+        Assert.Null(IndexQueries.ContextSlice(wide, wide.Length - 1, 5, 5).After);
+        // Small ASCII lines: full requested window (byte cap not hit), correct ordering, hit line excluded.
+        var (b, a) = IndexQueries.ContextSlice(new[] { "a0", "a1", "a2", "a3", "a4" }, 2, 2, 2);
+        Assert.Equal(new[] { "a0", "a1" }, b);
+        Assert.Equal(new[] { "a3", "a4" }, a);
+    }
+
+    // Precise-by-default: the noisy cross-line 'partial' co-occurrence bucket is opt-in now (agent's #3).
+    [Fact]
+    public void SearchTextIsPreciseByDefaultPartialsOptIn()
+    {
+        var tools = new NavigationTools(_manager, _semantic);
+        // 'using' and 'namespace' occur in every .cs file but on different lines -> partial leads.
+        var def = Parse(tools.SearchText("namespace using")).GetProperty("hits").EnumerateArray().ToList();
+        Assert.DoesNotContain(def, h => h.GetProperty("matchKind").GetString() == "partial");
+        var opt = Parse(tools.SearchText("namespace using", partials: "always")).GetProperty("hits").EnumerateArray().ToList();
+        Assert.Contains(opt, h => h.GetProperty("matchKind").GetString() == "partial");
+    }
 }

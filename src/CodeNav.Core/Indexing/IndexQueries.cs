@@ -11,7 +11,8 @@ public sealed record FileHit(long Id, string Path, long Size, int LineCount, boo
 
 public sealed record TextHit(
     string FilePath, int Line, string LineText, bool IsGenerated,
-    string MatchKind = "precise", IReadOnlyList<string>? Matched = null);
+    string MatchKind = "precise", IReadOnlyList<string>? Matched = null,
+    IReadOnlyList<string>? Before = null, IReadOnlyList<string>? After = null);
 
 /// <summary>
 /// Graded text-search result. Hits are ordered precise-first (contiguous phrase before
@@ -96,7 +97,7 @@ public sealed class IndexQueries : IDisposable
     /// partials only fill space precise did not), "never", or "always".
     /// </summary>
     public TextSearchResult SearchTextGraded(string query, int limit, TextFilter? filter,
-        int maxCandidateFiles, int offset, string partialsMode)
+        int maxCandidateFiles, int offset, string partialsMode, int ctxBefore = 0, int ctxAfter = 0)
     {
         string fts = FtsQuery(query);
         if (fts.Length == 0) return new TextSearchResult(new(), 0, 0, new());
@@ -166,7 +167,7 @@ public sealed class IndexQueries : IDisposable
         {
             string? content = ContentById(c.Id);
             if (content is null) continue;
-            var (filePrecise, filePartial) = GradeFile(c.Path, content, c.Gen, distinctTokens, rawQuery);
+            var (filePrecise, filePartial) = GradeFile(c.Path, content, c.Gen, distinctTokens, rawQuery, ctxBefore, ctxAfter);
             precise.AddRange(filePrecise);
             if (filePrecise.Count == 0 && filePartial.Count > 0)
             {
@@ -192,9 +193,13 @@ public sealed class IndexQueries : IDisposable
     /// partial lines (one per otherwise-unmatched token). A file contributes to exactly one tier.
     /// </summary>
     private static (List<TextHit> Precise, List<TextHit> Partial) GradeFile(
-        string path, string content, bool gen, IReadOnlyList<string> tokens, string rawQuery)
+        string path, string content, bool gen, IReadOnlyList<string> tokens, string rawQuery,
+        int ctxBefore, int ctxAfter)
     {
         var lines = content.Split('\n');
+        // A newline-terminated file yields a trailing "" element; drop it so a context window near EOF
+        // does not emit a spurious blank line. Every real line's index is unchanged (only the final "").
+        if (lines.Length > 1 && lines[^1].Length == 0) lines = lines[..^1];
         bool multi = tokens.Count > 1;
         var phrase = new List<TextHit>();
         var scattered = new List<TextHit>();
@@ -211,7 +216,8 @@ public sealed class IndexQueries : IDisposable
             }
             if (!all) continue;
             bool isPhrase = multi && line.IndexOf(rawQuery, StringComparison.OrdinalIgnoreCase) >= 0;
-            (isPhrase ? phrase : scattered).Add(new TextHit(path, i + 1, Snippet(line), gen, "precise"));
+            var (before, after) = ContextSlice(lines, i, ctxBefore, ctxAfter);
+            (isPhrase ? phrase : scattered).Add(new TextHit(path, i + 1, Snippet(line), gen, "precise", null, before, after));
         }
 
         if (phrase.Count + scattered.Count > 0)
@@ -240,7 +246,8 @@ public sealed class IndexQueries : IDisposable
                 if (here is not null)
                 {
                     foreach (var t in here) covered.Add(t);
-                    partial.Add(new TextHit(path, i + 1, Snippet(line), gen, "partial", here));
+                    var (before, after) = ContextSlice(lines, i, ctxBefore, ctxAfter);
+                    partial.Add(new TextHit(path, i + 1, Snippet(line), gen, "partial", here, before, after));
                 }
             }
         }
@@ -1187,6 +1194,43 @@ public sealed class IndexQueries : IDisposable
     {
         string t = line.TrimEnd('\r').TrimEnd();
         return t.Length <= 240 ? t : t[..240] + "…";
+    }
+
+    /// <summary>Lines immediately before/after a 0-based hit line (grep -B/-A), snippet-trimmed and
+    /// clamped to file bounds. Returns (null, null) — omitted from the response — when no context is
+    /// requested or at a file edge. Each side is byte-bounded (nearest lines first) so a single
+    /// context-heavy hit — e.g. multi-byte/CJK comment blocks — cannot breach the response hard-byte
+    /// budget, which floors at one item and so cannot shed a lone hit's context.</summary>
+    internal static (IReadOnlyList<string>? Before, IReadOnlyList<string>? After) ContextSlice(
+        string[] lines, int lineIdx, int before, int after)
+    {
+        const int bytesPerSide = 4 * 1024;
+        List<string>? b = null, a = null;
+        int start = Math.Max(0, lineIdx - before);
+        if (before > 0 && start < lineIdx)
+        {
+            b = new List<string>();
+            int bytes = 0;
+            for (int j = lineIdx - 1; j >= start && bytes < bytesPerSide; j--) // nearest-first; truncation drops the farthest
+            {
+                string s = Snippet(lines[j]);
+                bytes += System.Text.Encoding.UTF8.GetByteCount(s);
+                b.Insert(0, s);
+            }
+        }
+        int end = Math.Min(lines.Length - 1, lineIdx + after);
+        if (after > 0 && end > lineIdx)
+        {
+            a = new List<string>();
+            int bytes = 0;
+            for (int j = lineIdx + 1; j <= end && bytes < bytesPerSide; j++)
+            {
+                string s = Snippet(lines[j]);
+                bytes += System.Text.Encoding.UTF8.GetByteCount(s);
+                a.Add(s);
+            }
+        }
+        return (b, a);
     }
 
     public void Dispose() => _conn.Dispose();

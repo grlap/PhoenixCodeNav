@@ -171,7 +171,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Ranked full-text search over the indexed C# surface only (.cs plus .csproj/.sln/config). Does NOT see .sql, .js, or other file types, and is token-based, not regex — use grep for those and for regex/alternation. Hits graded 'precise' (all tokens on the line) or 'partial' (some; a lead). For literals, config keys, error messages, comments. For code identifiers prefer search_symbol/definition/references.")]
+    [Description("Ranked full-text search over the indexed C# surface (.cs plus .csproj/.sln/config) — NOT .sql/.js/other file types. WHOLE-WORD and token-based, not regex: 'Batch' does NOT match 'Batching', and there is no \\s / alternation / character classes — use grep for regex or non-C# files. Returns 'precise' hits (all query tokens on one line) by default; set partials='always' for weaker co-occurrence leads. Use context (or contextBefore/contextAfter) for surrounding lines, like grep -C/-B/-A. Best for literals, config keys, error messages, comments; for code identifiers prefer search_symbol/definition/references.")]
     public string SearchText(
         [Description("Text to find. Multi-word queries are AND-ed by token; a line with all tokens is 'precise'.")] string query,
         [Description("Restrict to paths matching this glob (e.g. 'src/Billing/**').")] string? pathGlob = null,
@@ -181,13 +181,20 @@ public sealed partial class NavigationTools
         [Description("'all' (default), 'production' (exclude tests), or 'tests'.")] string scope = "all",
         [Description("Restrict by file language: cs | csproj | sln | config.")] string? lang = null,
         [Description("Include generated files (default false).")] bool includeGenerated = false,
-        [Description("Partial (some-token) hits: 'auto' (default — only fill space precise did not), 'never', or 'always'.")] string partials = "auto",
+        [Description("Weaker 'some query tokens co-occur, not all on one line' leads: 'never' (default — precise only), 'auto' (fill space precise did not), or 'always'. filesMatchedAcrossLines still flags files where all tokens co-occur across lines.")] string partials = "never",
+        [Description("Lines of context around each hit, like grep -C (0-20, default 0 = just the line). Applies both before and after.")] int context = 0,
+        [Description("Context lines BEFORE each hit (grep -B); overrides 'context' when set.")] int? contextBefore = null,
+        [Description("Context lines AFTER each hit (grep -A); overrides 'context' when set.")] int? contextAfter = null,
         [Description("Max hits (default 20, max 100).")] int limit = 20,
         [Description("Opaque cursor from a previous call.")] string? cursor = null)
     {
         if (NotReady() is { } notReady) return notReady;
         (limit, int offset) = Page(limit, cursor);
-        string mode = partials is "never" or "always" ? partials : "auto";
+        // Fail-safe: an unrecognized value falls back to the precise-only default, not the more
+        // permissive "auto" — a typo must not silently reintroduce the noisy partial bucket.
+        string mode = partials switch { "never" or "auto" or "always" => partials, _ => "never" };
+        int ctxBefore = Math.Clamp(contextBefore ?? context, 0, 20);
+        int ctxAfter = Math.Clamp(contextAfter ?? context, 0, 20);
         using var q = _manager.OpenQueries();
         var filter = new IndexQueries.TextFilter(
             PathGlob: pathGlob,
@@ -196,7 +203,7 @@ public sealed partial class NavigationTools
             TestsOnly: scope switch { "tests" => true, "production" => false, _ => null },
             Lang: lang,
             ExcludePaths: BuildExcludes(excludePath, firstPartyOnly));
-        var result = q.SearchTextGraded(query, limit + 1, filter, maxCandidateFiles: 300, offset: offset, partialsMode: mode);
+        var result = q.SearchTextGraded(query, limit + 1, filter, maxCandidateFiles: 300, offset: offset, partialsMode: mode, ctxBefore: ctxBefore, ctxAfter: ctxAfter);
         var hits = result.Hits;
         string? next = hits.Count > limit ? $"o:{offset + limit}" : null;
         if (next is not null) hits.RemoveAt(hits.Count - 1);
@@ -232,6 +239,8 @@ public sealed partial class NavigationTools
                 path = t.FilePath,
                 t.Line,
                 text = t.LineText,
+                before = t.Before, // surrounding lines — present only when context was requested
+                after = t.After,
                 t.IsGenerated,
                 matchKind = t.MatchKind,
                 matched = t.MatchKind == "partial" ? t.Matched : null, // tokens only meaningful on partials
@@ -241,7 +250,7 @@ public sealed partial class NavigationTools
             filesMatchedAcrossLines = acrossLines,
             nextCursor = next,
             truncated,
-            note = "Token-based, not a regex engine. 'precise' = all query tokens on the line; 'partial' = a lead (tokens co-occur in the file, not on one line).",
+            note = "Whole-word, token-based (not regex): 'Batch' does not match 'Batching'. 'precise' = all tokens on the line (default); 'partial' (opt-in via partials='always') = tokens co-occur in the file, not one line. Add context for surrounding lines; use grep for regex or non-C# files.",
             meta,
         });
     }
