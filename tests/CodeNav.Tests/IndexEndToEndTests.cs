@@ -229,7 +229,13 @@ public class IndexEndToEndTests : IClassFixture<IndexFixture>
 
         result = DeltaRefresher.Refresh(store, _fx.Root, new[] { newRel });
         Assert.Equal(1, result.AddedFiles);
-        Assert.True(result.ProjectsRefreshed);
+        // zki: in a PURE-SDK workspace an added .cs is attributed incrementally (no global rebuild);
+        // any legacy project forces the full rebuild (a legacy explicit <Compile> list can claim a
+        // re-added file without its csproj changing). Either way the ownership assertion below is the
+        // real contract.
+        bool hasLegacy;
+        using (var q = _fx.Open()) hasLegacy = q.Overview().LegacyProjects > 0;
+        Assert.Equal(hasLegacy, result.ProjectsRefreshed);
 
         using (var q = _fx.Open())
         {

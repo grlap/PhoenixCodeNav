@@ -21,6 +21,21 @@ public static class WorkspaceScanner
         "node_modules", "TestResults", ".codenav",
     };
 
+    /// <summary>True when any path segment is an excluded directory name — the same rule the scan
+    /// walk applies. Shared by the watcher and by targeted refresh paths (git reconcile /
+    /// refresh_index feed raw paths), so no excluded-dir file can enter the index by any route.</summary>
+    public static bool IsExcludedPath(string relPath)
+    {
+        foreach (var segment in relPath.Split('/'))
+        {
+            foreach (var excluded in DefaultExcludedDirs)
+            {
+                if (segment.Equals(excluded, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        return false;
+    }
+
     private static readonly HashSet<string> ConfigFileNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props",

@@ -72,9 +72,15 @@ public sealed class SemanticWorkspace : IDisposable
             // existing ProjectId so already-loaded dependents keep valid references — a
             // fresh id would silently orphan them (Roslyn drops references to absent ids).
             var reuseIds = new Dictionary<string, ProjectId>(StringComparer.OrdinalIgnoreCase);
-            foreach (var name in requested.Where(_loaded.ContainsKey).ToList())
+            var loadedRequested = requested.Where(_loaded.ContainsKey).ToList();
+            // ONE grouped fingerprint query for the whole warm set — this loop ran a point query per
+            // already-loaded project on every semantic call (dz3: the dominant warm-path SQL cost).
+            var fingerprints = loadedRequested.Count > 0
+                ? q.ProjectFingerprints(loadedRequested)
+                : new Dictionary<string, (long, long)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var name in loadedRequested)
             {
-                var current = q.ProjectFingerprint(name);
+                var current = fingerprints.TryGetValue(name, out var fp) ? fp : (0L, 0L);
                 if (_loaded[name].Fingerprint != current)
                 {
                     _log($"Semantic reload (files changed): {name}");
@@ -271,9 +277,26 @@ public sealed class SemanticWorkspace : IDisposable
         return names.OrderBy(n => Depth(n, 0)).ThenBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    // Memory backstop (njw): the project-count cap is SOFT — referenced projects are never evicted —
+    // so heavy clusters can hold compilations well past it with no byte accounting. Past this managed-
+    // heap threshold the effective cap halves, so subsequent passes drain harder while preserving the
+    // no-dangling-reference invariant. A pressure signal, not a hard ceiling.
+    private const long ManagedHeapBackstopBytes = 3L * 1024 * 1024 * 1024;
+
     private void EvictBeyondCap(HashSet<string> keep)
     {
-        if (_loaded.Count <= MaxLoadedProjects) return;
+        int cap = MaxLoadedProjects;
+        if (_loaded.Count > 0 && GC.GetTotalMemory(false) > ManagedHeapBackstopBytes)
+        {
+            cap = Math.Max(8, MaxLoadedProjects / 2);
+        }
+        if (_loaded.Count <= cap) return;
+        if (cap != MaxLoadedProjects)
+        {
+            // Logged only when the tightened cap actually drives an eviction pass — under sustained
+            // heap pressure with nothing over cap this would otherwise spam every semantic call.
+            _log($"Semantic cache memory backstop: managed heap over {ManagedHeapBackstopBytes / (1024 * 1024)} MB — tightening cap {MaxLoadedProjects} -> {cap}.");
+        }
 
         // Evict only projects that no currently-loaded project references, so eviction
         // never leaves a dangling ProjectReference (Roslyn would silently drop it and
@@ -288,7 +311,7 @@ public sealed class SemanticWorkspace : IDisposable
         var evictable = _loaded
             .Where(kv => !keep.Contains(kv.Key) && !referenced.Contains(kv.Value.Id))
             .OrderBy(kv => kv.Value.LastUse)
-            .Take(_loaded.Count - MaxLoadedProjects)
+            .Take(_loaded.Count - cap)
             .ToList();
         foreach (var (name, lp) in evictable)
         {
@@ -297,7 +320,7 @@ public sealed class SemanticWorkspace : IDisposable
         }
         if (evictable.Count > 0)
         {
-            _log($"Semantic cache evicted {evictable.Count} projects (cap {MaxLoadedProjects}).");
+            _log($"Semantic cache evicted {evictable.Count} projects (cap {cap}).");
         }
     }
 

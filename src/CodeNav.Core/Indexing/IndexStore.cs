@@ -162,8 +162,8 @@ public sealed class IndexStore : IDisposable
         cmd.Transaction = tx;
         cmd.CommandText = """
             INSERT INTO files(path, size, mtime_ticks, hash, lang, line_count, is_generated, has_test_attrs)
-            VALUES($p, $s, $m, $h, $l, $lc, $g, $t);
-            SELECT last_insert_rowid();
+            VALUES($p, $s, $m, $h, $l, $lc, $g, $t)
+            RETURNING id;
             """;
         cmd.Parameters.AddWithValue("$p", path);
         cmd.Parameters.AddWithValue("$s", size);
@@ -192,11 +192,13 @@ public sealed class IndexStore : IDisposable
         if (rows.Count == 0) return;
         using var cmd = _write.CreateCommand();
         cmd.Transaction = tx;
+        // RETURNING makes this ONE statement per row (was INSERT + SELECT last_insert_rowid() —
+        // two prepared-statement steps per symbol, ~1.14M steps on a 570k-symbol build).
         cmd.CommandText = """
             INSERT INTO symbols(file_id, parent_id, kind, name, ns, container, signature,
                                 accessibility, start_line, end_line, is_partial, arity, attr_markers)
-            VALUES($f, $p, $k, $n, $ns, $c, $sig, $acc, $sl, $el, $part, $ar, $attr);
-            SELECT last_insert_rowid();
+            VALUES($f, $p, $k, $n, $ns, $c, $sig, $acc, $sl, $el, $part, $ar, $attr)
+            RETURNING id;
             """;
         var pF = cmd.Parameters.Add("$f", SqliteType.Integer);
         var pP = cmd.Parameters.Add("$p", SqliteType.Integer);
@@ -351,6 +353,30 @@ public sealed class IndexStore : IDisposable
         cmd.CommandText = "SELECT id, path, lang FROM files";
         using var r = cmd.ExecuteReader();
         while (r.Read()) list.Add((r.GetInt64(0), r.GetString(1), r.GetString(2)));
+        return list;
+    }
+
+    /// <summary>True when any project parsed as legacy style. Gates the incremental added-file
+    /// attribution: legacy explicit-&lt;Compile&gt; lists can claim a re-added file without a csproj
+    /// change, which only the full rebuild re-reads.</summary>
+    public bool HasLegacyProjects()
+    {
+        using var cmd = _write.CreateCommand();
+        cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM projects WHERE style = 'legacy')";
+        return Convert.ToInt64(cmd.ExecuteScalar()) == 1;
+    }
+
+    /// <summary>(id, csproj relPath) of projects that own files by DIRECTORY GLOB — SDK-style or
+    /// failed-parse (anything non-legacy; style 'legacy' is exactly the parser's non-null
+    /// ExplicitCompileItems case). Used for the incremental attribution of a single added .cs file
+    /// in pure-SDK workspaces (zki).</summary>
+    public List<(long Id, string RelPath)> GlobRootProjects()
+    {
+        var list = new List<(long, string)>();
+        using var cmd = _write.CreateCommand();
+        cmd.CommandText = "SELECT id, path FROM projects WHERE style != 'legacy'";
+        using var r = cmd.ExecuteReader();
+        while (r.Read()) list.Add((r.GetInt64(0), r.GetString(1)));
         return list;
     }
 

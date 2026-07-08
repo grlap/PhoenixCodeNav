@@ -55,6 +55,8 @@ public static class DeltaRefresher
 
         int added = 0, changed = 0, deleted = 0;
         bool projectDataDirty = false;
+        Dictionary<string, long>? globRoots = null; // lazy: only built when a .cs file is ADDED
+        bool? hasLegacy = null;                     // lazy: gates the incremental attribution
 
         using (var tx = store.BeginTransaction())
         {
@@ -68,6 +70,11 @@ public static class DeltaRefresher
                 // come from the scanner, which already excludes reparse points, so it needs
                 // no per-candidate walk.
                 if (!detectAll && WorkspacePaths.EscapesViaReparsePoint(workspaceRoot, full)) continue;
+                // Excluded-dir parity with the scanner (review): git reconcile and refresh_index feed
+                // RAW paths here (the watcher filters, they don't) — without this, a committed csproj
+                // under packages/ or bin/ becomes a file row and, now that RefreshProjectData sources
+                // its project list from the files table, a phantom project the disk walk never minted.
+                if (!detectAll && WorkspaceScanner.IsExcludedPath(rel)) continue;
                 bool exists = File.Exists(full);
                 bool known = stored.TryGetValue(rel, out var old);
                 string lang = LangOf(rel);
@@ -121,7 +128,37 @@ public static class DeltaRefresher
                         store.InsertContent(tx, id, content);
                         store.InsertSymbols(tx, id, parsed.Symbols);
                         added++;
-                        projectDataDirty = true; // ownership needs recomputing (SDK glob or new legacy item)
+                        // Attribute the new file incrementally instead of rebuilding the whole project
+                        // graph per added .cs (zki: full disk walk + reparse of EVERY csproj). SAFE ONLY
+                        // in pure-SDK workspaces: a LEGACY project's explicit <Compile> list can claim a
+                        // re-added file WITHOUT its csproj changing (git stash pop, branch switch), and
+                        // only the full rebuild re-reads those lists — the incremental walk permanently
+                        // lost that ownership (review-reproduced). With any legacy project present we
+                        // fall back to the full rebuild, which itself no longer walks the disk, so
+                        // legacy-heavy workspaces still come out ahead.
+                        hasLegacy ??= store.HasLegacyProjects();
+                        if (hasLegacy.Value)
+                        {
+                            projectDataDirty = true;
+                        }
+                        else
+                        {
+                            // Longest glob-root dir prefix wins, mirroring CompileItemResolver's walk
+                            // exactly (including its root-dir quirk, so both attributions always agree).
+                            globRoots ??= BuildGlobRoots(store);
+                            string fdir = rel;
+                            while (true)
+                            {
+                                int slash = fdir.LastIndexOf('/');
+                                if (slash < 0) break;
+                                fdir = fdir[..slash];
+                                if (globRoots.TryGetValue(fdir, out long pid))
+                                {
+                                    store.InsertCompileItem(tx, pid, id);
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
                 else
@@ -160,18 +197,48 @@ public static class DeltaRefresher
         return new RefreshResult(changed, added, deleted, projectDataDirty, sw.Elapsed);
     }
 
-    /// <summary>Re-parses all csproj/sln files and rebuilds project tables + compile items.</summary>
+    /// <summary>Same longest-dir-prefix map CompileItemResolver builds: non-legacy (SDK or failed-
+    /// parse) project dirs, keyed for the added-file walk. Built at most once per refresh.</summary>
+    private static Dictionary<string, long> BuildGlobRoots(IndexStore store)
+    {
+        var roots = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, relPath) in store.GlobRootProjects())
+        {
+            string dir = Path.GetDirectoryName(relPath)?.Replace('\\', '/') ?? "";
+            roots[dir] = id;
+        }
+        return roots;
+    }
+
+    /// <summary>Re-parses all csproj/sln files and rebuilds project tables + compile items. When no
+    /// scan is supplied, the file lists come from the FILES TABLE (kept fresh by this refresher) —
+    /// previously every watcher-triggered csproj touch paid a FULL workspace disk walk here (zki).</summary>
     public static void RefreshProjectData(IndexStore store, string workspaceRoot, ScanResult? scan = null)
     {
-        scan ??= WorkspaceScanner.Scan(workspaceRoot);
-
-        var parsedProjects = new ParsedProject[scan.ProjectFiles.Count];
-        Parallel.For(0, scan.ProjectFiles.Count, i =>
+        List<string> projectPaths, solutionPaths;
+        if (scan is not null)
         {
-            parsedProjects[i] = ProjectFileParser.Parse(workspaceRoot, scan.ProjectFiles[i].RelPath);
+            projectPaths = scan.ProjectFiles.Select(f => f.RelPath).ToList();
+            solutionPaths = scan.SolutionFiles.Select(f => f.RelPath).ToList();
+        }
+        else
+        {
+            projectPaths = new List<string>();
+            solutionPaths = new List<string>();
+            foreach (var (_, path, lang) in store.FileIdPathLang())
+            {
+                if (lang == "csproj") projectPaths.Add(path);
+                else if (lang == "sln") solutionPaths.Add(path);
+            }
+        }
+
+        var parsedProjects = new ParsedProject[projectPaths.Count];
+        Parallel.For(0, projectPaths.Count, i =>
+        {
+            parsedProjects[i] = ProjectFileParser.Parse(workspaceRoot, projectPaths[i]);
         });
-        var parsedSolutions = scan.SolutionFiles
-            .Select(s => SolutionParser.Parse(workspaceRoot, s.RelPath))
+        var parsedSolutions = solutionPaths
+            .Select(s => SolutionParser.Parse(workspaceRoot, s))
             .ToList();
 
         var csFileIds = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);

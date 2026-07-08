@@ -320,17 +320,7 @@ public sealed partial class NavigationTools
 
         // Best-effort owning symbol per hit (feedback: jump from a text match to the owning
         // method/type without a follow-up symbol_at). Only .cs files carry symbols.
-        var owners = new Dictionary<(string Path, int Line), string>();
-        foreach (var h in hits)
-        {
-            if (!h.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) continue;
-            if (owners.ContainsKey((h.FilePath, h.Line))) continue;
-            var sym = q.InnermostSymbolAt(h.FilePath, h.Line);
-            if (sym is not null)
-            {
-                owners[(h.FilePath, h.Line)] = sym.Container is { Length: > 0 } c ? $"{c}.{sym.Name}" : sym.Name;
-            }
-        }
+        var owners = OwningSymbols(q, hits);
 
         var meta = Meta.From(_manager.Health(), "indexed", "text");
         return Json.WithListBudget(hits, (items, truncated) => new
@@ -363,6 +353,18 @@ public sealed partial class NavigationTools
         });
     }
 
+    // Best-effort owning symbol per .cs hit — BATCHED (one grouped query per ~40 keys) instead of one
+    // InnermostSymbolAt point query per hit (9fr N+1: a full page issued up to ~100 queries).
+    private static Dictionary<(string Path, int Line), string> OwningSymbols(IndexQueries q, IEnumerable<TextHit> hits)
+    {
+        var keys = hits.Where(h => h.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            .Select(h => (h.FilePath, h.Line)).Distinct().ToList();
+        var owners = new Dictionary<(string, int), string>();
+        foreach (var (key, sym) in q.InnermostSymbolsAt(keys))
+            owners[key] = sym.Container is { Length: > 0 } c ? $"{c}.{sym.Name}" : sym.Name;
+        return owners;
+    }
+
     // Regex mode for search_text (Batch B): .NET regex over indexed content, FTS-narrowed by required
     // literals when possible, else a bounded scan; ReDoS-guarded. Mirrors the token response shape
     // (context lines, containingSymbol, noise) so callers get one consistent hit format.
@@ -383,15 +385,7 @@ public sealed partial class NavigationTools
         if (hadMore) hits.RemoveAt(hits.Count - 1);
 
         // Owning symbol per .cs hit — parity with token search_text (feedback loved containingSymbol).
-        var owners = new Dictionary<(string Path, int Line), string>();
-        foreach (var h in hits)
-        {
-            if (!h.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) continue;
-            if (owners.ContainsKey((h.FilePath, h.Line))) continue;
-            var sym = q.InnermostSymbolAt(h.FilePath, h.Line);
-            if (sym is not null)
-                owners[(h.FilePath, h.Line)] = sym.Container is { Length: > 0 } c ? $"{c}.{sym.Name}" : sym.Name;
-        }
+        var owners = OwningSymbols(q, hits);
 
         // Contextual note — only when it changes the caller's next move (timeout, clipped coverage, or
         // a zero-hit that needs the line-based/case-sensitivity reminder). Silent on a clean success.

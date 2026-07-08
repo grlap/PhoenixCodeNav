@@ -204,17 +204,7 @@ public sealed class WorkspaceWatcher : IDisposable
         }
     }
 
-    private static bool IsExcluded(string relPath)
-    {
-        foreach (var segment in relPath.Split('/'))
-        {
-            foreach (var excluded in WorkspaceScanner.DefaultExcludedDirs)
-            {
-                if (segment.Equals(excluded, StringComparison.OrdinalIgnoreCase)) return true;
-            }
-        }
-        return false;
-    }
+    private static bool IsExcluded(string relPath) => WorkspaceScanner.IsExcludedPath(relPath);
 
     private void Flush()
     {

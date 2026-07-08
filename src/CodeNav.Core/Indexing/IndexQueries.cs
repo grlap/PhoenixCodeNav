@@ -393,6 +393,56 @@ public sealed partial class IndexQueries : IDisposable
         return hits.Count > 0 ? hits[0] : null;
     }
 
+    /// <summary>Innermost enclosing symbol per (path, line), batched: search_text decorated up to a
+    /// full page (~100 hits) with one InnermostSymbolAt point query EACH — this replaces the N+1 with
+    /// chunked grouped queries and an in-memory innermost pick (smallest span, then latest start,
+    /// mirroring InnermostSymbolAt's ORDER BY). Keys absent from the result had no enclosing symbol.</summary>
+    public Dictionary<(string Path, int Line), SymbolHit> InnermostSymbolsAt(
+        IReadOnlyCollection<(string Path, int Line)> keys)
+    {
+        var result = new Dictionary<(string, int), SymbolHit>();
+        if (keys.Count == 0) return result;
+        var best = new Dictionary<(string, int), (int Span, int Start)>();
+        foreach (var chunk in keys.Distinct().Chunk(40))
+        {
+            var args = new List<(string, object)>();
+            var clauses = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                clauses.Add($"(f.path = $p{i} AND s.start_line <= $l{i} AND s.end_line >= $l{i})");
+                args.Add(($"$p{i}", chunk[i].Path));
+                args.Add(($"$l{i}", chunk[i].Line));
+            }
+            var rows = Query(
+                $"""
+                SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
+                FROM symbols s JOIN files f ON f.id = s.file_id
+                WHERE {string.Join(" OR ", clauses)}
+                """,
+                ReadSymbol, args.ToArray());
+            foreach (var sym in rows)
+            {
+                // One row can enclose several requested lines of the same file. Ordinal, not
+                // IgnoreCase: the SQL matched f.path = $p with BINARY comparison, so a case-twin path
+                // (possible on a case-sensitive FS) must not cross-attribute here (review finding).
+                foreach (var (path, lineNo) in chunk)
+                {
+                    if (!string.Equals(path, sym.FilePath, StringComparison.Ordinal)) continue;
+                    if (sym.StartLine > lineNo || sym.EndLine < lineNo) continue;
+                    int span = sym.EndLine - sym.StartLine;
+                    var key = (path, lineNo);
+                    if (!best.TryGetValue(key, out var b) || span < b.Span || (span == b.Span && sym.StartLine > b.Start))
+                    {
+                        best[key] = (span, sym.StartLine);
+                        result[key] = sym;
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
     /// <summary>Other files containing a PARTIAL declaration of the same type identity
     /// (name + kind + namespace + containing type) — the partial-type cross-links for an
     /// outline. is_partial=1 keeps an unrelated same-name non-partial type (legal in another
@@ -453,21 +503,21 @@ public sealed partial class IndexQueries : IDisposable
         {
             string? content = ContentById(c.Id);
             if (content is null) continue;
-            var lineNos = LocateTokenLines(content, symbolName, out var lines);
-            if (lineNos.Count == 0) continue;
+            var spans = LocateTokenLineSpans(content, symbolName);
+            if (spans.Count == 0) continue;
 
             var owners = fileProjects.TryGetValue(c.Id, out var list) ? list : new List<(string, bool)> { ("(no project)", false) };
             foreach (var (project, isTest) in owners)
             {
                 if (!groups.TryGetValue(project, out var g)) g = (isTest, 0, new List<TextHit>());
-                g.Count += lineNos.Count;
-                foreach (int ln in lineNos.Take(Math.Max(0, samplesPerProject - g.Samples.Count)))
+                g.Count += spans.Count;
+                foreach (var (ln, s, e) in spans.Take(Math.Max(0, samplesPerProject - g.Samples.Count)))
                 {
-                    g.Samples.Add(new TextHit(c.Path, ln, Snippet(lines[ln - 1]), c.Gen));
+                    g.Samples.Add(new TextHit(c.Path, ln, Snippet(content[s..e]), c.Gen));
                 }
                 groups[project] = g;
             }
-            total += lineNos.Count;
+            total += spans.Count;
         }
 
         var ordered = groups
@@ -503,6 +553,30 @@ public sealed partial class IndexQueries : IDisposable
 
     public List<GraphEdge> ProjectGraph(string projectName, int depth, string direction)
     {
+        // Depth-1 fast path: the semantic cluster load calls this once per project (TopoOrder +
+        // per-project references), and the general path below loads the ENTIRE edge table each call —
+        // O(edges) per project, O(projects x edges) per cluster. One indexed WHERE instead. Result-set
+        // parity with the BFS below (review-hardened): an unknown direction returns EMPTY (the BFS's
+        // guards match nothing), and 'both' emits downstream edges then upstream edges via UNION ALL —
+        // the BFS's deterministic order, which callers truncate on (.Take / list budget).
+        if (depth == 1)
+        {
+            const string select = """
+                SELECT pf.name, pt.name FROM project_refs r
+                JOIN projects pf ON pf.id = r.from_id
+                JOIN projects pt ON pt.id = r.to_id
+                """;
+            string? sql = direction switch
+            {
+                "downstream" => $"{select} WHERE pf.name = $n COLLATE NOCASE",
+                "upstream" => $"{select} WHERE pt.name = $n COLLATE NOCASE",
+                "both" => $"{select} WHERE pf.name = $n COLLATE NOCASE UNION ALL {select} WHERE pt.name = $n COLLATE NOCASE",
+                _ => null,
+            };
+            if (sql is null) return new List<GraphEdge>();
+            return Query(sql, r => new GraphEdge(r.GetString(0), r.GetString(1)), ("$n", projectName));
+        }
+
         var edges = Query(
             """
             SELECT pf.name, pt.name FROM project_refs r
@@ -632,6 +706,41 @@ public sealed partial class IndexQueries : IDisposable
             ORDER BY f.path
             """,
             r => r.GetString(0), ("$n", projectName));
+    }
+
+    /// <summary>Fingerprints for MANY projects in one grouped query. The warm-cache check in
+    /// EnsureLoadedAsync ran ProjectFingerprint once per already-loaded project on EVERY semantic
+    /// call — dozens to hundreds of point queries per references/implementations invocation (dz3).</summary>
+    public Dictionary<string, (long FileCount, long HashSum)> ProjectFingerprints(IReadOnlyCollection<string> projectNames)
+    {
+        var result = new Dictionary<string, (long, long)>(StringComparer.OrdinalIgnoreCase);
+        if (projectNames.Count == 0) return result;
+        foreach (var chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(200))
+        {
+            var args = new List<(string, object)>();
+            var ph = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                ph.Add($"$n{i}");
+                args.Add(($"$n{i}", chunk[i]));
+            }
+            foreach (var row in Query(
+                $"""
+                SELECT p.name, COUNT(*), TOTAL(f.hash) FROM compile_items ci
+                JOIN projects p ON p.id = ci.project_id
+                JOIN files f ON f.id = ci.file_id
+                WHERE p.name COLLATE NOCASE IN ({string.Join(",", ph)}) AND f.lang = 'cs'
+                GROUP BY p.name COLLATE NOCASE -- must union case-variant names exactly like the single
+                                               -- query's '= $n COLLATE NOCASE', or the warm check and
+                                               -- the load-time fingerprint permanently disagree and the
+                                               -- project reloads on EVERY semantic call (review repro)
+                """,
+                r => (Name: r.GetString(0), Count: r.GetInt64(1), Sum: (long)r.GetDouble(2)), args.ToArray()))
+            {
+                result[row.Name] = (row.Count, row.Sum);
+            }
+        }
+        return result; // names with no compiled files are simply absent => caller defaults to (0, 0)
     }
 
     /// <summary>Cheap change fingerprint for a project's compiled files.</summary>
@@ -1195,31 +1304,47 @@ public sealed partial class IndexQueries : IDisposable
     public static string FtsQuery(string query) =>
         string.Join(" ", Tokenize(query).Select(t => $"\"{t}\""));
 
-    /// <summary>Lines (1-based) where the name occurs as a whole identifier token.</summary>
-    private static List<int> LocateTokenLines(string content, string name, out string[] lines)
+    /// <summary>Lines (1-based) where the name occurs as a whole identifier token, with each line's
+    /// char span in <paramref name="content"/> — one entry per matching line, first match wins.
+    /// Single pass with NO per-line allocation: the old Split('\n') materialized every line of every
+    /// candidate file (~2x the content's allocation, up to 2000 files per references call); snippets
+    /// are now substringed lazily by the caller for sampled lines only. '\n'/'\r' are not identifier
+    /// chars, so boundary checks against the raw content match the old per-line semantics exactly.</summary>
+    private static List<(int Line, int Start, int End)> LocateTokenLineSpans(string content, string name)
     {
-        lines = content.Split('\n');
-        var result = new List<int>();
-        for (int i = 0; i < lines.Length; i++)
+        var result = new List<(int, int, int)>();
+        // A name containing '\n' could never match a Split('\n') line in the old implementation — and
+        // here a match STARTING with '\n' would make idx = lineEnd a no-progress infinite loop
+        // (review-reproduced via references(name:"\nGuard"), which FTS does not reject). Reject it.
+        if (name.Length == 0 || name.Contains('\n')) return result;
+        int line = 1, lineStart = 0;
+        int idx = 0;
+        while ((idx = content.IndexOf(name, idx, StringComparison.Ordinal)) >= 0)
         {
-            string line = lines[i];
-            int idx = 0;
-            while ((idx = line.IndexOf(name, idx, StringComparison.Ordinal)) >= 0)
+            // Advance the line cursor to the match (IndexOf positions are non-decreasing).
+            while (true)
             {
-                bool leftOk = idx == 0 || !IsIdentChar(line[idx - 1]);
-                int end = idx + name.Length;
-                bool rightOk = end >= line.Length || !IsIdentChar(line[end]);
-                if (leftOk && rightOk)
-                {
-                    result.Add(i + 1);
-                    break;
-                }
+                int nl = content.IndexOf('\n', lineStart);
+                if (nl < 0 || nl >= idx) break;
+                lineStart = nl + 1;
+                line++;
+            }
+            bool leftOk = idx == 0 || !IsIdentChar(content[idx - 1]);
+            int end = idx + name.Length;
+            bool rightOk = end >= content.Length || !IsIdentChar(content[end]);
+            if (leftOk && rightOk)
+            {
+                int lineEnd = content.IndexOf('\n', idx);
+                if (lineEnd < 0) lineEnd = content.Length;
+                result.Add((line, lineStart, lineEnd));
+                idx = lineEnd; // once per line: skip the rest of this line
+            }
+            else
+            {
                 idx = end;
             }
         }
         return result;
-
-        static bool IsIdentChar(char c) => char.IsLetterOrDigit(c) || c == '_';
     }
 
     private static string Snippet(string line)
