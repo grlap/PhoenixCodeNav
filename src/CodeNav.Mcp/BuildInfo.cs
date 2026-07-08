@@ -19,7 +19,11 @@ public static class BuildInfo
 {
     /// <summary>Bump when the tool surface or a user-visible capability changes. Pair with the
     /// features manifest in server_capabilities so a caller can confirm capabilities, not just a number.</summary>
-    public const string Version = "0.4.0";
+    public const string Version = "0.5.0";
+
+    /// <summary>"version+shortsha" — the inline deploy check every response's meta carries (ddp),
+    /// so a caller never has to guess which build produced a result.</summary>
+    public static string Stamp { get; } = $"{Version}+{Commit}";
 
     /// <summary>Short git commit phoenix was built from ("unknown" when the build could not read git —
     /// e.g. source copied without .git, or no git in the build image).</summary>

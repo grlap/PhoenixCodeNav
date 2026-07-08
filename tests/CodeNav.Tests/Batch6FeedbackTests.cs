@@ -196,17 +196,40 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
     }
 
     [Fact]
-    public void IndexedMetaCarriesConfidenceNote()
+    public void ConfidenceNoteIsContextualNotVerbatim()
     {
+        // 47t (field: the indexed explainer repeated on EVERY response was noise): plain indexed
+        // responses carry NO confidenceNote — the tier meanings live in server_capabilities'
+        // confidenceModel, read once. It also carries the inline build stamp (ddp).
         var tools = Tools();
         var meta = Parse(tools.SearchSymbol("Guard", kinds: "class", match: "exact")).GetProperty("meta");
         Assert.Equal("indexed", meta.GetProperty("confidence").GetString());
-        Assert.Contains("not compiler-verified", meta.GetProperty("confidenceNote").GetString());
+        Assert.False(meta.TryGetProperty("confidenceNote", out _));
+        Assert.Equal(BuildInfo.Stamp, meta.GetProperty("build").GetString());
 
-        // Heuristic responses explain themselves too.
+        // Heuristic responses STILL explain themselves — that warning changes how much to trust
+        // this specific result.
         var hMeta = Parse(tools.RelatedTests("Guard")).GetProperty("meta");
         Assert.Equal("heuristic", hMeta.GetProperty("confidence").GetString());
         Assert.False(string.IsNullOrEmpty(hMeta.GetProperty("confidenceNote").GetString()));
+    }
+
+    // 9z4 (field: couldn't tell if 'refreshing' meant "results wrong" or "background catch-up"):
+    // refreshing/stale statuses carry a one-line meaning; plain ready does not.
+    [Fact]
+    public void StatusNoteExplainsRefreshingAndStale()
+    {
+        var ready = new IndexHealth("ready", "v", null, null, 0, null, 0, "w", "d");
+        Assert.False(string.IsNullOrEmpty(Meta.From(ready, "indexed", "text").IndexStatus));
+        Assert.Null(Meta.From(ready, "indexed", "text").StatusNote);
+
+        var stale = Meta.From(ready with { PendingChanges = 3 }, "indexed", "text");
+        Assert.Equal("stale", stale.IndexStatus);
+        Assert.Contains("pending (3)", stale.StatusNote);
+
+        var refreshing = Meta.From(ready with { State = "refreshing" }, "indexed", "text");
+        Assert.Equal("refreshing", refreshing.IndexStatus);
+        Assert.Contains("non-blocking", refreshing.StatusNote);
     }
 
     // ---------------------------------------------------------------- zb9: containingSymbol

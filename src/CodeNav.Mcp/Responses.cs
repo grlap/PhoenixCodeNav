@@ -65,20 +65,32 @@ internal sealed record Meta(
     int PendingChanges,
     string Confidence,
     string NavigationLayer,
-    string? ConfidenceNote = null)
+    string? ConfidenceNote = null,
+    string? StatusNote = null,
+    string? Build = null)
 {
     public static Meta From(IndexHealth h, string confidence, string layer)
     {
         // Pending watcher changes mean results may lag the working tree.
         string status = h.State == "ready" && h.PendingChanges > 0 ? "stale" : h.State;
-        // Surface what the label means in the payload itself (feedback: priming alone is
-        // not enough). Kept terse — this rides on every non-exact response.
-        string? note = confidence switch
+        // 47t (field: "repeated on every response — after the first it's noise"): the indexed-tier
+        // explainer is GONE from per-response meta — the tier meanings live in
+        // server_capabilities.confidenceModel, read once. Only heuristic keeps its warning: it
+        // changes how much to trust THIS specific result.
+        string? note = confidence == "heuristic"
+            ? "naming/text inference — verify before relying on it"
+            : null;
+        // 9z4 (field: couldn't tell whether 'refreshing' meant "results may be wrong" or "background
+        // catch-up, results fine"): one line of meaning, only when the status needs it.
+        string? statusNote = status switch
         {
-            "indexed" => "index/syntax-backed, not compiler-verified",
-            "heuristic" => "naming/text inference — verify before relying on it",
+            "refreshing" => "background non-blocking refresh — results reflect the index as of lastRefreshUtc/indexedAtUtc",
+            "stale" => $"watcher changes pending ({h.PendingChanges}) — results may lag the working tree slightly",
             _ => null,
         };
-        return new Meta(status, h.IndexVersion, h.IndexedAtUtc, h.LastRefreshUtc, h.PendingChanges, confidence, layer, note);
+        // ddp (field: "I can programmatically check what's deployed — make it inline"): every
+        // response self-identifies its build, ~20 bytes.
+        return new Meta(status, h.IndexVersion, h.IndexedAtUtc, h.LastRefreshUtc, h.PendingChanges,
+            confidence, layer, note, statusNote, BuildInfo.Stamp);
     }
 }
