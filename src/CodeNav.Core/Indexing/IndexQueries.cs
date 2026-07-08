@@ -1017,14 +1017,25 @@ public sealed class IndexQueries : IDisposable
     {
         if (pathGlob is { Length: > 0 } inc)
         {
-            string like = GlobToLike(inc);
-            if (inc.Contains('/'))
+            // A leading "**/" means "at any depth, INCLUDING zero" — so root-level files must match.
+            // GlobToLike alone turns it into "%%/..." which requires a leading segment, silently
+            // excluding root files (bug 6yk); match the remainder both at root and at any depth, the
+            // same OR form the bare-glob (no-'/') case uses.
+            if (inc.StartsWith("**/", StringComparison.Ordinal))
+            {
+                string rest = GlobToLike(inc[3..]);
+                where.Append(" AND (f.path LIKE $incPath ESCAPE '\\' OR f.path LIKE $incBare ESCAPE '\\')");
+                args.Add(("$incPath", $"%/{rest}"));
+                args.Add(("$incBare", rest));
+            }
+            else if (inc.Contains('/'))
             {
                 where.Append(" AND f.path LIKE $incPath ESCAPE '\\'");
-                args.Add(("$incPath", like));
+                args.Add(("$incPath", GlobToLike(inc)));
             }
             else
             {
+                string like = GlobToLike(inc);
                 where.Append(" AND (f.path LIKE $incPath ESCAPE '\\' OR f.path LIKE $incBare ESCAPE '\\')");
                 args.Add(("$incPath", $"%/{like}"));
                 args.Add(("$incBare", like));
@@ -1035,16 +1046,25 @@ public sealed class IndexQueries : IDisposable
         foreach (var raw in excludePaths)
         {
             if (string.IsNullOrEmpty(raw)) continue;
-            string like = GlobToLike(raw);
             string pPath = $"$ex{n}p", pBare = $"$ex{n}b"; // distinct binds per exclude
             n++;
-            if (raw.Contains('/'))
+            // Symmetric to the include side (bug 6yk mirror): a leading "**/" exclude must also drop
+            // root-level matches, or e.g. "**/gen/**" fails to exclude a root-level "gen/...".
+            if (raw.StartsWith("**/", StringComparison.Ordinal))
+            {
+                string rest = GlobToLike(raw[3..]);
+                where.Append($" AND f.path NOT LIKE {pPath} ESCAPE '\\' AND f.path NOT LIKE {pBare} ESCAPE '\\'");
+                args.Add((pPath, $"%/{rest}"));
+                args.Add((pBare, rest));
+            }
+            else if (raw.Contains('/'))
             {
                 where.Append($" AND f.path NOT LIKE {pPath} ESCAPE '\\'");
-                args.Add((pPath, like));
+                args.Add((pPath, GlobToLike(raw)));
             }
             else
             {
+                string like = GlobToLike(raw);
                 where.Append($" AND f.path NOT LIKE {pPath} ESCAPE '\\' AND f.path NOT LIKE {pBare} ESCAPE '\\'");
                 args.Add((pPath, $"%/{like}"));
                 args.Add((pBare, like));

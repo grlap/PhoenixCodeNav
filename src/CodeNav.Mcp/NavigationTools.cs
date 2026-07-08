@@ -1177,7 +1177,10 @@ public sealed partial class NavigationTools
     public string RefreshIndex(
         [Description("Optional comma-separated workspace-relative paths to refresh.")] string? paths = null)
     {
-        var list = SplitCsv(paths);
+        // Normalize backslash paths to the workspace-relative forward-slash form the index stores under;
+        // otherwise "src\Foo.cs" refreshes as a NEW path, creating a permanent duplicate file/symbol
+        // row alongside the indexed "src/Foo.cs" (bug 9h3).
+        var list = SplitCsv(paths)?.Select(NormalizePath).ToList();
         _manager.RequestRefresh(list?.Count > 0 ? list : null);
         return Json.Serialize(new
         {
