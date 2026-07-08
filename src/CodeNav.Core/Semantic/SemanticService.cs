@@ -18,7 +18,8 @@ public sealed record SemanticDeclaration(
     List<DeclarationSpan> Declarations,
     bool IsAbstract = false);
 
-public sealed record SemanticLocation(string Path, int Line, string LineText, string Project, bool IsTestProject);
+public sealed record SemanticLocation(string Path, int Line, string LineText, string Project, bool IsTestProject,
+    string? Kind = null);
 
 public sealed record SemanticRefGroup(string Project, bool IsTestProject, int Count, List<SemanticLocation> Samples);
 
@@ -27,7 +28,8 @@ public sealed record SemanticReferences(
     int TotalLocations,
     List<SemanticRefGroup> Groups,
     ClusterCoverage Coverage,
-    List<string> SkippedCandidateProjects);
+    List<string> SkippedCandidateProjects,
+    IReadOnlyDictionary<string, int>? KindCounts = null);
 
 /// <summary>One implementation / derived class / override, tagged for hierarchy ranking.
 /// <paramref name="Via"/> names the base type that introduces the queried interface when the type
@@ -106,7 +108,7 @@ public sealed partial class SemanticService : IDisposable
 
     public async Task<(SemanticReferences? Result, string? FailReason)> ReferencesAsync(
         string path, int line, int? column, string? nameHint, int maxProjects, int samplesPerGroup, int timeoutMs,
-        bool includeGenerated = true)
+        bool includeGenerated = true, IReadOnlySet<string>? usageKinds = null, bool publicConsumersOnly = false)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         try
@@ -133,6 +135,14 @@ public sealed partial class SemanticService : IDisposable
                 generatedPaths = gq.GeneratedPaths();
             }
             var groups = new Dictionary<string, SemanticRefGroup>(StringComparer.OrdinalIgnoreCase);
+            var kindCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var rootCache = new Dictionary<SyntaxTree, SyntaxNode>(); // one parse-root fetch per tree
+            bool symbolIsType = symbol is INamedTypeSymbol;
+            // publicConsumersOnly anchors on the symbol's DECLARING project (assemblyName == index
+            // project name in the adhoc workspace). Anchoring on the query-position file INVERTS the
+            // filter when the caller targets a USAGE position (review-reproduced: the declaring
+            // project was kept and the usage's project dropped).
+            string declaringProject = symbol.ContainingAssembly?.Name ?? owningProject ?? "";
             int total = 0;
             foreach (var referenced in found)
             {
@@ -145,8 +155,22 @@ public sealed partial class SemanticService : IDisposable
                     int refLine = lineSpan.StartLinePosition.Line + 1;
                     string relPath = ToRelPath(doc.FilePath ?? doc.Name);
                     if (generatedPaths is not null && generatedPaths.Contains(relPath)) continue;
+                    // publicConsumersOnly: API blast-radius view — drop usages from the DECLARING
+                    // project itself, before counting, so totals reflect external consumers only.
+                    if (publicConsumersOnly && string.Equals(project, declaringProject, StringComparison.OrdinalIgnoreCase)) continue;
+
+                    // Classify HOW the symbol is used (call vs xmldoc mention vs ...); filter before
+                    // counting so totals honor usageKinds (same discipline as includeGenerated).
+                    if (!rootCache.TryGetValue(loc.Location.SourceTree, out var rootNode))
+                    {
+                        rootNode = await loc.Location.SourceTree.GetRootAsync(cts.Token).ConfigureAwait(false);
+                        rootCache[loc.Location.SourceTree] = rootNode;
+                    }
+                    string kind = SemanticReferenceKinds.Classify(rootNode, loc.Location.SourceSpan.Start, symbolIsType);
+                    if (usageKinds is not null && !usageKinds.Contains(kind)) continue;
 
                     total++;
+                    kindCounts[kind] = kindCounts.GetValueOrDefault(kind) + 1;
                     bool isTest = testFlags.TryGetValue(project, out bool t) && t;
                     if (!groups.TryGetValue(project, out var g))
                     {
@@ -157,7 +181,7 @@ public sealed partial class SemanticService : IDisposable
                     {
                         string text = (await loc.Location.SourceTree.GetTextAsync(cts.Token).ConfigureAwait(false))
                             .Lines[lineSpan.StartLinePosition.Line].ToString().Trim();
-                        samples.Add(new SemanticLocation(relPath, refLine, Truncate(text), project, isTest));
+                        samples.Add(new SemanticLocation(relPath, refLine, Truncate(text), project, isTest, kind));
                     }
                     groups[project] = g with { Count = g.Count + 1 };
                 }
@@ -168,7 +192,8 @@ public sealed partial class SemanticService : IDisposable
                 total,
                 groups.Values.OrderByDescending(g => g.Count).ToList(),
                 coverage,
-                skipped);
+                skipped,
+                kindCounts);
             return (result, null);
         }
         catch (OperationCanceledException)

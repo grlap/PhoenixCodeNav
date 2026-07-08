@@ -52,7 +52,8 @@ public sealed partial class NavigationTools
                 new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (best-effort, silent when compiled); repo_overview.orphanedFiles count" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
-                new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + contextual notes" },
+                new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + didYouMean token variants + contextual notes" },
+                new { id = "reference-kinds", summary = "references (exact path): per-location usage kinds — call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/other — with a kinds breakdown, usageKinds filter (validated), and publicConsumersOnly (usages outside the symbol's declaring project); indexed fallback stays unclassified and says so" },
                 new { id = "symbol-handles", summary = "idx:N~fp symbol handles (index-local, reindex-detecting) accepted by source_context / definition / references" },
             },
             tools = new[]
@@ -1181,7 +1182,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "references")]
-    [Description("Where a symbol is used across the workspace, grouped by project with counts and sample lines. mode='auto' tries compiler-exact references (target by position path+line, or by name) scoped to candidate projects, falling back to index candidates. Pass pathGlob/excludePath to scope candidates (e.g. excludePath='3rdparty/**'); a path filter runs the indexed candidate path so counts reflect the filter. Call before changing behavior.")]
+    [Description("Where a symbol is used across the workspace, grouped by project with counts and sample lines. mode='auto' tries compiler-exact references (target by position path+line, or by name) scoped to candidate projects, falling back to index candidates. Exact references are usage-kind classified (kinds breakdown: call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof) — filter with usageKinds (e.g. 'call' to skip doc mentions) or publicConsumersOnly for external callers. Pass pathGlob/excludePath to scope candidates (e.g. excludePath='3rdparty/**'); a path filter runs the indexed candidate path so counts reflect the filter. Call before changing behavior.")]
     public string References(
         [Description("Symbol name (whole-identifier). Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of a usage or declaration (position mode — most precise).")] string? path = null,
@@ -1190,6 +1191,8 @@ public sealed partial class NavigationTools
         [Description("'auto' (semantic first), 'semantic', or 'indexed' (fast candidates).")] string mode = "auto",
         [Description("Include usages in test projects (default true).")] bool includeTests = true,
         [Description("Include usages in generated files (default false).")] bool includeGenerated = false,
+        [Description("Comma-separated usage-kind filter — SEMANTIC (exact) path only: call, construction, typeMention, attribute, nameof, xmldoc, usingDirective, baseList, typeof, other. Counts and groups honor it (e.g. 'call,construction' = real executions only).")] string? usageKinds = null,
+        [Description("Only usages OUTSIDE the symbol's own declaring project — the external/API-consumer view (semantic path only).")] bool publicConsumersOnly = false,
         [Description("Restrict candidate paths to this glob (supplying a path filter runs indexed candidates).")] string? pathGlob = null,
         [Description("Exclude candidate paths matching this glob, e.g. '3rdparty/**' (supplying a path filter runs indexed candidates).")] string? excludePath = null,
         [Description("Max candidate files scanned in indexed mode (default 500).")] int maxFiles = 500,
@@ -1214,13 +1217,32 @@ public sealed partial class NavigationTools
         // are project-level and cannot be re-derived per path), so a filter forces indexed mode.
         bool hasPathFilter = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 };
         string? failReason = hasPathFilter && mode != "indexed" ? "path_filter_ran_indexed_candidates" : null;
+        // Usage-kind buckets + external-consumers view are syntax/compiler facts — semantic path only.
+        var kindSet = SplitCsv(usageKinds) is { Count: > 0 } uk
+            ? new HashSet<string>(uk, StringComparer.OrdinalIgnoreCase)
+            : null;
+        if (kindSet is not null)
+        {
+            // Validate up front: a typo ('calls') silently filtering everything to zero would read as
+            // "dead code" at exact confidence — the silent-empty anti-pattern this codebase keeps killing.
+            var unknown = kindSet.Where(k => !SemanticReferenceKinds.All.Contains(k, StringComparer.OrdinalIgnoreCase)).ToList();
+            if (unknown.Count > 0)
+            {
+                return Json.Serialize(new
+                {
+                    error = "bad_request",
+                    detail = $"Unknown usageKinds value(s): {string.Join(", ", unknown)}. Valid: {string.Join(", ", SemanticReferenceKinds.All)}.",
+                    meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                });
+            }
+        }
         if (mode is "auto" or "semantic" && !hasPathFilter)
         {
             var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column);
             if (target is { } t)
             {
                 var (result, reason) = _semantic
-                    .ReferencesAsync(t.Path, t.Line, t.Column, hint, maxProjects, Math.Clamp(samplesPerGroup, 0, 10), timeoutMs, includeGenerated)
+                    .ReferencesAsync(t.Path, t.Line, t.Column, hint, maxProjects, Math.Clamp(samplesPerGroup, 0, 10), timeoutMs, includeGenerated, kindSet, publicConsumersOnly)
                     .GetAwaiter().GetResult();
                 if (result is not null)
                 {
@@ -1235,13 +1257,16 @@ public sealed partial class NavigationTools
                         symbol = SemanticSymbolJson(result.Symbol),
                         summary = $"{result.TotalLocations} exact references across {result.Groups.Count} projects ({prod0} production, {test0} test).",
                         totalReferences = result.TotalLocations,
+                        // HOW the symbol is used, e.g. {"call":20,"xmldoc":480} — the anti-"500 refs
+                        // that are mostly doc mentions" signal. Filter with usageKinds.
+                        kinds = result.KindCounts is { Count: > 0 } ? result.KindCounts : null,
                         groupBy = "project",
                         groups = items.Select(g => new
                         {
                             project = g.Project,
                             isTest = g.IsTestProject,
                             count = g.Count,
-                            samples = g.Samples.Select(s => new { s.Path, s.Line, text = s.LineText }),
+                            samples = g.Samples.Select(s => new { s.Path, s.Line, text = s.LineText, kind = s.Kind }),
                         }),
                         coverage = CoverageJson(result.Coverage),
                         partial,
@@ -1305,7 +1330,10 @@ public sealed partial class NavigationTools
                 samples = g.Samples.Select(s => new { path = s.FilePath, s.Line, text = s.LineText }),
             }),
             truncated,
-            note = "Candidates are whole-identifier text matches (confidence: indexed), not compiler-resolved references.",
+            note = "Candidates are whole-identifier text matches (confidence: indexed), not compiler-resolved references."
+                + (kindSet is not null || publicConsumersOnly
+                    ? " NOTE: usageKinds/publicConsumersOnly need compiler syntax and were NOT applied on this indexed path."
+                    : ""),
             meta,
         });
     }
