@@ -869,6 +869,7 @@ public sealed partial class NavigationTools
         if (targetKind is not (null or "interface" or "class" or "struct" or "record" or "record_struct"))
         {
             List<SymbolHit> memberImpls = new();
+            int implementerCount = 0;
             if (targetSym?.Container is { Length: > 0 } declType)
             {
                 // Scope the member lookup to the implementer types by (namespace, type name) IDENTITY —
@@ -878,18 +879,27 @@ public sealed partial class NavigationTools
                 var typeKeys = q.ImplementationCandidates(declType, 100)
                     .Select(t => (t.Ns ?? "", t.Name))
                     .ToList();
+                implementerCount = typeKeys.Count;
                 if (typeKeys.Count > 0)
                     memberImpls = q.MembersNamedInTypes(lookupName, typeKeys, 100).Take(50).ToList();
             }
             if (memberImpls.Count > 0)
             {
+                // Coverage transparency: an implementer that declares no such member (an interface impl
+                // without this override) is legitimately omitted — say how many, so the caller knows.
+                int matchedTypes = memberImpls.Select(m => (m.Ns ?? "", m.Container ?? "")).Distinct().Count();
+                int omitted = Math.Max(0, implementerCount - matchedTypes);
                 return Json.WithListBudget(memberImpls, (items, truncated) => new
                 {
                     name = lookupName,
                     declaringType = targetSym!.Container,
+                    implementerCount,
+                    omittedImplementers = omitted > 0 ? omitted : (int?)null,
                     implementations = items.Select(SymbolJson),
                     partialReason = "member_scoped_syntactic",
-                    note = $"Same-named members of the syntactic implementers of {targetSym!.Container} (confidence heuristic — compiler-exact override resolution found none, likely a type-twin identity mismatch). Verify with source_context.",
+                    note = $"Same-named members of the syntactic implementers of {targetSym!.Container} (confidence heuristic — compiler-exact override resolution found none, likely a type-twin identity mismatch)."
+                        + (omitted > 0 ? $" {omitted} of {implementerCount} implementer(s) declare no such member and were omitted." : "")
+                        + " Verify with source_context.",
                     truncated = truncated || memberImpls.Count >= 50,
                     meta,
                 });
