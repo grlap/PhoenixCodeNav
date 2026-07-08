@@ -1022,7 +1022,7 @@ public sealed partial class NavigationTools
             if (target is { } t)
             {
                 var (result, reason) = _semantic
-                    .ReferencesAsync(t.Path, t.Line, t.Column, hint, maxProjects, Math.Clamp(samplesPerGroup, 0, 10), timeoutMs)
+                    .ReferencesAsync(t.Path, t.Line, t.Column, hint, maxProjects, Math.Clamp(samplesPerGroup, 0, 10), timeoutMs, includeGenerated)
                     .GetAwaiter().GetResult();
                 if (result is not null)
                 {
@@ -1086,14 +1086,8 @@ public sealed partial class NavigationTools
         }
         var excludes = excludePath is { Length: > 0 } ex ? new[] { ex } : null;
         var (total, groups) = q.ReferenceCandidates(
-            name, Math.Clamp(maxFiles, 10, 2000), Math.Clamp(samplesPerGroup, 0, 10), pathGlob, excludes);
+            name, Math.Clamp(maxFiles, 10, 2000), Math.Clamp(samplesPerGroup, 0, 10), pathGlob, excludes, includeGenerated);
         if (!includeTests) groups = groups.Where(g => !g.IsTestProject).ToList();
-        if (!includeGenerated)
-        {
-            groups = groups
-                .Select(g => g with { Samples = g.Samples.Where(s => !s.IsGenerated).ToList() })
-                .ToList();
-        }
 
         int prod = groups.Where(g => !g.IsTestProject).Sum(g => g.Count);
         int test = groups.Where(g => g.IsTestProject).Sum(g => g.Count);

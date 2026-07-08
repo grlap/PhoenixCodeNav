@@ -421,7 +421,7 @@ public sealed class IndexQueries : IDisposable
 
     public (int TotalHits, List<ReferenceGroup> Groups) ReferenceCandidates(
         string symbolName, int maxCandidateFiles = 500, int samplesPerProject = 3,
-        string? pathGlob = null, IReadOnlyList<string>? excludePaths = null)
+        string? pathGlob = null, IReadOnlyList<string>? excludePaths = null, bool includeGenerated = true)
     {
         var args = new List<(string, object)>
         {
@@ -431,6 +431,8 @@ public sealed class IndexQueries : IDisposable
         // third-party candidate files precisely (counts reflect the filtered set).
         var where = new System.Text.StringBuilder("WHERE fts_content MATCH $q");
         AppendPathFilter(where, args, pathGlob, excludePaths);
+        // Drop generated files from candidacy so COUNTS (not just samples) honor includeGenerated (bug wi3).
+        if (!includeGenerated) where.Append(" AND f.is_generated = 0");
         var candidates = Query(
             $"""
             SELECT f.id, f.path, f.is_generated FROM fts_content
@@ -864,6 +866,16 @@ public sealed class IndexQueries : IDisposable
             }
         }
         return result;
+    }
+
+    /// <summary>Workspace-relative paths of files flagged generated (is_generated=1), for callers that
+    /// must exclude generated code from results (case-insensitive, matching the index's path handling).</summary>
+    public HashSet<string> GeneratedPaths()
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in Query("SELECT path FROM files WHERE is_generated = 1", r => r.GetString(0)))
+            set.Add(p);
+        return set;
     }
 
     public string? ContentByPath(string filePath)

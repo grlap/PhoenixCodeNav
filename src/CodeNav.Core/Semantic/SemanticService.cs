@@ -105,7 +105,8 @@ public sealed partial class SemanticService : IDisposable
     // ---------------------------------------------------------------- references
 
     public async Task<(SemanticReferences? Result, string? FailReason)> ReferencesAsync(
-        string path, int line, int? column, string? nameHint, int maxProjects, int samplesPerGroup, int timeoutMs)
+        string path, int line, int? column, string? nameHint, int maxProjects, int samplesPerGroup, int timeoutMs,
+        bool includeGenerated = true)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         try
@@ -123,6 +124,14 @@ public sealed partial class SemanticService : IDisposable
             var found = await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token).ConfigureAwait(false);
 
             var testFlags = ProjectTestFlags();
+            // When excluding generated code, drop reference locations in generated files from BOTH the
+            // counts and the samples (bug wi3: the semantic path previously ignored includeGenerated).
+            HashSet<string>? generatedPaths = null;
+            if (!includeGenerated)
+            {
+                using var gq = _manager.OpenQueries();
+                generatedPaths = gq.GeneratedPaths();
+            }
             var groups = new Dictionary<string, SemanticRefGroup>(StringComparer.OrdinalIgnoreCase);
             int total = 0;
             foreach (var referenced in found)
@@ -135,6 +144,7 @@ public sealed partial class SemanticService : IDisposable
                     var lineSpan = loc.Location.GetLineSpan();
                     int refLine = lineSpan.StartLinePosition.Line + 1;
                     string relPath = ToRelPath(doc.FilePath ?? doc.Name);
+                    if (generatedPaths is not null && generatedPaths.Contains(relPath)) continue;
 
                     total++;
                     bool isTest = testFlags.TryGetValue(project, out bool t) && t;
