@@ -93,7 +93,8 @@ public sealed class IndexStore : IDisposable
               guid TEXT,
               tfms TEXT NOT NULL,
               is_test INTEGER NOT NULL,
-              load_status TEXT NOT NULL
+              load_status TEXT NOT NULL,
+              compile_globs INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX idx_projects_name ON projects(name COLLATE NOCASE);
 
@@ -239,8 +240,8 @@ public sealed class IndexStore : IDisposable
         using var cmd = _write.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO projects(path, dir, name, style, guid, tfms, is_test, load_status)
-            VALUES($p, $d, $n, $st, $g, $tf, $t, $ls);
+            INSERT INTO projects(path, dir, name, style, guid, tfms, is_test, load_status, compile_globs)
+            VALUES($p, $d, $n, $st, $g, $tf, $t, $ls, $cg);
             SELECT last_insert_rowid();
             """;
         cmd.Parameters.AddWithValue("$p", p.RelPath);
@@ -251,6 +252,12 @@ public sealed class IndexStore : IDisposable
         cmd.Parameters.AddWithValue("$tf", p.TargetFrameworks);
         cmd.Parameters.AddWithValue("$t", p.IsTest ? 1 : 0);
         cmd.Parameters.AddWithValue("$ls", p.LoadStatus);
+        // Include/Remove globs — or an SDK project that OPTS OUT of default items (review 5a: its dir
+        // must not act as an incremental glob root) — make ownership non-derivable from the dir
+        // prefix alone; the incremental added-file attribution falls back to the full rebuild.
+        cmd.Parameters.AddWithValue("$cg",
+            p.CompileIncludeGlobs is { Count: > 0 } || p.CompileRemoveGlobs is { Count: > 0 } ||
+            (p.Style == "sdk" && !p.DefaultCompileItems) ? 1 : 0);
         return (long)cmd.ExecuteScalar()!;
     }
 
@@ -356,25 +363,25 @@ public sealed class IndexStore : IDisposable
         return list;
     }
 
-    /// <summary>True when any project parsed as legacy style. Gates the incremental added-file
-    /// attribution: legacy explicit-&lt;Compile&gt; lists can claim a re-added file without a csproj
-    /// change, which only the full rebuild re-reads.</summary>
-    public bool HasLegacyProjects()
+    /// <summary>True when any project's ownership is NOT derivable from the dir prefix alone —
+    /// legacy explicit-&lt;Compile&gt; lists (which can claim a re-added file without a csproj change)
+    /// or any Include/Remove compile globs. Gates the incremental added-file attribution: such
+    /// shapes are re-read only by the full rebuild.</summary>
+    public bool HasNonTrivialCompileShapes()
     {
         using var cmd = _write.CreateCommand();
-        cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM projects WHERE style = 'legacy')";
+        cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM projects WHERE style = 'legacy' OR compile_globs = 1)";
         return Convert.ToInt64(cmd.ExecuteScalar()) == 1;
     }
 
-    /// <summary>(id, csproj relPath) of projects that own files by DIRECTORY GLOB — SDK-style or
-    /// failed-parse (anything non-legacy; style 'legacy' is exactly the parser's non-null
-    /// ExplicitCompileItems case). Used for the incremental attribution of a single added .cs file
-    /// in pure-SDK workspaces (zki).</summary>
+    /// <summary>(id, csproj relPath) of projects that own files by their DIRECTORY prefix alone —
+    /// SDK-style or failed-parse, with no Include/Remove globs. Used for the incremental attribution
+    /// of a single added .cs file in trivially-shaped workspaces (zki).</summary>
     public List<(long Id, string RelPath)> GlobRootProjects()
     {
         var list = new List<(long, string)>();
         using var cmd = _write.CreateCommand();
-        cmd.CommandText = "SELECT id, path FROM projects WHERE style != 'legacy'";
+        cmd.CommandText = "SELECT id, path FROM projects WHERE style != 'legacy' AND compile_globs = 0";
         using var r = cmd.ExecuteReader();
         while (r.Read()) list.Add((r.GetInt64(0), r.GetString(1)));
         return list;

@@ -32,8 +32,10 @@ public static class IndexBuilder
 
     /// <summary>Rebuild-trigger version: bump whenever the schema OR the indexer's stored output
     /// changes, so a deployed binary rebuilds a stale on-disk index instead of trusting old rows.
-    /// v2: ref/out/in/params modifiers in signatures; interface members default to public.</summary>
-    public const string SchemaVersion = "2";
+    /// v2: ref/out/in/params modifiers in signatures; interface members default to public.
+    /// v3: compile-graph fidelity (3tz) — compile_items honor &lt;Compile Include&gt; globs and
+    /// &lt;Compile Remove&gt;; projects gained compile_globs.</summary>
+    public const string SchemaVersion = "3";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null)
     {

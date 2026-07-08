@@ -7,12 +7,12 @@ using Microsoft.Data.Sqlite;
 namespace CodeNav.Tests;
 
 /// <summary>
-/// Compiled-awareness (id8): the "orphaned" signal = a .cs file indexed from the tree but in NO
-/// project's compile set. It is a BEST-EFFORT, over-inclusive "likely dead code" hint (the compile
-/// graph grep lacks) — NOT a compiler fact — and it is additive only (a flag, never a filter),
-/// because it has false positives. These tests pin both directions: a genuinely-dead root file is
-/// flagged (true positive), and a genuinely-COMPILED legacy-wildcard file is ALSO flagged (known
-/// false positive) — so nobody mistakes the flag for proof or hides results on it.
+/// Compiled-awareness (id8, tightened by 3tz): the "orphaned" signal = a .cs file indexed from the
+/// tree but in NO project's compile set. Since 3tz the compile graph expands &lt;Compile Include&gt;
+/// wildcard globs and honors &lt;Compile Remove&gt;, so the old legacy-wildcard false positive is gone;
+/// the flag remains additive only (never a filter) because residual gaps remain (.projitems, props
+/// globs, ignored Conditions). These tests pin: a genuinely-dead root file is flagged, and a
+/// legacy-wildcard file is correctly COMPILED.
 /// </summary>
 public class Batch12CompiledAwarenessTests
 {
@@ -27,11 +27,9 @@ public class Batch12CompiledAwarenessTests
             File.WriteAllText(Path.Combine(root, "OrphanMarker.cs"),
                 "namespace Dead { public class OrphanMarkerType { } }");
 
-            // KNOWN false positive: a legacy project whose sources are a wildcard <Compile> include.
-            // ProjectFileParser skips wildcard includes, so CompileItemResolver takes the (empty)
-            // explicit branch and writes NO compile_items — the file lands as orphaned even though it
-            // genuinely compiles. Pinning this keeps the signal honest (best-effort / over-inclusive),
-            // and is exactly why orphaned is a flag, never a filter: hiding on it could bury live code.
+            // 3tz flipped this: a legacy project whose sources are a wildcard <Compile> include used
+            // to be a KNOWN false positive (wildcards were skipped -> the whole live project looked
+            // orphaned). The resolver now EXPANDS include globs, so this file is correctly attributed.
             string legacyDir = Path.Combine(root, "LegacyWild");
             Directory.CreateDirectory(legacyDir);
             File.WriteAllText(Path.Combine(legacyDir, "LegacyWild.csproj"),
@@ -52,11 +50,9 @@ public class Batch12CompiledAwarenessTests
                 var compiled = q.FindFiles("Guard.cs", 1);
                 if (compiled.Count > 0)
                     Assert.Empty(q.OrphanedPaths(new[] { compiled[0].Path }));
-                // The known false positive is CHARACTERIZED, not silently "correct": the compiled
-                // legacy-wildcard file IS flagged orphaned. If this ever flips, the signal's shape
-                // changed and the honesty wording (over-inclusive, additive-only) must be revisited.
-                Assert.Contains("LegacyWild/LiveButWild.cs",
-                    q.OrphanedPaths(new[] { "LegacyWild/LiveButWild.cs" }));
+                // 3tz: the legacy-wildcard file is now correctly COMPILED (include globs expanded) —
+                // the signal's biggest false-positive class is gone.
+                Assert.Empty(q.OrphanedPaths(new[] { "LegacyWild/LiveButWild.cs" }));
             }
 
             var manager = new IndexManager(root, dbPath);

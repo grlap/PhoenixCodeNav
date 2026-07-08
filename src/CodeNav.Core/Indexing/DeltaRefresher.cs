@@ -130,13 +130,13 @@ public static class DeltaRefresher
                         added++;
                         // Attribute the new file incrementally instead of rebuilding the whole project
                         // graph per added .cs (zki: full disk walk + reparse of EVERY csproj). SAFE ONLY
-                        // in pure-SDK workspaces: a LEGACY project's explicit <Compile> list can claim a
-                        // re-added file WITHOUT its csproj changing (git stash pop, branch switch), and
-                        // only the full rebuild re-reads those lists — the incremental walk permanently
-                        // lost that ownership (review-reproduced). With any legacy project present we
-                        // fall back to the full rebuild, which itself no longer walks the disk, so
-                        // legacy-heavy workspaces still come out ahead.
-                        hasLegacy ??= store.HasLegacyProjects();
+                        // when every project's ownership is dir-prefix-derivable: a LEGACY explicit
+                        // <Compile> list can claim a re-added file WITHOUT its csproj changing (git
+                        // stash pop, branch switch — review-reproduced permanent ownership loss), and
+                        // Include/Remove globs (3tz) can claim or exclude the new file in ways only the
+                        // full rebuild re-evaluates. With any such shape present we fall back to the
+                        // full rebuild, which itself no longer walks the disk.
+                        hasLegacy ??= store.HasNonTrivialCompileShapes();
                         if (hasLegacy.Value)
                         {
                             projectDataDirty = true;

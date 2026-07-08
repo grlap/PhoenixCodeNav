@@ -49,7 +49,7 @@ public sealed partial class NavigationTools
                 new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic" },
                 new { id = "hierarchy-ranking", summary = "implementations ranked concrete-first with derivation 'via' + a likelyImplementation flag" },
                 new { id = "implementer-completeness", summary = "implementations member-mode: the syntactic fallback reports implementerCount + omittedImplementers (silent when none omitted); the exact path reports coverage instead" },
-                new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (best-effort, silent when compiled); repo_overview.orphanedFiles count" },
+                new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (silent when compiled; Include globs expanded, Remove honored — residual gaps: .projitems/props globs/Conditions); repo_overview.orphanedFiles; semantic resolution never targets an uncompiled declaration" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
                 new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + didYouMean token variants + contextual notes" },
@@ -131,9 +131,9 @@ public sealed partial class NavigationTools
             totalLines = stats.TotalLines,
             symbols = stats.Symbols,
             generatedFiles = stats.GeneratedFiles,
-            // .cs files in no project's compile set — a best-effort "likely dead code" count (the
-            // compile-graph signal grep lacks). Over-counts: wildcard/shared/props <Compile> includes
-            // aren't expanded, so some live files are included. Per hit: search_symbol's orphaned flag.
+            // .cs files in no project's compile set — dead code the compiler never builds (3tz: the
+            // graph expands <Compile Include> globs and honors <Compile Remove>; residual gaps are
+            // shared .projitems, props-level globs, and ignored Conditions). Per hit: the orphaned flag.
             orphanedFiles = stats.OrphanedFiles,
             targetFrameworks = stats.TfmBreakdown,
             // Vendored/generated directory globs detected in the index — pass to search_symbol /
@@ -676,7 +676,7 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- symbols
 
     [McpServerTool(Name = "search_symbol")]
-    [Description("Find declared symbols by name across the workspace (types, methods, properties...). Prefer this over search_text for anything that is a code identifier. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored third-party source). Hits carry a best-effort 'orphaned' flag (present only when true) for files in no project's compile set — likely dead code the compiler never builds.")]
+    [Description("Find declared symbols by name across the workspace (types, methods, properties...). Prefer this over search_text for anything that is a code identifier. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored third-party source). Hits carry an 'orphaned' flag (present only when true) for files in NO project's compile set — dead code the compiler never builds (Compile Include globs expanded, Compile Remove honored).")]
     public string SearchSymbol(
         [Description("Symbol name. Match behavior set by 'match'. Empty (or '*') with a 'namespace' or 'pathGlob' ENUMERATES that scope's symbols instead — kind-filterable, paged.")] string query = "",
         [Description("Comma-separated kind filter: class,interface,struct,record,enum,delegate,method,constructor,property,field,event,enum_member. Empty = all.")] string? kinds = null,
@@ -743,10 +743,10 @@ public sealed partial class NavigationTools
             hits = q.SearchSymbols(query, match, kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
         }
 
-        // Flag hits in files that no project compiles — a best-effort "likely dead code" signal grep
-        // can't give (phoenix has the compile graph). Additive ONLY: the hit is still returned and
-        // tagged orphaned:true, never hidden. The signal over-counts (wildcard/shared/props <Compile>
-        // includes aren't expanded), so hiding on it could bury live code — hence flag, don't filter.
+        // Flag hits in files that no project compiles — the "really compiled?" signal grep can't give
+        // (phoenix has the compile graph; 3tz expands Include globs + honors Remove). Additive ONLY:
+        // the hit is still returned and tagged orphaned:true, never hidden — residual gaps (shared
+        // .projitems, props globs, ignored Conditions) mean hiding could still bury live code.
         if (hits.Count > 0)
         {
             var orphaned = q.OrphanedPaths(hits.Select(h => h.FilePath).ToList());
@@ -1420,12 +1420,31 @@ public sealed partial class NavigationTools
         if (name is null) return (null, null);
 
         using var q = _manager.OpenQueries();
-        var hits = q.SearchSymbols(name, "exact", SplitCsv(kinds), 20, includeGenerated: false);
+        // includeGenerated: TRUE (review 4a): the LIVE twin of a dead declaration is typically the
+        // WSDL/codegen copy, which carries an <auto-generated> banner — excluding generated files
+        // here made the live twin invisible and the orphan gate below useless for the exact
+        // production case. The ORDER BY still ranks non-generated first, so picks only change when
+        // the non-generated candidates are dead.
+        var hits = q.SearchSymbols(name, "exact", SplitCsv(kinds), 20, includeGenerated: true);
         if (container is { } c)
         {
             hits = hits.Where(h =>
                 (h.Container?.Contains(c, StringComparison.OrdinalIgnoreCase) ?? false) ||
                 (h.Ns?.Contains(c, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+        }
+        // NEVER target an uncompiled declaration (3tz, the dead-twin bug): a file no project compiles
+        // is in no compilation, so semantic resolution against it can only fail — while a LIVE twin of
+        // the same symbol (e.g. the WSDL-generated one) exists elsewhere. The old pick even preferred
+        // the dead twin: non-generated files sort first. Fall back to orphaned-only when there is no
+        // live declaration at all (then semantic fails honestly and the heuristic path takes over).
+        if (hits.Count > 0)
+        {
+            var orphaned = q.OrphanedPaths(hits.Select(h => h.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+            if (orphaned.Count > 0)
+            {
+                var live = hits.Where(h => !orphaned.Contains(h.FilePath)).ToList();
+                if (live.Count > 0) hits = live;
+            }
         }
         var best = hits
             .OrderBy(h => h.Kind switch { "interface" => 0, "class" => 1, "struct" => 1, "enum" => 1, _ => 2 })
@@ -1560,9 +1579,9 @@ public sealed partial class NavigationTools
         // Best-effort "this hit lives under a vendored/generated dir" signal (only present when
         // true). Lets a caller spot third-party noise without firstPartyOnly, or excludePath it.
         noise = IndexQueries.IsVendorPath(s.FilePath) ? true : (bool?)null,
-        // Best-effort "likely dead code": this file is in no project's compile set (only present when
-        // true) — the compile-graph signal grep lacks, but syntactic/over-inclusive (wildcard, shared,
-        // and props <Compile> includes aren't expanded), so treat as "worth checking", not proof.
+        // "No project compiles this file" (only present when true) — the compile-graph signal grep
+        // lacks. 3tz: Include globs expanded, Remove honored; residual gaps are shared .projitems,
+        // props-level globs, and ignored Conditions — near-proof, not absolute proof.
         orphaned = s.IsOrphaned ? true : (bool?)null,
         attributes = s.AttrMarkers,
     };

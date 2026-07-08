@@ -11,9 +11,24 @@ public sealed record ParsedProject(
     bool IsTest,
     List<string> ProjectRefRelPaths,    // workspace-relative, forward slashes
     List<(string Package, string Version)> PackageRefs,
-    List<string>? ExplicitCompileItems, // workspace-relative; null => SDK globbing
+    List<string>? ExplicitCompileItems, // workspace-relative EXACT paths; null => SDK-style project
     List<(string Assembly, string? HintPath)> AssemblyRefs, // legacy <Reference> items; hint paths workspace-relative
-    string LoadStatus);                 // "parsed" | "failed:<reason>"
+    string LoadStatus,                  // "parsed" | "failed:<reason>"
+    // Compile-graph fidelity (3tz): a file must only count as compiled when the project REALLY
+    // compiles it. Include globs (with their per-item Exclude=) cover legacy wildcard <Compile>
+    // (previously skipped -> whole live projects looked orphaned) and SDK explicit <Compile Include>
+    // (incl. linked ../ files); Remove globs cover unconditioned, project-level <Compile Remove>
+    // (previously ignored -> excluded files looked compiled — the dead-twin bug). Condition
+    // attributes on INCLUDES are deliberately ignored (over-inclusion is safe); a conditioned or
+    // <Target>-scoped REMOVE is skipped (honoring it would falsely orphan live files).
+    List<CompileGlob>? CompileIncludeGlobs = null,  // workspace-relative patterns (may contain * ? **)
+    List<string>? CompileRemoveGlobs = null,        // workspace-relative patterns
+    bool DefaultCompileItems = true);               // SDK **/*.cs default; false when EnableDefaultCompileItems=false (always false for legacy)
+
+/// <summary>One wildcard/SDK &lt;Compile Include&gt; spec with its own Exclude= filters (Exclude only
+/// prunes THAT item's wildcard expansion — the legacy exclusion idiom, since legacy MSBuild has no
+/// &lt;Compile Remove&gt;).</summary>
+public sealed record CompileGlob(string Include, List<string>? Excludes);
 
 /// <summary>
 /// Owns: reading a single .csproj (legacy or SDK style) into a ParsedProject without
@@ -74,6 +89,8 @@ public static class ProjectFileParser
         var packageRefs = new List<(string, string)>();
         var assemblyRefs = new List<(string, string?)>();
         List<string>? compileItems = isSdk ? null : new List<string>();
+        var includeGlobs = new List<CompileGlob>();
+        var removeGlobs = new List<string>();
 
         foreach (var item in root.Descendants().Where(e => e.Name.LocalName is "ProjectReference" or "PackageReference" or "Compile" or "Reference"))
         {
@@ -89,11 +106,46 @@ public static class ProjectFileParser
                         ?? "";
                     packageRefs.Add((include, version));
                     break;
-                case "Compile" when include is not null && !isSdk:
-                    // Legacy projects list sources explicitly; globs are rare but possible.
-                    if (!include.Contains('*'))
+                case "Compile":
+                    // Compile-graph fidelity (3tz). Include: legacy exact paths keep the fast explicit
+                    // list; wildcards (previously SKIPPED — orphaning whole legacy projects) and all
+                    // SDK-side includes (incl. linked ../ files) become match globs. Remove: previously
+                    // ignored, so an excluded-from-compilation file counted as compiled (the dead-twin
+                    // bug). Condition attributes are ignored on purpose. MSBuild ';'-separated specs
+                    // are split; Update= is metadata-only and irrelevant to compiled-ness.
+                    if (include is not null)
                     {
-                        compileItems!.Add(NormalizeRelative(projectDir, include));
+                        // Per-item Exclude= prunes THIS include's wildcard expansion (the legacy
+                        // exclusion idiom; pre-15 MSBuild has no <Compile Remove>).
+                        List<string>? excludes = null;
+                        if (item.Attribute("Exclude")?.Value is { } excl)
+                        {
+                            excludes = excl.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                .Select(s => NormalizeRelative(projectDir, s)).ToList();
+                            if (excludes.Count == 0) excludes = null;
+                        }
+                        foreach (var spec in include.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                        {
+                            if (!isSdk && !spec.Contains('*') && !spec.Contains('?'))
+                            {
+                                compileItems!.Add(NormalizeRelative(projectDir, spec));
+                            }
+                            else
+                            {
+                                includeGlobs.Add(new CompileGlob(NormalizeRelative(projectDir, spec), excludes));
+                            }
+                        }
+                    }
+                    // A REMOVE is honored only when unconditioned and project-level: a Condition'd
+                    // remove (multi-TFM idioms) or a <Target>-scoped remove would falsely ORPHAN live
+                    // files — the one direction this graph must never err in (review 2a). Includes
+                    // keep ignoring Conditions: over-inclusion is the safe direction.
+                    if (item.Attribute("Remove")?.Value is { } remove && !IsConditionedOrTargetScoped(item))
+                    {
+                        foreach (var spec in remove.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                        {
+                            removeGlobs.Add(NormalizeRelative(projectDir, spec));
+                        }
                     }
                     break;
                 case "Reference" when include is not null:
@@ -104,6 +156,9 @@ public static class ProjectFileParser
                     break;
             }
         }
+
+        bool defaultCompileItems = isSdk &&
+            !string.Equals(Prop(root, "EnableDefaultCompileItems")?.Trim(), "false", StringComparison.OrdinalIgnoreCase);
 
         // packages.config for legacy package refs.
         string packagesConfig = Path.Combine(Path.GetDirectoryName(full)!, "packages.config");
@@ -128,8 +183,17 @@ public static class ProjectFileParser
                       packageRefs.Any(p => TestPackageMarkers.Any(m => p.Item1.Contains(m, StringComparison.OrdinalIgnoreCase)));
 
         return new ParsedProject(relPath, name, style, guid, tfms, isTest,
-            projectRefs.Distinct().ToList(), packageRefs, compileItems, assemblyRefs, "parsed");
+            projectRefs.Distinct().ToList(), packageRefs, compileItems, assemblyRefs, "parsed",
+            includeGlobs.Count > 0 ? includeGlobs : null,
+            removeGlobs.Count > 0 ? removeGlobs : null,
+            defaultCompileItems);
     }
+
+    /// <summary>True when the element or any ancestor carries a Condition attribute or is a
+    /// &lt;Target&gt; body — contexts where honoring a &lt;Compile Remove&gt; would falsely orphan
+    /// live files (the remove may never execute, or only for some TFM).</summary>
+    private static bool IsConditionedOrTargetScoped(XElement e) =>
+        e.AncestorsAndSelf().Any(a => a.Attribute("Condition") is not null || a.Name.LocalName == "Target");
 
     private static bool LooksLikeTestName(string name) =>
         TestNameSuffixes.Any(s => name.EndsWith(s, StringComparison.OrdinalIgnoreCase));
