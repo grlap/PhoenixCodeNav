@@ -1,7 +1,7 @@
 # PhoenixCodeNav
 
 A code-navigation [MCP](https://modelcontextprotocol.io) server for **very large C# workspaces**
-(designed for ~2,000-csproj enterprise monorepos, legacy *and* SDK-style, net472-first).
+(designed for enterprise monorepos with thousands of csproj, legacy *and* SDK-style, net472-first).
 It gives coding agents (Claude Code, Codex, anything MCP) a fast, structured alternative to
 grep-driven exploration: ranked search, file outlines, exact references, project graphs, and
 compact context packs — with strict response budgets so results never flood the transcript.
@@ -17,7 +17,7 @@ how freshness (incl. git branch switch / pull) is handled ·
 
 ## Why not just grep?
 
-At 2k projects / millions of lines, text search returns too many weak matches, dependency
+At thousands of projects / millions of lines, text search returns too many weak matches, dependency
 direction is invisible, and agents burn context reading whole files. PhoenixCodeNav answers
 navigation questions in three layers, each labeled with how trustworthy it is:
 
