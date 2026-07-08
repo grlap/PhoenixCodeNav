@@ -205,7 +205,10 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
         var meta = Parse(tools.SearchSymbol("Guard", kinds: "class", match: "exact")).GetProperty("meta");
         Assert.Equal("indexed", meta.GetProperty("confidence").GetString());
         Assert.False(meta.TryGetProperty("confidenceNote", out _));
-        Assert.Equal(BuildInfo.Stamp, meta.GetProperty("build").GetString());
+        // Pin the stamp's COMPOSITION, not Stamp-vs-itself (review: the self-referential assert let a
+        // static-init ordering bug ship "0.5.0+" with the commit dropped, at 200 tests green).
+        Assert.Equal($"{BuildInfo.Version}+{BuildInfo.Commit}", meta.GetProperty("build").GetString());
+        Assert.EndsWith(BuildInfo.Commit, meta.GetProperty("build").GetString());
 
         // Heuristic responses STILL explain themselves — that warning changes how much to trust
         // this specific result.

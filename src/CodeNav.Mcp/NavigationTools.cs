@@ -46,7 +46,7 @@ public sealed partial class NavigationTools
             // trigger its (often silent-when-clean) response fields — grep an id to verify a deploy.
             features = new object[]
             {
-                new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic; confidenceNote only when heuristic (tier meanings live in confidenceModel here); meta.statusNote explains refreshing/stale; meta.build stamps every response with version+commit" },
+                new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic; confidenceNote only when heuristic (tier meanings live in confidenceModel here); meta.statusNote explains refreshing/stale; meta.build stamps every result meta with version+commit" },
                 new { id = "hierarchy-ranking", summary = "implementations ranked concrete-first with derivation 'via' + a likelyImplementation flag" },
                 new { id = "implementer-completeness", summary = "implementations member-mode: the syntactic fallback reports implementerCount + omittedImplementers (silent when none omitted); the exact path reports coverage instead" },
                 new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (silent when compiled; Include globs expanded, Remove honored — residual gaps: .projitems/props globs/Conditions); repo_overview.orphanedFiles; semantic resolution never targets an uncompiled declaration" },

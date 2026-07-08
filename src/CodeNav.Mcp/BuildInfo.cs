@@ -21,9 +21,11 @@ public static class BuildInfo
     /// features manifest in server_capabilities so a caller can confirm capabilities, not just a number.</summary>
     public const string Version = "0.5.0";
 
-    /// <summary>"version+shortsha" — the inline deploy check every response's meta carries (ddp),
-    /// so a caller never has to guess which build produced a result.</summary>
-    public static string Stamp { get; } = $"{Version}+{Commit}";
+    /// <summary>"version+shortsha" — the inline deploy check every result's meta carries (ddp),
+    /// so a caller never has to guess which build produced a result. Expression-bodied ON PURPOSE:
+    /// an initialized property here ran BEFORE Commit's initializer (static init is textual order)
+    /// and shipped "0.5.0+" with the commit silently dropped (review-caught in the built DLL).</summary>
+    public static string Stamp => $"{Version}+{Commit}";
 
     /// <summary>Short git commit phoenix was built from ("unknown" when the build could not read git —
     /// e.g. source copied without .git, or no git in the build image).</summary>
