@@ -55,6 +55,9 @@ public sealed partial class NavigationTools
                 new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + didYouMean token variants + contextual notes" },
                 new { id = "reference-kinds", summary = "references (exact path): per-location usage kinds — call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/other — with a kinds breakdown, usageKinds filter (validated), and publicConsumersOnly (usages outside the symbol's declaring project); indexed fallback stays unclassified and says so" },
                 new { id = "symbol-handles", summary = "idx:N~fp symbol handles (index-local, reindex-detecting) accepted by source_context / definition / references" },
+                new { id = "filter-honest-counts", summary = "references: totalReferences/totalCandidates, kinds, groups, and summary all honor includeTests (filtered BEFORE counting on both exact and indexed paths); linked multi-project files counted once; filtered summaries say 'test projects excluded' instead of a misleading '0 test'" },
+                new { id = "bounded-source-reads", summary = "source_context streams only the requested spans from disk (never whole-file reads); contextLines clamped; zero/negative span starts clamp to line 1" },
+                new { id = "arity-exact-partials", summary = "outline partialFiles match generic arity — partial Foo and partial Foo<T> cross-link only their own halves" },
             },
             tools = new[]
             {
@@ -471,7 +474,9 @@ public sealed partial class NavigationTools
 
         // Memoized per type identity: BuildNested runs up to twice on budget degradation,
         // and batch_outline multiplies calls — one lookup per unique partial type, total.
-        var partialCache = new Dictionary<(string Name, string? Ns, string Kind, string? Container), List<string>>();
+        // Arity is part of the identity (szs): partial Foo and partial Foo<T> in the SAME file
+        // are different types with different partial-file sets — one cache slot each.
+        var partialCache = new Dictionary<(string Name, string? Ns, string Kind, string? Container, int Arity), List<string>>();
 
         // includeMembers=false keeps only namespace/type nodes (the depth-1 view);
         // true adds member leaves (methods, properties, ...) — the depth-2 view.
@@ -492,10 +497,12 @@ public sealed partial class NavigationTools
             bool partialFilesMore = false;
             if (s.IsPartial && TypeKinds.Contains(s.Kind))
             {
-                var key = (s.Name, s.Ns, s.Kind, s.Container);
+                var key = (s.Name, s.Ns, s.Kind, s.Container, s.Arity);
                 if (!partialCache.TryGetValue(key, out var others))
                 {
-                    others = q.PartialDeclarationFiles(s.Name, s.Ns, s.Kind, s.Container, normPath); // up to 11
+                    // Arity-matched (szs): without it, outline(FooOfT.cs) listed partial class Foo's
+                    // files as Foo<T>'s "other halves" — navigation to the WRONG type's declarations.
+                    others = q.PartialDeclarationFiles(s.Name, s.Ns, s.Kind, s.Container, normPath, s.Arity); // up to 11
                     partialCache[key] = others;
                 }
                 if (others.Count > 0)
@@ -583,6 +590,29 @@ public sealed partial class NavigationTools
         }
         path = NormalizePath(path);
         maxBytes = Math.Clamp(maxBytes, 256, Json.HardBudgetBytes);
+        // Clamped BEFORE it enters line arithmetic: an absurd contextLines (int.MaxValue) would
+        // overflow start/end math and defeat the bounded read below.
+        contextLines = Math.Clamp(contextLines, 0, 500);
+
+        // Parse the span specs BEFORE reading anything (gep): the requested spans bound how much
+        // of the file we ever materialize. Unparsable specs are skipped. Zero/negative starts are
+        // CLAMPED to line 1, not rejected — the old code accepted them ("0-10" rendered lines
+        // 1..12) and 0-based callers are common; rejecting would be a silent-empty (review).
+        var ranges = new List<(int Start, int End)>();
+        foreach (var spec in spans.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = spec.Split('-');
+            if (!int.TryParse(parts[0], out int start)) continue;
+            int end = parts.Length > 1 && int.TryParse(parts[1], out int e) ? e : start;
+            start = Math.Max(1, start);
+            end = Math.Max(1, end);
+            if (end < start) continue; // inverted range — yields nothing
+            ranges.Add((start, end));
+        }
+        // Long arithmetic: end near int.MaxValue plus context must saturate, not wrap negative.
+        int maxNeededLine = 0;
+        foreach (var r in ranges)
+            maxNeededLine = (int)Math.Min(int.MaxValue, Math.Max(maxNeededLine, r.End + (long)contextLines));
 
         // Reject paths that escape the workspace root before touching the filesystem.
         if (!CodeNav.Core.WorkspacePaths.TryResolveInside(_manager.WorkspaceRoot, path, out string full))
@@ -591,41 +621,41 @@ public sealed partial class NavigationTools
         }
 
         string freshness = "live";
-        string? content = null;
+        // Live read is BOUNDED (gep): stream lines only up to the last requested line and stop —
+        // never File.ReadAllText, which materialized entire files (a multi-hundred-MB artifact in
+        // the workspace = one allocation spike per call) just to slice a few lines out.
         // Skip paths reaching outside via a symlink/junction (target or any ancestor) so an
         // in-workspace link cannot be followed to external content; fall through to the index.
+        IReadOnlyList<string>? lines = null;
         if (File.Exists(full) && !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(_manager.WorkspaceRoot, full))
         {
-            try { content = File.ReadAllText(full); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            lines = ReadLinesUpTo(full, maxNeededLine);
         }
-        if (content is null)
+        if (lines is null)
         {
-            // Index fallback is keyed by relative path, so it can only ever return
-            // in-workspace content — a contained path that is simply not on disk.
+            // Index fallback is keyed by relative path, so it can only ever return in-workspace
+            // content — a contained path that is simply not on disk. This path still materializes
+            // the stored content whole (no per-file size cap exists yet — rs7); the DoS-relevant
+            // vector was the LIVE read of arbitrary on-disk files, which is now bounded above.
             using var q = _manager.OpenQueries();
-            content = q.ContentByPath(path);
+            string? content = q.ContentByPath(path);
+            if (content is not null) lines = content.Split('\n');
             freshness = "index";
         }
-        if (content is null)
+        if (lines is null)
         {
             return Json.Serialize(new { error = "file_not_found", path, meta = Meta.From(_manager.Health(), "indexed", "text") });
         }
-
-        var lines = content.Split('\n');
 
         (List<object> Spans, bool Truncated) BuildSpans(long rawBudget)
         {
             var spanResults = new List<object>();
             long budget = rawBudget;
             bool truncated = false;
-            foreach (var spec in spans.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            foreach (var (rawStart, rawEnd) in ranges)
             {
-                var parts = spec.Split('-');
-                if (!int.TryParse(parts[0], out int start)) continue;
-                int end = parts.Length > 1 && int.TryParse(parts[1], out int e) ? e : start;
-                start = Math.Max(1, start - contextLines);
-                end = Math.Min(lines.Length, end + contextLines);
+                int start = Math.Max(1, rawStart - contextLines);
+                int end = Math.Min(lines.Count, (int)Math.Min(int.MaxValue, rawEnd + (long)contextLines));
 
                 var numbered = new List<string>();
                 for (int i = start; i <= end; i++)
@@ -676,6 +706,24 @@ public sealed partial class NavigationTools
             json = BuildResponse(effective);
         }
         return json;
+    }
+
+    /// <summary>Streams at most <paramref name="maxLines"/> lines from a file, then stops reading
+    /// (gep): the caller's spans bound the read, so a giant file costs only its requested prefix —
+    /// never a whole-file materialization. Returns null on IO/access failure (caller falls back to
+    /// index content). Line endings are normalized by ReadLine; the formatter's TrimEnd('\r') stays
+    /// correct for both this path and the index path's Split('\n').</summary>
+    private static List<string>? ReadLinesUpTo(string fullPath, int maxLines)
+    {
+        try
+        {
+            var list = new List<string>(Math.Min(maxLines, 4096));
+            using var sr = new StreamReader(fullPath);
+            string? line;
+            while (list.Count < maxLines && (line = sr.ReadLine()) is not null) list.Add(line);
+            return list;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
     // ---------------------------------------------------------------- symbols
@@ -1241,20 +1289,23 @@ public sealed partial class NavigationTools
             if (target is { } t)
             {
                 var (result, reason) = _semantic
-                    .ReferencesAsync(t.Path, t.Line, t.Column, hint, maxProjects, Math.Clamp(samplesPerGroup, 0, 10), timeoutMs, includeGenerated, kindSet, publicConsumersOnly)
+                    .ReferencesAsync(t.Path, t.Line, t.Column, hint, maxProjects, Math.Clamp(samplesPerGroup, 0, 10), timeoutMs, includeGenerated, kindSet, publicConsumersOnly, includeTests)
                     .GetAwaiter().GetResult();
                 if (result is not null)
                 {
+                    // includeTests is filtered INSIDE the semantic scan, before counting (wu1) —
+                    // so TotalLocations, KindCounts, Groups, and this summary all describe one set.
                     var groups0 = result.Groups;
-                    if (!includeTests) groups0 = groups0.Where(g => !g.IsTestProject).ToList();
                     int prod0 = groups0.Where(g => !g.IsTestProject).Sum(g => g.Count);
                     int test0 = groups0.Where(g => g.IsTestProject).Sum(g => g.Count);
+                    // "0 test" would misread as "no test usages exist" when they were EXCLUDED.
+                    string mix0 = includeTests ? $"{prod0} production, {test0} test" : $"{prod0} production; test projects excluded";
                     bool partial = result.SkippedCandidateProjects.Count > 0 || result.Coverage.FailedProjects.Count > 0;
                     var meta0 = Meta.From(_manager.Health(), "exact", "semantic");
                     return Json.WithListBudget(groups0, (items, truncated) => new
                     {
                         symbol = SemanticSymbolJson(result.Symbol),
-                        summary = $"{result.TotalLocations} exact references across {result.Groups.Count} projects ({prod0} production, {test0} test).",
+                        summary = $"{result.TotalLocations} exact references across {groups0.Count} projects ({mix0}).",
                         totalReferences = result.TotalLocations,
                         // HOW the symbol is used, e.g. {"call":20,"xmldoc":480} — the anti-"500 refs
                         // that are mostly doc mentions" signal. Filter with usageKinds.
@@ -1307,18 +1358,22 @@ public sealed partial class NavigationTools
             return Json.Serialize(new { error = "symbol_not_resolved", partialReason = failReason });
         }
         var excludes = excludePath is { Length: > 0 } ex ? new[] { ex } : null;
+        // includeTests is filtered INSIDE the candidate scan, before counting (wu1) — so `total`
+        // and the groups describe one set. Summing the filtered groups here instead was itself
+        // dishonest (review-reproduced): a file linked into TWO production projects appears in
+        // both groups, so the sum double-counted it and the "filtered" total EXCEEDED the real one.
         var (total, groups) = q.ReferenceCandidates(
-            name, Math.Clamp(maxFiles, 10, 2000), Math.Clamp(samplesPerGroup, 0, 10), pathGlob, excludes, includeGenerated);
-        if (!includeTests) groups = groups.Where(g => !g.IsTestProject).ToList();
+            name, Math.Clamp(maxFiles, 10, 2000), Math.Clamp(samplesPerGroup, 0, 10), pathGlob, excludes, includeGenerated, includeTests);
 
         int prod = groups.Where(g => !g.IsTestProject).Sum(g => g.Count);
         int test = groups.Where(g => g.IsTestProject).Sum(g => g.Count);
+        string mix = includeTests ? $"{prod} production, {test} test" : $"{prod} production; test projects excluded";
         var meta = Meta.From(_manager.Health(), "indexed", "text");
         return Json.WithListBudget(groups, (items, truncated) => new
         {
             name,
             partialReason = failReason,
-            summary = $"{total} candidate reference lines across {groups.Count} projects ({prod} production, {test} test).",
+            summary = $"{total} candidate reference lines across {groups.Count} projects ({mix}).",
             totalCandidates = total,
             groupBy = "project",
             groups = items.Select(g => new

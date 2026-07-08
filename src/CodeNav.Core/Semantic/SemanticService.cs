@@ -108,7 +108,8 @@ public sealed partial class SemanticService : IDisposable
 
     public async Task<(SemanticReferences? Result, string? FailReason)> ReferencesAsync(
         string path, int line, int? column, string? nameHint, int maxProjects, int samplesPerGroup, int timeoutMs,
-        bool includeGenerated = true, IReadOnlySet<string>? usageKinds = null, bool publicConsumersOnly = false)
+        bool includeGenerated = true, IReadOnlySet<string>? usageKinds = null, bool publicConsumersOnly = false,
+        bool includeTests = true)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         try
@@ -155,6 +156,12 @@ public sealed partial class SemanticService : IDisposable
                     int refLine = lineSpan.StartLinePosition.Line + 1;
                     string relPath = ToRelPath(doc.FilePath ?? doc.Name);
                     if (generatedPaths is not null && generatedPaths.Contains(relPath)) continue;
+                    // includeTests filters BEFORE counting (wu1) — same discipline as
+                    // includeGenerated/usageKinds, so TotalLocations, KindCounts, and the group
+                    // list all describe the same filtered set. Previously the tool dropped test
+                    // GROUPS after the fact while summary/kinds still counted their locations.
+                    bool isTest = testFlags.TryGetValue(project, out bool t) && t;
+                    if (!includeTests && isTest) continue;
                     // publicConsumersOnly: API blast-radius view — drop usages from the DECLARING
                     // project itself, before counting, so totals reflect external consumers only.
                     if (publicConsumersOnly && string.Equals(project, declaringProject, StringComparison.OrdinalIgnoreCase)) continue;
@@ -171,7 +178,6 @@ public sealed partial class SemanticService : IDisposable
 
                     total++;
                     kindCounts[kind] = kindCounts.GetValueOrDefault(kind) + 1;
-                    bool isTest = testFlags.TryGetValue(project, out bool t) && t;
                     if (!groups.TryGetValue(project, out var g))
                     {
                         g = new SemanticRefGroup(project, isTest, 0, new List<SemanticLocation>());

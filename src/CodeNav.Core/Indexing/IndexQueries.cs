@@ -5,7 +5,8 @@ namespace CodeNav.Core.Indexing;
 public sealed record SymbolHit(
     long Id, string Kind, string Name, string? Ns, string? Container, string Signature,
     string Accessibility, int StartLine, int EndLine, bool IsPartial, string? AttrMarkers,
-    string FilePath, bool FileIsGenerated, long? ParentId, bool IsOrphaned = false);
+    string FilePath, bool FileIsGenerated, long? ParentId, bool IsOrphaned = false,
+    int Arity = 0); // generic type-parameter count — Foo and Foo<T> are DIFFERENT types (szs)
 
 public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated);
 
@@ -307,7 +308,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
             FROM symbols s JOIN files f ON f.id = s.file_id
             {where}
             ORDER BY
@@ -325,7 +326,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p
             ORDER BY s.start_line, s.end_line DESC
@@ -347,7 +348,7 @@ public sealed partial class IndexQueries : IDisposable
             var next = Query(
                 """
                 SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
                 FROM symbols s JOIN files f ON f.id = s.file_id
                 WHERE s.id = $id
                 """,
@@ -367,7 +368,7 @@ public sealed partial class IndexQueries : IDisposable
         var hits = Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.id = $id
             """,
@@ -382,7 +383,7 @@ public sealed partial class IndexQueries : IDisposable
         var hits = Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p AND s.start_line <= $l AND s.end_line >= $l
             ORDER BY (s.end_line - s.start_line), s.start_line DESC
@@ -416,7 +417,7 @@ public sealed partial class IndexQueries : IDisposable
             var rows = Query(
                 $"""
                 SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
                 FROM symbols s JOIN files f ON f.id = s.file_id
                 WHERE {string.Join(" OR ", clauses)}
                 """,
@@ -444,18 +445,21 @@ public sealed partial class IndexQueries : IDisposable
     }
 
     /// <summary>Other files containing a PARTIAL declaration of the same type identity
-    /// (name + kind + namespace + containing type) — the partial-type cross-links for an
+    /// (name + arity + kind + namespace + containing type) — the partial-type cross-links for an
     /// outline. is_partial=1 keeps an unrelated same-name non-partial type (legal in another
-    /// project) out; the container match keeps same-name nested types apart. Best-effort:
-    /// identity does not include project or generic arity. Returns up to 11 so the caller can
-    /// detect (and mark) the &gt;10 case rather than silently capping.</summary>
-    public List<string> PartialDeclarationFiles(string name, string? ns, string kind, string? container, string excludePath)
+    /// project) out; the container match keeps same-name nested types apart; the arity match keeps
+    /// generic-arity SIBLINGS apart — <c>partial class Foo</c> and <c>partial class Foo&lt;T&gt;</c>
+    /// are different types whose partial halves live in different file sets (szs). Best-effort:
+    /// identity does not include project. Returns up to 11 so the caller can detect (and mark)
+    /// the &gt;10 case rather than silently capping.</summary>
+    public List<string> PartialDeclarationFiles(string name, string? ns, string kind, string? container, string excludePath, int arity = 0)
     {
         return Query(
             """
             SELECT DISTINCT f.path
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.name = $n AND s.kind = $k AND s.is_partial = 1
+              AND s.arity = $a
               AND COALESCE(s.ns, '') = COALESCE($ns, '')
               AND COALESCE(s.container, '') = COALESCE($c, '')
               AND f.path <> $p
@@ -464,14 +468,15 @@ public sealed partial class IndexQueries : IDisposable
             """,
             r => r.GetString(0),
             ("$n", name), ("$k", kind), ("$ns", (object?)ns ?? DBNull.Value),
-            ("$c", (object?)container ?? DBNull.Value), ("$p", excludePath));
+            ("$c", (object?)container ?? DBNull.Value), ("$p", excludePath), ("$a", arity));
     }
 
     // ---------------------------------------------------------------- reference candidates
 
     public (int TotalHits, List<ReferenceGroup> Groups) ReferenceCandidates(
         string symbolName, int maxCandidateFiles = 500, int samplesPerProject = 3,
-        string? pathGlob = null, IReadOnlyList<string>? excludePaths = null, bool includeGenerated = true)
+        string? pathGlob = null, IReadOnlyList<string>? excludePaths = null, bool includeGenerated = true,
+        bool includeTests = true)
     {
         var args = new List<(string, object)>
         {
@@ -501,12 +506,20 @@ public sealed partial class IndexQueries : IDisposable
         var groups = new Dictionary<string, (bool IsTest, int Count, List<TextHit> Samples)>();
         foreach (var c in candidates)
         {
+            // includeTests filters OWNERS before counting (wu1): a file owned only by test
+            // projects contributes nothing (its lines leave `total` too); a file shared between
+            // production and test projects keeps its production attribution and is counted ONCE
+            // in `total` — summing the per-project group counts instead would double-count files
+            // legacy projects link into several compile sets (review-reproduced).
+            var owners = fileProjects.TryGetValue(c.Id, out var list) ? list : new List<(string, bool)> { ("(no project)", false) };
+            if (!includeTests) owners = owners.Where(o => !o.Item2).ToList();
+            if (owners.Count == 0) continue;
+
             string? content = ContentById(c.Id);
             if (content is null) continue;
             var spans = LocateTokenLineSpans(content, symbolName);
             if (spans.Count == 0) continue;
 
-            var owners = fileProjects.TryGetValue(c.Id, out var list) ? list : new List<(string, bool)> { ("(no project)", false) };
             foreach (var (project, isTest) in owners)
             {
                 if (!groups.TryGetValue(project, out var g)) g = (isTest, 0, new List<TextHit>());
@@ -647,7 +660,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.name = $m COLLATE NOCASE AND ({string.Join(" OR ", clauses)})
             ORDER BY f.is_generated, f.path
@@ -668,7 +681,7 @@ public sealed partial class IndexQueries : IDisposable
         var candidates = Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.kind IN ('class','struct','record','record_struct')
               AND s.name <> $n
@@ -941,14 +954,15 @@ public sealed partial class IndexQueries : IDisposable
 
     // ---------------------------------------------------------------- misc
 
-    /// <summary>Of the given workspace-relative paths, the subset in NO project's compile set — a
-    /// best-effort, syntactic "likely dead code" signal (the compile graph grep lacks), NOT a compiler
-    /// fact. It is OVER-inclusive: legacy projects whose sources are wildcard &lt;Compile&gt; includes,
-    /// shared projects (.shproj/.projitems), Directory.Build.props/.targets compile globs, and repo-root
-    /// projects all leave genuinely-compiled files with no compile_items, so a LIVE file can appear here.
-    /// Conversely a project that fails to PARSE still glob-attributes its whole subtree, so dead code
-    /// under it will NOT appear. Treat membership as "worth checking", not proof — and never hide results
-    /// on it (that could bury live code); absence is likewise not proof a file compiles.</summary>
+    /// <summary>Of the given workspace-relative paths, the subset in NO project's compile set — the
+    /// "is this file really compiled?" signal (the compile graph grep lacks). Since 3tz the graph
+    /// expands &lt;Compile Include&gt; wildcard globs (legacy wildcard projects are owned), honors
+    /// &lt;Compile Remove&gt; (an excluded-from-compilation file is correctly orphaned — the dead-twin
+    /// case) and EnableDefaultCompileItems. Remaining best-effort gaps: shared projects
+    /// (.shproj/.projitems), Directory.Build.props/.targets compile globs, and Condition attributes
+    /// (ignored — over-inclusive). A project that fails to PARSE glob-attributes its whole subtree,
+    /// so dead code under it will NOT appear. Still a syntactic signal, not a compiler fact — never
+    /// hide results on it; absence is not absolute proof a file compiles.</summary>
     public HashSet<string> OrphanedPaths(IReadOnlyCollection<string> paths)
     {
         var result = new HashSet<string>(StringComparer.Ordinal);
@@ -1021,8 +1035,8 @@ public sealed partial class IndexQueries : IDisposable
             TestProjects: Scalar("SELECT COUNT(*) FROM projects WHERE is_test=1"),
             Solutions: Scalar("SELECT COUNT(*) FROM solutions"),
             GeneratedFiles: Scalar("SELECT COUNT(*) FROM files WHERE is_generated=1"),
-            // Indexed .cs files in no project's compile set — a best-effort "likely dead code" count
-            // (see OrphanedPaths: over-counts, since wildcard/shared/props <Compile> includes aren't expanded).
+            // Indexed .cs files in no project's compile set — the "really compiled?" count (see
+            // OrphanedPaths for the exact semantics and remaining shared/props/Condition gaps).
             OrphanedFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='cs' AND NOT EXISTS (SELECT 1 FROM compile_items ci WHERE ci.file_id = files.id)"),
             TfmBreakdown: tfms,
             IndexVersion: version,
@@ -1077,7 +1091,8 @@ public sealed partial class IndexQueries : IDisposable
         r.GetString(5), r.GetString(6), r.GetInt32(7), r.GetInt32(8),
         r.GetBoolean(9), r.IsDBNull(10) ? null : r.GetString(10),
         r.GetString(11), r.GetBoolean(12),
-        r.FieldCount > 13 && !r.IsDBNull(13) ? r.GetInt64(13) : null);
+        r.FieldCount > 13 && !r.IsDBNull(13) ? r.GetInt64(13) : null,
+        Arity: r.FieldCount > 14 && !r.IsDBNull(14) ? r.GetInt32(14) : 0);
 
     private static ProjectRow ReadProject(SqliteDataReader r) => new(
         r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3),

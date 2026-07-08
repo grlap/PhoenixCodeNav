@@ -131,7 +131,10 @@ public sealed class IndexManager : IDisposable
             }
             catch (Exception ex)
             {
-                _error = ex.Message;
+                // Client-visible error carries the exception TYPE only (9vw): ex.Message can embed
+                // absolute filesystem paths, account names, or SQLite connection details — internals
+                // that don't belong in a tool response. The full exception goes to the server log.
+                _error = $"{ex.GetType().Name} during index startup (see server log)";
                 _state = "failed";
                 _log($"Index startup failed: {ex}");
             }
@@ -261,7 +264,8 @@ public sealed class IndexManager : IDisposable
             }
             catch (Exception ex)
             {
-                _error = ex.Message;
+                // Type-name only, like the startup path (9vw) — no ex.Message internals to clients.
+                _error = $"{ex.GetType().Name} during delta refresh (see server log)";
                 _state = previous == "ready" ? "ready" : previous;
                 _log($"Delta refresh failed: {ex}");
             }
