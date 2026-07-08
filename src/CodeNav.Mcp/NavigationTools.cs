@@ -52,6 +52,7 @@ public sealed partial class NavigationTools
                 new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (best-effort, silent when compiled); repo_overview.orphanedFiles count" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
+                new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + contextual notes" },
                 new { id = "symbol-handles", summary = "idx:N~fp symbol handles (index-local, reindex-detecting) accepted by source_context / definition / references" },
             },
             tools = new[]
@@ -187,7 +188,7 @@ public sealed partial class NavigationTools
         [Description("Lines of context around each hit, like grep -C (0-20, default 0 = just the line). Applies both before and after.")] int context = 0,
         [Description("Context lines BEFORE each hit (grep -B); overrides 'context' when set.")] int? contextBefore = null,
         [Description("Context lines AFTER each hit (grep -A); overrides 'context' when set.")] int? contextAfter = null,
-        [Description("Treat 'query' as a .NET regex (line-based, case-sensitive; prefix (?i) for insensitive) instead of tokens — NOT rust/ripgrep syntax. Scope with pathGlob; ReDoS-guarded (per-match timeout + overall budget), so results may be partial (timedOut:true). Overrides whole-word/partials.")] bool regex = false,
+        [Description("Treat 'query' as a .NET regex instead of tokens — NOT rust/ripgrep syntax. LINE-BASED: a pattern spanning multiple lines matches NOTHING. Case-sensitive; prefix (?i) for insensitive. Scope with pathGlob; ReDoS-guarded (per-match timeout + overall budget) with honest coverage (filesTotal/budgetHit/timedOut). Overrides whole-word/partials.")] bool regex = false,
         [Description("Max hits (default 20, max 100).")] int limit = 20,
         [Description("Opaque cursor from a previous call.")] string? cursor = null)
     {
@@ -219,6 +220,70 @@ public sealed partial class NavigationTools
         var acrossLines = !anyPrecise && result.FilesMatchedAcrossLines.Count > 0
             ? result.FilesMatchedAcrossLines.Take(10).ToList()
             : null;
+
+        // Dead-end redirect (field evidence: an agent scoped pathGlob to the wrong dir, got a correct 0,
+        // and fell back to manually reading files). The index knows where matches actually are — one
+        // bounded unscoped probe turns "0 hits" into "0 HERE, but they exist THERE" or an honest
+        // "absent everywhere". Only on a first-page total dead end, so the probe costs nothing normally.
+        object? elsewhere = null;
+        string? note = null;
+        if (result.TotalPrecise == 0 && result.TotalPartial == 0 && offset == 0)
+        {
+            bool scoped = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 } || firstPartyOnly
+                || project is not null || scope != "all" || lang is not null;
+            if (IndexQueries.FtsQuery(query).Length == 0)
+            {
+                // Pure punctuation/whitespace: the tokenizer sees nothing, so a probe is pointless.
+                note = "The query has no indexable tokens (letters/digits/underscore) — token search cannot match it. Use regex:true for punctuation patterns, or grep.";
+            }
+            else
+            {
+                var probe = q.SearchTextGraded(query, 5, new IndexQueries.TextFilter(IncludeGenerated: true),
+                    maxCandidateFiles: 100, offset: 0, partialsMode: "never");
+                if (probe.TotalPrecise > 0)
+                {
+                    elsewhere = new
+                    {
+                        preciseCount = probe.TotalPrecise,
+                        samplePaths = probe.Hits.Select(h => h.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToList(),
+                    };
+                    bool probeAllGenerated = probe.Hits.All(h => h.IsGenerated);
+                    // "Outside your filters" covers every filter, not just pathGlob: a samplePath INSIDE
+                    // the caller's glob means scope/lang/project/excludePath excluded it, not the glob.
+                    note = scoped
+                        ? $"0 hits within your filters, but {probe.TotalPrecise} precise line(s) exist outside them (see elsewhere.samplePaths; a sample inside your pathGlob means a different filter — scope/lang/project/excludePath — excluded it) — widen or relax filters."
+                          + (probeAllGenerated ? " The probe hits are all in generated files — pass includeGenerated:true." : "")
+                        : "The probe found matches only in generated files — pass includeGenerated:true.";
+                }
+                else if (probe.TotalPartial > 0)
+                {
+                    // The tokens DO co-occur, just never on one line (the probe's partial signal —
+                    // asserting "absent anywhere" here would be false; a precise line can also exist
+                    // below the probe's candidate cap, hence "in the probed candidates").
+                    elsewhere = new
+                    {
+                        coOccurringFiles = probe.FilesMatchedAcrossLines.Count,
+                        samplePaths = probe.FilesMatchedAcrossLines.Take(3).ToList(),
+                    };
+                    note = $"No single line in the probed candidates has all query tokens, but they co-occur across lines in {probe.FilesMatchedAcrossLines.Count} file(s) (see elsewhere.samplePaths) — drop a token or retry with partials:'always'{(scoped ? " without your filters" : "")}.";
+                }
+                else
+                {
+                    // Provably index-wide: an FTS AND over all files matched nothing (the inner LIMIT
+                    // truncates results, not the match), so no file holds all tokens together.
+                    note = "No file contains all query tokens together (whole-word: 'Batch' does not match 'Batching'). Check spelling, drop a token, try search_symbol match='substring' for identifiers, or grep for non-C# file types.";
+                }
+            }
+        }
+        else if (result.TotalPrecise == 0 && result.TotalPartial > 0 && mode == "never")
+        {
+            note = $"0 precise lines; {result.TotalPartial} weaker cross-line partial lead(s) exist — retry with partials:'always'.";
+        }
+        else if (result.TotalPrecise >= 1000 && offset == 0)
+        {
+            note = $"Common term: {result.TotalPrecise} precise lines in the scanned candidate set — "
+                 + (pathGlob is { Length: > 0 } ? "narrow the glob further or add tokens to sharpen." : "scope with pathGlob or add tokens to sharpen.");
+        }
 
         // Best-effort owning symbol per hit (feedback: jump from a text match to the owning
         // method/type without a follow-up symbol_at). Only .cs files carry symbols.
@@ -253,9 +318,13 @@ public sealed partial class NavigationTools
                 noise = IndexQueries.IsVendorPath(t.FilePath) ? true : (bool?)null, // under a vendored/generated dir
             }),
             filesMatchedAcrossLines = acrossLines,
+            elsewhere, // dead-end redirect: where matches DO exist when the filtered result is empty
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
             truncated,
-            note = "Whole-word, token-based (not regex): 'Batch' does not match 'Batching'. 'precise' = all tokens on the line (default); 'partial' (opt-in via partials='always') = tokens co-occur in the file, not one line. Add context for surrounding lines; use grep for regex or non-C# files.",
+            // Contextual, not verbatim (feedback: the fixed explainer was duplicated token waste; the
+            // whole-word/precise semantics live in the tool description). Present only when it changes
+            // the caller's next move: redirect, absent, partial-leads, or common-term steering.
+            note,
             meta,
         });
     }
@@ -290,13 +359,32 @@ public sealed partial class NavigationTools
                 owners[(h.FilePath, h.Line)] = sym.Container is { Length: > 0 } c ? $"{c}.{sym.Name}" : sym.Name;
         }
 
+        // Contextual note — only when it changes the caller's next move (timeout, clipped coverage, or
+        // a zero-hit that needs the line-based/case-sensitivity reminder). Silent on a clean success.
+        bool scoped = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 } || firstPartyOnly
+            || project is not null || scope != "all" || lang is not null;
+        bool coverageClipped = res.FilesTotal > res.FilesScanned;
+        string? note = res.TimedOut
+            ? "PARTIAL: the scan hit its time budget. Narrow with pathGlob or add a distinctive whole-word literal (e.g. \\bWord\\b) so FTS can pre-narrow."
+            : coverageClipped
+                ? $"PARTIAL coverage: scanned {res.FilesScanned} of {res.FilesTotal} candidate files (cap) — narrow with pathGlob or add a whole-word literal (\\bWord\\b) so FTS can pre-narrow."
+                : res.TotalMatches == 0
+                    ? ".NET regex is LINE-BASED — a pattern spanning multiple lines matches NOTHING — and case-sensitive without (?i)."
+                      + (scoped ? " The scan honored your filters; retry without them to check elsewhere." : "")
+                    : null;
+
         var meta = Meta.From(_manager.Health(), "indexed", "text");
         return Json.WithListBudget(hits, (items, truncated) => new
         {
             mode = "regex",
             matchCount = res.TotalMatches,
             filesScanned = res.FilesScanned,
+            // Coverage honesty: candidates in scope BEFORE the cap; budgetHit means coverage was clipped
+            // (cap or timeout), so "0 matches" or a small count is NOT proof of absence.
+            filesTotal = res.FilesTotal,
+            budgetHit = coverageClipped ? true : (bool?)null,
             narrowed = res.Narrowed,                 // FTS-pre-narrowed by required literals, vs a full scan
+            narrowedOn = res.Literals,               // WHICH whole-token literals narrowed (null on a scan)
             timedOut = res.TimedOut ? true : (bool?)null,
             hits = items.Select(t => new
             {
@@ -311,9 +399,7 @@ public sealed partial class NavigationTools
             }),
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
             truncated,
-            note = res.TimedOut
-                ? ".NET regex (line-based); results PARTIAL — the scan hit its time budget. Narrow with pathGlob or add a literal substring to the pattern."
-                : ".NET regex (line-based, case-sensitive; (?i) for insensitive) — not rust/ripgrep syntax. Scoped by pathGlob; use grep for non-C# file types.",
+            note,
             meta,
         });
     }

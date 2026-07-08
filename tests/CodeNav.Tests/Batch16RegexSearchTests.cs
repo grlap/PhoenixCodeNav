@@ -79,11 +79,18 @@ public class Batch16RegexSearchTests
                 Assert.Equal("regex", pw.GetProperty("mode").GetString());
                 Assert.True(pw.GetProperty("narrowed").GetBoolean());
                 Assert.Equal(2, pw.GetProperty("matchCount").GetInt32());
+                // 23h/tzj: coverage + narrowing transparency; xyy: silent note on a clean success.
+                Assert.Contains("public", pw.GetProperty("narrowedOn").EnumerateArray().Select(e => e.GetString()));
+                Assert.True(pw.GetProperty("filesTotal").GetInt32() >= 1);
+                Assert.False(pw.TryGetProperty("budgetHit", out _)); // full coverage -> omitted
+                Assert.False(pw.TryGetProperty("note", out _));      // nothing to steer -> omitted
 
                 // edge-touching literal pattern is NOT narrowable (would false-negative), but full scan finds it
                 var ps = Parse(tools.SearchText("public\\s+static", regex: true, pathGlob: "RxTarget.cs"));
                 Assert.False(ps.GetProperty("narrowed").GetBoolean());
                 Assert.Equal(2, ps.GetProperty("matchCount").GetInt32());
+                Assert.False(ps.TryGetProperty("narrowedOn", out _)); // scan mode -> no literals to report
+                Assert.Equal(1, ps.GetProperty("filesTotal").GetInt32()); // pathGlob scoped to exactly 1 file
 
                 // SOUNDNESS GUARD (Finding 2): 'public static' inside 'zzpublic static' must be found —
                 // narrowing on a non-whole-token literal would drop this file (0 hits) via FTS AND.
@@ -100,9 +107,11 @@ public class Batch16RegexSearchTests
                 Assert.False(dig.GetProperty("narrowed").GetBoolean());
                 Assert.True(dig.GetProperty("matchCount").GetInt32() >= 1);
 
-                // case sensitivity: PUBLIC (no flag) misses; (?i) hits
-                Assert.Equal(0, Parse(tools.SearchText("PUBLIC", regex: true, pathGlob: "RxTarget.cs"))
-                    .GetProperty("matchCount").GetInt32());
+                // case sensitivity: PUBLIC (no flag) misses; (?i) hits. Zero-hit carries the line-based/
+                // case-sensitivity reminder note (ajv/xyy: contextual, only when it changes the next move).
+                var caps = Parse(tools.SearchText("PUBLIC", regex: true, pathGlob: "RxTarget.cs"));
+                Assert.Equal(0, caps.GetProperty("matchCount").GetInt32());
+                Assert.Contains("LINE-BASED", caps.GetProperty("note").GetString());
                 Assert.True(Parse(tools.SearchText("(?i)PUBLIC", regex: true, pathGlob: "RxTarget.cs"))
                     .GetProperty("matchCount").GetInt32() >= 2);
 
@@ -115,6 +124,47 @@ public class Batch16RegexSearchTests
                 Assert.True(hit.TryGetProperty("before", out _) || hit.TryGetProperty("after", out _));
             }
             finally { manager.Dispose(); }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
+        }
+    }
+
+    // ks6: the ReDoS guards must be regression-tested, not just review-verified. (1) A catastrophic
+    // pattern trips the per-match timeout (RegexMatchTimeoutException -> timedOut) instead of hanging.
+    // (2) The overall wall-clock budget is checked PER LINE, so a ~zero budget aborts mid-scan.
+    [Fact]
+    public void RedosAndBudgetGuardsTimeOutInsteadOfHanging()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-redos").FullName;
+        try
+        {
+            WorkspaceGenerator.Generate(root, targetProjects: 2, seed: 12);
+            // Catastrophic-backtracking bait: a long 'a' run that (a+)+$ cannot match (trailing '!').
+            File.WriteAllText(Path.Combine(root, "Redos.cs"),
+                "namespace R { class C { /* " + new string('a', 80) + "! */ } }");
+            // Budget bait: enough lines (~100k, one big file) that even a cheap non-matching scan takes
+            // >= 1ms, so the PER-LINE budget check provably fires mid-file on a ~zero budget. (5k lines
+            // scanned in under a millisecond — the review's 'between-files-only' hole needs a big file.)
+            File.WriteAllText(Path.Combine(root, "Budget.cs"),
+                "namespace B { class C {\n" + string.Concat(Enumerable.Repeat("// pad line\n", 100_000)) + "} }");
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+
+            using var q = new IndexQueries(dbPath);
+            // (a|aa)+$ — an alternation-headed loop with overlapping branches; .NET's auto-atomicity
+            // cannot rewrite it (unlike (a+)+$, which the optimizer makes linear), so a long 'a' run
+            // with a non-matching tail genuinely explodes and must be stopped by the per-match timeout.
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var redos = q.SearchRegex("(a|aa)+$", null, 300, 0, 20, 0, 0, totalBudgetMs: 30000, perMatchMs: 60);
+            sw.Stop();
+            Assert.True(redos.TimedOut, "catastrophic pattern did not trip the per-match ReDoS guard");
+            Assert.True(sw.ElapsedMilliseconds < 15000, $"ReDoS guard too slow: {sw.ElapsedMilliseconds}ms");
+
+            var budget = q.SearchRegex("neverMatchesAnythingZz", null, 300, 0, 20, 0, 0, totalBudgetMs: 0, perMatchMs: 250);
+            Assert.True(budget.TimedOut, "per-line budget check did not fire on a ~zero budget");
         }
         finally
         {

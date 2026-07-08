@@ -33,7 +33,7 @@ public sealed partial class IndexQueries
 
         var literals = RegexLiterals.ExtractRequired(pattern);
         bool narrowed = literals.Count > 0;
-        var candidates = RegexCandidates(literals, filter, maxCandidateFiles);
+        var (candidates, filesTotal) = RegexCandidates(literals, filter, maxCandidateFiles);
 
         var sw = Stopwatch.StartNew();
         var hits = new List<TextHit>();
@@ -66,12 +66,15 @@ public sealed partial class IndexQueries
 
         int totalMatches = hits.Count;
         var page = hits.Skip(offset).Take(limit).ToList();
-        return new RegexSearchResult(page, totalMatches, scanned, narrowed, timedOut, null);
+        return new RegexSearchResult(page, totalMatches, scanned, narrowed, timedOut, null,
+            filesTotal, narrowed ? literals : null);
     }
 
-    private List<(long Id, string Path, bool Gen)> RegexCandidates(
+    private (List<(long Id, string Path, bool Gen)> Candidates, int FilesTotal) RegexCandidates(
         List<string> literals, TextFilter filter, int max)
     {
+        // Filter args are shared by the candidate query and the coverage COUNT; $lim is added only to
+        // the candidate args so the COUNT binds exactly the parameters its SQL references.
         var args = new List<(string, object)>();
         var where = new System.Text.StringBuilder("WHERE 1=1");
         string join = "";
@@ -92,13 +95,27 @@ public sealed partial class IndexQueries
                 ? " AND (p.is_test = 1 OR f.has_test_attrs = 1)"
                 : " AND COALESCE(p.is_test, 0) = 0 AND f.has_test_attrs = 0");
         }
-        args.Add(("$lim", max));
 
         if (literals.Count > 0)
         {
             args.Add(("$q", string.Join(" ", literals.Select(t => $"\"{t}\""))));
+            // Coverage honesty: the TRUE count of in-scope candidate files — deliberately WITHOUT the
+            // bm25 LIMIT window the candidate query uses. With the window, a common literal saturating
+            // it plus a narrow path filter could yield filesTotal == filesScanned and falsely claim
+            // full coverage while unscanned in-scope files exist (review finding). A COUNT needs no
+            // ranking, so it can afford the full FTS match set.
+            int total = (int)Query(
+                $"""
+                WITH m AS (SELECT rowid AS fid FROM fts_content WHERE fts_content MATCH $q)
+                SELECT COUNT(DISTINCT f.id) FROM m
+                JOIN files f ON f.id = m.fid
+                {join}
+                {where}
+                """,
+                r => r.GetInt64(0), args.ToArray())[0];
             args.Add(("$innerLim", Math.Clamp(max * 10, 2000, 20000)));
-            return Query(
+            args.Add(("$lim", max));
+            var cands = Query(
                 $"""
                 WITH m AS MATERIALIZED (
                     SELECT rowid AS fid, bm25(fts_content) AS rank
@@ -114,10 +131,19 @@ public sealed partial class IndexQueries
                 """,
                 r => (Id: r.GetInt64(0), Path: r.GetString(1), Gen: r.GetBoolean(2)),
                 args.ToArray());
+            return (cands, total);
         }
 
         // No safely-extractable literal anchor: bounded scan over indexed source files.
-        return Query(
+        int scanTotal = (int)Query(
+            $"""
+            SELECT COUNT(DISTINCT f.id) FROM files f
+            {join}
+            {where} AND f.lang IN ('cs','csproj','sln','config')
+            """,
+            r => r.GetInt64(0), args.ToArray())[0];
+        args.Add(("$lim", max));
+        var scanned = Query(
             $"""
             SELECT f.id, f.path, f.is_generated FROM files f
             {join}
@@ -128,10 +154,14 @@ public sealed partial class IndexQueries
             """,
             r => (Id: r.GetInt64(0), Path: r.GetString(1), Gen: r.GetBoolean(2)),
             args.ToArray());
+        return (scanned, scanTotal);
     }
 }
 
 /// <summary>Result of a regex content search. Narrowed = FTS-pre-narrowed by required literals (vs a
-/// full scan); TimedOut = the per-match ReDoS guard or overall budget fired, so results are PARTIAL.</summary>
+/// full scan; Literals = the whole-token literals it narrowed on, null when scanning); TimedOut = the
+/// per-match ReDoS guard or overall budget fired, so results are PARTIAL. FilesTotal = candidate files
+/// in scope BEFORE the cap — FilesScanned &lt; FilesTotal means coverage was clipped (cap or timeout).</summary>
 public sealed record RegexSearchResult(
-    List<TextHit> Hits, int TotalMatches, int FilesScanned, bool Narrowed, bool TimedOut, string? Error);
+    List<TextHit> Hits, int TotalMatches, int FilesScanned, bool Narrowed, bool TimedOut, string? Error,
+    int FilesTotal = 0, IReadOnlyList<string>? Literals = null);
