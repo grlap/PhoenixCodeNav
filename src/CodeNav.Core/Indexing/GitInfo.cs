@@ -92,31 +92,62 @@ public static class GitInfo
 
     private static string? Run(string cwd, string args)
     {
+        if (GitExe.Value is not { } gitExe) return null; // git not resolved — feature off
+        // -c core.fsmonitor=false: on fsmonitor/Scalar-enabled monoliths git auto-spawns a
+        // background daemon; our read-only queries never need it, and the daemon INHERITING our
+        // redirected pipes is exactly the hang fixed below. Unknown/unused -c keys are harmless.
+        return RunProcess(gitExe, cwd, "-c core.fsmonitor=false " + args);
+    }
+
+    /// <summary>Hang-proof process runner (field bug: repo_overview froze inside
+    /// StandardOutput.ReadToEnd on a work monolith). The old shape — synchronous ReadToEnd BEFORE
+    /// WaitForExit — could block FOREVER, making its own timeout unreachable: (a) sequential sync
+    /// reads deadlock when stderr fills the pipe first; (b) git can spawn a background daemon
+    /// (fsmonitor--daemon) that inherits the redirected stdout handle, so the pipe never reaches
+    /// EOF even after the command itself exits. Now: both streams read ASYNC, WaitForExit(timeout)
+    /// runs first (it deliberately does not wait for drain), then a bounded drain-grace — a
+    /// lingering pipe-holder degrades to null ("git unavailable") instead of hanging the server.
+    /// Stdin is redirected and closed so no child can inherit or consume the MCP stdio channel.</summary>
+    internal static string? RunProcess(string exe, string cwd, string args, int waitMs = 10000, int drainMs = 2000)
+    {
         try
         {
-            if (GitExe.Value is not { } gitExe) return null; // git not resolved — feature off
-            var psi = new ProcessStartInfo(gitExe, args)
+            var psi = new ProcessStartInfo(exe, args)
             {
                 WorkingDirectory = Directory.Exists(cwd) ? cwd : Environment.CurrentDirectory,
+                RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            psi.Environment["GIT_OPTIONAL_LOCKS"] = "0";   // read-only queries must not take index locks
+            psi.Environment["GIT_TERMINAL_PROMPT"] = "0";  // never wait on interactive input
             using var p = Process.Start(psi);
             if (p is null) return null;
-            string stdout = p.StandardOutput.ReadToEnd();
-            _ = p.StandardError.ReadToEnd();
-            if (!p.WaitForExit(10000))
+            p.StandardInput.Close();
+            // Dedicated background reader THREADS, not Task continuations: under a saturated thread
+            // pool (heavy parallel load) async drains can miss a small grace window and spuriously
+            // report null — a pool-independent thread drains the instant the pipe closes.
+            string stdout = "";
+            var outReader = new Thread(() => { try { stdout = p.StandardOutput.ReadToEnd(); } catch { /* pipe torn down */ } }) { IsBackground = true };
+            var errReader = new Thread(() => { try { p.StandardError.ReadToEnd(); } catch { /* pipe torn down */ } }) { IsBackground = true };
+            outReader.Start();
+            errReader.Start();
+            if (!p.WaitForExit(waitMs))
             {
                 try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 return null;
+            }
+            if (!outReader.Join(drainMs) || !errReader.Join(drainMs))
+            {
+                return null; // a grandchild still holds the pipe — degrade, never hang
             }
             return p.ExitCode == 0 ? stdout : null;
         }
         catch
         {
-            return null; // git missing, spawn failure, etc.
+            return null; // exe missing, spawn failure, etc.
         }
     }
 }
