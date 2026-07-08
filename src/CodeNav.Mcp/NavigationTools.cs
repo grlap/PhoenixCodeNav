@@ -871,17 +871,15 @@ public sealed partial class NavigationTools
             List<SymbolHit> memberImpls = new();
             if (targetSym?.Container is { Length: > 0 } declType)
             {
-                var implementers = q.ImplementationCandidates(declType, 100);
-                // Scope the member lookup to the implementer type NAMES (not a global name search that a
-                // 500-cap would truncate for a hot member like Create/Execute/Dispose), then refine by
-                // (namespace, container) so an unrelated same-named type can't masquerade as one.
-                var implementerKeys = implementers.Select(t => (t.Ns ?? "", t.Name)).ToHashSet();
-                var containerNames = implementers.Select(t => t.Name).ToList();
-                if (containerNames.Count > 0)
-                    memberImpls = q.MembersNamedInContainers(lookupName, containerNames, 200)
-                        .Where(m => implementerKeys.Contains((m.Ns ?? "", m.Container ?? "")))
-                        .Take(50)
-                        .ToList();
+                // Scope the member lookup to the implementer types by (namespace, type name) IDENTITY —
+                // so the query's cap bounds only genuine implementer members (not every same-simple-named
+                // type across all namespaces) and an unrelated type can't sneak in. ImplementationCandidates
+                // now whole-token-matches the base list, so a superstring interface (IFooBar) doesn't scope in.
+                var typeKeys = q.ImplementationCandidates(declType, 100)
+                    .Select(t => (t.Ns ?? "", t.Name))
+                    .ToList();
+                if (typeKeys.Count > 0)
+                    memberImpls = q.MembersNamedInTypes(lookupName, typeKeys, 100).Take(50).ToList();
             }
             if (memberImpls.Count > 0)
             {

@@ -541,28 +541,32 @@ public sealed class IndexQueries : IDisposable
 
     // ---------------------------------------------------------------- semantic-layer support
 
-    /// <summary>Members named <paramref name="memberName"/> whose declaring type is one of
-    /// <paramref name="containerNames"/> — scoped by container so a hot member name (Create, Execute,
-    /// Dispose) doesn't get lost behind a global name-search cap. Caller refines by namespace. Empty
-    /// on empty inputs.</summary>
-    public List<SymbolHit> MembersNamedInContainers(string memberName, IReadOnlyCollection<string> containerNames, int limit)
+    /// <summary>Members named <paramref name="memberName"/> declared in one of the given types,
+    /// identified by (namespace, container) PAIRS — so the <c>LIMIT</c> bounds only genuine matches
+    /// (not every same-container-named type across all namespaces) and a hot member name can't get
+    /// lost behind the cap. Empty on empty inputs.</summary>
+    public List<SymbolHit> MembersNamedInTypes(string memberName, IReadOnlyCollection<(string Ns, string Container)> types, int limit)
     {
-        if (string.IsNullOrEmpty(memberName) || containerNames.Count == 0) return new();
+        if (string.IsNullOrEmpty(memberName) || types.Count == 0) return new();
         var args = new List<(string, object)> { ("$m", memberName), ("$lim", limit) };
-        var placeholders = new List<string>();
+        var clauses = new List<string>();
         int i = 0;
-        foreach (var c in containerNames.Distinct(StringComparer.Ordinal))
+        foreach (var (ns, container) in types.Distinct())
         {
-            string p = $"$c{i++}";
-            placeholders.Add(p);
-            args.Add((p, c));
+            if (string.IsNullOrEmpty(container)) continue;
+            string n = $"$n{i}", c = $"$c{i}";
+            i++;
+            clauses.Add($"(COALESCE(s.ns, '') = {n} AND s.container = {c})");
+            args.Add((n, ns ?? ""));
+            args.Add((c, container));
         }
+        if (clauses.Count == 0) return new();
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
                    s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
             FROM symbols s JOIN files f ON f.id = s.file_id
-            WHERE s.name = $m COLLATE NOCASE AND s.container IN ({string.Join(",", placeholders)})
+            WHERE s.name = $m COLLATE NOCASE AND ({string.Join(" OR ", clauses)})
             ORDER BY f.is_generated, f.path
             LIMIT $lim
             """,
@@ -576,7 +580,9 @@ public sealed class IndexQueries : IDisposable
         // any base list — never run that catch-all.
         if (string.IsNullOrEmpty(name)) return new();
         string esc = EscapeLike(name);
-        return Query(
+        // The LIKE is a SUBSTRING filter, so over-fetch and refine to types whose base list names the
+        // interface as a WHOLE identifier token — otherwise 'IFoo' would also match 'IFooBar'.
+        var candidates = Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
                    s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
@@ -588,7 +594,8 @@ public sealed class IndexQueries : IDisposable
             LIMIT $lim
             """,
             ReadSymbol,
-            ("$n", name), ("$pat", $"%: %{esc}%"), ("$lim", limit));
+            ("$n", name), ("$pat", $"%: %{esc}%"), ("$lim", Math.Min(limit * 4, 2000)));
+        return candidates.Where(h => ContainsWholeToken(h.Signature, name)).Take(limit).ToList();
     }
 
     /// <summary>Project name → is-test flag for the whole workspace (small).</summary>
