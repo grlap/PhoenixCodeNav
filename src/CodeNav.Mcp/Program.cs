@@ -54,7 +54,7 @@ builder.Services.AddSingleton(sp =>
 builder.Services
     .AddMcpServer(o =>
     {
-        o.ServerInfo = new() { Name = "phoenix-codenav", Version = "0.1.0" };
+        o.ServerInfo = new() { Name = "phoenix-codenav", Version = CodeNav.Mcp.BuildInfo.Version };
         o.ServerInstructions =
             "Code navigation for a large C# workspace. Prefer these tools over shell grep for source navigation: " +
             "start with repo_overview; use search_symbol/definition/references for code identifiers; " +

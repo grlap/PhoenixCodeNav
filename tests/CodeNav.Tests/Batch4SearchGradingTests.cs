@@ -191,4 +191,48 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.False(string.IsNullOrEmpty(model.GetProperty("heuristic").GetString()));
         Assert.Contains("not compiler-verified", model.GetProperty("indexed").GetString());
     }
+
+    // Deploy-verifiability (field feedback: an agent could not confirm a deploy because the version
+    // was a hardcoded literal and no build identity was surfaced). A caller must be able to tell WHICH
+    // build is running: version is sourced from BuildInfo, build.commit round-trips the git stamp,
+    // indexSchema matches the builder.
+    [Fact]
+    public void CapabilitiesStampBuildIdentityForDeployVerification()
+    {
+        var tools = new NavigationTools(_manager, _semantic);
+        var json = Parse(tools.ServerCapabilities());
+        Assert.Equal(BuildInfo.Version, json.GetProperty("version").GetString());
+        var build = json.GetProperty("build");
+        Assert.Equal(BuildInfo.Version, build.GetProperty("version").GetString());
+        string commit = build.GetProperty("commit").GetString()!;
+        Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
+        Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
+        Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
+    }
+
+    // The features manifest lets a caller CONFIRM a capability without triggering its silent-when-clean
+    // response fields — the exact verification the field agent couldn't do from a bare response.
+    [Fact]
+    public void CapabilitiesFeatureManifestLetsCallerConfirmCapabilities()
+    {
+        var tools = new NavigationTools(_manager, _semantic);
+        var json = Parse(tools.ServerCapabilities());
+        var ids = json.GetProperty("features").EnumerateArray()
+            .Select(f => f.GetProperty("id").GetString()).ToHashSet();
+        Assert.Contains("compiled-awareness", ids);
+        Assert.Contains("implementer-completeness", ids);
+        Assert.Contains("hierarchy-ranking", ids);
+    }
+
+    // The build commit comes from the SDK's "<version>+<sha>" AssemblyInformationalVersion. Pin the
+    // parse — in particular the "unknown" fallback for a git-less build (no +sha), the exact scenario
+    // a review flagged: the stamp must degrade to "unknown", never a partial/garbage commit.
+    [Theory]
+    [InlineData("1.0.0+868bf8c88be235d377159b7d84b96997a9c1fefc", "868bf8c88be2")]
+    [InlineData("0.2.0+abc123", "abc123")]
+    [InlineData("1.0.0", "unknown")]  // git-less build: SDK appends no +sha
+    [InlineData("1.0.0+", "unknown")] // malformed suffix
+    [InlineData(null, "unknown")]
+    public void BuildInfoParsesCommitOrFallsBackToUnknown(string? informationalVersion, string expected)
+        => Assert.Equal(expected, BuildInfo.ParseCommit(informationalVersion));
 }

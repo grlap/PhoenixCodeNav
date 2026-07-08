@@ -15,6 +15,11 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- The .NET SDK's source-control integration appends "+<git-sha>" to AssemblyInformationalVersion
+         when built with a .git present; BuildInfo.Commit reads it back to report WHICH build is running
+         (=> "unknown" in a git-less build). Explicit so a future default flip can't silently drop the
+         deploy-verification stamp. Preferred over a custom git shell-out (no stderr/quoting pitfalls). -->
+    <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <ItemGroup>

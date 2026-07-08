@@ -36,9 +36,24 @@ public sealed partial class NavigationTools
         return Json.Serialize(new
         {
             server = "phoenixCodeNav",
-            version = "0.1.0",
+            version = BuildInfo.Version,
+            // Build identity so a caller can verify WHICH build is deployed. The old hardcoded version
+            // went stale at 0.1.0 across many feature batches; commit auto-tracks the actual build.
+            build = new { version = BuildInfo.Version, commit = BuildInfo.Commit, indexSchema = BuildInfo.IndexSchema },
             languages = new[] { "csharp" },
             navigationLayers = new[] { "text", "syntax", "semantic" },
+            // Explicit capability manifest: lets a caller CONFIRM a feature is present without having to
+            // trigger its (often silent-when-clean) response fields — grep an id to verify a deploy.
+            features = new object[]
+            {
+                new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic" },
+                new { id = "hierarchy-ranking", summary = "implementations ranked concrete-first with derivation 'via' + a likelyImplementation flag" },
+                new { id = "implementer-completeness", summary = "implementations member-mode: the syntactic fallback reports implementerCount + omittedImplementers (silent when none omitted); the exact path reports coverage instead" },
+                new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (best-effort, silent when compiled); repo_overview.orphanedFiles count" },
+                new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match" },
+                new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
+                new { id = "symbol-handles", summary = "idx:N~fp symbol handles (index-local, reindex-detecting) accepted by source_context / definition / references" },
+            },
             tools = new[]
             {
                 "server_capabilities", "repo_overview", "find_file", "search_text", "outline",
@@ -475,7 +490,7 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- symbols
 
     [McpServerTool(Name = "search_symbol")]
-    [Description("Find declared symbols by name across the workspace (types, methods, properties...). Prefer this over search_text for anything that is a code identifier. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored third-party source).")]
+    [Description("Find declared symbols by name across the workspace (types, methods, properties...). Prefer this over search_text for anything that is a code identifier. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored third-party source). Hits carry a best-effort 'orphaned' flag (present only when true) for files in no project's compile set — likely dead code the compiler never builds.")]
     public string SearchSymbol(
         [Description("Symbol name. Match behavior set by 'match'.")] string query,
         [Description("Comma-separated kind filter: class,interface,struct,record,enum,delegate,method,constructor,property,field,event,enum_member. Empty = all.")] string? kinds = null,
@@ -790,7 +805,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "implementations")]
-    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to base-list name matching (confidence 'heuristic', unranked).")]
+    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to base-list name matching (confidence 'heuristic', unranked). For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead.")]
     public string Implementations(
         [Description("Interface/type/member name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration or a usage (position mode).")] string? path = null,
