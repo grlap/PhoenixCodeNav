@@ -297,6 +297,12 @@ public sealed class IndexManager : IDisposable
     /// A live call (shells out to git) — for repo_overview, not the per-response meta.</summary>
     public string? CurrentHeadCommit() => _gitDir is null ? null : GitInfo.HeadCommit(_workspaceRoot);
 
+    /// <summary>HEAD commit with an honest status for repo_overview (field: a silent null after the
+    /// hang guard fired was undiagnosable). "unavailable" = not a git repo / git absent / error;
+    /// "timed_out" = the hang guard fired (git itself is slow, not a hang).</summary>
+    public (string? Sha, string Status) CurrentHeadCommitEx() =>
+        _gitDir is null ? (null, "unavailable") : GitInfo.HeadCommitEx(_workspaceRoot);
+
     public void Dispose()
     {
         lock (_disposeLock) { _disposed = true; } // block any in-flight watcher publication

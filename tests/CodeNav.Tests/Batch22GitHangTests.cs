@@ -42,4 +42,35 @@ public class Batch22GitHangTests
             Path.GetTempPath(), "/c echo hello");
         Assert.Equal("hello", result?.Trim());
     }
+
+    // Field feedback: bounded TIME is not enough — a runaway subprocess can produce megabytes.
+    // Past the cap the runner keeps DRAINING (the child never blocks on a full pipe) but discards,
+    // marking Truncated; the string? wrapper treats truncation as failure (callers must not act on
+    // a partial changed-file list — they full-sweep instead).
+    [Fact]
+    public void RunnerCapsOutputAndMarksTruncated()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string cmd = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
+        var r = GitInfo.RunProcessEx(cmd, Path.GetTempPath(),
+            "/c \"for /l %i in (1,1,500) do @echo 0123456789012345678901234567890123456789\"",
+            maxOutputChars: 1000);
+        Assert.Equal("ok", r.Status);
+        Assert.True(r.Truncated, "output beyond the cap must mark Truncated");
+        Assert.Equal(1000, r.Output!.Length);
+    }
+
+    // Field feedback: the guard firing must be DIAGNOSABLE, not a silent null — "why is headCommit
+    // empty?" needs an answer. A never-exiting process reports status "timed_out".
+    [Fact]
+    public void RunnerReportsTimedOutStatus()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var r = GitInfo.RunProcessEx("ping", Path.GetTempPath(), "-n 30 127.0.0.1", waitMs: 800, drainMs: 500);
+        sw.Stop();
+        Assert.Equal("timed_out", r.Status);
+        Assert.Null(r.Output);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8), $"timed_out path took {sw.Elapsed.TotalSeconds:n1}s");
+    }
 }

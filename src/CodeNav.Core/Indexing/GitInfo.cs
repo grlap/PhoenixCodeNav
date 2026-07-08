@@ -57,10 +57,18 @@ public static class GitInfo
     }
 
     /// <summary>Current HEAD commit SHA, or null on failure/absent.</summary>
-    public static string? HeadCommit(string workspaceRoot)
+    public static string? HeadCommit(string workspaceRoot) => HeadCommitEx(workspaceRoot).Value;
+
+    /// <summary>HEAD commit WITH an honest status — field feedback: a silent null made
+    /// "why is headCommit empty?" undiagnosable (git absent? not a repo? or the hang guard fired?).
+    /// Status: "ok" | "unavailable" (git absent / not a repo / error) | "timed_out" (guard fired).</summary>
+    public static (string? Value, string Status) HeadCommitEx(string workspaceRoot)
     {
-        string? outp = Run(workspaceRoot, "rev-parse HEAD")?.Trim();
-        return string.IsNullOrEmpty(outp) ? null : outp;
+        if (GitExe.Value is not { } gitExe) return (null, "unavailable");
+        var r = RunProcessEx(gitExe, workspaceRoot, GitArgs("rev-parse HEAD"));
+        if (r.Status is "timed_out" or "drain_timed_out") return (null, "timed_out");
+        string? sha = r.Status == "ok" && !r.Truncated ? r.Output?.Trim() : null;
+        return string.IsNullOrEmpty(sha) ? (null, "unavailable") : (sha, "ok");
     }
 
     /// <summary>Current branch name, or null when detached or on failure.</summary>
@@ -79,6 +87,8 @@ public static class GitInfo
     public static List<string>? ChangedFiles(string workspaceRoot, string fromCommit, string toCommit)
     {
         if (string.IsNullOrWhiteSpace(fromCommit) || string.IsNullOrWhiteSpace(toCommit)) return null;
+        // A TRUNCATED diff must fail this call (null => the caller full-sweeps): acting on a partial
+        // changed-file list would silently skip refreshing real changes.
         string? outp = Run(workspaceRoot, $"diff --name-only --no-renames --relative {fromCommit} {toCommit}");
         if (outp is null) return null;
         var list = new List<string>();
@@ -93,13 +103,17 @@ public static class GitInfo
     private static string? Run(string cwd, string args)
     {
         if (GitExe.Value is not { } gitExe) return null; // git not resolved — feature off
-        // -c core.fsmonitor=false: on fsmonitor/Scalar-enabled monoliths git auto-spawns a
-        // background daemon; our read-only queries never need it, and the daemon INHERITING our
-        // redirected pipes is exactly the hang fixed below. core.useBuiltinFSMonitor covers the
-        // Scalar-era microsoft/git 2.33-2.36 builds, which gate the experimental daemon on THAT key
-        // (review advisory). Unknown/unused -c keys are harmless on every git in the wild.
-        return RunProcess(gitExe, cwd, "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args);
+        var r = RunProcessEx(gitExe, cwd, GitArgs(args));
+        return r.Status == "ok" && !r.Truncated ? r.Output : null;
     }
+
+    // -c core.fsmonitor=false: on fsmonitor/Scalar-enabled monoliths git auto-spawns a background
+    // daemon; our read-only queries never need it, and the daemon INHERITING our redirected pipes is
+    // exactly the hang RunProcessEx guards against. core.useBuiltinFSMonitor covers the Scalar-era
+    // microsoft/git 2.33-2.36 builds, which gate the experimental daemon on THAT key. Unknown/unused
+    // -c keys are harmless on every git in the wild.
+    private static string GitArgs(string args) =>
+        "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args;
 
     /// <summary>Hang-proof process runner (field bug: repo_overview froze inside
     /// StandardOutput.ReadToEnd on a work monolith). The old shape — synchronous ReadToEnd BEFORE
@@ -111,6 +125,19 @@ public static class GitInfo
     /// lingering pipe-holder degrades to null ("git unavailable") instead of hanging the server.
     /// Stdin is redirected and closed so no child can inherit or consume the MCP stdio channel.</summary>
     internal static string? RunProcess(string exe, string cwd, string args, int waitMs = 10000, int drainMs = 2000)
+    {
+        var r = RunProcessEx(exe, cwd, args, waitMs, drainMs);
+        return r.Status == "ok" && !r.Truncated ? r.Output : null;
+    }
+
+    /// <summary>Outcome of a bounded process run. Status: "ok" | "spawn_failed" | "timed_out"
+    /// (WaitForExit guard) | "drain_timed_out" (a pipe-holder outlived the exit) | "exit_nonzero".
+    /// Truncated: stdout exceeded the cap (output is the capped prefix) — field feedback: bounded
+    /// TIME is not enough, a runaway subprocess can also produce megabytes.</summary>
+    internal sealed record ProcessResult(string? Output, string Status, bool Truncated);
+
+    internal static ProcessResult RunProcessEx(string exe, string cwd, string args,
+        int waitMs = 10000, int drainMs = 2000, int maxOutputChars = 8 * 1024 * 1024)
     {
         try
         {
@@ -126,38 +153,82 @@ public static class GitInfo
             psi.Environment["GIT_OPTIONAL_LOCKS"] = "0";   // read-only queries must not take index locks
             psi.Environment["GIT_TERMINAL_PROMPT"] = "0";  // never wait on interactive input
             using var p = Process.Start(psi);
-            if (p is null) return null;
+            if (p is null) return new ProcessResult(null, "spawn_failed", false);
             p.StandardInput.Close();
             // Dedicated background reader THREADS, not Task continuations: under a saturated thread
             // pool (heavy parallel load) async drains can miss a small grace window and spuriously
-            // report null — a pool-independent thread drains the instant the pipe closes.
+            // report failure — a pool-independent thread drains the instant the pipe closes. Reads
+            // are BOUNDED: past the cap we keep draining (so the child never blocks on a full pipe)
+            // but discard, marking Truncated.
             string stdout = "";
-            var outReader = new Thread(() => { try { stdout = p.StandardOutput.ReadToEnd(); } catch { /* pipe torn down */ } }) { IsBackground = true };
-            var errReader = new Thread(() => { try { p.StandardError.ReadToEnd(); } catch { /* pipe torn down */ } }) { IsBackground = true };
+            bool truncated = false;
+            var outReader = new Thread(() =>
+            {
+                try { (stdout, truncated) = ReadBounded(p.StandardOutput, maxOutputChars); }
+                catch { /* pipe torn down */ }
+            }) { IsBackground = true };
+            var errReader = new Thread(() =>
+            {
+                try { _ = ReadBounded(p.StandardError, 64 * 1024); } // drained, capped, discarded
+                catch { /* pipe torn down */ }
+            }) { IsBackground = true };
             outReader.Start();
             errReader.Start();
             if (!p.WaitForExit(waitMs))
             {
                 try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                return null;
+                CutReadEnds(p);
+                return new ProcessResult(null, "timed_out", false);
             }
             if (!outReader.Join(drainMs) || !errReader.Join(drainMs))
             {
-                // A grandchild still holds the pipe. Degrade to null — but first reap what we can
-                // and CUT OUR READ ENDS: disposing the base streams aborts the blocked ReadToEnd in
-                // ~20ms (review-measured; the readers' catches swallow the ObjectDisposedException).
+                // A grandchild still holds the pipe. Degrade — but first reap what we can and CUT
+                // OUR READ ENDS: disposing the base streams aborts the blocked reads in ~20ms
+                // (review-measured; the readers' catches swallow the ObjectDisposedException).
                 // Without this, every degraded call leaked 2 blocked threads + 2 pipe handles for
                 // the foreign holder's lifetime — a slow leak on a long-running server.
                 try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                try { p.StandardOutput.BaseStream.Dispose(); } catch { /* aborting blocked read */ }
-                try { p.StandardError.BaseStream.Dispose(); } catch { /* aborting blocked read */ }
-                return null;
+                CutReadEnds(p);
+                return new ProcessResult(null, "drain_timed_out", false);
             }
-            return p.ExitCode == 0 ? stdout : null;
+            return p.ExitCode == 0
+                ? new ProcessResult(stdout, "ok", truncated)
+                : new ProcessResult(null, "exit_nonzero", truncated);
         }
         catch
         {
-            return null; // exe missing, spawn failure, etc.
+            return new ProcessResult(null, "spawn_failed", false); // exe missing, spawn failure, etc.
         }
+    }
+
+    private static void CutReadEnds(Process p)
+    {
+        try { p.StandardOutput.BaseStream.Dispose(); } catch { /* aborting a blocked read */ }
+        try { p.StandardError.BaseStream.Dispose(); } catch { /* aborting a blocked read */ }
+    }
+
+    /// <summary>Reads to EOF with a character cap: appends up to <paramref name="maxChars"/>, then
+    /// keeps DRAINING (discarding) so the child never blocks on a full pipe. Returns the capped text
+    /// and whether anything was discarded.</summary>
+    private static (string Text, bool Truncated) ReadBounded(StreamReader reader, int maxChars)
+    {
+        var sb = new System.Text.StringBuilder();
+        var buf = new char[8192];
+        bool truncated = false;
+        int n;
+        while ((n = reader.Read(buf, 0, buf.Length)) > 0)
+        {
+            int room = maxChars - sb.Length;
+            if (room >= n)
+            {
+                sb.Append(buf, 0, n);
+            }
+            else
+            {
+                if (room > 0) sb.Append(buf, 0, room);
+                truncated = true;
+            }
+        }
+        return (sb.ToString(), truncated);
     }
 }

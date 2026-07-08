@@ -103,12 +103,17 @@ public sealed partial class NavigationTools
 
         // Live HEAD lookup (occasional call — not in the per-response meta). When it differs
         // from the indexed commit, a branch switch / pull is still reconciling; indexStatus
-        // already reports the transient lag.
-        string? headCommit = _manager.CurrentHeadCommit();
-        object? git = h.IndexedCommit is null && headCommit is null
-            ? null
+        // already reports the transient lag. gitStatus is HONEST about failure (field: a silent
+        // absence after the hang guard fired left "why is headCommit empty?" undiagnosable):
+        // "ok" | "unavailable" (git absent / not a repo) | "timed_out" (git slow — the guard fired,
+        // not a hang; timeoutMs says how long it waited).
+        var (headCommit, gitStatus) = _manager.CurrentHeadCommitEx();
+        object? git = gitStatus == "unavailable" && h.IndexedCommit is null
+            ? null // never was a git workspace — omit the block entirely
             : new
             {
+                status = gitStatus,
+                timeoutMs = gitStatus == "timed_out" ? 10000 : (int?)null,
                 indexedCommit = h.IndexedCommit,
                 indexedBranch = h.IndexedBranch,
                 headCommit,
