@@ -95,8 +95,10 @@ public static class GitInfo
         if (GitExe.Value is not { } gitExe) return null; // git not resolved — feature off
         // -c core.fsmonitor=false: on fsmonitor/Scalar-enabled monoliths git auto-spawns a
         // background daemon; our read-only queries never need it, and the daemon INHERITING our
-        // redirected pipes is exactly the hang fixed below. Unknown/unused -c keys are harmless.
-        return RunProcess(gitExe, cwd, "-c core.fsmonitor=false " + args);
+        // redirected pipes is exactly the hang fixed below. core.useBuiltinFSMonitor covers the
+        // Scalar-era microsoft/git 2.33-2.36 builds, which gate the experimental daemon on THAT key
+        // (review advisory). Unknown/unused -c keys are harmless on every git in the wild.
+        return RunProcess(gitExe, cwd, "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args);
     }
 
     /// <summary>Hang-proof process runner (field bug: repo_overview froze inside
@@ -141,7 +143,15 @@ public static class GitInfo
             }
             if (!outReader.Join(drainMs) || !errReader.Join(drainMs))
             {
-                return null; // a grandchild still holds the pipe — degrade, never hang
+                // A grandchild still holds the pipe. Degrade to null — but first reap what we can
+                // and CUT OUR READ ENDS: disposing the base streams aborts the blocked ReadToEnd in
+                // ~20ms (review-measured; the readers' catches swallow the ObjectDisposedException).
+                // Without this, every degraded call leaked 2 blocked threads + 2 pipe handles for
+                // the foreign holder's lifetime — a slow leak on a long-running server.
+                try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                try { p.StandardOutput.BaseStream.Dispose(); } catch { /* aborting blocked read */ }
+                try { p.StandardError.BaseStream.Dispose(); } catch { /* aborting blocked read */ }
+                return null;
             }
             return p.ExitCode == 0 ? stdout : null;
         }

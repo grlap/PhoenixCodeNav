@@ -176,19 +176,13 @@ public class Batch5GitRefreshTests
 
     private static (int Code, string Output) Git(string dir, string args)
     {
-        var psi = new ProcessStartInfo("git", args)
-        {
-            WorkingDirectory = dir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        using var p = Process.Start(psi)!;
-        string outp = p.StandardOutput.ReadToEnd();
-        _ = p.StandardError.ReadToEnd();
-        p.WaitForExit(20000);
-        return (p.ExitCode, outp);
+        // Routed through the hang-proof runner (review: this helper had the exact pre-hotfix
+        // ReadToEnd-before-WaitForExit shape AND runs index-refreshing commands like `add -A`,
+        // which DO consult fsmonitor — on a dev machine with global core.fsmonitor=true the spawned
+        // daemon would inherit the pipe and hang the entire suite).
+        string? outp = GitInfo.RunProcess("git", dir,
+            "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args, waitMs: 20000);
+        return outp is null ? (1, "") : (0, outp);
     }
 
     private static void GitInit(string dir)
