@@ -226,7 +226,36 @@ public sealed partial class NavigationTools
         // bounded unscoped probe turns "0 hits" into "0 HERE, but they exist THERE" or an honest
         // "absent everywhere". Only on a first-page total dead end, so the probe costs nothing normally.
         object? elsewhere = null;
+        object? didYouMean = null;
         string? note = null;
+        // Token-VARIANT probe (field: searched 'Mode4', the code says 'Mode 4' -> 0 hits, agent fell
+        // back to grep). Probes the split (Mode4 -> "Mode 4") and joined ("Mode 4" -> Mode4) forms; a
+        // hit is SUGGESTED via didYouMean, never silently substituted. Called from EVERY zero-precise
+        // first-page branch — review showed the join direction is starved if gated to total dead ends
+        // only (common tokens co-occur across lines in any real repo, landing in the co-occur or
+        // partial-leads branches instead). Counts are hedged: the probe grades <=100 candidate files.
+        void ProbeVariants(bool replaceNote)
+        {
+            foreach (var variant in new[] { QueryVariants.SplitVariant(query), QueryVariants.JoinVariant(query) })
+            {
+                if (variant is null) continue;
+                var vp = q.SearchTextGraded(variant, 5, new IndexQueries.TextFilter(IncludeGenerated: true),
+                    maxCandidateFiles: 100, offset: 0, partialsMode: "never");
+                if (vp.TotalPrecise > 0)
+                {
+                    didYouMean = new
+                    {
+                        query = variant,
+                        preciseCount = vp.TotalPrecise,
+                        samplePaths = vp.Hits.Select(h => h.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToList(),
+                    };
+                    string msg = $"the variant '{variant}' has at least {vp.TotalPrecise} precise line(s) in the probed candidates (see didYouMean) — retry with that query"
+                        + (vp.Hits.All(h => h.IsGenerated) ? " with includeGenerated:true (the probe hits are all in generated files)" : "") + ".";
+                    note = replaceNote ? $"No file contains all query tokens together, but {msg}" : $"{note} Also: {msg}";
+                    break;
+                }
+            }
+        }
         if (result.TotalPrecise == 0 && result.TotalPartial == 0 && offset == 0)
         {
             bool scoped = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 } || firstPartyOnly
@@ -251,7 +280,7 @@ public sealed partial class NavigationTools
                     // "Outside your filters" covers every filter, not just pathGlob: a samplePath INSIDE
                     // the caller's glob means scope/lang/project/excludePath excluded it, not the glob.
                     note = scoped
-                        ? $"0 hits within your filters, but {probe.TotalPrecise} precise line(s) exist outside them (see elsewhere.samplePaths; a sample inside your pathGlob means a different filter — scope/lang/project/excludePath — excluded it) — widen or relax filters."
+                        ? $"0 hits within your filters, but at least {probe.TotalPrecise} precise line(s) exist outside them (see elsewhere.samplePaths; a sample inside your pathGlob means a different filter — scope/lang/project/excludePath — excluded it) — widen or relax filters."
                           + (probeAllGenerated ? " The probe hits are all in generated files — pass includeGenerated:true." : "")
                         : "The probe found matches only in generated files — pass includeGenerated:true.";
                 }
@@ -266,18 +295,21 @@ public sealed partial class NavigationTools
                         samplePaths = probe.FilesMatchedAcrossLines.Take(3).ToList(),
                     };
                     note = $"No single line in the probed candidates has all query tokens, but they co-occur across lines in {probe.FilesMatchedAcrossLines.Count} file(s) (see elsewhere.samplePaths) — drop a token or retry with partials:'always'{(scoped ? " without your filters" : "")}.";
+                    ProbeVariants(replaceNote: false); // a variant with PRECISE lines beats cross-line leads
                 }
                 else
                 {
                     // Provably index-wide: an FTS AND over all files matched nothing (the inner LIMIT
                     // truncates results, not the match), so no file holds all tokens together.
                     note = "No file contains all query tokens together (whole-word: 'Batch' does not match 'Batching'). Check spelling, drop a token, try search_symbol match='substring' for identifiers, or grep for non-C# file types.";
+                    ProbeVariants(replaceNote: true);
                 }
             }
         }
         else if (result.TotalPrecise == 0 && result.TotalPartial > 0 && mode == "never")
         {
             note = $"0 precise lines; {result.TotalPartial} weaker cross-line partial lead(s) exist — retry with partials:'always'.";
+            if (offset == 0) ProbeVariants(replaceNote: false);
         }
         else if (result.TotalPrecise >= 1000 && offset == 0)
         {
@@ -319,6 +351,7 @@ public sealed partial class NavigationTools
             }),
             filesMatchedAcrossLines = acrossLines,
             elsewhere, // dead-end redirect: where matches DO exist when the filtered result is empty
+            didYouMean, // dead-end token-form suggestion (Mode4 -> "Mode 4"); a suggestion, never a substitution
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
             truncated,
             // Contextual, not verbatim (feedback: the fixed explainer was duplicated token waste; the
@@ -650,7 +683,7 @@ public sealed partial class NavigationTools
     [McpServerTool(Name = "search_symbol")]
     [Description("Find declared symbols by name across the workspace (types, methods, properties...). Prefer this over search_text for anything that is a code identifier. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored third-party source). Hits carry a best-effort 'orphaned' flag (present only when true) for files in no project's compile set — likely dead code the compiler never builds.")]
     public string SearchSymbol(
-        [Description("Symbol name. Match behavior set by 'match'.")] string query,
+        [Description("Symbol name. Match behavior set by 'match'. Empty (or '*') with a 'namespace' or 'pathGlob' ENUMERATES that scope's symbols instead — kind-filterable, paged.")] string query = "",
         [Description("Comma-separated kind filter: class,interface,struct,record,enum,delegate,method,constructor,property,field,event,enum_member. Empty = all.")] string? kinds = null,
         [Description("'auto' (exact, then prefix, then substring), 'exact', 'prefix', or 'substring'.")] string match = "auto",
         [Description("Include symbols in generated files (default false).")] bool includeGenerated = false,
@@ -669,7 +702,25 @@ public sealed partial class NavigationTools
 
         List<SymbolHit> hits;
         string effectiveMatch = match;
-        if (match == "auto" && cursorMode is "exact" or "prefix" or "substring")
+        if (string.IsNullOrWhiteSpace(query) || query.Trim() == "*")
+        {
+            // Enumeration mode (field evidence: an agent passed kinds+namespace with no name expecting
+            // the namespace's classes, got a silent [] and had to guess a name). An empty name within a
+            // namespace/pathGlob scope lists that scope; without a scope it is an explicit error —
+            // a silent empty result is the one answer that helps nobody.
+            if (!(@namespace is { Length: > 0 } || pathGlob is { Length: > 0 }))
+            {
+                return Json.Serialize(new
+                {
+                    error = "bad_request",
+                    detail = "An empty name enumerates a scope — provide 'namespace' or 'pathGlob' (optionally 'kinds').",
+                    meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+                });
+            }
+            hits = q.SearchSymbols("", "prefix", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+            effectiveMatch = "enumerate";
+        }
+        else if (match == "auto" && cursorMode is "exact" or "prefix" or "substring")
         {
             // Continue the mode resolved on page 1. Re-running the exact->prefix->substring ladder on a
             // later page fails: the fallback is gated to offset==0, so exact-at-offset returns [] and the
