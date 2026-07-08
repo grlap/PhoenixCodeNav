@@ -153,18 +153,20 @@ public sealed partial class NavigationTools
         [Description("Opaque cursor from a previous call to fetch the next page.")] string? cursor = null)
     {
         if (NotReady() is { } notReady) return notReady;
-        (limit, int offset) = Page(limit, cursor);
+        (limit, int offset, _) = Page(limit, cursor);
         using var q = _manager.OpenQueries();
         var excludes = excludePath is { Length: > 0 } ex ? new[] { ex } : null;
         var files = q.FindFiles(nameOrGlob, limit + 1, excludes, offset);
-        string? next = files.Count > limit ? $"o:{offset + limit}" : null;
-        if (next is not null) files.RemoveAt(files.Count - 1);
+        bool hadMore = files.Count > limit;
+        if (hadMore) files.RemoveAt(files.Count - 1);
 
         var meta = Meta.From(_manager.Health(), "indexed", "text");
+        // nextCursor resumes at offset + the count actually RETURNED: the byte-budget shrink drops the
+        // page tail (keeping a prefix), so a fixed offset+limit would skip the dropped items (bug e2q).
         return Json.WithListBudget(files, (items, truncated) => new
         {
             files = items.Select(f => new { f.Path, sizeBytes = f.Size, lines = f.LineCount, f.IsGenerated }),
-            nextCursor = next,
+            nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
             truncated,
             meta,
         });
@@ -189,7 +191,7 @@ public sealed partial class NavigationTools
         [Description("Opaque cursor from a previous call.")] string? cursor = null)
     {
         if (NotReady() is { } notReady) return notReady;
-        (limit, int offset) = Page(limit, cursor);
+        (limit, int offset, _) = Page(limit, cursor);
         // Fail-safe: an unrecognized value falls back to the precise-only default, not the more
         // permissive "auto" — a typo must not silently reintroduce the noisy partial bucket.
         string mode = partials switch { "never" or "auto" or "always" => partials, _ => "never" };
@@ -205,8 +207,8 @@ public sealed partial class NavigationTools
             ExcludePaths: BuildExcludes(excludePath, firstPartyOnly));
         var result = q.SearchTextGraded(query, limit + 1, filter, maxCandidateFiles: 300, offset: offset, partialsMode: mode, ctxBefore: ctxBefore, ctxAfter: ctxAfter);
         var hits = result.Hits;
-        string? next = hits.Count > limit ? $"o:{offset + limit}" : null;
-        if (next is not null) hits.RemoveAt(hits.Count - 1);
+        bool hadMore = hits.Count > limit;
+        if (hadMore) hits.RemoveAt(hits.Count - 1);
 
         // Only surface the file-level "tokens co-occur but not on one line" signal when the
         // page shows no precise hits — that is exactly when it changes the caller's read.
@@ -248,7 +250,7 @@ public sealed partial class NavigationTools
                 noise = IndexQueries.IsVendorPath(t.FilePath) ? true : (bool?)null, // under a vendored/generated dir
             }),
             filesMatchedAcrossLines = acrossLines,
-            nextCursor = next,
+            nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
             truncated,
             note = "Whole-word, token-based (not regex): 'Batch' does not match 'Batching'. 'precise' = all tokens on the line (default); 'partial' (opt-in via partials='always') = tokens co-occur in the file, not one line. Add context for surrounding lines; use grep for regex or non-C# files.",
             meta,
@@ -513,14 +515,22 @@ public sealed partial class NavigationTools
         [Description("Opaque cursor from a previous call.")] string? cursor = null)
     {
         if (NotReady() is { } notReady) return notReady;
-        (limit, int offset) = Page(limit, cursor);
+        (limit, int offset, string? cursorMode) = Page(limit, cursor);
         var kindList = SplitCsv(kinds);
         using var q = _manager.OpenQueries();
         var excludes = BuildExcludes(excludePath, firstPartyOnly);
 
         List<SymbolHit> hits;
         string effectiveMatch = match;
-        if (match == "auto")
+        if (match == "auto" && cursorMode is "exact" or "prefix" or "substring")
+        {
+            // Continue the mode resolved on page 1. Re-running the exact->prefix->substring ladder on a
+            // later page fails: the fallback is gated to offset==0, so exact-at-offset returns [] and the
+            // page comes back empty, losing the prefix/substring results (bug cli).
+            effectiveMatch = cursorMode;
+            hits = q.SearchSymbols(query, cursorMode, kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+        }
+        else if (match == "auto")
         {
             hits = q.SearchSymbols(query, "exact", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
             effectiveMatch = "exact";
@@ -551,15 +561,17 @@ public sealed partial class NavigationTools
                 hits = hits.Select(h => orphaned.Contains(h.FilePath) ? h with { IsOrphaned = true } : h).ToList();
         }
 
-        string? next = hits.Count > limit ? $"o:{offset + limit}" : null;
-        if (next is not null) hits.RemoveAt(hits.Count - 1);
+        bool hadMore = hits.Count > limit;
+        if (hadMore) hits.RemoveAt(hits.Count - 1);
 
         var meta = Meta.From(_manager.Health(), "indexed", "syntax");
         return Json.WithListBudget(hits, (items, truncated) => new
         {
             matchMode = effectiveMatch,
             symbols = items.Select(SymbolJson),
-            nextCursor = next,
+            // Carry the resolved mode so a later page continues it (bug cli); resume at the returned
+            // count so a byte-budget shrink doesn't skip the dropped tail (bug e2q).
+            nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}:{effectiveMatch}" : null,
             truncated,
             // Steer the follow-up (feedback: nothing nudged toward references after a symbol
             // hit). First page only — repeating it on cursored pages just burns budget.
@@ -1353,16 +1365,21 @@ public sealed partial class NavigationTools
         });
     }
 
-    private static (int Limit, int Offset) Page(int limit, string? cursor)
+    // Cursor is "o:<offset>" or, for a mode-carrying tool (search_symbol auto), "o:<offset>:<mode>".
+    private static (int Limit, int Offset, string? Mode) Page(int limit, string? cursor)
     {
         limit = Math.Clamp(limit, 1, 100);
         int offset = 0;
-        if (cursor is not null && cursor.StartsWith("o:", StringComparison.Ordinal) &&
-            int.TryParse(cursor[2..], out int parsed) && parsed > 0)
+        string? mode = null;
+        if (cursor is not null && cursor.StartsWith("o:", StringComparison.Ordinal))
         {
-            offset = parsed;
+            string rest = cursor[2..];
+            int colon = rest.IndexOf(':');
+            string offsetPart = colon < 0 ? rest : rest[..colon];
+            if (int.TryParse(offsetPart, out int parsed) && parsed > 0) offset = parsed;
+            if (colon >= 0 && colon + 1 < rest.Length) mode = rest[(colon + 1)..];
         }
-        return (limit, offset);
+        return (limit, offset, mode);
     }
 
     private static List<string>? SplitCsv(string? csv) =>
