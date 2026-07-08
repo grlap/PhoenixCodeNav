@@ -160,6 +160,19 @@ public class SemanticTests : IClassFixture<IndexFixture>, IDisposable
         Assert.NotEmpty(q.ImplementationCandidates("IClock", 50)); // a real interface still matches
     }
 
+    // The scoped member lookup that backs member-mode implementations: scope by container name so a
+    // hot member name isn't lost behind a global search cap, and nothing leaks from other types.
+    [Fact]
+    public void MembersNamedInContainersScopesByType()
+    {
+        using var q = _manager.OpenQueries();
+        Assert.Contains(q.MembersNamedInContainers("NotNull", new[] { "Guard" }, 50),
+            s => s.Container == "Guard" && s.Name == "NotNull");
+        Assert.Empty(q.MembersNamedInContainers("NotNull", System.Array.Empty<string>(), 50)); // no containers
+        Assert.Empty(q.MembersNamedInContainers("", new[] { "Guard" }, 50));                    // no name
+        Assert.Empty(q.MembersNamedInContainers("NotNull", new[] { "NoSuchTypeZz" }, 50));      // scoped out
+    }
+
     // The base-list heuristic is a TYPE operation; on a MEMBER target the fallback must not sweep in
     // every type whose base list merely contains the member name (was "worse than useless" noise).
     [Fact]

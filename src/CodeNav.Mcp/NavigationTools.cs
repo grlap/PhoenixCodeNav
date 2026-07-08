@@ -871,14 +871,15 @@ public sealed partial class NavigationTools
             List<SymbolHit> memberImpls = new();
             if (targetSym?.Container is { Length: > 0 } declType)
             {
-                // Key on (namespace, type name) — not the bare simple name — so a same-named member of
-                // an UNRELATED type in another namespace can't masquerade as an implementer's member.
-                var implementerTypes = q.ImplementationCandidates(declType, 100)
-                    .Select(t => (t.Ns ?? "", t.Name))
-                    .ToHashSet();
-                if (implementerTypes.Count > 0)
-                    memberImpls = q.SearchSymbols(lookupName, "exact", null, 500, includeGenerated: true)
-                        .Where(m => m.Container is { } c && implementerTypes.Contains((m.Ns ?? "", c)))
+                var implementers = q.ImplementationCandidates(declType, 100);
+                // Scope the member lookup to the implementer type NAMES (not a global name search that a
+                // 500-cap would truncate for a hot member like Create/Execute/Dispose), then refine by
+                // (namespace, container) so an unrelated same-named type can't masquerade as one.
+                var implementerKeys = implementers.Select(t => (t.Ns ?? "", t.Name)).ToHashSet();
+                var containerNames = implementers.Select(t => t.Name).ToList();
+                if (containerNames.Count > 0)
+                    memberImpls = q.MembersNamedInContainers(lookupName, containerNames, 200)
+                        .Where(m => implementerKeys.Contains((m.Ns ?? "", m.Container ?? "")))
                         .Take(50)
                         .ToList();
             }

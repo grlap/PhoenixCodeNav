@@ -541,6 +541,34 @@ public sealed class IndexQueries : IDisposable
 
     // ---------------------------------------------------------------- semantic-layer support
 
+    /// <summary>Members named <paramref name="memberName"/> whose declaring type is one of
+    /// <paramref name="containerNames"/> — scoped by container so a hot member name (Create, Execute,
+    /// Dispose) doesn't get lost behind a global name-search cap. Caller refines by namespace. Empty
+    /// on empty inputs.</summary>
+    public List<SymbolHit> MembersNamedInContainers(string memberName, IReadOnlyCollection<string> containerNames, int limit)
+    {
+        if (string.IsNullOrEmpty(memberName) || containerNames.Count == 0) return new();
+        var args = new List<(string, object)> { ("$m", memberName), ("$lim", limit) };
+        var placeholders = new List<string>();
+        int i = 0;
+        foreach (var c in containerNames.Distinct(StringComparer.Ordinal))
+        {
+            string p = $"$c{i++}";
+            placeholders.Add(p);
+            args.Add((p, c));
+        }
+        return Query(
+            $"""
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE s.name = $m COLLATE NOCASE AND s.container IN ({string.Join(",", placeholders)})
+            ORDER BY f.is_generated, f.path
+            LIMIT $lim
+            """,
+            ReadSymbol, args.ToArray());
+    }
+
     /// <summary>Types whose base list textually mentions the given name (heuristic implementations).</summary>
     public List<SymbolHit> ImplementationCandidates(string name, int limit)
     {
