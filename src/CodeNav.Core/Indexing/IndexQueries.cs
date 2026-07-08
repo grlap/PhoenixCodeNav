@@ -5,7 +5,7 @@ namespace CodeNav.Core.Indexing;
 public sealed record SymbolHit(
     long Id, string Kind, string Name, string? Ns, string? Container, string Signature,
     string Accessibility, int StartLine, int EndLine, bool IsPartial, string? AttrMarkers,
-    string FilePath, bool FileIsGenerated, long? ParentId);
+    string FilePath, bool FileIsGenerated, long? ParentId, bool IsOrphaned = false);
 
 public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated);
 
@@ -30,7 +30,7 @@ public sealed record ReferenceGroup(string Project, bool IsTestProject, int Coun
 
 public sealed record OverviewStats(
     long CsFiles, long TotalLines, long Symbols, long Projects, long LegacyProjects,
-    long SdkProjects, long TestProjects, long Solutions, long GeneratedFiles,
+    long SdkProjects, long TestProjects, long Solutions, long GeneratedFiles, long OrphanedFiles,
     string TfmBreakdown, string? IndexVersion, string? IndexedAtUtc);
 
 /// <summary>
@@ -823,6 +823,42 @@ public sealed class IndexQueries : IDisposable
 
     // ---------------------------------------------------------------- misc
 
+    /// <summary>Of the given workspace-relative paths, the subset in NO project's compile set — a
+    /// best-effort, syntactic "likely dead code" signal (the compile graph grep lacks), NOT a compiler
+    /// fact. It is OVER-inclusive: legacy projects whose sources are wildcard &lt;Compile&gt; includes,
+    /// shared projects (.shproj/.projitems), Directory.Build.props/.targets compile globs, and repo-root
+    /// projects all leave genuinely-compiled files with no compile_items, so a LIVE file can appear here.
+    /// Conversely a project that fails to PARSE still glob-attributes its whole subtree, so dead code
+    /// under it will NOT appear. Treat membership as "worth checking", not proof — and never hide results
+    /// on it (that could bury live code); absence is likewise not proof a file compiles.</summary>
+    public HashSet<string> OrphanedPaths(IReadOnlyCollection<string> paths)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        if (paths.Count == 0) return result;
+        foreach (var chunk in paths.Distinct(StringComparer.Ordinal).Chunk(400))
+        {
+            var args = new List<(string, object)>();
+            var placeholders = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                string p = $"$p{i}";
+                placeholders.Add(p);
+                args.Add((p, chunk[i]));
+            }
+            foreach (var path in Query(
+                $"""
+                SELECT f.path FROM files f
+                WHERE f.path IN ({string.Join(",", placeholders)})
+                  AND NOT EXISTS (SELECT 1 FROM compile_items ci WHERE ci.file_id = f.id)
+                """,
+                r => r.GetString(0), args.ToArray()))
+            {
+                result.Add(path);
+            }
+        }
+        return result;
+    }
+
     public string? ContentByPath(string filePath)
     {
         var rows = Query(
@@ -857,6 +893,9 @@ public sealed class IndexQueries : IDisposable
             TestProjects: Scalar("SELECT COUNT(*) FROM projects WHERE is_test=1"),
             Solutions: Scalar("SELECT COUNT(*) FROM solutions"),
             GeneratedFiles: Scalar("SELECT COUNT(*) FROM files WHERE is_generated=1"),
+            // Indexed .cs files in no project's compile set — a best-effort "likely dead code" count
+            // (see OrphanedPaths: over-counts, since wildcard/shared/props <Compile> includes aren't expanded).
+            OrphanedFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='cs' AND NOT EXISTS (SELECT 1 FROM compile_items ci WHERE ci.file_id = files.id)"),
             TfmBreakdown: tfms,
             IndexVersion: version,
             IndexedAtUtc: at);

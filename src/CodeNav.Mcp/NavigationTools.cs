@@ -114,6 +114,10 @@ public sealed partial class NavigationTools
             totalLines = stats.TotalLines,
             symbols = stats.Symbols,
             generatedFiles = stats.GeneratedFiles,
+            // .cs files in no project's compile set — a best-effort "likely dead code" count (the
+            // compile-graph signal grep lacks). Over-counts: wildcard/shared/props <Compile> includes
+            // aren't expanded, so some live files are included. Per hit: search_symbol's orphaned flag.
+            orphanedFiles = stats.OrphanedFiles,
             targetFrameworks = stats.TfmBreakdown,
             // Vendored/generated directory globs detected in the index — pass to search_symbol /
             // search_text excludePath (or firstPartyOnly) to drop third-party noise. [] when none.
@@ -510,6 +514,17 @@ public sealed partial class NavigationTools
         else
         {
             hits = q.SearchSymbols(query, match, kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+        }
+
+        // Flag hits in files that no project compiles — a best-effort "likely dead code" signal grep
+        // can't give (phoenix has the compile graph). Additive ONLY: the hit is still returned and
+        // tagged orphaned:true, never hidden. The signal over-counts (wildcard/shared/props <Compile>
+        // includes aren't expanded), so hiding on it could bury live code — hence flag, don't filter.
+        if (hits.Count > 0)
+        {
+            var orphaned = q.OrphanedPaths(hits.Select(h => h.FilePath).ToList());
+            if (orphaned.Count > 0)
+                hits = hits.Select(h => orphaned.Contains(h.FilePath) ? h with { IsOrphaned = true } : h).ToList();
         }
 
         string? next = hits.Count > limit ? $"o:{offset + limit}" : null;
@@ -1292,6 +1307,10 @@ public sealed partial class NavigationTools
         // Best-effort "this hit lives under a vendored/generated dir" signal (only present when
         // true). Lets a caller spot third-party noise without firstPartyOnly, or excludePath it.
         noise = IndexQueries.IsVendorPath(s.FilePath) ? true : (bool?)null,
+        // Best-effort "likely dead code": this file is in no project's compile set (only present when
+        // true) — the compile-graph signal grep lacks, but syntactic/over-inclusive (wildcard, shared,
+        // and props <Compile> includes aren't expanded), so treat as "worth checking", not proof.
+        orphaned = s.IsOrphaned ? true : (bool?)null,
         attributes = s.AttrMarkers,
     };
 
