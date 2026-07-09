@@ -58,6 +58,63 @@ public class Batch26AssemblyRefEdgeTests
         finally { Cleanup(root); }
     }
 
+    // Review (deferred pass, F1): a same-name PAIR member referencing its own assembly name
+    // passed the row-id self-guard (different rows) and minted a name-level SELF-edge —
+    // DependentClosure then returned the project as its own dependent (contract: "target
+    // excluded") and impact inflated its blast radius.
+    [Fact]
+    public void PairMemberReferencingItsOwnAssemblyNameMintsNoSelfEdge()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-selfedge").FullName;
+        try
+        {
+            // BOTH twins carry the self-name reference: pick-first resolves to ONE row, so
+            // whichever row is first, the OTHER twin's reference passes a row-id-only guard —
+            // arming the test regardless of scan order (the single-referencer variant passed
+            // vacuously when the referencing row happened to be the map winner).
+            foreach (var proj in new[] { "UtilsOld", "UtilsNew" })
+            {
+                string dir = Path.Combine(root, proj);
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, $"{proj}.csproj"),
+                    """
+                    <Project Sdk="Microsoft.NET.Sdk">
+                      <PropertyGroup>
+                        <TargetFramework>net9.0</TargetFramework>
+                        <AssemblyName>Utils</AssemblyName>
+                      </PropertyGroup>
+                      <ItemGroup>
+                        <Reference Include="Utils"><HintPath>../Common/Utils.dll</HintPath></Reference>
+                      </ItemGroup>
+                    </Project>
+                    """);
+                File.WriteAllText(Path.Combine(dir, "A.cs"), $"namespace {proj} {{ class A {{ }} }}");
+            }
+            string consumer = Path.Combine(root, "Consumer");
+            Directory.CreateDirectory(consumer);
+            File.WriteAllText(Path.Combine(consumer, "Consumer.csproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <Reference Include="Utils"><HintPath>../Common/Utils.dll</HintPath></Reference>
+                  </ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(consumer, "B.cs"), "namespace Consumer { class B { } }");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var q = new IndexQueries(dbPath);
+            Assert.DoesNotContain(q.ProjectGraph("Utils", 1, "downstream"),
+                e => e.ToProject.Equals("Utils", StringComparison.OrdinalIgnoreCase));
+            var dependents = q.DependentClosure("Utils");
+            Assert.Contains("Consumer", dependents);
+            Assert.DoesNotContain("Utils", dependents); // the documented contract: target excluded
+        }
+        finally { Cleanup(root); }
+    }
+
     // Field 0.7.4 extended: impact("IPartnerFrameworkInterface") reported
     // transitiveDependentProjects: 0 against 91 referencing projects — the ORPHANED declaration
     // sorted first, ProjectsContaining(orphanedPath) was empty, owner stayed null. impact (and
@@ -171,6 +228,16 @@ public class Batch26AssemblyRefEdgeTests
                     var baseList = Parse(toolsGold.References(name: "IPartnerContract", usageKinds: "baseList", timeoutMs: 90000));
                     Assert.Equal("exact", baseList.GetProperty("meta").GetProperty("confidence").GetString());
                     Assert.Equal(2, baseList.GetProperty("totalReferences").GetInt32()); // one per implementer, never 2x
+
+                    // Review F2: a FILTER-caused zero (usageKinds:'call' on an interface whose
+                    // only usages are baseList/typeMention) is an honest zero with full coverage —
+                    // the loading-gap note must NOT fire ("raise maxProjects" cannot help; the
+                    // namers it would cite are exactly what the filter excluded).
+                    var filteredZero = Parse(toolsGold.References(name: "IPartnerContract", usageKinds: "call", timeoutMs: 90000));
+                    Assert.Equal("exact", filteredZero.GetProperty("meta").GetProperty("confidence").GetString());
+                    Assert.Equal(0, filteredZero.GetProperty("totalReferences").GetInt32());
+                    Assert.False(filteredZero.TryGetProperty("note", out _),
+                        "filter-caused zero must not carry the loading-gap note");
 
                     // type_hierarchy, cold on its own service: SEEDED discovery (field: 8 exact
                     // hits with coverage 1/1 were residue from a prior implementations call — a

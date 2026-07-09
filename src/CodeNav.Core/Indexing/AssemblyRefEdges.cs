@@ -76,7 +76,12 @@ internal static class AssemblyRefEdges
                 // speculative and review-reproduced as a false-edge source (Include="VendorLib"
                 // whose HintPath file name happens to match a workspace project).
                 if (!byName.TryGetValue(assembly, out long toId)) continue; // not an in-workspace assembly
-                if (toId == fromId) continue;                                // self-reference guard
+                // Self-guard at NAME level, not row level (review): a same-name pair member
+                // referencing its own assembly name would pass a row-id check (different rows)
+                // and mint a name-level SELF-edge — DependentClosure then returns the project as
+                // its own dependent (contract: "target excluded") and impact inflates its count.
+                if (toId == fromId) continue;
+                if (string.Equals(assembly, p.Name, StringComparison.OrdinalIgnoreCase)) continue;
                 store.InsertProjectRef(tx, fromId, toId);
                 recovered++;
             }

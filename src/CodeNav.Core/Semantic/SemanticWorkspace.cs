@@ -238,9 +238,11 @@ public sealed class SemanticWorkspace : IDisposable
             // common folder, not the project — the recovered assembly-ref edge supplies the wire),
             // SKIP the metadata dll: the name binds to the SOURCE symbol. The dll ALONE binds
             // consumers to a METADATA symbol that never matches the queried source declaration —
-            // the field's 8-implementers-found-0 trap. Keyed on refNames, NOT on _loaded: for an
-            // AMBIGUOUS assembly name no edge exists, so a same-named project merely being loaded
-            // must not strip the dll (that would leave the consumer with NEITHER binding).
+            // the field's 8-implementers-found-0 trap. Keyed on refNames, NOT on _loaded: only a
+            // WIRED ProjectReference justifies dropping the dll — a same-named project that is
+            // merely loaded but not wired (edge missing, load-order miss, cycle-guard skip) must
+            // keep its dll or the consumer is left with NEITHER binding. (Collided names DO
+            // produce edges since Batch 29 — the wired-only keying is what stays load-bearing.)
             // Defense-in-depth note: with BOTH references present Roslyn empirically prefers the
             // source project in every shape we reproduced (equal and differing versions), so this
             // skip is not independently test-pinnable — it exists so we never depend on that

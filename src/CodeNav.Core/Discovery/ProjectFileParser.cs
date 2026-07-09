@@ -49,7 +49,7 @@ public static class ProjectFileParser
     // AssemblyRefs; QualityTools is the classic MSTest v1 assembly.
     private static readonly string[] TestAssemblyMarkers =
     {
-        "nunit.framework", "xunit", "xunit.core",
+        "nunit.framework", "xunit", "xunit.core", "xunit.assert",
         "Microsoft.VisualStudio.QualityTools.UnitTestFramework",
         "Microsoft.VisualStudio.TestPlatform.TestFramework",
     };

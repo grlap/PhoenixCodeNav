@@ -44,8 +44,12 @@ public static class IndexBuilder
     /// unrelated csproj change, because the delta path hash-skips untouched project files.
     /// v7: isTest classification — no-dot "Tests" name suffix + BINARY-referenced test
     /// frameworks (nunit.framework/xunit/MSTest via &lt;Reference&gt;+HintPath) now count
-    /// (field: HubServiceTests carried [TestFixture] types yet filtered as production).</summary>
-    public const string SchemaVersion = "7";
+    /// (field: HubServiceTests carried [TestFixture] types yet filtered as production).
+    /// v8: review fixes — name-level self-edge guard (a pair member referencing its own
+    /// assembly name minted X-&gt;X, inflating dependents), NAME-uniform is_test across
+    /// same-AssemblyName pair rows (half-promotion made the answer scan-order-dependent),
+    /// xunit.assert marker.</summary>
+    public const string SchemaVersion = "8";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null)

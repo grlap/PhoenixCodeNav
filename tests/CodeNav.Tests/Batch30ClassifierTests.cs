@@ -168,4 +168,64 @@ public class Batch30ClassifierTests
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
+
+    // Review (deferred pass, F3): R3 promoted per ROW, so a same-AssemblyName PAIR with an
+    // incoming ProjectReference to one twin was HALF-promoted — and the name-keyed flags map
+    // (last-row-wins) made the NAME's classification depend on scan order vs which twin carried
+    // the edge (review-reproduced: identical workspaces, opposite answers). is_test is now
+    // NAME-uniform: if any row of a name classifies, every row does.
+    [Fact]
+    public void SameNamePairClassifiesUniformlyRegardlessOfWhichTwinIsReferenced()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-istest-pair").FullName;
+        try
+        {
+            foreach (var proj in new[] { "TeamHub", "TeamHub.NetNew" })
+            {
+                string dir = Path.Combine(root, proj);
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, $"{proj}.csproj"),
+                    """
+                    <Project Sdk="Microsoft.NET.Sdk">
+                      <PropertyGroup>
+                        <TargetFramework>net9.0</TargetFramework>
+                        <AssemblyName>TeamHubFixtures</AssemblyName>
+                      </PropertyGroup>
+                    </Project>
+                    """);
+                File.WriteAllText(Path.Combine(dir, "Fixtures.cs"),
+                    $"namespace {proj.Replace('.', '_')} {{ [NUnit.Framework.TestFixture] public class Fixtures {{ }} }}");
+            }
+            // The consumer references the LAST-inserted twin (TeamHub.NetNew sorts after TeamHub),
+            // the direction the review reproduced as flipping the name-level answer to FALSE.
+            string consumer = Path.Combine(root, "OtherTests");
+            Directory.CreateDirectory(consumer);
+            File.WriteAllText(Path.Combine(consumer, "OtherTests.csproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                  <ItemGroup><ProjectReference Include="../TeamHub.NetNew/TeamHub.NetNew.csproj" /></ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(consumer, "C.cs"), "namespace OtherTests { class C { } }");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var q = new CodeNav.Core.Indexing.IndexQueries(dbPath);
+            Assert.True(q.AllProjectTestFlags()["TeamHubFixtures"],
+                "the pair is ONE assembly — classification must not depend on which twin carries the edge");
+            // ROW-level uniformity, order-independent (the name-collapse assert above can pass by
+            // last-row-wins luck): each twin owns its own Fixtures.cs, so per-row flags are
+            // observable through ProjectsContaining — BOTH rows must be test.
+            Assert.True(q.ProjectsContaining("TeamHub/Fixtures.cs").Single().IsTest,
+                "leaf twin row must be test");
+            Assert.True(q.ProjectsContaining("TeamHub.NetNew/Fixtures.cs").Single().IsTest,
+                "REFERENCED twin row must be test too (name-uniform is_test)");
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
 }

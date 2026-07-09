@@ -286,7 +286,28 @@ public sealed class IndexStore : IDisposable
                           WHERE ci.project_id = projects.id AND f.has_test_attrs = 1)
               AND NOT EXISTS (SELECT 1 FROM project_refs r WHERE r.to_id = projects.id)
             """;
-        return cmd.ExecuteNonQuery();
+        int promoted = cmd.ExecuteNonQuery();
+        // NAME-level uniformity (review): a same-AssemblyName pair is ONE assembly to every
+        // name-keyed reader — but per-row classification could differ (a referenced twin fails
+        // the leaf guard; parse-time R1/R2 can diverge between twins), and AllProjectTestFlags'
+        // last-row-wins collapse made the NAME's answer depend on scan order vs which twin
+        // carried the incoming edge (review-reproduced: identical workspaces, opposite
+        // classification). If ANY row of a name classifies as test, every row of that name does.
+        // NAME-level uniformity (review): a same-AssemblyName pair is ONE assembly to every
+        // name-keyed reader — but per-row classification could differ (a referenced twin fails
+        // the leaf guard; parse-time R1/R2 can diverge between twins), and AllProjectTestFlags'
+        // last-row-wins collapse made the NAME's answer depend on scan order vs which twin
+        // carried the incoming edge (review-reproduced: identical workspaces, opposite
+        // classification). If ANY row of a name classifies as test, every row of that name does.
+        using var uniform = _write.CreateCommand();
+        uniform.Transaction = tx;
+        uniform.CommandText = """
+            UPDATE projects SET is_test = 1
+            WHERE is_test = 0
+              AND name COLLATE NOCASE IN (SELECT name FROM projects WHERE is_test = 1)
+            """;
+        promoted += uniform.ExecuteNonQuery();
+        return promoted;
     }
 
     public void InsertPackageRef(SqliteTransaction tx, long projectId, string package, string version) =>

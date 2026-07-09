@@ -49,7 +49,7 @@ public sealed partial class NavigationTools
                 new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic; confidenceNote only when heuristic (tier meanings live in confidenceModel here); meta.statusNote explains refreshing/stale; meta.build stamps every result meta with version+commit" },
                 new { id = "hierarchy-ranking", summary = "implementations ranked concrete-first with derivation 'via' + a likelyImplementation flag. By design these appear CONDITIONALLY: likelyImplementation only when exactly ONE concrete implementation exists; 'via' only when a type implements the queried interface INDIRECTLY through a base — a flat N-implementer set legitimately shows neither" },
                 new { id = "implementer-completeness", summary = "implementations member-mode: the syntactic fallback reports implementerCount + omittedImplementers (silent when none omitted); the exact path reports coverage instead" },
-                new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (silent when compiled; Include globs expanded, Remove honored — residual gaps: .projitems/props globs/Conditions); repo_overview.orphanedFiles; semantic resolution never targets an uncompiled declaration" },
+                new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (silent when compiled; Include globs expanded, Remove honored — residual gaps: .projitems/props globs/Conditions); repo_overview.orphanedFiles; semantic resolution never targets an uncompiled declaration; impact and context_pack likewise prefer COMPILED declarations for ownership (an orphaned copy sorting first no longer zeroes transitiveDependentProjects)" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is LOGGED, never silent" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
                 new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + didYouMean token variants + contextual notes" },
@@ -60,7 +60,7 @@ public sealed partial class NavigationTools
                 new { id = "arity-exact-partials", summary = "outline partialFiles match generic arity — partial Foo and partial Foo<T> cross-link only their own halves" },
                 new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. 'partial' is DELIBERATELY not in this string: it has its own isPartial field on every symbol node (plus partialFiles cross-links on outline types). Index schema v4 (first run after deploy rebuilds the index)" },
                 new { id = "deadline-honesty", summary = "semantic references/implementations/definition/type_hierarchy report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout. references counts are physical-site deduped (one count per project+path+line+kind — twin-declaration types no longer double-count); coverage carries solutionProjects so hits from previously-resident projects are legible" },
-                new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Assembly-name collisions (net-old/net-new csproj pairs) resolve to a name-level edge — the graph and the semantic workspace are name-keyed, so paired declarers keep all their consumer edges. Index schema v5 (first run after deploy rebuilds). meta.indexSchema now stamped on every response" },
+                new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Assembly-name collisions (net-old/net-new csproj pairs) resolve to a name-level edge — the graph and the semantic workspace are name-keyed, so paired declarers keep all their consumer edges (schema v6+; edge recovery itself since v5). meta.indexSchema stamped on every response" },
                 new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and every index_building error body carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal (once the scan knows it), elapsedMs} — monotonic counters, no fabricated ETA or percent (derive % from the counters); absent when ready, and background refreshes never show a cold-build bar" },
             },
             tools = new[]
@@ -1333,15 +1333,25 @@ public sealed partial class NavigationTools
                     // Field 0.7.2 P2: an exact ZERO when the base-list index KNOWS implementers is
                     // almost certainly a loading gap, not dead code — say so, actionably. (The
                     // honesty posture says "0 is a fact", but here the tool holds contrary data.)
+                    // GUARDED (review): the note must not fire on FILTER-caused zeros — with
+                    // usageKinds:'call' the base-list namers it would cite are exactly the
+                    // baseList usages the filter excluded, and "raise maxProjects" cannot help.
+                    // Same for publicConsumersOnly/includeTests. And the advice is only honest
+                    // when coverage was actually BOUNDED (skipped/failed/under-loaded) — post-
+                    // seeds, an unfiltered zero with namers and full coverage shouldn't occur.
                     string? zeroNote = null;
-                    if (result.TotalLocations == 0)
+                    bool zeroUnfiltered = kindSet is null && !publicConsumersOnly && includeTests;
+                    bool coverageBounded = result.SkippedCandidateProjects.Count > 0
+                        || result.Coverage.FailedProjects.Count > 0
+                        || result.Coverage.LoadedProjects < result.Coverage.RequestedProjects;
+                    if (result.TotalLocations == 0 && zeroUnfiltered && coverageBounded)
                     {
                         using var qz = _manager.OpenQueries();
                         string probeName = name ?? hint ?? "";
                         int baseListNamers = probeName.Length > 0 ? qz.ImplementationCandidates(probeName, 5).Count : 0;
                         if (baseListNamers > 0)
                         {
-                            zeroNote = $"0 exact references, but {(baseListNamers >= 5 ? "5+" : baseListNamers.ToString())} indexed types name '{probeName}' in their base lists (see implementations) — if coverage shows few loaded projects, raise maxProjects or scope with pathGlob.";
+                            zeroNote = $"0 exact references, but {(baseListNamers >= 5 ? "5+" : baseListNamers.ToString())} indexed types name '{probeName}' in their base lists (see implementations) — coverage was bounded (see skipped/failed); raise maxProjects or scope with pathGlob.";
                         }
                     }
                     bool exhausted = result.DeadlineExhausted;
