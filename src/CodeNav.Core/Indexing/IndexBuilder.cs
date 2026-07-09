@@ -42,9 +42,11 @@ public static class IndexBuilder
     /// 0.7.2 regression: paired declarers lost every consumer edge) — same tables, new edge
     /// content again; without this bump a deployed v5 index keeps the severed graph until an
     /// unrelated csproj change, because the delta path hash-skips untouched project files.
-    /// v7: isTest classification — no-dot "Tests" name suffix + BINARY-referenced test
-    /// frameworks (nunit.framework/xunit/MSTest via &lt;Reference&gt;+HintPath) now count
-    /// (field: HubServiceTests carried [TestFixture] types yet filtered as production).
+    /// v7: isTest classification — BINARY-referenced test frameworks (nunit.framework/xunit/
+    /// MSTest via &lt;Reference&gt;+HintPath) now count, plus compiled-test-attribute leaf
+    /// promotion; name matching stays dotted-suffix-only (the no-dot loosening was REJECTED —
+    /// TestRoute counterexample). Field: HubServiceTests carried [TestFixture] types yet
+    /// filtered as production.
     /// v8: review fixes — name-level self-edge guard (a pair member referencing its own
     /// assembly name minted X-&gt;X, inflating dependents), NAME-uniform is_test across
     /// same-AssemblyName pair rows (half-promotion made the answer scan-order-dependent),

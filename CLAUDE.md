@@ -58,14 +58,44 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 <!-- END BEADS INTEGRATION -->
 
 
+## Commit Discipline — NEVER check in without review
+
+**Every commit requires an adversarial review round FIRST. No exceptions, no self-granted
+risk-tier exemptions.** "Just docs", "just tests", "trivial cleanup" do not qualify for a
+skip — this session's history is the proof: batches that looked safe repeatedly carried real
+defects (a recovery path that silently dropped the file watcher; a diagnostic note giving
+wrong advice on filtered zeros; a test seam added to the hottest loop in the codebase). The
+discipline works precisely because it does not trust the author's risk assessment.
+
+The loop, in order — no step skipped or reordered:
+
+1. Implement.
+2. Tests, **reintroduction-verified**: temporarily re-break the code and prove the test goes
+   red, then restore. A test that never failed proves nothing.
+3. `dotnet build` at **0 warnings**; `dotnet test` green. Known flake:
+   `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` (watcher timing) — if it fires
+   in a full run, verify it passes isolated and note it.
+4. **Adversarial subagent review of the full uncommitted diff**, with empirical reproduction
+   required for findings. Findings → fix → verification round (same reviewer) until CLEAN.
+5. Only after CLEAN: commit. (Autonomous commit on a clean review was EXPLICITLY
+   pre-authorized by Greg for this repository's batch loop — "when review is clean, check-in
+   and let me know", reaffirmed 2026-07-09 — which is what lets it override the global
+   do-not-commit rule here; in any session where Greg has not affirmed this workflow, the
+   global rule wins and every commit needs his explicit word.
+   **Push always needs explicit per-changeset approval from Greg — no standing grant exists.**)
+6. Close/annotate beads in the same commit. Bump `BuildInfo.Version` when the tool surface or
+   a user-visible capability changes; bump `IndexBuilder.SchemaVersion` whenever the schema
+   **or the indexer's stored output** changes (it forces the rebuild deployments rely on —
+   edge content and classification results count as stored output).
+
+If the reviewer dies mid-pass (session limits), the batch is **not reviewed** — do not commit
+on a self-performed probe run; wait for capacity or ask Greg.
+
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+dotnet build          # must be 0 warnings
+dotnet test           # full suite; see known flake above
 ```
 
 ## Architecture Overview
