@@ -47,7 +47,7 @@ public sealed partial class NavigationTools
             features = new object[]
             {
                 new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic; confidenceNote only when heuristic (tier meanings live in confidenceModel here); meta.statusNote explains refreshing/stale; meta.build stamps every result meta with version+commit" },
-                new { id = "hierarchy-ranking", summary = "implementations ranked concrete-first with derivation 'via' + a likelyImplementation flag" },
+                new { id = "hierarchy-ranking", summary = "implementations ranked concrete-first with derivation 'via' + a likelyImplementation flag. By design these appear CONDITIONALLY: likelyImplementation only when exactly ONE concrete implementation exists; 'via' only when a type implements the queried interface INDIRECTLY through a base — a flat N-implementer set legitimately shows neither" },
                 new { id = "implementer-completeness", summary = "implementations member-mode: the syntactic fallback reports implementerCount + omittedImplementers (silent when none omitted); the exact path reports coverage instead" },
                 new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (silent when compiled; Include globs expanded, Remove honored — residual gaps: .projitems/props globs/Conditions); repo_overview.orphanedFiles; semantic resolution never targets an uncompiled declaration" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is LOGGED, never silent" },
@@ -58,8 +58,8 @@ public sealed partial class NavigationTools
                 new { id = "filter-honest-counts", summary = "references: totalReferences/totalCandidates, kinds, groups, and summary all honor includeTests (filtered BEFORE counting on both exact and indexed paths); linked multi-project files counted once; filtered summaries say 'test projects excluded' instead of a misleading '0 test'" },
                 new { id = "bounded-source-reads", summary = "source_context streams only the requested spans from disk (never whole-file reads); contextLines clamped; zero/negative span starts clamp to line 1" },
                 new { id = "arity-exact-partials", summary = "outline partialFiles match generic arity — partial Foo and partial Foo<T> cross-link only their own halves" },
-                new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. Index schema v4 (first run after deploy rebuilds the index)" },
-                new { id = "deadline-honesty", summary = "semantic references/implementations/definition report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout" },
+                new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. 'partial' is DELIBERATELY not in this string: it has its own isPartial field on every symbol node (plus partialFiles cross-links on outline types). Index schema v4 (first run after deploy rebuilds the index)" },
+                new { id = "deadline-honesty", summary = "semantic references/implementations/definition/type_hierarchy report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout. references counts are physical-site deduped (one count per project+path+line+kind — twin-declaration types no longer double-count); coverage carries solutionProjects so hits from previously-resident projects are legible" },
                 new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Ambiguous assembly names create no edge. Index schema v5 (first run after deploy rebuilds). meta.indexSchema now stamped on every response" },
                 new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and every index_building error body carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal (once the scan knows it), elapsedMs} — monotonic counters, no fabricated ETA or percent (derive % from the counters); absent when ready, and background refreshes never show a cold-build bar" },
             },
@@ -1265,7 +1265,7 @@ public sealed partial class NavigationTools
         [Description("Include usages in test projects (default true).")] bool includeTests = true,
         [Description("Include usages in generated files (default false).")] bool includeGenerated = false,
         [Description("Comma-separated usage-kind filter — SEMANTIC (exact) path only: call, construction, typeMention, attribute, nameof, xmldoc, usingDirective, baseList, typeof, other. Counts and groups honor it (e.g. 'call,construction' = real executions only).")] string? usageKinds = null,
-        [Description("Only usages OUTSIDE the symbol's own declaring project — the external/API-consumer view (semantic path only).")] bool publicConsumersOnly = false,
+        [Description("Only usages OUTSIDE the symbol's own declaring PROJECT (project-scoped, NOT accessibility-scoped — the name is about API blast radius, not access modifiers). The external-consumer view; semantic path only.")] bool publicConsumersOnly = false,
         [Description("Restrict candidate paths to this glob (supplying a path filter runs indexed candidates).")] string? pathGlob = null,
         [Description("Exclude candidate paths matching this glob, e.g. '3rdparty/**' (supplying a path filter runs indexed candidates).")] string? excludePath = null,
         [Description("Max candidate files scanned in indexed mode (default 500).")] int maxFiles = 500,
@@ -1590,6 +1590,10 @@ public sealed partial class NavigationTools
     {
         loadedProjects = c.LoadedProjects,
         requestedProjects = c.RequestedProjects,
+        // Field 0.7.0: SymbolFinder scans the WHOLE solution (including projects loaded by earlier
+        // calls), so hits can legitimately exceed the requested set — this makes that legible
+        // instead of "coverage 1/1 but 8 hits from 8 projects".
+        solutionProjects = c.SolutionProjects > 0 ? c.SolutionProjects : (int?)null,
         failedProjects = c.FailedProjects.Count > 0 ? c.FailedProjects : null,
         frameworkRefsAvailable = c.FrameworkRefsAvailable,
     };

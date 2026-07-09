@@ -149,6 +149,13 @@ public sealed partial class SemanticService : IDisposable
             // project was kept and the usage's project dropped).
             string declaringProject = symbol.ContainingAssembly?.Name ?? owningProject ?? "";
             int total = 0;
+            // Physical-site dedupe (field P1, 0.7.0): twin-declaration types can surface the SAME
+            // usage site through more than one ReferencedSymbol entry — the canary returned
+            // totalReferences 13 for 8 implementers with Interface.cs:11 twice INSIDE one group.
+            // One (project, path, line, kind) site counts once: the semantic mirror of 0ok's
+            // physical indexed totals. Keyed WITH the project so a file genuinely linked into two
+            // projects keeps its per-project attribution (the documented blast-radius property).
+            var seenSites = new HashSet<(string Project, string Path, int Line, string Kind)>();
             bool deadlineExhausted = false;
             // Salvage wrapper (24n): if the deadline fires INSIDE the counting loop, keep what was
             // counted as a lower bound instead of discarding completed compiler work into a bare
@@ -186,6 +193,7 @@ public sealed partial class SemanticService : IDisposable
                     }
                     string kind = SemanticReferenceKinds.Classify(rootNode, loc.Location.SourceSpan.Start, symbolIsType);
                     if (usageKinds is not null && !usageKinds.Contains(kind)) continue;
+                    if (!seenSites.Add((project, relPath, refLine, kind))) continue; // field P1: idempotent site counting
 
                     // ALL bookkeeping commits before the awaitable sample fetch (review, 24n): with
                     // the group commit trailing GetTextAsync, a deadline OCE on that await salvaged

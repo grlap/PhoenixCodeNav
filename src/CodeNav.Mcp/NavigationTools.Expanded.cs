@@ -117,6 +117,9 @@ public sealed partial class NavigationTools
             return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
         }
 
+        // Deadline visibility (field 0.7.0: type_hierarchy was the one exact tool without timing).
+        int deadlineMs = Math.Clamp(timeoutMs, 500, 120000); // mirrors TypeHierarchyAsync's clamp
+        var swSem = System.Diagnostics.Stopwatch.StartNew();
         var (target, hint) = ResolveSemanticTarget(name, null, "class,interface,struct,record,enum", path, line, column);
         if (target is not { } t)
         {
@@ -132,6 +135,7 @@ public sealed partial class NavigationTools
                 error = "semantic_unavailable",
                 partialReason = reason,
                 hint = "Use 'implementations' for its indexed fallback, or search_symbol.",
+                timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
                 meta = Meta.From(_manager.Health(), "indexed", "semantic"),
             });
         }
@@ -173,6 +177,7 @@ public sealed partial class NavigationTools
                     // can actually still hit post-edge-recovery, with the remediation inline.
                     note = "Compiler-exact resolution found no derived/implementing types, but these name it in their base list (derivedOrImplementing is heuristic here). Implementer projects were likely not loaded into the semantic cluster (raise maxProjects, or scope with pathGlob), or the implementers bind the name to a declaration outside the workspace. baseTypes/interfaces remain exact. Verify with source_context.",
                     coverage = coverage is null ? null : CoverageJson(coverage),
+                    timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
                     truncated = truncated || heuristic.Count >= 50,
                     meta = meta1,
                 });
@@ -186,6 +191,7 @@ public sealed partial class NavigationTools
             interfaces = result.Interfaces.Select(SemanticSymbolJson),
             derivedOrImplementing = items.Select(SemanticSymbolJson),
             coverage = coverage is null ? null : CoverageJson(coverage),
+            timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
             truncated,
             meta = meta1,
         });

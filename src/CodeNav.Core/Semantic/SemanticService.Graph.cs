@@ -121,8 +121,22 @@ public sealed partial class SemanticService
             if (symbolA is null || owningProject is null) return (null, null, "symbol_not_resolved");
             if (symbolA is not INamedTypeSymbol) return (null, null, "not_a_type");
 
+            // Implementer seeds, same as ImplementationsAsync (field 0.7.0: type_hierarchy showed
+            // 8 exact hits with coverage 1/1 — the hits were RESIDUE from a prior implementations
+            // call's loads, not this call's own discovery; unseeded, a cold type_hierarchy on a
+            // cross-project interface finds nothing). Seeding makes it self-sufficient AND makes
+            // coverage describe the projects this answer actually needed.
+            List<string> implementerSeeds;
+            using (var q = _manager.OpenQueries())
+            {
+                implementerSeeds = q.ImplementationCandidates(symbolA.Name, 100)
+                    .SelectMany(c => q.ProjectsContaining(c.FilePath).Select(p => p.Name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
             var (solution, symbol, coverage, _) = await LoadScanSetAndResolveAsync(
-                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token).ConfigureAwait(false);
+                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token, implementerSeeds).ConfigureAwait(false);
             if (symbol is not INamedTypeSymbol type)
             {
                 return (null, null, symbol is null ? "symbol_not_resolved_in_scope" : "not_a_type");

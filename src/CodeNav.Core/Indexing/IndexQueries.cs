@@ -721,12 +721,16 @@ public sealed partial class IndexQueries : IDisposable
         return map;
     }
 
-    /// <summary>File paths compiled by a project, ordered.</summary>
+    /// <summary>File paths compiled by a project, ordered. DISTINCT is load-bearing (field P1,
+    /// 0.7.2): monoliths carry same-AssemblyName csproj PAIRS (net-old/net-new multi-targets both
+    /// named X) — the name join matches BOTH project rows, so without DISTINCT every shared file
+    /// came back twice, the semantic workspace created duplicate documents in one adhoc project,
+    /// and every reference site in those files was counted twice within its group.</summary>
     public List<string> ProjectFiles(string projectName)
     {
         return Query(
             """
-            SELECT f.path FROM compile_items ci
+            SELECT DISTINCT f.path FROM compile_items ci
             JOIN projects p ON p.id = ci.project_id
             JOIN files f ON f.id = ci.file_id
             WHERE p.name = $n COLLATE NOCASE AND f.lang = 'cs'

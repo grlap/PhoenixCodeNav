@@ -11,7 +11,10 @@ public sealed record ClusterCoverage(
     int RequestedProjects,
     List<string> SkippedProjects,
     List<string> FailedProjects,
-    bool FrameworkRefsAvailable);
+    bool FrameworkRefsAvailable,
+    // Field 0.7.0 ("coverage 1/1 but 8 hits from 8 projects"): SymbolFinder scans the WHOLE
+    // solution, including projects resident from earlier calls — this makes that visible.
+    int SolutionProjects = 0);
 
 /// <summary>
 /// Owns: an AdhocWorkspace populated lazily with per-project compilations built from
@@ -131,7 +134,8 @@ public sealed class SemanticWorkspace : IDisposable
                 RequestedProjects: requested.Count,
                 SkippedProjects: skipped,
                 FailedProjects: failed,
-                FrameworkRefsAvailable: refDir is not null);
+                FrameworkRefsAvailable: refDir is not null,
+                SolutionProjects: _workspace.CurrentSolution.ProjectIds.Count);
             return (_workspace.CurrentSolution, coverage);
         }
         finally

@@ -131,6 +131,30 @@ public class Batch26AssemblyRefEdgeTests
                     Assert.Contains(names, n => n.Contains("ImplA"));
                     Assert.Contains(names, n => n.Contains("ImplB"));
                 }
+
+                // Field goldens (0.7.0 feedback, synthetic mirror of the monolith canary):
+                // baseList usage counts must equal the IMPLEMENTER COUNT exactly — the field P1
+                // was totalReferences 13 for 8 implementers (same physical site counted twice).
+                using (var semGold = new SemanticService(m))
+                {
+                    var toolsGold = new NavigationTools(m, semGold);
+                    var baseList = Parse(toolsGold.References(name: "IPartnerContract", usageKinds: "baseList", timeoutMs: 90000));
+                    Assert.Equal("exact", baseList.GetProperty("meta").GetProperty("confidence").GetString());
+                    Assert.Equal(2, baseList.GetProperty("totalReferences").GetInt32()); // one per implementer, never 2x
+
+                    // type_hierarchy, cold on its own service: SEEDED discovery (field: 8 exact
+                    // hits with coverage 1/1 were residue from a prior implementations call — a
+                    // cold call found nothing), timing present (deadline-honesty symmetry).
+                    var th = Parse(toolsGold.TypeHierarchy(name: "IPartnerContract", timeoutMs: 90000));
+                    Assert.Equal("exact", th.GetProperty("meta").GetProperty("confidence").GetString());
+                    Assert.False(th.TryGetProperty("derivedConfidence", out _), "expected the exact path, not the heuristic fallback");
+                    Assert.Equal(2, th.GetProperty("derivedOrImplementing").GetArrayLength());
+                    Assert.Equal(90000, th.GetProperty("timing").GetProperty("deadlineMs").GetInt32());
+                    Assert.True(th.GetProperty("timing").GetProperty("elapsedMs").GetInt64() >= 0);
+                    // coverage now reports the whole-solution scan surface (field: "8 hits, 1/1").
+                    var cov = th.GetProperty("coverage");
+                    Assert.True(cov.GetProperty("solutionProjects").GetInt32() >= cov.GetProperty("loadedProjects").GetInt32());
+                }
             }
             finally { m.Dispose(); }
         }
@@ -231,6 +255,14 @@ public class Batch26AssemblyRefEdgeTests
             """);
         File.WriteAllText(Path.Combine(apiDir, "IPartnerContract.cs"),
             "namespace ET.Api { public interface IPartnerContract { void Execute(); } }");
+        // The field's twin ingredient: an ORPHANED copy of the interface (indexed, compiled by no
+        // project — the file-copied-then-removed-from-csproj shape). Resolution must keep ignoring
+        // it, and reference counts must not inflate because of it (field P1: totalReferences 13
+        // for 8 implementers on exactly this shape).
+        string oldCore = Path.Combine(root, "OldCore");
+        Directory.CreateDirectory(oldCore);
+        File.WriteAllText(Path.Combine(oldCore, "IPartnerContract.cs"),
+            "namespace ET.Api { public interface IPartnerContract { void Execute(); } }");
 
         foreach (var (proj, impl) in new[] { ("SoapA", "ImplA"), ("SoapB", "ImplB") })
         {
@@ -254,6 +286,30 @@ public class Batch26AssemblyRefEdgeTests
         // A genuine usage (not just base lists) so references has call-site material in SoapB.
         File.WriteAllText(Path.Combine(root, "SoapB", "UseContract.cs"),
             "namespace SoapB { public class UseContract { public void Run(ET.Api.IPartnerContract c) => c.Execute(); } }");
+
+        // The field P1's REAL ingredient: a same-AssemblyName csproj PAIR (the monolith's
+        // net-old/net-new multi-target idiom — two project rows both named SoapA compiling the
+        // same file). ProjectFiles(name) joins on the name, so without DISTINCT the shared file
+        // surfaced twice, became duplicate adhoc documents, and every reference site in it was
+        // counted TWICE within one group ("Interface.cs:11 twice ... every implementer ~2x").
+        string soapA2 = Path.Combine(root, "SoapA.NetNew");
+        Directory.CreateDirectory(soapA2);
+        File.WriteAllText(Path.Combine(soapA2, "SoapA.NetNew.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net9.0</TargetFramework>
+                <AssemblyName>SoapA</AssemblyName>
+                <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+              </PropertyGroup>
+              <ItemGroup>
+                <Compile Include="../SoapA/ImplA.cs" />
+                <Reference Include="ET.Api.Generated">
+                  <HintPath>../Common/ET.Api.Generated.dll</HintPath>
+                </Reference>
+              </ItemGroup>
+            </Project>
+            """);
 
         // Ambiguity fixture: two projects emitting the same assembly name + one referencing it.
         foreach (var dup in new[] { "DupA", "DupB" })
