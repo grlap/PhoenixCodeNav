@@ -267,6 +267,28 @@ public sealed class IndexStore : IDisposable
     public void InsertProjectRef(SqliteTransaction tx, long fromId, long toId) =>
         ExecTx(tx, "INSERT OR IGNORE INTO project_refs(from_id, to_id) VALUES($a, $b)", ("$a", fromId), ("$b", toId));
 
+    /// <summary>R3 of the isTest rules (field: custom assembly resolution injects test-framework
+    /// references OUTSIDE the csproj, so parse-time signals R1/R2 can be structurally blind):
+    /// promote a project to is_test when its COMPILED set contains a test-attributed file
+    /// ([TestFixture]/[Fact]/... — files.has_test_attrs, indexed from source) AND the project is
+    /// a graph LEAF (no incoming project_refs — nothing depends on a test assembly). The leaf
+    /// guard keeps a production lib with one stray attributed file production (user: mixed
+    /// projects exist; name shapes like TestRoute must never classify). Runs AFTER compile-item
+    /// attribution and ref insertion; returns promoted count for the build log.</summary>
+    public int PromoteTestProjectsByCompiledAttributes(SqliteTransaction tx)
+    {
+        using var cmd = _write.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            UPDATE projects SET is_test = 1
+            WHERE is_test = 0
+              AND EXISTS (SELECT 1 FROM compile_items ci JOIN files f ON f.id = ci.file_id
+                          WHERE ci.project_id = projects.id AND f.has_test_attrs = 1)
+              AND NOT EXISTS (SELECT 1 FROM project_refs r WHERE r.to_id = projects.id)
+            """;
+        return cmd.ExecuteNonQuery();
+    }
+
     public void InsertPackageRef(SqliteTransaction tx, long projectId, string package, string version) =>
         ExecTx(tx, "INSERT INTO package_refs(project_id, package, version) VALUES($a, $b, $c)",
             ("$a", projectId), ("$b", package), ("$c", version));

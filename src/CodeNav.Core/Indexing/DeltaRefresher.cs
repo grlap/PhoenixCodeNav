@@ -280,6 +280,9 @@ public static class DeltaRefresher
         // cross-project implementations/references until the next full rebuild.
         AssemblyRefEdges.Write(store, tx, parsedProjects, projectIds);
         CompileItemResolver.Write(store, tx, parsedProjects, projectIds, csFileIds);
+        // isTest R3 parity with the full build (a .cs file GAINING [TestFixture] converges on the
+        // next graph rebuild — csproj-touch or full — an accepted staleness, same as ownership).
+        store.PromoteTestProjectsByCompiledAttributes(tx);
         tx.Commit();
     }
 

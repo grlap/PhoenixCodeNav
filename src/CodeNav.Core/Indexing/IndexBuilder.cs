@@ -41,8 +41,11 @@ public static class IndexBuilder
     /// v6: assembly-name COLLISIONS resolve to a name-level edge instead of no-edge (field
     /// 0.7.2 regression: paired declarers lost every consumer edge) — same tables, new edge
     /// content again; without this bump a deployed v5 index keeps the severed graph until an
-    /// unrelated csproj change, because the delta path hash-skips untouched project files.</summary>
-    public const string SchemaVersion = "6";
+    /// unrelated csproj change, because the delta path hash-skips untouched project files.
+    /// v7: isTest classification — no-dot "Tests" name suffix + BINARY-referenced test
+    /// frameworks (nunit.framework/xunit/MSTest via &lt;Reference&gt;+HintPath) now count
+    /// (field: HubServiceTests carried [TestFixture] types yet filtered as production).</summary>
+    public const string SchemaVersion = "7";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null)
@@ -231,6 +234,10 @@ public static class IndexBuilder
                 if (fileIds.TryGetValue(f.RelPath, out long fid)) csFileIds[f.RelPath] = fid;
             }
             CompileItemResolver.Write(store, tx, parsedProjects, projectIds, csFileIds);
+            // isTest R3 (custom-resolve-proof): compiled test attributes + graph-leaf promotion —
+            // must run after BOTH compile attribution and ref insertion (leaf check).
+            int promoted = store.PromoteTestProjectsByCompiledAttributes(tx);
+            if (promoted > 0) progress?.Invoke($"Test classification: {promoted} projects promoted by compiled test attributes");
             tx.Commit();
         }
 

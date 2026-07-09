@@ -42,6 +42,25 @@ public static class ProjectFileParser
         "xunit", "nunit", "mstest.testframework", "microsoft.net.test.sdk",
     };
 
+    // Legacy projects consume test frameworks as BINARY references (<Reference Include=
+    // "nunit.framework"> + HintPath), not packages — the monolith's multi-stage idiom, third
+    // appearance (field: HubServiceTests carries [TestFixture] types yet classified production
+    // because NUnit never shows up in packageRefs). Simple-name markers checked against
+    // AssemblyRefs; QualityTools is the classic MSTest v1 assembly.
+    private static readonly string[] TestAssemblyMarkers =
+    {
+        "nunit.framework", "xunit", "xunit.core",
+        "Microsoft.VisualStudio.QualityTools.UnitTestFramework",
+        "Microsoft.VisualStudio.TestPlatform.TestFramework",
+    };
+
+    // Narrow, DOTTED naming conventions only — a fallback signal, never the classifier. Name
+    // shapes are weak predictors (user counterexample: TestRoute.csproj is production routing,
+    // not a unit test project), so anything test-framework-shaped must come from REFERENCES:
+    // TestPackageMarkers (PackageReference/packages.config) or TestAssemblyMarkers (binary
+    // <Reference> — how this monolith actually consumes NUnit). A no-dot "Tests" suffix was
+    // considered for the HubServiceTests miss and deliberately rejected in favor of the
+    // reference signal, which catches it via nunit.framework.
     private static readonly string[] TestNameSuffixes =
     {
         ".Tests", ".Test", ".UnitTests", ".IntegrationTests", ".Specs",
@@ -180,7 +199,15 @@ public static class ProjectFileParser
         }
 
         bool isTest = LooksLikeTestName(name) ||
-                      packageRefs.Any(p => TestPackageMarkers.Any(m => p.Item1.Contains(m, StringComparison.OrdinalIgnoreCase)));
+                      packageRefs.Any(p => TestPackageMarkers.Any(m => p.Item1.Contains(m, StringComparison.OrdinalIgnoreCase))) ||
+                      // Binary-referenced test frameworks (field: [TestFixture] projects whose
+                      // NUnit arrives via <Reference>+HintPath, invisible to package markers).
+                      // Exact-equality against the standard assembly names, PLUS a Contains on
+                      // "nunit.framework" (user: their non-standard custom-resolve reference
+                      // shape doesn't reduce to the bare simple name — substring is the contract).
+                      assemblyRefs.Any(a =>
+                          TestAssemblyMarkers.Any(m => a.Item1.Equals(m, StringComparison.OrdinalIgnoreCase)) ||
+                          a.Item1.Contains("nunit.framework", StringComparison.OrdinalIgnoreCase));
 
         return new ParsedProject(relPath, name, style, guid, tfms, isTest,
             projectRefs.Distinct().ToList(), packageRefs, compileItems, assemblyRefs, "parsed",

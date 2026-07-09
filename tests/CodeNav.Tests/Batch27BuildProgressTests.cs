@@ -19,7 +19,7 @@ public class Batch27BuildProgressTests
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
 
     [Fact]
-    public void BuilderReportsPhasesAndMonotonicCounts()
+    public async Task BuilderReportsPhasesAndMonotonicCounts()
     {
         string root = Directory.CreateTempSubdirectory("codenav-prog-core").FullName;
         try
@@ -41,7 +41,7 @@ public class Batch27BuildProgressTests
 
             IndexBuilder.Build(root, IndexBuilder.DefaultDbPath(root), null, bp);
             sampler.Cancel();
-            try { samplerTask.GetAwaiter().GetResult(); } catch (OperationCanceledException) { }
+            try { await samplerTask; } catch (OperationCanceledException) { }
 
             var final = bp.Snapshot();
             Assert.Equal("finalizing", final.Phase);
