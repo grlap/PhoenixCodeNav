@@ -903,35 +903,61 @@ public sealed partial class IndexQueries : IDisposable
     /// <summary>Shortest dependency paths (project references) from one project to another.</summary>
     public List<List<string>> DependencyPaths(string fromProject, string toProject, int maxPaths = 3)
     {
-        var (downstream, _) = ProjectGraphEdges();
+        // 46p: the old implementation was a FIFO BFS of materialized path copies — on a wide
+        // lattice it enumerated EVERY equal-length partial path before the first result could
+        // stop it (~width^layers: a 17-layer 3-wide synthetic graph took 69 seconds and GB-scale
+        // allocations). Two phases instead, no partial-path materialization:
+        //   1. Reverse BFS from the TARGET gives distTo[n] = hops from n to the target — O(V+E).
+        //   2. DFS from the source following ONLY strictly-descending edges
+        //      (distTo[dep] == distTo[node] - 1): every step provably lies on a shortest path,
+        //      so there are no dead ends and enumeration costs O(maxPaths × pathLength).
+        // Contract preserved: shortest-length paths only, up to maxPaths, name lists,
+        // fromProject == toProject yields the single-node path. One deliberate change: a
+        // same-AssemblyName pair's duplicate name-level edges previously emitted DUPLICATE
+        // identical paths — neighbors are now deduped per node, so paths are distinct.
+        var (downstream, upstream) = ProjectGraphEdges();
         var results = new List<List<string>>();
-        var queue = new Queue<List<string>>();
-        queue.Enqueue(new List<string> { fromProject });
-        var bestDepth = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { [fromProject] = 0 };
-        int? shortest = null;
 
-        while (queue.Count > 0 && results.Count < maxPaths)
+        var distTo = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { [toProject] = 0 };
+        var queue = new Queue<string>();
+        queue.Enqueue(toProject);
+        while (queue.Count > 0)
         {
-            var pathSoFar = queue.Dequeue();
-            if (shortest is { } s && pathSoFar.Count > s) break; // only shortest-length paths
-            string node = pathSoFar[^1];
-            if (node.Equals(toProject, StringComparison.OrdinalIgnoreCase))
+            string node = queue.Dequeue();
+            if (!upstream.TryGetValue(node, out var preds)) continue;
+            foreach (var pred in preds)
             {
-                results.Add(pathSoFar);
-                shortest ??= pathSoFar.Count;
-                continue;
-            }
-            if (!downstream.TryGetValue(node, out var deps)) continue;
-            foreach (var dep in deps)
-            {
-                int depth = pathSoFar.Count;
-                if (bestDepth.TryGetValue(dep, out int seen) && seen < depth) continue;
-                bestDepth[dep] = depth;
-                var next = new List<string>(pathSoFar) { dep };
-                queue.Enqueue(next);
+                if (distTo.ContainsKey(pred)) continue;
+                distTo[pred] = distTo[node] + 1;
+                queue.Enqueue(pred);
             }
         }
+        if (!distTo.ContainsKey(fromProject)) return results; // unreachable (or unknown) — found:false
+
+        var path = new List<string> { fromProject };
+        Walk(fromProject);
         return results;
+
+        void Walk(string node)
+        {
+            if (results.Count >= maxPaths) return;
+            if (distTo[node] == 0) // the target (covers fromProject == toProject as [from])
+            {
+                results.Add(new List<string>(path));
+                return;
+            }
+            if (!downstream.TryGetValue(node, out var deps)) return; // cannot happen: distTo > 0 implies an edge
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // pair-row dup edges → one path
+            foreach (var dep in deps)
+            {
+                if (results.Count >= maxPaths) return;
+                if (!distTo.TryGetValue(dep, out int d) || d != distTo[node] - 1) continue; // off the shortest DAG
+                if (!seen.Add(dep)) continue;
+                path.Add(dep);
+                Walk(dep);
+                path.RemoveAt(path.Count - 1);
+            }
+        }
     }
 
     /// <summary>Signal (49k) grades the STRONGEST usage shape found in the group's sampled

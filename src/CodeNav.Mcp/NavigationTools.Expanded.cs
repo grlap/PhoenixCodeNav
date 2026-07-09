@@ -133,6 +133,37 @@ public sealed partial class NavigationTools
         reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
         if (result is null)
         {
+            // dve (a), parity with implementations: semantic failure (cold load, timeout, scope
+            // miss) degraded to a BARE error here while implementations surfaces base-list
+            // candidates — same question, different generosity. baseTypes/interfaces are
+            // OMITTED, not empty-claimed — they need the compiler.
+            // NOT for 'not_a_type' (review, reproduced): that is the compiler's DEFINITIVE
+            // refusal, not an availability gap — the name-mode kind gate does not cover
+            // POSITION mode (path+line resolves with no kind filter), and degrading there
+            // presented a class as "deriving from" a same-named METHOD. A definitive answer
+            // is never overridden by a heuristic sweep.
+            string fallbackName = reason is "not_a_type" ? "" : name ?? hint ?? "";
+            List<SymbolHit> candidates = new();
+            if (fallbackName.Length > 0)
+            {
+                using var qf = _manager.OpenQueries();
+                candidates = qf.ImplementationCandidates(fallbackName, 50);
+            }
+            if (candidates.Count > 0)
+            {
+                var metaH = Meta.From(_manager.Health(), "heuristic", "syntax");
+                return Json.WithListBudget(candidates, (items, truncated) => new
+                {
+                    name = fallbackName,
+                    derivedOrImplementing = items.Select(SymbolJson),
+                    derivedConfidence = "heuristic",
+                    partialReason = reason,
+                    note = "Semantic resolution unavailable (see partialReason) — these types name it in their base list (confidence heuristic). baseTypes/interfaces are omitted: they need the compiler. Verify with source_context, or retry for exact.",
+                    timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
+                    truncated = truncated || candidates.Count >= 50,
+                    meta = metaH,
+                });
+            }
             return Json.Serialize(new
             {
                 error = "semantic_unavailable",
@@ -485,14 +516,33 @@ public sealed partial class NavigationTools
     [McpServerTool(Name = "impact")]
     [Description("First-pass blast radius before changing a symbol: reference volume by project, dependent-project count, public API exposure, related tests, and deterministic risk notes.")]
     public string Impact(
-        [Description("Symbol name to assess.")] string name,
-        [Description("Optional containing type/namespace fragment.")] string? container = null)
+        [Description("Symbol name to assess. Optional when symbolId given.")] string? name = null,
+        [Description("Optional containing type/namespace fragment.")] string? container = null,
+        [Description("Resolve by a prior result's handle instead of name: 'idx:NNN~fp' (from search_symbol / symbol_at / definition). Takes precedence over name+container and PINS the primary declaration to that exact row — no name-ambiguity re-disambiguation.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        // 5u5 (the P1's last tool): impact was the one symbolId emitter that could not take a
+        // handle back, so every follow-up redid name+container disambiguation. A handle PINS the
+        // primary declaration (the caller already chose the row — even an orphaned one is their
+        // deliberate target); name-based reference counting below is unchanged.
+        SymbolHit? pinned = null;
+        if (symbolId is { Length: > 0 })
+        {
+            var (hit, error) = ResolveSymbolIdHandle(symbolId);
+            if (error is not null) return error;
+            pinned = hit;
+            name = hit!.Name;
+        }
+        if (string.IsNullOrEmpty(name))
+        {
+            return Json.Serialize(new { error = "bad_request", detail = "Provide 'name' or 'symbolId'." });
+        }
         using var q = _manager.OpenQueries();
 
-        var decls = q.SearchSymbols(name, "exact", null, 10, includeGenerated: true);
-        if (container is { } c)
+        var decls = pinned is not null
+            ? new List<SymbolHit> { pinned }
+            : q.SearchSymbols(name, "exact", null, 10, includeGenerated: true);
+        if (pinned is null && container is { } c) // a handle outranks container, like references
         {
             decls = decls.Where(h =>
                 (h.Container?.Contains(c, StringComparison.OrdinalIgnoreCase) ?? false) ||

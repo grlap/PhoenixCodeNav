@@ -48,13 +48,13 @@ public sealed partial class NavigationTools
             {
                 new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic; confidenceNote only when heuristic (tier meanings live in confidenceModel here); meta.statusNote explains refreshing/stale; meta.build stamps every result meta with version+commit" },
                 new { id = "hierarchy-ranking", summary = "implementations ranked concrete-first with derivation 'via' + a likelyImplementation flag. By design these appear CONDITIONALLY: likelyImplementation only when exactly ONE concrete implementation exists; 'via' only when a type implements the queried interface INDIRECTLY through a base — a flat N-implementer set legitimately shows neither. Example shapes when they DO fire (display values are NAMESPACE-QUALIFIED): {implementations:[{symbol:{display:'Widgets.SqlWidgetStore',...}, rank:'concrete'}], concreteCount:1, likelyImplementation:'Widgets.SqlWidgetStore'} and {symbol:{display:'Widgets.CachedStore',...}, isAbstract:true when abstract (omitted when concrete), rank:'concrete', via:'StoreBase'} (CachedStore : StoreBase : IWidgetStore). Envelope note: implementations wraps hits in {symbol, isAbstract, rank, via}; type_hierarchy.derivedOrImplementing returns flat symbol objects — a historical drift, documented rather than broken; pin shapes per tool" },
-                new { id = "implementer-completeness", summary = "implementations member-mode: the syntactic fallback reports implementerCount + omittedImplementers (silent when none omitted); the exact path reports coverage instead" },
+                new { id = "implementer-completeness", summary = "implementations member-mode: the syntactic fallback reports implementerCount + omittedImplementers (silent when none omitted); the exact path reports coverage instead. Mixed-section honesty on every implementations fallback: when the compiler RESOLVED the symbol but implementers came from the index, the payload keeps the exact identity (symbol + symbolConfidence:'exact') beside implementationsConfidence:'heuristic' — mirroring type_hierarchy.derivedConfidence; both fields omitted when the symbol itself never resolved. type_hierarchy's semantic_unavailable path likewise degrades to base-list candidates (derivedConfidence:'heuristic'; baseTypes/interfaces OMITTED — they need the compiler) instead of a bare error" },
                 new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (silent when compiled; Include globs expanded, Remove honored — residual gaps: .projitems/props globs/Conditions); repo_overview.orphanedFiles; semantic resolution never targets an uncompiled declaration; impact and context_pack likewise prefer COMPILED declarations for ownership (an orphaned copy sorting first no longer zeroes transitiveDependentProjects)" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is LOGGED, never silent" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
                 new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + didYouMean token variants + contextual notes" },
                 new { id = "reference-kinds", summary = "references (exact path): per-location usage kinds — call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/other — with a kinds breakdown, usageKinds filter (validated), and publicConsumersOnly (usages outside the symbol's declaring project); indexed fallback stays unclassified and says so" },
-                new { id = "symbol-handles", summary = "idx:N~fp symbol handles (index-local, reindex-detecting) accepted by source_context / definition / references" },
+                new { id = "symbol-handles", summary = "idx:N~fp symbol handles (index-local, reindex-detecting) accepted by source_context / definition / references / impact — impact PINS the primary declaration to the handle's row (no name-ambiguity re-disambiguation; container is ignored under a handle)" },
                 new { id = "filter-honest-counts", summary = "references: totalReferences/totalCandidates, kinds, groups, and summary all honor includeTests (filtered BEFORE counting on both exact and indexed paths); linked multi-project files counted once; filtered summaries say 'test projects excluded' instead of a misleading '0 test'" },
                 new { id = "test-classification", summary = "isTest is REFERENCE-driven: test frameworks via packages OR binary <Reference> (nunit/xunit/MSTest, incl. non-standard names containing nunit.framework), plus compiled-[TestFixture]-attributes-on-graph-leaf promotion for custom-resolve builds where the framework never appears in the csproj. Name shapes are a narrow dotted-suffix fallback only — TestRoute-style names never classify. Classification broadened in schema v7 (reference signals can reclassify a large share of legacy test projects, so isTest cached from earlier schemas may differ); NAME-uniform across same-AssemblyName csproj pairs since v8" },
                 new { id = "bounded-source-reads", summary = "source_context streams only the requested spans from disk (never whole-file reads); contextLines clamped; zero/negative span starts clamp to line 1" },
@@ -1106,6 +1106,11 @@ public sealed partial class NavigationTools
         }
 
         string? failReason = null;
+        // dve (b): when the compiler RESOLVED the symbol but found no implementers, the fallback
+        // used to discard that exact identity and relabel EVERYTHING heuristic — keep it for
+        // mixed-section honesty (symbol exact, list heuristic), mirroring type_hierarchy's
+        // derivedConfidence split.
+        SemanticDeclaration? resolvedSymbol = null;
         int deadlineMs = Math.Clamp(timeoutMs, 500, 120000); // mirror the service clamp (24n)
         var swSem = System.Diagnostics.Stopwatch.StartNew();
         var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column);
@@ -1114,6 +1119,7 @@ public sealed partial class NavigationTools
             var (result, reason) = _semantic
                 .ImplementationsAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
                 .GetAwaiter().GetResult();
+            resolvedSymbol = result?.Symbol;
             if (result is { Implementations.Count: > 0 })
             {
                 var impls = result.Implementations; // already ranked concrete-first by the semantic layer
@@ -1219,6 +1225,10 @@ public sealed partial class NavigationTools
                 {
                     name = lookupName,
                     declaringType = targetSym!.Container,
+                    // dve (b): same mixed-section honesty as the type fallback below.
+                    symbol = resolvedSymbol is not null ? SemanticSymbolJson(resolvedSymbol) : null,
+                    symbolConfidence = resolvedSymbol is not null ? "exact" : null,
+                    implementationsConfidence = resolvedSymbol is not null ? "heuristic" : null,
                     implementerCount,
                     omittedImplementers = omitted > 0 ? omitted : (int?)null,
                     implementations = items.Select(SymbolJson),
@@ -1235,6 +1245,8 @@ public sealed partial class NavigationTools
             return Json.Serialize(new
             {
                 name = lookupName,
+                symbol = resolvedSymbol is not null ? SemanticSymbolJson(resolvedSymbol) : null,
+                symbolConfidence = resolvedSymbol is not null ? "exact" : null,
                 implementations = Array.Empty<object>(),
                 partialReason = "member_fallback_type_scoped",
                 semanticReason = failReason, // why the exact path returned nothing (context, not actionable)
@@ -1247,6 +1259,13 @@ public sealed partial class NavigationTools
         return Json.WithListBudget(heuristic, (items, truncated) => new
         {
             name = lookupName,
+            // dve (b): mixed-section honesty, mirroring type_hierarchy.derivedConfidence — the
+            // compiler-resolved identity survives into the fallback with its own confidence,
+            // instead of the whole payload flattening to one heuristic label. Both fields are
+            // omitted when the symbol itself never resolved (then meta's heuristic covers all).
+            symbol = resolvedSymbol is not null ? SemanticSymbolJson(resolvedSymbol) : null,
+            symbolConfidence = resolvedSymbol is not null ? "exact" : null,
+            implementationsConfidence = resolvedSymbol is not null ? "heuristic" : null,
             implementations = items.Select(SymbolJson),
             partialReason = failReason ?? "semantic_unavailable",
             note = items.Count > 0 && failReason is "no_semantic_implementers" or "candidate_cluster_bounded"
