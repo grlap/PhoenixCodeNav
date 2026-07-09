@@ -13,7 +13,8 @@ public sealed record IndexHealth(
     string WorkspaceRoot,
     string DbPath,
     string? IndexedCommit = null,   // git commit the index reflects (git-aware refresh)
-    string? IndexedBranch = null);
+    string? IndexedBranch = null,
+    IndexProgress? Progress = null); // live build progress — non-null ONLY while state == building
 
 /// <summary>
 /// Owns: index lifecycle for one workspace — open-or-build (in background, never
@@ -56,6 +57,7 @@ public sealed class IndexManager : IDisposable
     private volatile string? _lastRefreshUtc;
     private volatile string? _indexedCommit;
     private volatile string? _indexedBranch;
+    private volatile BuildProgress? _buildProgress; // non-null only while a build is running
 
     public IndexManager(string workspaceRoot, string? dbPath = null, Action<string>? log = null)
     {
@@ -103,9 +105,14 @@ public sealed class IndexManager : IDisposable
                 if (build)
                 {
                     _state = "building";
+                    // Live progress for the building window (bead two, field-requested during the
+                    // v5 monolith reindex): published before the build starts, cleared after —
+                    // Health() surfaces it only while state == "building".
+                    _buildProgress = new BuildProgress();
                     _log($"Building index for {_workspaceRoot} ...");
-                    var buildResult = IndexBuilder.Build(_workspaceRoot, _dbPath, _log);
+                    var buildResult = IndexBuilder.Build(_workspaceRoot, _dbPath, _log, _buildProgress);
                     _log($"Index built: {buildResult.CsFiles} files, {buildResult.Symbols} symbols in {buildResult.TotalTime.TotalSeconds:F0}s");
+                    _buildProgress = null;
                 }
 
                 var store = new IndexStore(_dbPath, createNew: false);
@@ -298,10 +305,14 @@ public sealed class IndexManager : IDisposable
         }
         catch (IOException) { /* transient; report 0 */ }
 
+        // Progress only while genuinely building — a background refresh must never show a
+        // cold-build progress bar (field design note; refresh honesty is bead z4c).
+        var bp = _buildProgress;
         return new IndexHealth(
             _state, _indexVersion, _indexedAtUtc, _lastRefreshUtc,
             _watcher?.PendingCount ?? 0, _error, dbBytes, _workspaceRoot, _dbPath,
-            _indexedCommit, _indexedBranch);
+            _indexedCommit, _indexedBranch,
+            _state == "building" && bp is not null ? bp.Snapshot() : null);
     }
 
     /// <summary>Current git HEAD commit for the workspace, or null if not a git repo / git absent.

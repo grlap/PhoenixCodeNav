@@ -40,7 +40,8 @@ public static class IndexBuilder
     /// in-workspace-project edges (multi-staged binary refs); same tables, new edge content.</summary>
     public const string SchemaVersion = "5";
 
-    public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null)
+    public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
+        BuildProgress? liveProgress = null)
     {
         var total = Stopwatch.StartNew();
         dbPath ??= DefaultDbPath(workspaceRoot);
@@ -50,6 +51,9 @@ public static class IndexBuilder
         var scan = WorkspaceScanner.Scan(workspaceRoot);
         var scanTime = sw.Elapsed;
         progress?.Invoke($"Scanned: {scan.CsFiles.Count} .cs, {scan.ProjectFiles.Count} .csproj, {scan.SolutionFiles.Count} solutions");
+        // The scan fixes filesTotal — the point where "% done" becomes derivable (bead two).
+        liveProgress?.SetFilesTotal(scan.CsFiles.Count);
+        liveProgress?.SetPhase("parsing_projects");
 
         // ---- project + solution parsing (parallel, cheap XML) ----
         sw.Restart();
@@ -107,6 +111,7 @@ public static class IndexBuilder
 
         // ---- parse + persist .cs files (parallel parse, single writer) ----
         sw.Restart();
+        liveProgress?.SetPhase("indexing_files");
         progress?.Invoke($"Parsing {scan.CsFiles.Count} C# files on {Environment.ProcessorCount} cores ...");
 
         var channel = Channel.CreateBounded<(ScannedFile File, ParsedCsFile Parsed, ulong Hash)>(
@@ -156,13 +161,23 @@ public static class IndexBuilder
                     lineCount += item.Parsed.LineCount;
                     csCount++;
 
+                    liveProgress?.AddFileIndexed();
                     if (++inTx >= 400)
                     {
                         tx.Commit();
                         tx.Dispose();
                         tx = store.BeginTransaction();
                         inTx = 0;
-                        if (csCount % 8000 == 0) progress?.Invoke($"  indexed {csCount} files ...");
+                        if (csCount % 8000 == 0)
+                        {
+                            // The human-facing estimate for anyone watching the log (bead two):
+                            // running count / fixed total / derived percent / elapsed. The API
+                            // surface carries the raw numbers only — no percent field there.
+                            progress?.Invoke(
+                                $"  indexed {csCount}/{scan.CsFiles.Count} files " +
+                                $"({(scan.CsFiles.Count > 0 ? csCount * 100 / scan.CsFiles.Count : 100)}%, " +
+                                $"{total.Elapsed.TotalSeconds:F0}s elapsed)");
+                        }
                     }
                 }
             }
@@ -170,6 +185,7 @@ public static class IndexBuilder
             tx.Dispose();
         }
         producer.GetAwaiter().GetResult();
+        liveProgress?.SetPhase("finalizing");
 
         // ---- other files (csproj/sln/config): find_file + config_lookup fodder ----
         int otherCount = 0;

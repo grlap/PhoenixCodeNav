@@ -61,6 +61,7 @@ public sealed partial class NavigationTools
                 new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. Index schema v4 (first run after deploy rebuilds the index)" },
                 new { id = "deadline-honesty", summary = "semantic references/implementations/definition report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout" },
                 new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Ambiguous assembly names create no edge. Index schema v5 (first run after deploy rebuilds). meta.indexSchema now stamped on every response" },
+                new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and every index_building error body carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal (once the scan knows it), elapsedMs} — monotonic counters, no fabricated ETA or percent (derive % from the counters); absent when ready, and background refreshes never show a cold-build bar" },
             },
             tools = new[]
             {
@@ -87,6 +88,10 @@ public sealed partial class NavigationTools
             index = new
             {
                 state = h.State,
+                // Live build progress (bead two, field-requested): phase + monotonic counters +
+                // elapsedMs; filesTotal only once the scan knows it; absent unless building.
+                // No ETA/percent by design — see the BuildProgress doc for the honesty rationale.
+                progress = ProgressJson(h),
                 h.IndexVersion,
                 h.IndexedAtUtc,
                 h.LastRefreshUtc,
@@ -1694,11 +1699,26 @@ public sealed partial class NavigationTools
             error = h.State == "building" ? "index_building" : "index_unavailable",
             state = h.State,
             detail = h.Error,
+            // The progress struct rides IN the error (field: "otherwise callers still have to
+            // poll server_capabilities separately") — phase + monotonic counters + elapsed,
+            // filesTotal omitted until the scan knows it, no fabricated ETA/percent (bead two).
+            progress = ProgressJson(h),
             hint = h.State == "building"
                 ? "The workspace index is still building (first run). Retry shortly; use shell tools meanwhile."
                 : "Index unavailable. Falling back to shell search is appropriate.",
         });
     }
+
+    /// <summary>Build-progress envelope shared by server_capabilities.index and the
+    /// index_building error body — one shape everywhere; null (omitted) unless building.</summary>
+    private static object? ProgressJson(IndexHealth h) =>
+        h.Progress is not { } p ? null : new
+        {
+            phase = p.Phase,
+            filesIndexed = p.FilesIndexed,
+            filesTotal = p.FilesTotal,
+            elapsedMs = p.ElapsedMs,
+        };
 
     // Cursor is "o:<offset>" or, for a mode-carrying tool (search_symbol auto), "o:<offset>:<mode>".
     private static (int Limit, int Offset, string? Mode) Page(int limit, string? cursor)
