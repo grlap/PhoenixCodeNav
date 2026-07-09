@@ -241,7 +241,7 @@ public static class IndexBuilder
             // isTest R3 (custom-resolve-proof): compiled test attributes + graph-leaf promotion —
             // must run after BOTH compile attribution and ref insertion (leaf check).
             int promoted = store.PromoteTestProjectsByCompiledAttributes(tx);
-            if (promoted > 0) progress?.Invoke($"Test classification: {promoted} projects promoted by compiled test attributes");
+            if (promoted > 0) progress?.Invoke($"Test classification: {promoted} project rows promoted (compiled test attributes + same-name uniformity)");
             tx.Commit();
         }
 

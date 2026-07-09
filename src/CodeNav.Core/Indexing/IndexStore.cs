@@ -272,9 +272,12 @@ public sealed class IndexStore : IDisposable
     /// promote a project to is_test when its COMPILED set contains a test-attributed file
     /// ([TestFixture]/[Fact]/... — files.has_test_attrs, indexed from source) AND the project is
     /// a graph LEAF (no incoming project_refs — nothing depends on a test assembly). The leaf
-    /// guard keeps a production lib with one stray attributed file production (user: mixed
-    /// projects exist; name shapes like TestRoute must never classify). Runs AFTER compile-item
-    /// attribution and ref insertion; returns promoted count for the build log.</summary>
+    /// guard keeps a SINGLE production lib with one stray attributed file production (user:
+    /// mixed projects exist; name shapes like TestRoute must never classify) — for same-name
+    /// PAIRS the name-uniformity pass below wins instead (review-assessed: the pair-shaped
+    /// protection was already illusory pre-v8; a NAME-level leaf check is the future fix if a
+    /// production pair with a stray fixture ever surfaces in the field). Runs AFTER compile-item
+    /// attribution and ref insertion; returns rows flipped by BOTH passes for the build log.</summary>
     public int PromoteTestProjectsByCompiledAttributes(SqliteTransaction tx)
     {
         using var cmd = _write.CreateCommand();
@@ -293,12 +296,8 @@ public sealed class IndexStore : IDisposable
         // last-row-wins collapse made the NAME's answer depend on scan order vs which twin
         // carried the incoming edge (review-reproduced: identical workspaces, opposite
         // classification). If ANY row of a name classifies as test, every row of that name does.
-        // NAME-level uniformity (review): a same-AssemblyName pair is ONE assembly to every
-        // name-keyed reader — but per-row classification could differ (a referenced twin fails
-        // the leaf guard; parse-time R1/R2 can diverge between twins), and AllProjectTestFlags'
-        // last-row-wins collapse made the NAME's answer depend on scan order vs which twin
-        // carried the incoming edge (review-reproduced: identical workspaces, opposite
-        // classification). If ANY row of a name classifies as test, every row of that name does.
+        // Single pass is a fixed point: propagation is same-name-only, so the eligible-name set
+        // cannot grow (review-verified: a second call returns 0).
         using var uniform = _write.CreateCommand();
         uniform.Transaction = tx;
         uniform.CommandText = """
