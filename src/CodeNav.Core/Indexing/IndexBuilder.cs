@@ -37,8 +37,12 @@ public static class IndexBuilder
     /// &lt;Compile Remove&gt;; projects gained compile_globs.
     /// v4: symbols.modifiers (bt7) — static/sealed/abstract/virtual/override/new/readonly/const.
     /// v5: assembly-ref edge recovery (lhg) — project_refs now include &lt;Reference&gt;-to-
-    /// in-workspace-project edges (multi-staged binary refs); same tables, new edge content.</summary>
-    public const string SchemaVersion = "5";
+    /// in-workspace-project edges (multi-staged binary refs); same tables, new edge content.
+    /// v6: assembly-name COLLISIONS resolve to a name-level edge instead of no-edge (field
+    /// 0.7.2 regression: paired declarers lost every consumer edge) — same tables, new edge
+    /// content again; without this bump a deployed v5 index keeps the severed graph until an
+    /// unrelated csproj change, because the delta path hash-skips untouched project files.</summary>
+    public const string SchemaVersion = "6";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null)
