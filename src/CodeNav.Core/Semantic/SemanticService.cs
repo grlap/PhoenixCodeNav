@@ -68,6 +68,13 @@ public sealed partial class SemanticService : IDisposable
         _log = log ?? (_ => { });
     }
 
+    /// <summary>TEST SEAM (tof): invoked once per counted reference location with the running
+    /// total. Lets a test throw OperationCanceledException mid-count to exercise the 24n salvage
+    /// branch deterministically — a real deadline landing inside the loop is not reproducible on
+    /// demand (the seam gap the salvage shipped with). Never set in production; instance-scoped
+    /// so parallel tests cannot cross-trip it.</summary>
+    internal Action<int>? TestOnlyPerLocationCounted;
+
     public bool FrameworkRefsAvailable
     {
         get
@@ -226,6 +233,9 @@ public sealed partial class SemanticService : IDisposable
                         g = new SemanticRefGroup(project, isTest, 0, new List<SemanticLocation>());
                     }
                     groups[project] = g with { Count = g.Count + 1 };
+                    // Placed AFTER the bookkeeping commit, matching where a real deadline OCE is
+                    // survivable (the awaitable sample fetch below) — counted state is consistent.
+                    TestOnlyPerLocationCounted?.Invoke(total);
                     var samples = g.Samples;
                     if (samples.Count < samplesPerGroup)
                     {
