@@ -52,7 +52,7 @@ public sealed partial class NavigationTools
                 new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (silent when compiled; Include globs expanded, Remove honored — residual gaps: .projitems/props globs/Conditions); repo_overview.orphanedFiles; semantic resolution never targets an uncompiled declaration; impact and context_pack likewise prefer COMPILED declarations for ownership (an orphaned copy sorting first no longer zeroes transitiveDependentProjects)" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is LOGGED, never silent" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
-                new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + didYouMean token variants + contextual notes" },
+                new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + didYouMean (variantKind 'tokenForm': Mode4 <-> 'Mode 4'; variantKind 'spelling': single-token Damerau edit-distance-1 against indexed SYMBOL names, first-char-anchored — first-character typos and sub-4-char tokens are deliberately not covered — every suggestion PROBED before surfacing, never substituted) + contextual notes; elsewhere/didYouMean precise probes carry structured samples {path, line, containingSymbol} beside samplePaths (the redirect no longer drops the owner context main hits carry; the cross-line co-occur branch stays paths-only — its evidence is file-level)" },
                 new { id = "reference-kinds", summary = "references (exact path): per-location usage kinds — call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/other — with a kinds breakdown, usageKinds filter (validated), and publicConsumersOnly (usages outside the symbol's declaring project); indexed fallback stays unclassified and says so" },
                 new { id = "symbol-handles", summary = "idx:N~fp symbol handles (index-local, reindex-detecting) accepted by source_context / definition / references / impact — impact PINS the primary declaration to the handle's row (no name-ambiguity re-disambiguation; container is ignored under a handle)" },
                 new { id = "filter-honest-counts", summary = "references: totalReferences/totalCandidates, kinds, groups, and summary all honor includeTests (filtered BEFORE counting on both exact and indexed paths); linked multi-project files counted once; filtered summaries say 'test projects excluded' instead of a misleading '0 test'" },
@@ -257,20 +257,45 @@ public sealed partial class NavigationTools
         // partial-leads branches instead). Counts are hedged: the probe grades <=100 candidate files.
         void ProbeVariants(bool replaceNote)
         {
-            foreach (var variant in new[] { QueryVariants.SplitVariant(query), QueryVariants.JoinVariant(query) })
+            // Candidate order is a policy: token-FORM variants (Mode4 <-> "Mode 4") first —
+            // they preserve the caller's spelling — then SPELLING near-misses (1ly, field:
+            // didYouMean never fired on identifier typos because only form variants existed).
+            // Spelling candidates only for a single bare identifier-ish token: multi-token or
+            // punctuated queries aren't symbol names, and the vocabulary is the symbol index.
+            var candidates = new List<(string Variant, string Kind)>();
+            if (QueryVariants.SplitVariant(query) is { } split) candidates.Add((split, "tokenForm"));
+            if (QueryVariants.JoinVariant(query) is { } join) candidates.Add((join, "tokenForm"));
+            if (query.Length >= 4 && query.All(c => char.IsLetterOrDigit(c) || c == '_'))
             {
-                if (variant is null) continue;
+                candidates.AddRange(q.NearMissSymbolNames(query, 3).Select(n => (n, "spelling")));
+            }
+            foreach (var (variant, kind) in candidates)
+            {
                 var vp = q.SearchTextGraded(variant, 5, new IndexQueries.TextFilter(IncludeGenerated: true),
                     maxCandidateFiles: 100, offset: 0, partialsMode: "never");
                 if (vp.TotalPrecise > 0)
                 {
+                    // Structured samples (dzi): the redirect used to drop exactly the owner
+                    // context main hits carry; samplePaths stays for compatibility.
+                    var sampleHits = vp.Hits.Take(3).ToList();
+                    var sampleOwners = OwningSymbols(q, sampleHits);
                     didYouMean = new
                     {
                         query = variant,
+                        variantKind = kind, // 'tokenForm' (Mode4 <-> "Mode 4") | 'spelling' (edit distance 1, probed)
                         preciseCount = vp.TotalPrecise,
                         samplePaths = vp.Hits.Select(h => h.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToList(),
+                        samples = sampleHits.Select(h => new
+                        {
+                            path = h.FilePath,
+                            h.Line,
+                            containingSymbol = sampleOwners.TryGetValue((h.FilePath, h.Line), out var cs) ? cs : null,
+                        }),
                     };
-                    string msg = $"the variant '{variant}' has at least {vp.TotalPrecise} precise line(s) in the probed candidates (see didYouMean) — retry with that query"
+                    string what = kind == "spelling"
+                        ? $"the near-miss identifier '{variant}' (edit distance 1, from the symbol index)"
+                        : $"the variant '{variant}'";
+                    string msg = $"{what} has at least {vp.TotalPrecise} precise line(s) in the probed candidates (see didYouMean) — retry with that query"
                         + (vp.Hits.All(h => h.IsGenerated) ? " with includeGenerated:true (the probe hits are all in generated files)" : "") + ".";
                     note = replaceNote ? $"No file contains all query tokens together, but {msg}" : $"{note} Also: {msg}";
                     break;
@@ -292,10 +317,23 @@ public sealed partial class NavigationTools
                     maxCandidateFiles: 100, offset: 0, partialsMode: "never");
                 if (probe.TotalPrecise > 0)
                 {
+                    // Structured samples (dzi): parity with main hits — the redirect used to
+                    // ship bare path strings, dropping the containingSymbol context that makes
+                    // a lead actionable. samplePaths stays for compatibility (their spec rows
+                    // reference it). The co-occur branch below keeps paths only — its evidence
+                    // is file-level (no line to anchor an owner on).
+                    var probeSamples = probe.Hits.Take(3).ToList();
+                    var probeOwners = OwningSymbols(q, probeSamples);
                     elsewhere = new
                     {
                         preciseCount = probe.TotalPrecise,
                         samplePaths = probe.Hits.Select(h => h.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToList(),
+                        samples = probeSamples.Select(h => new
+                        {
+                            path = h.FilePath,
+                            h.Line,
+                            containingSymbol = probeOwners.TryGetValue((h.FilePath, h.Line), out var cs) ? cs : null,
+                        }),
                     };
                     bool probeAllGenerated = probe.Hits.All(h => h.IsGenerated);
                     // "Outside your filters" covers every filter, not just pathGlob: a samplePath INSIDE

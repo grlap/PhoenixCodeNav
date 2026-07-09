@@ -1541,6 +1541,80 @@ public sealed partial class IndexQueries : IDisposable
 
     private static string SignalName(int tier) => tier switch { 3 => "callSite", 2 => "typeUsage", _ => "nameMention" };
 
+    /// <summary>1ly: single-token SPELLING suggestions — distinct symbol names within Damerau
+    /// edit distance 1 of the token (one substitution, adjacent transposition, insertion, or
+    /// deletion; case-insensitive), anchored on the case-folded FIRST character so the scan
+    /// rides idx_symbols_name (NOCASE) instead of walking the table. Ordered by declaration
+    /// count (most-declared first) so the caller probes the likeliest names. The caller PROBES
+    /// every candidate before suggesting — nothing unverified reaches the wire. Accepted
+    /// limitations, documented rather than papered over: first-character typos are missed (a
+    /// full-alphabet fan-out or table scan is not worth a heuristic suggestion), and tokens
+    /// under 4 chars are refused (their ED-1 neighborhoods are noise).</summary>
+    public List<string> NearMissSymbolNames(string token, int maxCandidates = 3)
+    {
+        if (token.Length < 4 || token.Length > 128) return new();
+        char first = token[0];
+        if (first >= char.MaxValue) return new();
+        var rows = Query(
+            """
+            SELECT name, COUNT(*) FROM symbols
+            WHERE name >= $lo COLLATE NOCASE AND name < $hi COLLATE NOCASE
+              AND LENGTH(name) BETWEEN $l1 AND $l2
+            GROUP BY name
+            LIMIT 20000
+            """,
+            r => (Name: r.GetString(0), Count: r.GetInt32(1)),
+            ("$lo", first.ToString()), ("$hi", ((char)(first + 1)).ToString()),
+            ("$l1", token.Length - 1), ("$l2", token.Length + 1));
+        return rows
+            .Where(r => WithinDamerauDistance1(token, r.Name))
+            .OrderByDescending(r => r.Count)
+            .ThenBy(r => r.Name, StringComparer.Ordinal)
+            .Select(r => r.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase) // case-twins probe identically (FTS is nocase)
+            .Take(maxCandidates)
+            .ToList();
+    }
+
+    /// <summary>Damerau-Levenshtein distance EXACTLY 1, case-insensitive: one substitution,
+    /// one adjacent transposition, or one insertion/deletion. Identical-ignoring-case returns
+    /// false — that is not a suggestion, and FTS is case-insensitive anyway.</summary>
+    private static bool WithinDamerauDistance1(string a, string b)
+    {
+        int la = a.Length, lb = b.Length;
+        if (Math.Abs(la - lb) > 1) return false;
+        static char F(char c) => char.ToLowerInvariant(c);
+        if (la == lb)
+        {
+            int i = 0;
+            while (i < la && F(a[i]) == F(b[i])) i++;
+            if (i == la) return false; // identical (nocase)
+            // One substitution: the rest matches.
+            bool substitution = true;
+            for (int k = i + 1; k < la; k++) { if (F(a[k]) != F(b[k])) { substitution = false; break; } }
+            if (substitution) return true;
+            // One adjacent transposition: swapped pair, then the rest matches.
+            if (i + 1 < la && F(a[i]) == F(b[i + 1]) && F(a[i + 1]) == F(b[i]))
+            {
+                for (int k = i + 2; k < la; k++) { if (F(a[k]) != F(b[k])) return false; }
+                return true;
+            }
+            return false;
+        }
+        // Lengths differ by one: one insertion/deletion — walk with a single skip in the longer.
+        string s = la < lb ? a : b, l = la < lb ? b : a;
+        int si = 0, li = 0;
+        bool skipped = false;
+        while (si < s.Length && li < l.Length)
+        {
+            if (F(s[si]) == F(l[li])) { si++; li++; continue; }
+            if (skipped) return false;
+            skipped = true;
+            li++; // skip one char of the longer
+        }
+        return true; // trailing longer char (if any) is the single skip
+    }
+
     private static int SignalTierOf(string? signal) => signal switch { "callSite" => 3, "typeUsage" => 2, "nameMention" => 1, _ => 0 };
 
     /// <summary>Lines immediately before/after a 0-based hit line (grep -B/-A), snippet-trimmed and
