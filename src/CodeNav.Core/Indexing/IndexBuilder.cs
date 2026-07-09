@@ -35,8 +35,10 @@ public static class IndexBuilder
     /// v2: ref/out/in/params modifiers in signatures; interface members default to public.
     /// v3: compile-graph fidelity (3tz) — compile_items honor &lt;Compile Include&gt; globs and
     /// &lt;Compile Remove&gt;; projects gained compile_globs.
-    /// v4: symbols.modifiers (bt7) — static/sealed/abstract/virtual/override/new/readonly/const.</summary>
-    public const string SchemaVersion = "4";
+    /// v4: symbols.modifiers (bt7) — static/sealed/abstract/virtual/override/new/readonly/const.
+    /// v5: assembly-ref edge recovery (lhg) — project_refs now include &lt;Reference&gt;-to-
+    /// in-workspace-project edges (multi-staged binary refs); same tables, new edge content.</summary>
+    public const string SchemaVersion = "5";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null)
     {
@@ -92,6 +94,13 @@ public static class IndexBuilder
                 {
                     if (projectIds.TryGetValue(pr, out long pid)) store.InsertSolutionProject(tx, slnId, pid);
                 }
+            }
+            // Multi-staged builds reference ASSEMBLIES from a common output folder, not projects
+            // (lhg) — recover those as graph edges or the dependency graph is blind to them.
+            var (recovered, ambiguousRefs) = AssemblyRefEdges.Write(store, tx, parsedProjects, projectIds);
+            if (recovered + ambiguousRefs > 0)
+            {
+                progress?.Invoke($"Assembly-ref edges: {recovered} recovered, {ambiguousRefs} ambiguous (skipped)");
             }
             tx.Commit();
         }

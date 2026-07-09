@@ -67,7 +67,8 @@ internal sealed record Meta(
     string NavigationLayer,
     string? ConfidenceNote = null,
     string? StatusNote = null,
-    string? Build = null)
+    string? Build = null,
+    string? IndexSchema = null) // field (asked twice): key on schema per-response, no capabilities call
 {
     public static Meta From(IndexHealth h, string confidence, string layer)
     {
@@ -89,8 +90,9 @@ internal sealed record Meta(
             _ => null,
         };
         // ddp (field: "I can programmatically check what's deployed — make it inline"): every
-        // response self-identifies its build, ~20 bytes.
+        // response self-identifies its build, ~20 bytes. indexSchema likewise (asked twice) —
+        // schema bumps force reindexes, and a caller watching for one shouldn't need a second call.
         return new Meta(status, h.IndexVersion, h.IndexedAtUtc, h.LastRefreshUtc, h.PendingChanges,
-            confidence, layer, note, statusNote, BuildInfo.Stamp);
+            confidence, layer, note, statusNote, BuildInfo.Stamp, BuildInfo.IndexSchema);
     }
 }

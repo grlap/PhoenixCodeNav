@@ -1,0 +1,346 @@
+using System.Text.Json;
+using CodeNav.Core.Indexing;
+using CodeNav.Core.Semantic;
+using CodeNav.Mcp;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.Data.Sqlite;
+
+namespace CodeNav.Tests;
+
+/// <summary>
+/// lhg — the field's multi-staged-build trap: ET.Api.Generated is consumed via
+/// &lt;Reference Include&gt; + HintPath (phase one builds assemblies to a common folder; later
+/// projects reference the DLL, not the project). With no ProjectReference the dependency graph
+/// had no edge, so (a) references' dependents-closure candidate discovery pruned the implementer
+/// projects (0 refs, coverage 1/1) and (b) even the seeded implementations cluster bound the
+/// interface to the DLL's METADATA symbol (or an error type), never matching the queried SOURCE
+/// declaration — 8 implementers found syntactically, 0 semantically.
+/// Fix under test: AssemblyRefEdges recovers &lt;Reference&gt;-to-in-workspace-project edges into
+/// project_refs (schema v5), and SemanticWorkspace substitutes the SOURCE project for the hint
+/// dll when that project is loaded in the cluster.
+/// </summary>
+public class Batch26AssemblyRefEdgeTests
+{
+    private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
+
+    [Fact]
+    public void BinaryReferenceToWorkspaceProjectBecomesAGraphEdge()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-lhg-edge").FullName;
+        try
+        {
+            WriteFieldShapedWorkspace(root, emitDll: false);
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var q = new IndexQueries(dbPath);
+
+            // The recovered edge: SoapA/SoapB -> ET.Api.Generated (matched via AssemblyName,
+            // which differs from the csproj FILE name ApiGen.csproj on purpose).
+            Assert.Contains(q.ProjectGraph("SoapA", 1, "downstream"),
+                e => e.ToProject.Equals("ET.Api.Generated", StringComparison.OrdinalIgnoreCase));
+            var dependents = q.DependentClosure("ET.Api.Generated");
+            Assert.Contains("SoapA", dependents);
+            Assert.Contains("SoapB", dependents);
+
+            // Ambiguity guard: two workspace projects both produce assembly 'Dup.Common' —
+            // referencing it must create NO edge (a wrong source substitution beats a hole... not).
+            Assert.DoesNotContain(q.ProjectGraph("RefsDup", 1, "downstream"),
+                e => e.ToProject.Equals("Dup.Common", StringComparison.OrdinalIgnoreCase));
+
+            // External-location guard (review): a HintPath into packages/ marks the dll EXTERNAL —
+            // no edge even though the simple name matches workspace project 'ET.Api.Generated'.
+            Assert.DoesNotContain(q.ProjectGraph("RefsNuGet", 1, "downstream"),
+                e => e.ToProject.Equals("ET.Api.Generated", StringComparison.OrdinalIgnoreCase));
+        }
+        finally { Cleanup(root); }
+    }
+
+    // Review (LOW): DeltaRefresher must preserve the recovered edges — a csproj touch rebuilds
+    // the whole project graph, and losing them would silently re-break cross-project semantics
+    // until the next full rebuild. Pin the parity.
+    [Fact]
+    public void CsprojRefreshPreservesRecoveredEdges()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-lhg-delta").FullName;
+        try
+        {
+            WriteFieldShapedWorkspace(root, emitDll: false);
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+
+            using var store = new IndexStore(dbPath, createNew: false);
+            DeltaRefresher.RefreshProjectData(store, root); // the csproj-touch code path
+
+            using var q = new IndexQueries(dbPath);
+            Assert.Contains(q.ProjectGraph("SoapA", 1, "downstream"),
+                e => e.ToProject.Equals("ET.Api.Generated", StringComparison.OrdinalIgnoreCase));
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void CrossProjectImplementationsAndReferencesResolveExactly()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-lhg-sem").FullName;
+        try
+        {
+            // The dll REALLY exists in the common folder (multi-stage build output) — the
+            // strongest failure shape: pre-fix, implementer compilations bind the interface to
+            // the dll's metadata symbol and FindImplementations on the source symbol finds zero.
+            WriteFieldShapedWorkspace(root, emitDll: true);
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var m = new IndexManager(root, dbPath);
+            try
+            {
+                m.Start();
+                Assert.True(WaitUntil(() => m.IsQueryable, 20000));
+
+                // REFERENCES FIRST, on its own SemanticService: implementations' seed loading
+                // would otherwise leave the implementer projects sitting in the shared workspace
+                // and references would find them WITHOUT its candidate discovery working
+                // (reintroduction-caught: the edges-gutted run passed this way). A fresh
+                // workspace forces references to discover SoapA/SoapB via the dependents
+                // closure — which only the recovered assembly-ref edges can populate.
+                using (var semRefs = new SemanticService(m))
+                {
+                    if (!semRefs.FrameworkRefsAvailable) return; // env guard: no reference assemblies
+                    var toolsRefs = new NavigationTools(m, semRefs);
+                    var refs = Parse(toolsRefs.References(name: "IPartnerContract", timeoutMs: 90000));
+                    Assert.Equal("exact", refs.GetProperty("meta").GetProperty("confidence").GetString());
+                    var projects = refs.GetProperty("groups").EnumerateArray()
+                        .Select(g => g.GetProperty("project").GetString())
+                        .ToList();
+                    Assert.Contains("SoapA", projects); // the pre-fix trap: 0 refs, coverage 1/1
+                    Assert.Contains("SoapB", projects);
+
+                    // Rider (asked twice in the field): schema keyed per-response.
+                    Assert.Equal(IndexBuilder.SchemaVersion,
+                        refs.GetProperty("meta").GetProperty("indexSchema").GetString());
+                }
+
+                using (var semImpls = new SemanticService(m))
+                {
+                    var toolsImpls = new NavigationTools(m, semImpls);
+                    var impls = Parse(toolsImpls.Implementations(name: "IPartnerContract", timeoutMs: 90000));
+                    Assert.Equal("exact", impls.GetProperty("meta").GetProperty("confidence").GetString());
+                    var names = impls.GetProperty("implementations").EnumerateArray()
+                        .Select(i => i.GetProperty("symbol").GetProperty("display").GetString()!)
+                        .ToList();
+                    Assert.Contains(names, n => n.Contains("ImplA"));
+                    Assert.Contains(names, n => n.Contains("ImplB"));
+                }
+            }
+            finally { m.Dispose(); }
+        }
+        finally { Cleanup(root); }
+    }
+
+    // Review (HIGH): MUTUAL assembly refs (A <Reference> B.dll, B <Reference> A.dll — legal in
+    // multi-stage builds) put both edges in the graph. Within one load pass only backward edges
+    // wire, but a fingerprint RELOAD re-adds a project while its dependent is already loaded —
+    // pre-guard, that wired the forward edge, AdhocWorkspace ACCEPTED the ProjectReference cycle,
+    // and GetCompilationAsync deadlocked FOREVER (every later semantic call in the cluster burned
+    // its whole deadline into semantic_timeout, unevictable until process restart).
+    [Fact]
+    public void MutualAssemblyRefsSurviveAReloadWithoutWiringACycle()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-lhg-cycle").FullName;
+        try
+        {
+            foreach (var (proj, other) in new[] { ("CycA", "CycB"), ("CycB", "CycA") })
+            {
+                string dir = Path.Combine(root, proj);
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, $"{proj}.csproj"),
+                    $"""
+                    <Project Sdk="Microsoft.NET.Sdk">
+                      <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                      <ItemGroup>
+                        <Reference Include="{other}">
+                          <HintPath>../Common/{other}.dll</HintPath>
+                        </Reference>
+                      </ItemGroup>
+                    </Project>
+                    """);
+            }
+            File.WriteAllText(Path.Combine(root, "CycA", "AlphaCore.cs"),
+                "namespace CycA { public class AlphaCore { public void Ping() { } } }");
+            File.WriteAllText(Path.Combine(root, "CycA", "AlphaUser.cs"),
+                "namespace CycA { public class AlphaUser { public CycB.BetaCore? B; } }");
+            File.WriteAllText(Path.Combine(root, "CycB", "BetaCore.cs"),
+                "namespace CycB { public class BetaCore { } }");
+            File.WriteAllText(Path.Combine(root, "CycB", "BetaUser.cs"),
+                "namespace CycB { public class BetaUser { public CycA.AlphaCore? A; } }");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var m = new IndexManager(root, dbPath);
+            var semantic = new SemanticService(m);
+            try
+            {
+                m.Start();
+                Assert.True(WaitUntil(() => m.IsQueryable, 20000));
+                if (!semantic.FrameworkRefsAvailable) return;
+                var tools = new NavigationTools(m, semantic);
+
+                // Pass 1 loads both (one direction wired, the other left as a hole/dll).
+                var first = Parse(tools.References(name: "AlphaCore", timeoutMs: 30000));
+                Assert.Equal("exact", first.GetProperty("meta").GetProperty("confidence").GetString());
+
+                // Mutate CycB so its fingerprint changes, and wait until the INDEX reflects it —
+                // the next semantic call then takes the reload path for CycB.
+                File.AppendAllText(Path.Combine(root, "CycB", "BetaCore.cs"),
+                    "\nnamespace CycB { public class CycMutationToken { } }");
+                m.RequestRefresh(new[] { "CycB/BetaCore.cs" });
+                Assert.True(WaitUntil(() =>
+                {
+                    using var q = m.OpenQueries();
+                    return q.SearchSymbols("CycMutationToken", "exact", null, 2).Count > 0;
+                }, 20000), "index did not pick up the mutation");
+
+                // Pass 2: pre-guard this wired CycB->CycA into an accepted cycle and burned the
+                // full deadline into semantic_timeout; post-guard it completes exact and fast.
+                var second = Parse(tools.References(name: "AlphaCore", timeoutMs: 30000));
+                Assert.Equal("exact", second.GetProperty("meta").GetProperty("confidence").GetString());
+                Assert.True(second.GetProperty("timing").GetProperty("elapsedMs").GetInt64() < 25000,
+                    "second pass burned the deadline — the reload cycle deadlock is back");
+            }
+            finally { semantic.Dispose(); m.Dispose(); }
+        }
+        finally { Cleanup(root); }
+    }
+
+    // ---------------------------------------------------------------- fixture
+
+    private static void WriteFieldShapedWorkspace(string root, bool emitDll)
+    {
+        // Declaring project: csproj FILE name (ApiGen) deliberately differs from the
+        // AssemblyName (ET.Api.Generated) — <Reference> matching must key on AssemblyName.
+        string apiDir = Path.Combine(root, "ApiGen");
+        Directory.CreateDirectory(apiDir);
+        File.WriteAllText(Path.Combine(apiDir, "ApiGen.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net9.0</TargetFramework>
+                <AssemblyName>ET.Api.Generated</AssemblyName>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(apiDir, "IPartnerContract.cs"),
+            "namespace ET.Api { public interface IPartnerContract { void Execute(); } }");
+
+        foreach (var (proj, impl) in new[] { ("SoapA", "ImplA"), ("SoapB", "ImplB") })
+        {
+            string dir = Path.Combine(root, proj);
+            Directory.CreateDirectory(dir);
+            // NO ProjectReference — the multi-staged shape: assembly ref + HintPath only.
+            File.WriteAllText(Path.Combine(dir, $"{proj}.csproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <Reference Include="ET.Api.Generated">
+                      <HintPath>../Common/ET.Api.Generated.dll</HintPath>
+                    </Reference>
+                  </ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(dir, $"{impl}.cs"),
+                $"namespace {proj} {{ public class {impl} : ET.Api.IPartnerContract {{ public void Execute() {{ }} }} }}");
+        }
+        // A genuine usage (not just base lists) so references has call-site material in SoapB.
+        File.WriteAllText(Path.Combine(root, "SoapB", "UseContract.cs"),
+            "namespace SoapB { public class UseContract { public void Run(ET.Api.IPartnerContract c) => c.Execute(); } }");
+
+        // Ambiguity fixture: two projects emitting the same assembly name + one referencing it.
+        foreach (var dup in new[] { "DupA", "DupB" })
+        {
+            string dir = Path.Combine(root, dup);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, $"{dup}.csproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net9.0</TargetFramework>
+                    <AssemblyName>Dup.Common</AssemblyName>
+                  </PropertyGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(dir, "A.cs"), $"namespace {dup} {{ class A {{ }} }}");
+        }
+        string refsDup = Path.Combine(root, "RefsDup");
+        Directory.CreateDirectory(refsDup);
+        File.WriteAllText(Path.Combine(refsDup, "RefsDup.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+              <ItemGroup>
+                <Reference Include="Dup.Common">
+                  <HintPath>../Common/Dup.Common.dll</HintPath>
+                </Reference>
+              </ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(refsDup, "B.cs"), "namespace RefsDup { class B { } }");
+
+        // External-location fixture (review): simple name collides with the workspace project,
+        // but the HintPath points into packages/ — a NuGet binary, not the project's output.
+        string refsNuGet = Path.Combine(root, "RefsNuGet");
+        Directory.CreateDirectory(refsNuGet);
+        File.WriteAllText(Path.Combine(refsNuGet, "RefsNuGet.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+              <ItemGroup>
+                <Reference Include="ET.Api.Generated">
+                  <HintPath>../packages/ET.Api.Generated.1.0.0/lib/net45/ET.Api.Generated.dll</HintPath>
+                </Reference>
+              </ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(refsNuGet, "C.cs"), "namespace RefsNuGet { class C { } }");
+
+        if (emitDll)
+        {
+            // Emit a REAL assembly with the interface into the common folder — the phase-one
+            // build output the implementer projects' HintPaths point at. VERSIONED like a real
+            // build stamp: with the default 0.0.0.0 the dll's identity EQUALS the adhoc source
+            // project's and Roslyn resolves the collision toward the project reference, hiding
+            // the trap — the field dll's distinct identity is what makes consumers bind to
+            // METADATA instead of source (the 8-implementers-found-0 shape).
+            string common = Path.Combine(root, "Common");
+            Directory.CreateDirectory(common);
+            var comp = CSharpCompilation.Create(
+                "ET.Api.Generated",
+                new[] { CSharpSyntaxTree.ParseText(
+                    """
+                    [assembly: System.Reflection.AssemblyVersion("4.2.0.0")]
+                    namespace ET.Api { public interface IPartnerContract { void Execute(); } }
+                    """) },
+                new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
+                new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            var emit = comp.Emit(Path.Combine(common, "ET.Api.Generated.dll"));
+            Assert.True(emit.Success, string.Join("; ", emit.Diagnostics.Take(3)));
+        }
+    }
+
+    private static bool WaitUntil(Func<bool> cond, int timeoutMs)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            if (cond()) return true;
+            Thread.Sleep(50);
+        }
+        return cond();
+    }
+
+    private static void Cleanup(string root)
+    {
+        SqliteConnection.ClearAllPools();
+        try { Directory.Delete(root, recursive: true); } catch { /* windows locks */ }
+    }
+}

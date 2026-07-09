@@ -275,6 +275,10 @@ public static class DeltaRefresher
                 if (projectIds.TryGetValue(pr, out long pid)) store.InsertSolutionProject(tx, slnId, pid);
             }
         }
+        // Assembly-ref edge recovery must mirror the full build (lhg) — a csproj touch rebuilds
+        // the whole graph here, and losing the recovered edges would silently re-break
+        // cross-project implementations/references until the next full rebuild.
+        AssemblyRefEdges.Write(store, tx, parsedProjects, projectIds);
         CompileItemResolver.Write(store, tx, parsedProjects, projectIds, csFileIds);
         tx.Commit();
     }

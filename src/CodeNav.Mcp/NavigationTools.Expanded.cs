@@ -169,7 +169,9 @@ public sealed partial class NavigationTools
                     derivedOrImplementing = items.Select(SymbolJson),
                     derivedConfidence = "heuristic",
                     partialReason = bounded ? "candidate_cluster_bounded" : "no_semantic_derived",
-                    note = "Compiler-exact resolution found no derived/implementing types, but these name it in their base list (derivedOrImplementing is heuristic here). Common cause: the type is declared in more than one assembly (e.g. a generated twin) and implementers reference a different declaration. baseTypes/interfaces remain exact. Verify with source_context.",
+                    // Field (lhg): stale "generated twin" wording replaced — key on the causes we
+                    // can actually still hit post-edge-recovery, with the remediation inline.
+                    note = "Compiler-exact resolution found no derived/implementing types, but these name it in their base list (derivedOrImplementing is heuristic here). Implementer projects were likely not loaded into the semantic cluster (raise maxProjects, or scope with pathGlob), or the implementers bind the name to a declaration outside the workspace. baseTypes/interfaces remain exact. Verify with source_context.",
                     coverage = coverage is null ? null : CoverageJson(coverage),
                     truncated = truncated || heuristic.Count >= 50,
                     meta = meta1,

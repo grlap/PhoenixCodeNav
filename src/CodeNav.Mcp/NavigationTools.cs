@@ -60,6 +60,7 @@ public sealed partial class NavigationTools
                 new { id = "arity-exact-partials", summary = "outline partialFiles match generic arity — partial Foo and partial Foo<T> cross-link only their own halves" },
                 new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. Index schema v4 (first run after deploy rebuilds the index)" },
                 new { id = "deadline-honesty", summary = "semantic references/implementations/definition report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout" },
+                new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Ambiguous assembly names create no edge. Index schema v5 (first run after deploy rebuilds). meta.indexSchema now stamped on every response" },
             },
             tools = new[]
             {
@@ -1238,7 +1239,10 @@ public sealed partial class NavigationTools
             implementations = items.Select(SymbolJson),
             partialReason = failReason ?? "semantic_unavailable",
             note = items.Count > 0 && failReason is "no_semantic_implementers" or "candidate_cluster_bounded"
-                ? "Compiler-exact resolution matched no implementers, but these types name it in their base list (confidence heuristic). Common cause: the type is declared in more than one assembly (e.g. a generated twin) and implementers reference a different declaration. Verify with source_context."
+                // Field (lhg): the old "declared in more than one assembly / generated twin" wording
+                // went stale once compiled-awareness + assembly-ref edges landed — say what we now
+                // actually know and what to do about it.
+                ? "Compiler-exact resolution matched no implementers, but these types name it in their base list (confidence heuristic). Implementer projects were likely not loaded into the semantic cluster (raise maxProjects, or scope with pathGlob), or the implementers bind the name to a declaration outside the workspace. Verify with source_context."
                 : "Base-list name matches from the index (confidence heuristic) — verify with source_context.",
             truncated = truncated || heuristic.Count >= 50, // count-capped even if the byte budget fit
             meta,

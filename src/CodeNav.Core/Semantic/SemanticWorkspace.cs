@@ -181,10 +181,73 @@ public sealed class SemanticWorkspace : IDisposable
                 filePath: full));
         }
 
+        // Project references FIRST (order matters for the dll-substitution below): in-cluster
+        // only; unloaded refs become navigation-grade holes.
+        var projectRefs = new List<ProjectReference>();
+        var refIds = new HashSet<ProjectId>();
+        var refNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // names actually wired
+        var solutionNow = _workspace.CurrentSolution;
+        // Cycle guard (review, HIGH): mutual assembly refs (A <Reference> B.dll, B <Reference> A.dll —
+        // a legal multi-stage shape) put BOTH edges in project_refs. Within one load pass only
+        // backward edges wire, but a fingerprint RELOAD re-adds a project while its dependents are
+        // already loaded — wiring the forward edge then completes a ProjectReference CYCLE, which
+        // AdhocWorkspace ACCEPTS (TryApplyChanges true) and which deadlocks GetCompilationAsync
+        // forever after (review-reproduced; eviction can never break it — both sides stay
+        // 'referenced'). Skip any edge whose target already REACHES this project id; the skipped
+        // direction is deliberately NOT in refNames, so its hint dll below stays — the metadata
+        // binding is the correct degraded wiring for the back edge.
+        bool WouldCycle(ProjectId target) => ReachesId(solutionNow, target, projectId);
+        using (var q2 = new IndexQueries(_dbPath))
+        {
+            foreach (var edge in q2.ProjectGraph(name, 1, "downstream"))
+            {
+                if (_loaded.TryGetValue(edge.ToProject, out var dep) && !refIds.Contains(dep.Id) &&
+                    !WouldCycle(dep.Id) && refIds.Add(dep.Id))
+                {
+                    projectRefs.Add(new ProjectReference(dep.Id));
+                    refNames.Add(edge.ToProject);
+                }
+            }
+        }
+        // Guarantee visibility of the symbol-declaring project even when the dependency
+        // path is transitive (SDK-style transitivity) — harmless when redundant.
+        if (ensureReferenceTo is not null)
+        {
+            foreach (var target in ensureReferenceTo)
+            {
+                if (!target.Equals(name, StringComparison.OrdinalIgnoreCase) &&
+                    _loaded.TryGetValue(target, out var dep) && !refIds.Contains(dep.Id) &&
+                    !WouldCycle(dep.Id) && refIds.Add(dep.Id))
+                {
+                    projectRefs.Add(new ProjectReference(dep.Id));
+                    refNames.Add(target);
+                }
+            }
+        }
+
         var metadataRefs = new List<MetadataReference>(frameworkRefs);
         foreach (var (assembly, hint) in parsed.AssemblyRefs)
         {
             if (hint is null) continue; // plain framework refs covered by reference assemblies
+            // Source-over-binary substitution (lhg): when the referenced assembly IS a project we
+            // just wired a ProjectReference to (multi-staged builds reference the built dll from a
+            // common folder, not the project — the recovered assembly-ref edge supplies the wire),
+            // SKIP the metadata dll: the name binds to the SOURCE symbol. The dll ALONE binds
+            // consumers to a METADATA symbol that never matches the queried source declaration —
+            // the field's 8-implementers-found-0 trap. Keyed on refNames, NOT on _loaded: for an
+            // AMBIGUOUS assembly name no edge exists, so a same-named project merely being loaded
+            // must not strip the dll (that would leave the consumer with NEITHER binding).
+            // Defense-in-depth note: with BOTH references present Roslyn empirically prefers the
+            // source project in every shape we reproduced (equal and differing versions), so this
+            // skip is not independently test-pinnable — it exists so we never depend on that
+            // conflict resolution (e.g. strong-named field dlls whose distinct identities tests
+            // cannot reproduce). TopoOrder loads dependencies first, so the edge target is already
+            // in _loaded — and thus in refNames — when its consumers load.
+            if (refNames.Contains(assembly) ||
+                refNames.Contains(Path.GetFileNameWithoutExtension(hint)))
+            {
+                continue;
+            }
             string full = Path.Combine(_workspaceRoot, hint.Replace('/', Path.DirectorySeparatorChar));
             if (File.Exists(full))
             {
@@ -196,33 +259,6 @@ public sealed class SemanticWorkspace : IDisposable
             if (ReferenceAssemblyLocator.ResolvePackageDll(pkg, version) is { } dll)
             {
                 try { metadataRefs.Add(MetadataReference.CreateFromFile(dll)); } catch { /* skip */ }
-            }
-        }
-
-        // In-cluster project references only; unloaded refs become navigation-grade holes.
-        var projectRefs = new List<ProjectReference>();
-        var refIds = new HashSet<ProjectId>();
-        using (var q2 = new IndexQueries(_dbPath))
-        {
-            foreach (var edge in q2.ProjectGraph(name, 1, "downstream"))
-            {
-                if (_loaded.TryGetValue(edge.ToProject, out var dep) && refIds.Add(dep.Id))
-                {
-                    projectRefs.Add(new ProjectReference(dep.Id));
-                }
-            }
-        }
-        // Guarantee visibility of the symbol-declaring project even when the dependency
-        // path is transitive (SDK-style transitivity) — harmless when redundant.
-        if (ensureReferenceTo is not null)
-        {
-            foreach (var target in ensureReferenceTo)
-            {
-                if (!target.Equals(name, StringComparison.OrdinalIgnoreCase) &&
-                    _loaded.TryGetValue(target, out var dep) && refIds.Add(dep.Id))
-                {
-                    projectRefs.Add(new ProjectReference(dep.Id));
-                }
             }
         }
 
@@ -249,6 +285,35 @@ public sealed class SemanticWorkspace : IDisposable
             Fingerprint = q.ProjectFingerprint(name),
             LastUse = ++_useCounter,
         };
+    }
+
+    /// <summary>True when <paramref name="from"/> reaches <paramref name="target"/> over the
+    /// solution's recorded ProjectReferences. A dangling id (a project removed for reload) has no
+    /// Project node to walk THROUGH, but references pointing AT it are still recorded on its
+    /// dependents — which is exactly what makes the reload case detectable: while B is removed,
+    /// A's reference to B's reused id keeps A→B visible, so B's reload sees that wiring B→A
+    /// would complete A→B→A and skips it.</summary>
+    private static bool ReachesId(Solution solution, ProjectId from, ProjectId target)
+    {
+        if (from == target) return true;
+        var seen = new HashSet<ProjectId>();
+        var stack = new Stack<ProjectId>();
+        stack.Push(from);
+        while (stack.Count > 0)
+        {
+            var cur = stack.Pop();
+            if (cur == target) return true;
+            if (!seen.Add(cur)) continue;
+            var p = solution.GetProject(cur);
+            if (p is null) continue; // dangling (removed-for-reload) — no outgoing edges to walk
+            // AllProjectReferences, NOT ProjectReferences: the latter is FILTERED to projects
+            // currently present in the solution, so during a reload's removal window a dependent's
+            // recorded reference to the removed id is invisible — which is precisely the moment
+            // this walk must see it (diagnosed via wiring telemetry: the filtered walk let the
+            // reload wire the back edge and complete the cycle the guard exists to prevent).
+            foreach (var r in p.AllProjectReferences) stack.Push(r.ProjectId);
+        }
+        return false;
     }
 
     private List<string> TopoOrder(IndexQueries q, List<string> names)
