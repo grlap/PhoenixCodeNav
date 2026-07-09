@@ -6,7 +6,8 @@ public sealed record SymbolHit(
     long Id, string Kind, string Name, string? Ns, string? Container, string Signature,
     string Accessibility, int StartLine, int EndLine, bool IsPartial, string? AttrMarkers,
     string FilePath, bool FileIsGenerated, long? ParentId, bool IsOrphaned = false,
-    int Arity = 0); // generic type-parameter count — Foo and Foo<T> are DIFFERENT types (szs)
+    int Arity = 0,               // generic type-parameter count — Foo and Foo<T> are DIFFERENT types (szs)
+    string? Modifiers = null);   // "static sealed abstract virtual override new readonly const" subset (bt7)
 
 public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated);
 
@@ -308,7 +309,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
             FROM symbols s JOIN files f ON f.id = s.file_id
             {where}
             ORDER BY
@@ -326,7 +327,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p
             ORDER BY s.start_line, s.end_line DESC
@@ -348,7 +349,7 @@ public sealed partial class IndexQueries : IDisposable
             var next = Query(
                 """
                 SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
                 FROM symbols s JOIN files f ON f.id = s.file_id
                 WHERE s.id = $id
                 """,
@@ -368,7 +369,7 @@ public sealed partial class IndexQueries : IDisposable
         var hits = Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.id = $id
             """,
@@ -383,7 +384,7 @@ public sealed partial class IndexQueries : IDisposable
         var hits = Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p AND s.start_line <= $l AND s.end_line >= $l
             ORDER BY (s.end_line - s.start_line), s.start_line DESC
@@ -417,7 +418,7 @@ public sealed partial class IndexQueries : IDisposable
             var rows = Query(
                 $"""
                 SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
                 FROM symbols s JOIN files f ON f.id = s.file_id
                 WHERE {string.Join(" OR ", clauses)}
                 """,
@@ -473,7 +474,15 @@ public sealed partial class IndexQueries : IDisposable
 
     // ---------------------------------------------------------------- reference candidates
 
-    public (int TotalHits, List<ReferenceGroup> Groups) ReferenceCandidates(
+    /// <summary>Result of the indexed reference scan. TotalHits/ProdHits/TestHits are PHYSICAL
+    /// line counts (each file counted once — a file linked into several projects is not repeated;
+    /// it lands in ProdHits when ANY surviving owner is a production project, else TestHits), so
+    /// ProdHits + TestHits == TotalHits always. Group counts are per-project ATTRIBUTIONS and can
+    /// sum higher than TotalHits for linked files (0ok: the summary previously printed those
+    /// attribution sums next to the physical total — "4 lines (8 production)").</summary>
+    public sealed record ReferenceCandidateResult(int TotalHits, int ProdHits, int TestHits, List<ReferenceGroup> Groups);
+
+    public ReferenceCandidateResult ReferenceCandidates(
         string symbolName, int maxCandidateFiles = 500, int samplesPerProject = 3,
         string? pathGlob = null, IReadOnlyList<string>? excludePaths = null, bool includeGenerated = true,
         bool includeTests = true)
@@ -502,7 +511,7 @@ public sealed partial class IndexQueries : IDisposable
         // Resolve project ownership for all candidate files in one query per batch.
         var fileProjects = FileProjects(candidates.Select(c => c.Id).ToList());
 
-        int total = 0;
+        int total = 0, prodTotal = 0, testTotal = 0;
         var groups = new Dictionary<string, (bool IsTest, int Count, List<TextHit> Samples)>();
         foreach (var c in candidates)
         {
@@ -531,13 +540,18 @@ public sealed partial class IndexQueries : IDisposable
                 groups[project] = g;
             }
             total += spans.Count;
+            // Physical prod/test split, counted once per file like `total` (0ok): production when
+            // ANY surviving owner is production ((no project) counts as production, matching the
+            // group display), else test-only. Keeps prod + test == total in the summary.
+            if (owners.Any(o => !o.Item2)) prodTotal += spans.Count;
+            else testTotal += spans.Count;
         }
 
         var ordered = groups
             .Select(kv => new ReferenceGroup(kv.Key, kv.Value.IsTest, kv.Value.Count, kv.Value.Samples))
             .OrderByDescending(g => g.Count)
             .ToList();
-        return (total, ordered);
+        return new ReferenceCandidateResult(total, prodTotal, testTotal, ordered);
     }
 
     // ---------------------------------------------------------------- projects
@@ -660,7 +674,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.name = $m COLLATE NOCASE AND ({string.Join(" OR ", clauses)})
             ORDER BY f.is_generated, f.path
@@ -681,7 +695,7 @@ public sealed partial class IndexQueries : IDisposable
         var candidates = Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.kind IN ('class','struct','record','record_struct')
               AND s.name <> $n
@@ -1092,7 +1106,8 @@ public sealed partial class IndexQueries : IDisposable
         r.GetBoolean(9), r.IsDBNull(10) ? null : r.GetString(10),
         r.GetString(11), r.GetBoolean(12),
         r.FieldCount > 13 && !r.IsDBNull(13) ? r.GetInt64(13) : null,
-        Arity: r.FieldCount > 14 && !r.IsDBNull(14) ? r.GetInt32(14) : 0);
+        Arity: r.FieldCount > 14 && !r.IsDBNull(14) ? r.GetInt32(14) : 0,
+        Modifiers: r.FieldCount > 15 && !r.IsDBNull(15) ? r.GetString(15) : null);
 
     private static ProjectRow ReadProject(SqliteDataReader r) => new(
         r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3),

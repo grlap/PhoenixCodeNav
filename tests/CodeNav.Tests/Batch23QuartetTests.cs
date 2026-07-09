@@ -263,12 +263,18 @@ public class Batch23QuartetTests
             IndexBuilder.Build(root, dbPath);
             using var q = new IndexQueries(dbPath);
 
-            var (allTotal, allGroups) = q.ReferenceCandidates("ProbeToken", 50, 3);
+            var (allTotal, allProd, allTest, allGroups) = q.ReferenceCandidates("ProbeToken", 50, 3);
             Assert.Equal(6, allTotal); // 4 shared + 2 test — physical lines, never per-owner copies
             Assert.Contains(allGroups, g => g.IsTestProject);
+            // Physical prod/test split sums to the total (0ok): shared file once as production,
+            // the test-only file as test — NOT the per-owner attribution sums (8 and 2).
+            Assert.Equal(4, allProd);
+            Assert.Equal(2, allTest);
 
-            var (prodTotal, prodGroups) = q.ReferenceCandidates("ProbeToken", 50, 3, includeTests: false);
+            var (prodTotal, prodOnly, testNone, prodGroups) = q.ReferenceCandidates("ProbeToken", 50, 3, includeTests: false);
             Assert.Equal(4, prodTotal); // test-only lines gone; the SHARED file counted ONCE
+            Assert.Equal(4, prodOnly);
+            Assert.Equal(0, testNone);
             Assert.DoesNotContain(prodGroups, g => g.IsTestProject);
             // Both owning production groups still see the shared file's lines (attribution intact).
             Assert.Equal(2, prodGroups.Count(g => g.Count == 4));

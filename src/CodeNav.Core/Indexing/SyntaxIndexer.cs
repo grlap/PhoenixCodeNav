@@ -18,7 +18,10 @@ public sealed record SymbolRow(
     int EndLine,                // 1-based inclusive
     bool IsPartial,
     int Arity,
-    string? AttrMarkers);       // ';' joined simple attribute names (for test detection etc.)
+    string? AttrMarkers,        // ';' joined simple attribute names (for test detection etc.)
+    string? Modifiers = null);  // space-joined inheritance/lifetime modifiers (static sealed abstract
+                                // virtual override new), null when none — bt7: in deep hierarchies a
+                                // caller needs "override" vs "virtual" to pick the right site
 
 public sealed record ParsedCsFile(
     string RelPath,
@@ -191,13 +194,38 @@ public static class SyntaxIndexer
     {
         var span = text.Lines.GetLinePositionSpan(node.Span);
         int ordinal = symbols.Count;
+        // Extracted HERE from the declaration node (bt7) so every member/type kind gets them
+        // uniformly — namespaces are MemberDeclarationSyntax too but carry no modifiers.
+        string? mods = node is MemberDeclarationSyntax md ? Mods(md.Modifiers) : null;
         symbols.Add(new SymbolRow(
             ordinal, parentOrdinal, kind, name, ns, container,
             signature.Length > 400 ? signature[..400] : signature,
             accessibility,
             span.Start.Line + 1, span.End.Line + 1,
-            isPartial, arity, attrs));
+            isPartial, arity, attrs, mods));
         return ordinal;
+    }
+
+    /// <summary>Space-joined inheritance/lifetime modifiers in canonical order, null when none.
+    /// Deliberately excludes accessibility (its own column), partial (its own flag), and
+    /// body-implementation details (async/unsafe/extern) that don't help pick an override site.</summary>
+    private static string? Mods(SyntaxTokenList modifiers)
+    {
+        if (modifiers.Count == 0) return null;
+        List<string>? found = null;
+        void Take(SyntaxKind kind, string text)
+        {
+            if (modifiers.Any(kind)) (found ??= new()).Add(text);
+        }
+        Take(SyntaxKind.StaticKeyword, "static");
+        Take(SyntaxKind.SealedKeyword, "sealed");
+        Take(SyntaxKind.AbstractKeyword, "abstract");
+        Take(SyntaxKind.VirtualKeyword, "virtual");
+        Take(SyntaxKind.OverrideKeyword, "override");
+        Take(SyntaxKind.NewKeyword, "new"); // member hiding — an override-site trap worth surfacing
+        Take(SyntaxKind.ReadOnlyKeyword, "readonly");
+        Take(SyntaxKind.ConstKeyword, "const");
+        return found is null ? null : string.Join(' ', found);
     }
 
     private static string? AttrMarkers(SyntaxList<AttributeListSyntax> lists, ref bool hasTestAttrs)

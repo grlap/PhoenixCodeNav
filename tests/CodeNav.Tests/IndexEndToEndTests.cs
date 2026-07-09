@@ -88,8 +88,9 @@ public class IndexEndToEndTests : IClassFixture<IndexFixture>
     public void ReferencesFindWholeIdentifierUsagesOnly()
     {
         using var q = _fx.Open();
-        var (total, groups) = q.ReferenceCandidates("Guard", 200, 2);
+        var (total, prod, test, groups) = q.ReferenceCandidates("Guard", 200, 2);
         Assert.True(total > 10);
+        Assert.Equal(total, prod + test); // physical split always sums to the physical total (0ok)
         Assert.NotEmpty(groups);
         // Whole-identifier matching: "GuardXyz" must not count. All samples contain "Guard" as a token.
         foreach (var sample in groups.SelectMany(g => g.Samples))

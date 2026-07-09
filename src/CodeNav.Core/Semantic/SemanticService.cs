@@ -29,7 +29,10 @@ public sealed record SemanticReferences(
     List<SemanticRefGroup> Groups,
     ClusterCoverage Coverage,
     List<string> SkippedCandidateProjects,
-    IReadOnlyDictionary<string, int>? KindCounts = null);
+    IReadOnlyDictionary<string, int>? KindCounts = null,
+    // 24n: the deadline fired MID-COUNT and the counts are a salvaged LOWER BOUND of the scanned
+    // portion — previously seconds of completed compiler work were discarded into "semantic_timeout".
+    bool DeadlineExhausted = false);
 
 /// <summary>One implementation / derived class / override, tagged for hierarchy ranking.
 /// <paramref name="Via"/> names the base type that introduces the queried interface when the type
@@ -39,7 +42,8 @@ public sealed record SemanticImplementation(SemanticDeclaration Declaration, str
 public sealed record SemanticImplementations(
     SemanticDeclaration Symbol,
     List<SemanticImplementation> Implementations,   // concrete (instantiable) leaves first, then abstract scaffolding
-    ClusterCoverage Coverage);
+    ClusterCoverage Coverage,
+    bool DeadlineExhausted = false);                // 24n: deadline fired mid-search — list is a lower bound
 
 /// <summary>
 /// Owns: exact (compiler-backed) navigation operations with deadlines — symbol
@@ -145,6 +149,13 @@ public sealed partial class SemanticService : IDisposable
             // project was kept and the usage's project dropped).
             string declaringProject = symbol.ContainingAssembly?.Name ?? owningProject ?? "";
             int total = 0;
+            bool deadlineExhausted = false;
+            // Salvage wrapper (24n): if the deadline fires INSIDE the counting loop, keep what was
+            // counted as a lower bound instead of discarding completed compiler work into a bare
+            // "semantic_timeout". A deadline during resolve/FindReferences still falls through to
+            // the outer catch — there is genuinely nothing to salvage there.
+            try
+            {
             foreach (var referenced in found)
             {
                 foreach (var loc in referenced.Locations)
@@ -176,12 +187,19 @@ public sealed partial class SemanticService : IDisposable
                     string kind = SemanticReferenceKinds.Classify(rootNode, loc.Location.SourceSpan.Start, symbolIsType);
                     if (usageKinds is not null && !usageKinds.Contains(kind)) continue;
 
+                    // ALL bookkeeping commits before the awaitable sample fetch (review, 24n): with
+                    // the group commit trailing GetTextAsync, a deadline OCE on that await salvaged
+                    // a response whose total/kinds included the location but whose groups did not —
+                    // worst case "at least 1 exact references across 0 projects". The with-copy
+                    // shares the Samples List instance, so samples added below still land in the
+                    // stored group; a sample lost to the OCE costs a sample line, never a count.
                     total++;
                     kindCounts[kind] = kindCounts.GetValueOrDefault(kind) + 1;
                     if (!groups.TryGetValue(project, out var g))
                     {
                         g = new SemanticRefGroup(project, isTest, 0, new List<SemanticLocation>());
                     }
+                    groups[project] = g with { Count = g.Count + 1 };
                     var samples = g.Samples;
                     if (samples.Count < samplesPerGroup)
                     {
@@ -189,8 +207,15 @@ public sealed partial class SemanticService : IDisposable
                             .Lines[lineSpan.StartLinePosition.Line].ToString().Trim();
                         samples.Add(new SemanticLocation(relPath, refLine, Truncate(text), project, isTest, kind));
                     }
-                    groups[project] = g with { Count = g.Count + 1 };
                 }
+            }
+            }
+            catch (OperationCanceledException) when (total > 0)
+            {
+                // counted-so-far survives as a lower bound (24n). The when-guard keeps a ZERO
+                // salvage falling through to semantic_timeout — "0 exact references" at exact
+                // confidence would read as dead code when the deadline simply beat the count.
+                deadlineExhausted = true;
             }
 
             var result = new SemanticReferences(
@@ -199,7 +224,8 @@ public sealed partial class SemanticService : IDisposable
                 groups.Values.OrderByDescending(g => g.Count).ToList(),
                 coverage,
                 skipped,
-                kindCounts);
+                kindCounts,
+                deadlineExhausted);
             return (result, null);
         }
         catch (OperationCanceledException)
@@ -242,24 +268,35 @@ public sealed partial class SemanticService : IDisposable
             if (symbol is null) return (null, "symbol_not_resolved_in_scope");
 
             var results = new List<SemanticImplementation>();
-            if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface)
+            bool deadlineExhausted = false;
+            // Salvage wrapper (24n): a deadline firing after SOME finder pass completed (e.g. the
+            // member path's implementations found, overrides not yet) keeps the found portion as a
+            // lower bound. A deadline before anything was found still exits via the outer catch.
+            try
             {
-                var impls = await SymbolFinder.FindImplementationsAsync(iface, solution, cancellationToken: cts.Token).ConfigureAwait(false);
-                foreach (var impl in impls)
-                    results.Add(new SemanticImplementation(Describe(impl), DerivationVia(impl, iface)));
+                if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface)
+                {
+                    var impls = await SymbolFinder.FindImplementationsAsync(iface, solution, cancellationToken: cts.Token).ConfigureAwait(false);
+                    foreach (var impl in impls)
+                        results.Add(new SemanticImplementation(Describe(impl), DerivationVia(impl, iface)));
+                }
+                else if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Class } cls)
+                {
+                    var derived = await SymbolFinder.FindDerivedClassesAsync(cls, solution, cancellationToken: cts.Token).ConfigureAwait(false);
+                    foreach (var d in derived)
+                        results.Add(new SemanticImplementation(Describe(d), DerivationVia(d, cls)));
+                }
+                else
+                {
+                    var impls = await SymbolFinder.FindImplementationsAsync(symbol, solution, cancellationToken: cts.Token).ConfigureAwait(false);
+                    results.AddRange(impls.Select(s => new SemanticImplementation(Describe(s), null)));
+                    var overrides = await SymbolFinder.FindOverridesAsync(symbol, solution, cancellationToken: cts.Token).ConfigureAwait(false);
+                    results.AddRange(overrides.Select(s => new SemanticImplementation(Describe(s), null)));
+                }
             }
-            else if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Class } cls)
+            catch (OperationCanceledException) when (results.Count > 0)
             {
-                var derived = await SymbolFinder.FindDerivedClassesAsync(cls, solution, cancellationToken: cts.Token).ConfigureAwait(false);
-                foreach (var d in derived)
-                    results.Add(new SemanticImplementation(Describe(d), DerivationVia(d, cls)));
-            }
-            else
-            {
-                var impls = await SymbolFinder.FindImplementationsAsync(symbol, solution, cancellationToken: cts.Token).ConfigureAwait(false);
-                results.AddRange(impls.Select(s => new SemanticImplementation(Describe(s), null)));
-                var overrides = await SymbolFinder.FindOverridesAsync(symbol, solution, cancellationToken: cts.Token).ConfigureAwait(false);
-                results.AddRange(overrides.Select(s => new SemanticImplementation(Describe(s), null)));
+                deadlineExhausted = true; // found-so-far survives as a lower bound (24n)
             }
 
             // Hierarchy ranking: concrete (instantiable) leaves first — the actual runtime targets —
@@ -269,7 +306,7 @@ public sealed partial class SemanticService : IDisposable
                 .ThenBy(r => r.Declaration.SymbolDisplay, StringComparer.Ordinal)
                 .ToList();
 
-            return (new SemanticImplementations(Describe(symbol), results, coverage), null);
+            return (new SemanticImplementations(Describe(symbol), results, coverage, deadlineExhausted), null);
         }
         catch (OperationCanceledException)
         {

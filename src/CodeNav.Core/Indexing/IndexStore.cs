@@ -144,7 +144,8 @@ public sealed class IndexStore : IDisposable
               end_line INTEGER NOT NULL,
               is_partial INTEGER NOT NULL,
               arity INTEGER NOT NULL,
-              attr_markers TEXT
+              attr_markers TEXT,
+              modifiers TEXT  -- v4 (bt7): space-joined static/sealed/abstract/virtual/override/new/readonly/const
             );
             CREATE INDEX idx_symbols_file ON symbols(file_id, start_line);
             CREATE INDEX idx_symbols_name ON symbols(name COLLATE NOCASE);
@@ -197,8 +198,8 @@ public sealed class IndexStore : IDisposable
         // two prepared-statement steps per symbol, ~1.14M steps on a 570k-symbol build).
         cmd.CommandText = """
             INSERT INTO symbols(file_id, parent_id, kind, name, ns, container, signature,
-                                accessibility, start_line, end_line, is_partial, arity, attr_markers)
-            VALUES($f, $p, $k, $n, $ns, $c, $sig, $acc, $sl, $el, $part, $ar, $attr)
+                                accessibility, start_line, end_line, is_partial, arity, attr_markers, modifiers)
+            VALUES($f, $p, $k, $n, $ns, $c, $sig, $acc, $sl, $el, $part, $ar, $attr, $mods)
             RETURNING id;
             """;
         var pF = cmd.Parameters.Add("$f", SqliteType.Integer);
@@ -214,6 +215,7 @@ public sealed class IndexStore : IDisposable
         var pPart = cmd.Parameters.Add("$part", SqliteType.Integer);
         var pAr = cmd.Parameters.Add("$ar", SqliteType.Integer);
         var pAttr = cmd.Parameters.Add("$attr", SqliteType.Text);
+        var pMods = cmd.Parameters.Add("$mods", SqliteType.Text);
 
         var ordinalToId = new long[rows.Count];
         foreach (var row in rows)
@@ -231,6 +233,7 @@ public sealed class IndexStore : IDisposable
             pPart.Value = row.IsPartial ? 1 : 0;
             pAr.Value = row.Arity;
             pAttr.Value = (object?)row.AttrMarkers ?? DBNull.Value;
+            pMods.Value = (object?)row.Modifiers ?? DBNull.Value;
             ordinalToId[row.OrdinalInFile] = (long)cmd.ExecuteScalar()!;
         }
     }

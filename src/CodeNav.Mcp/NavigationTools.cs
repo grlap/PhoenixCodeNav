@@ -58,6 +58,8 @@ public sealed partial class NavigationTools
                 new { id = "filter-honest-counts", summary = "references: totalReferences/totalCandidates, kinds, groups, and summary all honor includeTests (filtered BEFORE counting on both exact and indexed paths); linked multi-project files counted once; filtered summaries say 'test projects excluded' instead of a misleading '0 test'" },
                 new { id = "bounded-source-reads", summary = "source_context streams only the requested spans from disk (never whole-file reads); contextLines clamped; zero/negative span starts clamp to line 1" },
                 new { id = "arity-exact-partials", summary = "outline partialFiles match generic arity — partial Foo and partial Foo<T> cross-link only their own halves" },
+                new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. Index schema v4 (first run after deploy rebuilds the index)" },
+                new { id = "deadline-honesty", summary = "semantic references/implementations/definition report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout" },
             },
             tools = new[]
             {
@@ -517,6 +519,7 @@ public sealed partial class NavigationTools
                 s.Kind,
                 s.Signature,
                 s.Accessibility,
+                modifiers = s.Modifiers, // bt7: virtual/override/abstract/static/sealed..., omitted when none
                 s.StartLine,
                 s.EndLine,
                 isPartial = s.IsPartial ? true : (bool?)null,
@@ -884,6 +887,8 @@ public sealed partial class NavigationTools
         string? failReason = null;
         if (mode is "auto" or "semantic")
         {
+            int deadlineMs = Math.Clamp(timeoutMs, 500, 60000); // mirror DefinitionAsync's clamp (24n)
+            var swSem = System.Diagnostics.Stopwatch.StartNew();
             var (target, hint) = ResolveSemanticTarget(name, container, kinds, path, line, column);
             if (target is { } t)
             {
@@ -912,6 +917,7 @@ public sealed partial class NavigationTools
                         declarations = items.Select(d => new { d.Path, d.StartLine, d.EndLine }),
                         declarationsTruncated = (listTrunc || totalDecls > MaxDeclarationSites) ? true : (bool?)null,
                         body,
+                        timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds }, // 24n
                         meta = Meta.From(_manager.Health(), "exact", "semantic"),
                     });
                     // Semantic spans come from live sources — pair them with live content.
@@ -932,6 +938,7 @@ public sealed partial class NavigationTools
                     error = "semantic_unavailable",
                     partialReason = failReason,
                     hint = "Retry with mode='indexed' for name-index declarations.",
+                    timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds }, // 24n: was the deadline the cause?
                     meta = Meta.From(_manager.Health(), "indexed", "semantic"),
                 });
             }
@@ -1088,6 +1095,8 @@ public sealed partial class NavigationTools
         }
 
         string? failReason = null;
+        int deadlineMs = Math.Clamp(timeoutMs, 500, 120000); // mirror the service clamp (24n)
+        var swSem = System.Diagnostics.Stopwatch.StartNew();
         var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column);
         if (target is { } t)
         {
@@ -1098,7 +1107,9 @@ public sealed partial class NavigationTools
             {
                 var impls = result.Implementations; // already ranked concrete-first by the semantic layer
                 int concreteCount = impls.Count(r => !r.Declaration.IsAbstract);
+                bool exhausted = result.DeadlineExhausted;
                 var meta0 = Meta.From(_manager.Health(), "exact", "semantic");
+                long elapsedMs = swSem.ElapsedMilliseconds;
                 return Json.WithListBudget(impls, (items, truncated) => new
                 {
                     symbol = SemanticSymbolJson(result.Symbol),
@@ -1111,13 +1122,19 @@ public sealed partial class NavigationTools
                     }),
                     concreteCount,
                     // High-signal case: exactly one instantiable implementation is very likely THE
-                    // runtime type; anything else is abstract scaffolding.
-                    likelyImplementation = concreteCount == 1
+                    // runtime type; anything else is abstract scaffolding. Never claimed when the
+                    // deadline cut the search short — the "one" may just be the one found in time.
+                    likelyImplementation = concreteCount == 1 && !exhausted
                         ? impls.First(r => !r.Declaration.IsAbstract).Declaration.SymbolDisplay
                         : null,
                     coverage = CoverageJson(result.Coverage),
+                    partial = exhausted ? true : (bool?)null,
+                    partialReason = exhausted
+                        ? $"deadline exhausted after {elapsedMs}ms of {deadlineMs}ms — this list is a LOWER BOUND of the implementers (raise timeoutMs)"
+                        : null,
+                    timing = new { deadlineMs, elapsedMs },
                     truncated,
-                    hint = concreteCount == 1
+                    hint = concreteCount == 1 && !exhausted
                         ? "One concrete implementation — likely the runtime target. Ranked concrete-first; isAbstract/rank mark non-instantiable scaffolding."
                         : null,
                     meta = meta0,
@@ -1285,6 +1302,10 @@ public sealed partial class NavigationTools
         }
         if (mode is "auto" or "semantic" && !hasPathFilter)
         {
+            // Deadline visibility (24n): every semantic response reports the effective deadline and
+            // how much of it was spent — "why is this partial / slow?" needs numbers, not guesses.
+            int deadlineMs = Math.Clamp(timeoutMs, 500, 120000);
+            var swSem = System.Diagnostics.Stopwatch.StartNew();
             var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column);
             if (target is { } t)
             {
@@ -1300,13 +1321,18 @@ public sealed partial class NavigationTools
                     int test0 = groups0.Where(g => g.IsTestProject).Sum(g => g.Count);
                     // "0 test" would misread as "no test usages exist" when they were EXCLUDED.
                     string mix0 = includeTests ? $"{prod0} production, {test0} test" : $"{prod0} production; test projects excluded";
-                    bool partial = result.SkippedCandidateProjects.Count > 0 || result.Coverage.FailedProjects.Count > 0;
+                    bool exhausted = result.DeadlineExhausted;
+                    bool partial = exhausted || result.SkippedCandidateProjects.Count > 0 || result.Coverage.FailedProjects.Count > 0;
+                    // "at least": exhausted counts are a salvaged lower bound (24n), never the census.
+                    string atLeast = exhausted ? "at least " : "";
                     var meta0 = Meta.From(_manager.Health(), "exact", "semantic");
+                    long elapsedMs = swSem.ElapsedMilliseconds;
                     return Json.WithListBudget(groups0, (items, truncated) => new
                     {
                         symbol = SemanticSymbolJson(result.Symbol),
-                        summary = $"{result.TotalLocations} exact references across {groups0.Count} projects ({mix0}).",
+                        summary = $"{atLeast}{result.TotalLocations} exact references across {groups0.Count} projects ({mix0}).",
                         totalReferences = result.TotalLocations,
+                        totalIsLowerBound = exhausted ? true : (bool?)null,
                         // HOW the symbol is used, e.g. {"call":20,"xmldoc":480} — the anti-"500 refs
                         // that are mostly doc mentions" signal. Filter with usageKinds.
                         kinds = result.KindCounts is { Count: > 0 } ? result.KindCounts : null,
@@ -1320,10 +1346,15 @@ public sealed partial class NavigationTools
                         }),
                         coverage = CoverageJson(result.Coverage),
                         partial,
-                        partialReason = partial
-                            ? $"skipped {result.SkippedCandidateProjects.Count} candidate projects (raise maxProjects), {result.Coverage.FailedProjects.Count} failed loads"
-                            : null,
+                        partialReason = !partial ? null
+                            : exhausted
+                                ? $"deadline exhausted after {elapsedMs}ms of {deadlineMs}ms — counts cover the scanned portion only (raise timeoutMs)"
+                                  + (result.SkippedCandidateProjects.Count > 0 || result.Coverage.FailedProjects.Count > 0
+                                      ? $"; also skipped {result.SkippedCandidateProjects.Count} candidate projects, {result.Coverage.FailedProjects.Count} failed loads"
+                                      : "")
+                                : $"skipped {result.SkippedCandidateProjects.Count} candidate projects (raise maxProjects), {result.Coverage.FailedProjects.Count} failed loads",
                         skippedCandidateProjects = result.SkippedCandidateProjects.Count > 0 ? result.SkippedCandidateProjects : null,
+                        timing = new { deadlineMs, elapsedMs },
                         truncated,
                         meta = meta0,
                     });
@@ -1341,6 +1372,7 @@ public sealed partial class NavigationTools
                     error = "semantic_unavailable",
                     partialReason = failReason,
                     hint = "Retry with mode='indexed' for fast text candidates.",
+                    timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds }, // 24n: was the deadline the cause?
                     meta = Meta.From(_manager.Health(), "indexed", "semantic"),
                 });
             }
@@ -1362,11 +1394,11 @@ public sealed partial class NavigationTools
         // and the groups describe one set. Summing the filtered groups here instead was itself
         // dishonest (review-reproduced): a file linked into TWO production projects appears in
         // both groups, so the sum double-counted it and the "filtered" total EXCEEDED the real one.
-        var (total, groups) = q.ReferenceCandidates(
+        var (total, prod, test, groups) = q.ReferenceCandidates(
             name, Math.Clamp(maxFiles, 10, 2000), Math.Clamp(samplesPerGroup, 0, 10), pathGlob, excludes, includeGenerated, includeTests);
 
-        int prod = groups.Where(g => !g.IsTestProject).Sum(g => g.Count);
-        int test = groups.Where(g => g.IsTestProject).Sum(g => g.Count);
+        // prod/test are PHYSICAL splits of `total` (each file once — 0ok: the old per-group sums
+        // let "4 candidate lines (8 production)" appear when a file is linked into two projects).
         string mix = includeTests ? $"{prod} production, {test} test" : $"{prod} production; test projects excluded";
         var meta = Meta.From(_manager.Health(), "indexed", "text");
         return Json.WithListBudget(groups, (items, truncated) => new
@@ -1631,6 +1663,9 @@ public sealed partial class NavigationTools
         containingType = s.Container,
         s.Signature,
         s.Accessibility,
+        // Inheritance/lifetime modifiers (bt7): "virtual"/"override"/"abstract"/"static sealed"...
+        // Omitted when none — in deep hierarchies this picks the override site without opening files.
+        modifiers = s.Modifiers,
         path = s.FilePath,
         s.StartLine,
         s.EndLine,

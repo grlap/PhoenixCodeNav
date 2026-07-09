@@ -342,7 +342,7 @@ public sealed partial class NavigationTools
         }
 
         // 3. Reference summary (indexed — fast).
-        var (refTotal, refGroups) = q.ReferenceCandidates(name, 300, 1);
+        var (refTotal, _, _, refGroups) = q.ReferenceCandidates(name, 300, 1);
 
         // 4. Related tests.
         string? owner = declPath is not null
@@ -424,9 +424,9 @@ public sealed partial class NavigationTools
             ? q.ProjectsContaining(primary.FilePath).FirstOrDefault(p => !p.IsTest)?.Name
             : null;
 
-        var (refTotal, refGroups) = q.ReferenceCandidates(name, 500, 0);
-        int prodRefs = refGroups.Where(g => !g.IsTestProject).Sum(g => g.Count);
-        int testRefs = refGroups.Where(g => g.IsTestProject).Sum(g => g.Count);
+        // Physical prod/test split (0ok): the old per-group sums double-counted files linked into
+        // several projects, so impact could report more prod+test references than lines exist.
+        var (refTotal, prodRefs, testRefs, refGroups) = q.ReferenceCandidates(name, 500, 0);
         int dependents = owner is not null ? q.DependentClosure(owner).Count : 0;
         var tests = q.RelatedTests(name, owner, 6);
         bool isPublic = primary?.Accessibility == "public";
@@ -475,7 +475,7 @@ public sealed partial class NavigationTools
             return Json.Serialize(new { error = "symbol_not_resolved", partialReason = reason });
         }
         using var q = _manager.OpenQueries();
-        var (total, groups) = q.ReferenceCandidates(name, 300, 2);
+        var (total, _, _, groups) = q.ReferenceCandidates(name, 300, 2);
         var meta = Meta.From(_manager.Health(), "indexed", "text");
         return Json.WithListBudget(groups, (items, truncated) => new
         {

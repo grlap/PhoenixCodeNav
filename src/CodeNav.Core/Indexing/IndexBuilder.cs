@@ -34,8 +34,9 @@ public static class IndexBuilder
     /// changes, so a deployed binary rebuilds a stale on-disk index instead of trusting old rows.
     /// v2: ref/out/in/params modifiers in signatures; interface members default to public.
     /// v3: compile-graph fidelity (3tz) — compile_items honor &lt;Compile Include&gt; globs and
-    /// &lt;Compile Remove&gt;; projects gained compile_globs.</summary>
-    public const string SchemaVersion = "3";
+    /// &lt;Compile Remove&gt;; projects gained compile_globs.
+    /// v4: symbols.modifiers (bt7) — static/sealed/abstract/virtual/override/new/readonly/const.</summary>
+    public const string SchemaVersion = "4";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null)
     {
