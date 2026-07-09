@@ -84,6 +84,9 @@ public static class IndexBuilder
         var parsedSolutions = scan.SolutionFiles
             .Select(s => SolutionParser.Parse(workspaceRoot, s.RelPath))
             .ToList();
+        // efa: failed csproj parses were invisible — their compile sets and graph edges are
+        // guesses at best, and a watcher of the build deserves the count, not a clean-looking bar.
+        liveProgress?.SetProjectsFailed(parsedProjects.Count(p => p.LoadStatus.StartsWith("failed", StringComparison.Ordinal)));
         var projectTime = sw.Elapsed;
 
         using var store = new IndexStore(dbPath, createNew: true);
@@ -150,8 +153,11 @@ public static class IndexBuilder
                         var parsed = SyntaxIndexer.Parse(scanned.RelPath, content);
                         channel.Writer.WriteAsync((scanned, parsed, hash)).AsTask().GetAwaiter().GetResult();
                     }
-                    catch (IOException) { /* transiently unreadable — skip; delta refresh will retry */ }
-                    catch (UnauthorizedAccessException) { }
+                    // efa: a skipped file is ABSENT from the index until a delta refresh retries
+                    // it — count it so filesIndexed + filesSkipped accounts for filesTotal and a
+                    // stalled-looking bar is distinguishable from a lossy one.
+                    catch (IOException) { liveProgress?.AddFileSkipped(); /* transiently unreadable; delta refresh will retry */ }
+                    catch (UnauthorizedAccessException) { liveProgress?.AddFileSkipped(); }
                 });
             }
             finally

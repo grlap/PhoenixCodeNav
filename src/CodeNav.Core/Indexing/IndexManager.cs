@@ -14,7 +14,12 @@ public sealed record IndexHealth(
     string DbPath,
     string? IndexedCommit = null,   // git commit the index reflects (git-aware refresh)
     string? IndexedBranch = null,
-    IndexProgress? Progress = null); // live build progress — non-null ONLY while state == building
+    IndexProgress? Progress = null, // live build progress — non-null ONLY while state == building
+    // z4c: MONOTONIC count of file deltas the pump has APPLIED (added+changed+deleted across
+    // all refreshes since this manager started). Paired with PendingChanges it turns the
+    // refreshing state from a binary into movement: pending drains while processed climbs —
+    // a stuck pump (pending flat, processed flat) is distinguishable from a busy one.
+    long PendingProcessed = 0);
 
 /// <summary>
 /// Owns: index lifecycle for one workspace — open-or-build (in background, never
@@ -52,6 +57,7 @@ public sealed class IndexManager : IDisposable
     private volatile bool _disposed;
     private volatile string _state = "missing";
     private volatile string? _error;
+    private long _pendingProcessed; // z4c: lifetime count of applied file deltas (see IndexHealth)
     // Index metadata is cached here so Health() (called on tool threads) never touches
     // the single write connection, which only the opening thread and the pump may use.
     // Read once at open, then updated by the pump after each refresh.
@@ -266,6 +272,10 @@ public sealed class IndexManager : IDisposable
             {
                 _state = "refreshing";
                 var result = DeltaRefresher.Refresh(_store, _workspaceRoot, req.Paths, _log);
+                // z4c: count what was ACTUALLY applied (the refresh result), not what was
+                // requested — a sweep request has no path count, and hash-identical paths are
+                // rightly skipped without being "processed".
+                Interlocked.Add(ref _pendingProcessed, result.AddedFiles + result.ChangedFiles + result.DeletedFiles);
                 _lastRefreshUtc = DateTime.UtcNow.ToString("O");
                 if (result.AddedFiles + result.ChangedFiles + result.DeletedFiles > 0)
                 {
@@ -418,7 +428,8 @@ public sealed class IndexManager : IDisposable
             _state, _indexVersion, _indexedAtUtc, _lastRefreshUtc,
             _watcher?.PendingCount ?? 0, _error, dbBytes, _workspaceRoot, _dbPath,
             _indexedCommit, _indexedBranch,
-            _state == "building" && bp is not null ? bp.Snapshot() : null);
+            _state == "building" && bp is not null ? bp.Snapshot() : null,
+            Interlocked.Read(ref _pendingProcessed));
     }
 
     /// <summary>Current git HEAD commit for the workspace, or null if not a git repo / git absent.

@@ -63,7 +63,7 @@ public sealed partial class NavigationTools
                 new { id = "rebuild-hatch", summary = "refresh_index accepts force: 'auto'|'incremental' (delta refresh; hash-identical files skipped — never rebuilds an intact-looking index) or 'full' (delete the index and REBUILD FROM SCRATCH, pump-serialized, works even from state 'failed' — recovery re-attaches the file watcher and git tracking and clears the old error; watch index.progress). The in-band corruption-recovery hatch — no shell access needed" },
                 new { id = "deadline-honesty", summary = "semantic references/implementations/definition/type_hierarchy report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout. A deadline that dies during cluster LOAD (typically the FIRST call after an index build or reload) reports partialReason 'cluster_cold_load' — an immediate retry usually returns exact — instead of masquerading as a scan timeout (token is the string PREFIX; inline advice follows); references/implementations timing adds {clusterLoadMs, queryMs} so the budget split is visible. references counts are physical-site deduped (one count per project+path+line+kind — twin-declaration types no longer double-count); coverage carries solutionProjects so hits from previously-resident projects are legible; outOfGraphCandidates lists textual mentions with NO graph path to the declarer (plugins, config-wired consumers), previously dropped without a trace" },
                 new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Assembly-name collisions (net-old/net-new csproj pairs) resolve to a name-level edge — the graph and the semantic workspace are name-keyed, so paired declarers keep all their consumer edges (schema v6+; edge recovery itself since v5). meta.indexSchema stamped on every response" },
-                new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and every index_building error body carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal (once the scan knows it), elapsedMs} — monotonic counters, no fabricated ETA or percent (derive % from the counters); absent when ready, and background refreshes never show a cold-build bar" },
+                new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and every index_building error body carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal (once the scan knows it), elapsedMs} — monotonic counters, no fabricated percent (derive % from the counters); absent when ready, and background refreshes never show a cold-build bar. Loss visibility (efa): filesSkipped (unreadable .cs — absent from the index until a delta refresh retries) and projectsFailed (csproj parse failures — guessed compile sets) appear ONLY when >0. Derived throughput (0tn): filesPerSecond + estimatedRemainingMs appear only during indexing_files once >=100 files over >=1s of THAT phase's clock are measured — labeled estimates that may fluctuate, never extrapolated from another phase. Refresh movement (z4c): server_capabilities.index.pendingProcessed is the MONOTONIC count of applied file deltas, paired with pendingChanges — pending drains while processed climbs; both flat means a stuck pump, not a busy one" },
                 new { id = "edge-provenance", summary = "graph edges carry HOW the coupling is wired (schema v10): 'projectReference' (real <ProjectReference>) vs 'hintPathReference' (recovered from <Reference>+HintPath / bare Include — the multi-staged build). project_graph.edges.kind now reports the truth (previously HARDCODED 'projectReference' for every edge); dependency_path adds structuredPaths with per-hop 'via' (arrow strings stay) and sameProject:true on the trivially-yes X-to-X query; context_pack.ownerProjectEdges flags only hintPathReference edges; impact adds directDependentProjects {total, viaProjectReference, viaHintPathOnly} + a risk when consumers are HintPath-only (they bind to the last-BUILT dll and ProjectReference-aware refactor tooling won't follow the edge) — transitive stays one number (mixed-kind paths have no honest per-kind bucket; impact.transitiveNote states this inline whenever assembly wiring is present). A pair wired BOTH ways records 'project' (first-writer: ProjectReference edges insert before recovery). Reference groups in files no project compiles are now structured — orphaned:true with the project field OMITTED (house style: null fields don't serialize) — instead of the magic '(no project)' string" },
                 new { id = "related-tests-signal", summary = "related_tests / impact / context_pack test groups carry 'signal' — the strongest usage SHAPE among the sampled mention lines: callSite ('Name(' — something executes) > typeUsage ('new Name' / ': Name' / 'Name<' / 'Name.') > nameMention (strings, comments, usings). Heuristic text shapes, a lead-strength label — not a compiler fact; omitted on naming-convention / project-reference groups (Reason already carries their tier) AND on the rare mention group whose ordinal line scan misses the case-insensitive FTS match — absent signal means UNGRADED, never nameMention. related_tests samples carry the real mention line + text when located (previously always line 1 with empty text; the ungraded case keeps that placeholder with text omitted)" },
             },
@@ -100,6 +100,9 @@ public sealed partial class NavigationTools
                 h.IndexedAtUtc,
                 h.LastRefreshUtc,
                 h.PendingChanges,
+                // z4c: the pair that turns 'refreshing' from a binary into movement — pending
+                // drains while processed climbs; both flat = a stuck pump, not a busy one.
+                pendingProcessed = h.PendingProcessed,
                 h.Error,
                 dbBytes = h.DbBytes,
                 workspaceRoot = h.WorkspaceRoot,
@@ -1882,6 +1885,10 @@ public sealed partial class NavigationTools
         });
     }
 
+    /// <summary>Test seam: the shared progress emitter — the silent-when-zero (efa) and
+    /// gated-estimate (0tn) emission rules are pinned by tests through this.</summary>
+    internal static object? ProgressJsonForTest(IndexHealth h) => ProgressJson(h);
+
     /// <summary>Build-progress envelope shared by server_capabilities.index and the
     /// index_building error body — one shape everywhere; null (omitted) unless building.</summary>
     private static object? ProgressJson(IndexHealth h) =>
@@ -1891,6 +1898,16 @@ public sealed partial class NavigationTools
             filesIndexed = p.FilesIndexed,
             filesTotal = p.FilesTotal,
             elapsedMs = p.ElapsedMs,
+            // efa: silent on a clean build — the counters exist to make a LOSSY build visible
+            // (skipped reads are absent from the index until a delta refresh retries them;
+            // failed csproj parses mean guessed compile sets), not to add noise to a good one.
+            filesSkipped = p.FilesSkipped > 0 ? p.FilesSkipped : (int?)null,
+            projectsFailed = p.ProjectsFailed > 0 ? p.ProjectsFailed : (int?)null,
+            // 0tn: DERIVED from the monotonic counters over the indexing_files phase's own
+            // clock, present only once measurable (>=100 files over >=1s) — labeled estimates
+            // that may fluctuate; still no percent field (derive % from the counters).
+            filesPerSecond = p.FilesPerSecond,
+            estimatedRemainingMs = p.EstimatedRemainingMs,
         };
 
     // Cursor is "o:<offset>" or, for a mode-carrying tool (search_symbol auto), "o:<offset>:<mode>".
