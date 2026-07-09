@@ -19,9 +19,12 @@ public sealed record SymbolRow(
     bool IsPartial,
     int Arity,
     string? AttrMarkers,        // ';' joined simple attribute names (for test detection etc.)
-    string? Modifiers = null);  // space-joined inheritance/lifetime modifiers (static sealed abstract
+    string? Modifiers = null,   // space-joined inheritance/lifetime modifiers (static sealed abstract
                                 // virtual override new), null when none — bt7: in deep hierarchies a
                                 // caller needs "override" vs "virtual" to pick the right site
+    string? Accessors = null);  // "get=public;set=private" — ONLY when an accessor's accessibility
+                                // differs from the member's own (hu7, field twice-asked: the private
+                                // on a setter was invisible); null when uniform or accessor-less
 
 public sealed record ParsedCsFile(
     string RelPath,
@@ -197,13 +200,34 @@ public static class SyntaxIndexer
         // Extracted HERE from the declaration node (bt7) so every member/type kind gets them
         // uniformly — namespaces are MemberDeclarationSyntax too but carry no modifiers.
         string? mods = node is MemberDeclarationSyntax md ? Mods(md.Modifiers) : null;
+        string? accessors = AccessorSplit(node, accessibility);
         symbols.Add(new SymbolRow(
             ordinal, parentOrdinal, kind, name, ns, container,
             signature.Length > 400 ? signature[..400] : signature,
             accessibility,
             span.Start.Line + 1, span.End.Line + 1,
-            isPartial, arity, attrs, mods));
+            isPartial, arity, attrs, mods, accessors));
         return ordinal;
+    }
+
+    /// <summary>Per-accessor accessibility split, e.g. <c>get=public;set=private</c> — emitted
+    /// ONLY when at least one accessor's accessibility differs from the member's own (hu7, field
+    /// twice-asked: <c>{ get; private set; }</c> showed a bare "public" and the private setter
+    /// was invisible). All accessors are listed when any differs (explicit beats implicit);
+    /// null when uniform or accessor-less (expression-bodied members). Covers properties,
+    /// indexers, and events with explicit add/remove.</summary>
+    private static string? AccessorSplit(SyntaxNode node, string memberAccessibility)
+    {
+        if (node is not BasePropertyDeclarationSyntax bp || bp.AccessorList is null) return null;
+        List<string>? parts = null;
+        bool anyDiffers = false;
+        foreach (var acc in bp.AccessorList.Accessors)
+        {
+            string a = Access(acc.Modifiers, memberAccessibility);
+            if (!string.Equals(a, memberAccessibility, StringComparison.Ordinal)) anyDiffers = true;
+            (parts ??= new()).Add($"{acc.Keyword.ValueText}={a}");
+        }
+        return anyDiffers ? string.Join(';', parts!) : null;
     }
 
     /// <summary>Space-joined inheritance/lifetime modifiers in canonical order, null when none.

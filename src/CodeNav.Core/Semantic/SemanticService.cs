@@ -32,7 +32,10 @@ public sealed record SemanticReferences(
     IReadOnlyDictionary<string, int>? KindCounts = null,
     // 24n: the deadline fired MID-COUNT and the counts are a salvaged LOWER BOUND of the scanned
     // portion — previously seconds of completed compiler work were discarded into "semantic_timeout".
-    bool DeadlineExhausted = false);
+    bool DeadlineExhausted = false,
+    // kbn: textual candidates OUTSIDE the dependency closure (plugins, config-wired consumers) —
+    // previously dropped without a trace; capped at 20.
+    List<string>? OutOfGraphCandidates = null);
 
 /// <summary>One implementation / derived class / override, tagged for hierarchy ranking.
 /// <paramref name="Via"/> names the base type that introduces the queried interface when the type
@@ -139,7 +142,7 @@ public sealed partial class SemanticService : IDisposable
 
             // Phase 2: load the dependent scan set and re-resolve IN that snapshot, then
             // resolve + search against the SAME solution (no snapshot drift).
-            var (solution, symbol, coverage, skipped) = await LoadScanSetAndResolveAsync(
+            var (solution, symbol, coverage, skipped, outOfGraph) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token, implementerSeeds).ConfigureAwait(false);
             if (symbol is null) return (null, "symbol_not_resolved_in_scope");
 
@@ -248,7 +251,8 @@ public sealed partial class SemanticService : IDisposable
                 coverage,
                 skipped,
                 kindCounts,
-                deadlineExhausted);
+                deadlineExhausted,
+                outOfGraph.Count > 0 ? outOfGraph : null);
             return (result, null);
         }
         catch (OperationCanceledException)
@@ -286,7 +290,7 @@ public sealed partial class SemanticService : IDisposable
                     .ToList();
             }
 
-            var (solution, symbol, coverage, _) = await LoadScanSetAndResolveAsync(
+            var (solution, symbol, coverage, _, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token, implementerSeeds).ConfigureAwait(false);
             if (symbol is null) return (null, "symbol_not_resolved_in_scope");
 
@@ -464,11 +468,12 @@ public sealed partial class SemanticService : IDisposable
     /// dependent scan set and re-resolves the symbol IN the loaded snapshot. The returned
     /// symbol and solution are one consistent snapshot for SymbolFinder.
     /// </summary>
-    private async Task<(Solution Solution, ISymbol? Symbol, ClusterCoverage Coverage, List<string> Skipped)> LoadScanSetAndResolveAsync(
+    private async Task<(Solution Solution, ISymbol? Symbol, ClusterCoverage Coverage, List<string> Skipped, List<string> OutOfGraph)> LoadScanSetAndResolveAsync(
         string symbolName, string owningProject, string path, int line, int? column, string? nameHint,
         int maxProjects, CancellationToken ct, IReadOnlyList<string>? prioritySeeds = null)
     {
         List<string> skipped;
+        var outOfGraph = new List<string>();
         HashSet<string> scanSet;
         using (var q = _manager.OpenQueries())
         {
@@ -486,9 +491,17 @@ public sealed partial class SemanticService : IDisposable
                 foreach (var p in prioritySeeds)
                     if (chosen.Count < budget && seen.Add(p)) chosen.Add(p);
 
-            var candidates = q.CandidateProjectsForName(symbolName)
-                .Where(c => dependents.Contains(c.Project))
-                .ToList();
+            // kbn: textual candidates OUTSIDE the dependency closure (and not seed-chosen) were
+            // dropped SILENTLY — not even in `skipped`. Post-lhg the closure covers assembly-ref
+            // consumers, so this residue is reflection-loaded plugins / config-wired consumers:
+            // projects that mention the name but have no graph path to the declarer. Report them
+            // (capped) so a caller can see there was textual smoke beyond the graph.
+            var candidates = new List<(string Project, int FileCount)>();
+            foreach (var c in q.CandidateProjectsForName(symbolName))
+            {
+                if (dependents.Contains(c.Project)) candidates.Add(c);
+                else if (!seen.Contains(c.Project) && outOfGraph.Count < 20) outOfGraph.Add(c.Project);
+            }
             foreach (var c in candidates)
                 if (chosen.Count < budget && seen.Add(c.Project)) chosen.Add(c.Project);
             skipped = candidates.Select(c => c.Project).Where(p => !seen.Contains(p)).ToList();
@@ -503,7 +516,7 @@ public sealed partial class SemanticService : IDisposable
         var symbol = await ResolveInSolutionAsync(
             solution, owningProject, path.Replace('\\', '/').TrimStart('/'), line, column, nameHint, ct)
             .ConfigureAwait(false);
-        return (solution, symbol, coverage, skipped);
+        return (solution, symbol, coverage, skipped, outOfGraph);
     }
 
     // ---------------------------------------------------------------- shaping

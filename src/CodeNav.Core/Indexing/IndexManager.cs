@@ -27,8 +27,11 @@ public sealed class IndexManager : IDisposable
     private const int GitDiffCap = 5000; // beyond this, a full sweep beats a giant targeted batch
 
     // A refresh unit: Paths=null is a full detect-all sweep; RecordCommit, when set, is written
-    // as the reflected git commit after the batch succeeds (git-aware reconcile).
-    private sealed record RefreshRequest(IReadOnlyCollection<string>? Paths, string? RecordCommit = null);
+    // as the reflected git commit after the batch succeeds (git-aware reconcile). FullRebuild
+    // (tky) throws the whole index away and rebuilds from scratch — the in-band recovery hatch
+    // (field: parked at state 'failed' with no remedy but shell rm -rf .codenav).
+    private sealed record RefreshRequest(IReadOnlyCollection<string>? Paths, string? RecordCommit = null,
+        bool FullRebuild = false);
 
     private readonly string _workspaceRoot;
     private readonly string _dbPath;
@@ -252,6 +255,11 @@ public sealed class IndexManager : IDisposable
     {
         await foreach (var req in _refreshQueue.Reader.ReadAllAsync())
         {
+            if (req.FullRebuild)
+            {
+                FullRebuildInPump();
+                continue;
+            }
             if (_store is null) continue;
             string previous = _state;
             try
@@ -286,9 +294,107 @@ public sealed class IndexManager : IDisposable
         }
     }
 
+    /// <summary>The pump-side rebuild-from-scratch (tky): runs ON the pump thread so no delta
+    /// batch can interleave with the teardown. Discards the store, deletes the db, rebuilds with
+    /// live progress (the same building-state surface as a first run), reopens, and re-records
+    /// the git baseline (the fresh build reflects HEAD, and the old indexed_commit died with the
+    /// db). Failure latches state 'failed' with the sanitized error — from which this same hatch
+    /// remains the recovery path.</summary>
+    private void FullRebuildInPump()
+    {
+        _log("Full rebuild requested (refresh_index force:'full') — rebuilding the index from scratch.");
+        _state = "building";
+        _buildProgress = new BuildProgress();
+        try
+        {
+            _store?.Dispose();
+            _store = null;
+            // Delete with a bounded retry: in-flight tool calls hold short-lived READ connections
+            // (an open handle blocks Windows File.Delete); pooled ones are cleared, live ones
+            // release within milliseconds when their `using` scope ends. A persistently held file
+            // fails honestly after ~3s (state 'failed', from which this hatch remains the remedy).
+            // SIDECARS FIRST (review F3): main-db-then-sidecars left a crash window where a stale
+            // -wal survived into a fresh build (IndexStore's createNew cleanup only ran when the
+            // MAIN file existed) — the classic SQLite stale-WAL-replay footgun.
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+                    foreach (var sidecar in new[] { _dbPath + "-wal", _dbPath + "-shm" })
+                    {
+                        if (File.Exists(sidecar)) File.Delete(sidecar);
+                    }
+                    if (File.Exists(_dbPath)) File.Delete(_dbPath);
+                    break;
+                }
+                catch (IOException) when (attempt < 10)
+                {
+                    Thread.Sleep(300);
+                }
+            }
+
+            var result = IndexBuilder.Build(_workspaceRoot, _dbPath, _log, _buildProgress);
+            _log($"Full rebuild done: {result.CsFiles} files, {result.Symbols} symbols in {result.TotalTime.TotalSeconds:F0}s");
+
+            var store = new IndexStore(_dbPath, createNew: false);
+            // Reset cached meta BEFORE CacheMeta: its ??= semantics would otherwise resurrect
+            // values from the deleted index (stale indexed_commit on a fresh db).
+            _lastRefreshUtc = null;
+            _indexedCommit = null;
+            _indexedBranch = null;
+            CacheMeta(store);
+            _store = store;
+            _error = null;   // review F2: recovery is a DESIGNED failed->ready transition — a
+                             // healthy index must not keep reporting the pre-recovery failure
+            _state = "ready";
+
+            // Review F1: recovery FROM FAILED never had a watcher or git tracking — startup died
+            // before attaching them, and the recovered index silently went stale (PendingChanges
+            // read 0 with no watcher at all; branch switches never reconciled). Attach whatever
+            // is missing; null-guards keep the from-READY rebuild from double-attaching.
+            if (_watcher is null) StartWatcher();
+            if (_gitWatcher is null)
+            {
+                // Resolves _gitDir, queues the baseline commit record, attaches the GitWatcher —
+                // the same first-run path Start uses (queued behind us on this very pump).
+                InitGitTracking();
+            }
+            else if (_gitDir is not null && GitInfo.HeadCommit(_workspaceRoot) is { } head)
+            {
+                // From-READY rebuild: tracking is live; re-record the baseline immediately (the
+                // fresh build reflects HEAD and the old indexed_commit died with the db).
+                store.SetMeta("indexed_commit", head);
+                _indexedCommit = head;
+                if (GitInfo.HeadBranch(_workspaceRoot) is { } branch)
+                {
+                    store.SetMeta("indexed_branch", branch);
+                    _indexedBranch = branch;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"{ex.GetType().Name} during full rebuild (see server log)";
+            _state = "failed";
+            _log($"Full rebuild failed: {ex}");
+        }
+        finally
+        {
+            _buildProgress = null;
+        }
+    }
+
     /// <summary>Queues a manual refresh (targeted paths, or full detection sweep when null).</summary>
     public void RequestRefresh(IReadOnlyCollection<string>? paths = null) =>
         _refreshQueue.Writer.TryWrite(new RefreshRequest(paths));
+
+    /// <summary>Queues a REBUILD-FROM-SCRATCH (tky): delete the db, run a full build, reopen.
+    /// Serialized on the refresh pump like every other index mutation, so it can never race a
+    /// delta batch. This is the in-band recovery hatch for a corrupt/failed index — including
+    /// from state 'failed', where the pump is idle and the store may never have opened.</summary>
+    public void RequestFullRebuild() =>
+        _refreshQueue.Writer.TryWrite(new RefreshRequest(null, FullRebuild: true));
 
     public bool IsQueryable => _state is "ready" or "refreshing" && File.Exists(_dbPath);
 

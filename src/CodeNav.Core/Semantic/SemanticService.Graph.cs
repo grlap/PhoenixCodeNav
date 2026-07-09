@@ -29,7 +29,7 @@ public sealed partial class SemanticService
             var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
             if (symbolA is null || owningProject is null) return (null, null, "symbol_not_resolved");
 
-            var (solution, symbol, coverage, _) = await LoadScanSetAndResolveAsync(
+            var (solution, symbol, coverage, _, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token).ConfigureAwait(false);
             if (symbol is null) return (null, null, "symbol_not_resolved_in_scope");
 
@@ -135,7 +135,7 @@ public sealed partial class SemanticService
                     .ToList();
             }
 
-            var (solution, symbol, coverage, _) = await LoadScanSetAndResolveAsync(
+            var (solution, symbol, coverage, _, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token, implementerSeeds).ConfigureAwait(false);
             if (symbol is not INamedTypeSymbol type)
             {

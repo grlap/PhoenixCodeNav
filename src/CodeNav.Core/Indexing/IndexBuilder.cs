@@ -48,8 +48,10 @@ public static class IndexBuilder
     /// v8: review fixes — name-level self-edge guard (a pair member referencing its own
     /// assembly name minted X-&gt;X, inflating dependents), NAME-uniform is_test across
     /// same-AssemblyName pair rows (half-promotion made the answer scan-order-dependent),
-    /// xunit.assert marker.</summary>
-    public const string SchemaVersion = "8";
+    /// xunit.assert marker.
+    /// v9: symbols.accessors (hu7) — per-accessor accessibility ("get=public;set=private")
+    /// when an accessor differs from the member's own.</summary>
+    public const string SchemaVersion = "9";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null)

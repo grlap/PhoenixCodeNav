@@ -16,14 +16,17 @@ public sealed class IndexStore : IDisposable
     {
         _dbPath = dbPath;
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-        if (createNew && File.Exists(dbPath))
+        if (createNew)
         {
+            // Sidecars cleaned UNCONDITIONALLY (review F3): a crash between a main-db delete and
+            // its sidecar deletes leaves an orphaned -wal that a fresh build would otherwise
+            // replay stale content from. Main-file check stays only for the main delete.
             SqliteConnection.ClearAllPools();
-            File.Delete(dbPath);
             foreach (var sidecar in new[] { dbPath + "-wal", dbPath + "-shm" })
             {
                 if (File.Exists(sidecar)) File.Delete(sidecar);
             }
+            if (File.Exists(dbPath)) File.Delete(dbPath);
         }
 
         _write = Open();
@@ -145,7 +148,8 @@ public sealed class IndexStore : IDisposable
               is_partial INTEGER NOT NULL,
               arity INTEGER NOT NULL,
               attr_markers TEXT,
-              modifiers TEXT  -- v4 (bt7): space-joined static/sealed/abstract/virtual/override/new/readonly/const
+              modifiers TEXT,  -- v4 (bt7): space-joined static/sealed/abstract/virtual/override/new/readonly/const
+              accessors TEXT   -- v9 (hu7): "get=public;set=private", only when an accessor differs
             );
             CREATE INDEX idx_symbols_file ON symbols(file_id, start_line);
             CREATE INDEX idx_symbols_name ON symbols(name COLLATE NOCASE);
@@ -198,8 +202,8 @@ public sealed class IndexStore : IDisposable
         // two prepared-statement steps per symbol, ~1.14M steps on a 570k-symbol build).
         cmd.CommandText = """
             INSERT INTO symbols(file_id, parent_id, kind, name, ns, container, signature,
-                                accessibility, start_line, end_line, is_partial, arity, attr_markers, modifiers)
-            VALUES($f, $p, $k, $n, $ns, $c, $sig, $acc, $sl, $el, $part, $ar, $attr, $mods)
+                                accessibility, start_line, end_line, is_partial, arity, attr_markers, modifiers, accessors)
+            VALUES($f, $p, $k, $n, $ns, $c, $sig, $acc, $sl, $el, $part, $ar, $attr, $mods, $accs)
             RETURNING id;
             """;
         var pF = cmd.Parameters.Add("$f", SqliteType.Integer);
@@ -216,6 +220,7 @@ public sealed class IndexStore : IDisposable
         var pAr = cmd.Parameters.Add("$ar", SqliteType.Integer);
         var pAttr = cmd.Parameters.Add("$attr", SqliteType.Text);
         var pMods = cmd.Parameters.Add("$mods", SqliteType.Text);
+        var pAccs = cmd.Parameters.Add("$accs", SqliteType.Text);
 
         var ordinalToId = new long[rows.Count];
         foreach (var row in rows)
@@ -234,6 +239,7 @@ public sealed class IndexStore : IDisposable
             pAr.Value = row.Arity;
             pAttr.Value = (object?)row.AttrMarkers ?? DBNull.Value;
             pMods.Value = (object?)row.Modifiers ?? DBNull.Value;
+            pAccs.Value = (object?)row.Accessors ?? DBNull.Value;
             ordinalToId[row.OrdinalInFile] = (long)cmd.ExecuteScalar()!;
         }
     }

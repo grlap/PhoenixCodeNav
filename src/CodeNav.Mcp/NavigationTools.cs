@@ -55,11 +55,12 @@ public sealed partial class NavigationTools
                 new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + didYouMean token variants + contextual notes" },
                 new { id = "reference-kinds", summary = "references (exact path): per-location usage kinds — call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/other — with a kinds breakdown, usageKinds filter (validated), and publicConsumersOnly (usages outside the symbol's declaring project); indexed fallback stays unclassified and says so" },
                 new { id = "symbol-handles", summary = "idx:N~fp symbol handles (index-local, reindex-detecting) accepted by source_context / definition / references" },
-                new { id = "filter-honest-counts", summary = "references: totalReferences/totalCandidates, kinds, groups, and summary all honor includeTests (filtered BEFORE counting on both exact and indexed paths); linked multi-project files counted once; filtered summaries say 'test projects excluded' instead of a misleading '0 test'. isTest classification is REFERENCE-driven (nunit/xunit/MSTest via packages OR binary <Reference>, incl. non-standard names containing nunit.framework) plus compiled-[TestFixture]-attributes-on-graph-leaf promotion for custom-resolve builds; name shapes are a narrow dotted-suffix fallback only (TestRoute-style names never classify). Index schema v7" },
+                new { id = "filter-honest-counts", summary = "references: totalReferences/totalCandidates, kinds, groups, and summary all honor includeTests (filtered BEFORE counting on both exact and indexed paths); linked multi-project files counted once; filtered summaries say 'test projects excluded' instead of a misleading '0 test'. isTest classification is REFERENCE-driven (nunit/xunit/MSTest via packages OR binary <Reference>, incl. non-standard names containing nunit.framework) plus compiled-[TestFixture]-attributes-on-graph-leaf promotion for custom-resolve builds; name shapes are a narrow dotted-suffix fallback only (TestRoute-style names never classify). Index schema v7; is_test is NAME-uniform across same-AssemblyName csproj pairs since v8" },
                 new { id = "bounded-source-reads", summary = "source_context streams only the requested spans from disk (never whole-file reads); contextLines clamped; zero/negative span starts clamp to line 1" },
                 new { id = "arity-exact-partials", summary = "outline partialFiles match generic arity — partial Foo and partial Foo<T> cross-link only their own halves" },
-                new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. 'partial' is DELIBERATELY not in this string: it has its own isPartial field on every symbol node (plus partialFiles cross-links on outline types). Index schema v4 (first run after deploy rebuilds the index)" },
-                new { id = "deadline-honesty", summary = "semantic references/implementations/definition/type_hierarchy report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout. references counts are physical-site deduped (one count per project+path+line+kind — twin-declaration types no longer double-count); coverage carries solutionProjects so hits from previously-resident projects are legible" },
+                new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. 'partial' is DELIBERATELY not in this string: it has its own isPartial field on every symbol node (plus partialFiles cross-links on outline types). Since schema v9 members also carry 'accessors' ({get: 'public', set: 'private'}) — ONLY when an accessor's accessibility differs from the member's own, so a private setter is no longer invisible" },
+                new { id = "rebuild-hatch", summary = "refresh_index accepts force: 'auto'|'incremental' (delta refresh; hash-identical files skipped — never rebuilds an intact-looking index) or 'full' (delete the index and REBUILD FROM SCRATCH, pump-serialized, works even from state 'failed' — recovery re-attaches the file watcher and git tracking and clears the old error; watch index.progress). The in-band corruption-recovery hatch — no shell access needed" },
+                new { id = "deadline-honesty", summary = "semantic references/implementations/definition/type_hierarchy report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout. references counts are physical-site deduped (one count per project+path+line+kind — twin-declaration types no longer double-count); coverage carries solutionProjects so hits from previously-resident projects are legible; outOfGraphCandidates lists textual mentions with NO graph path to the declarer (plugins, config-wired consumers), previously dropped without a trace" },
                 new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Assembly-name collisions (net-old/net-new csproj pairs) resolve to a name-level edge — the graph and the semantic workspace are name-keyed, so paired declarers keep all their consumer edges (schema v6+; edge recovery itself since v5). meta.indexSchema stamped on every response" },
                 new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and every index_building error body carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal (once the scan knows it), elapsedMs} — monotonic counters, no fabricated ETA or percent (derive % from the counters); absent when ready, and background refreshes never show a cold-build bar" },
             },
@@ -526,6 +527,7 @@ public sealed partial class NavigationTools
                 s.Signature,
                 s.Accessibility,
                 modifiers = s.Modifiers, // bt7: virtual/override/abstract/static/sealed..., omitted when none
+                accessors = AccessorsJson(s.Accessors), // hu7: {get, set} only when an accessor differs
                 s.StartLine,
                 s.EndLine,
                 isPartial = s.IsPartial ? true : (bool?)null,
@@ -1387,6 +1389,11 @@ public sealed partial class NavigationTools
                                       : "")
                                 : $"skipped {result.SkippedCandidateProjects.Count} candidate projects (raise maxProjects), {result.Coverage.FailedProjects.Count} failed loads",
                         skippedCandidateProjects = result.SkippedCandidateProjects.Count > 0 ? result.SkippedCandidateProjects : null,
+                        // kbn: projects that textually mention the symbol but have NO graph path
+                        // to its declarer (plugins, config-wired consumers) — previously dropped
+                        // without a trace. Not loadable via maxProjects; scope with pathGlob or
+                        // run indexed mode to see their candidate lines.
+                        outOfGraphCandidates = result.OutOfGraphCandidates,
                         note = zeroNote,
                         timing = new { deadlineMs, elapsedMs },
                         truncated,
@@ -1513,10 +1520,33 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- maintenance
 
     [McpServerTool(Name = "refresh_index")]
-    [Description("Queue an index refresh: targeted (comma-separated workspace-relative paths) or a full change-detection sweep when no paths given. Normally unnecessary — a file watcher keeps the index fresh.")]
+    [Description("Queue an index refresh. force='auto'/'incremental': targeted paths or a change-detection sweep — hash-identical files are SKIPPED, so this never rebuilds an intact-looking index. force='full': the 'I know the db is wrong' hatch — delete the index and REBUILD FROM SCRATCH (works even from state 'failed'; watch server_capabilities.index.progress). Normally unnecessary — a file watcher keeps the index fresh.")]
     public string RefreshIndex(
-        [Description("Optional comma-separated workspace-relative paths to refresh.")] string? paths = null)
+        [Description("Optional comma-separated workspace-relative paths to refresh (ignored with force='full').")] string? paths = null,
+        [Description("'auto' (default) / 'incremental': delta refresh, unchanged files skipped. 'full': rebuild from scratch — corruption/recovery hatch.")] string force = "auto")
     {
+        // The two paths are EXPLICIT by contract (field: "calling refresh_index and hoping is
+        // not that" — a caller recovering from corruption needs a way in; the delta path's
+        // hash-skip makes it a no-op on untouched files by design).
+        if (force is not ("auto" or "incremental" or "full"))
+        {
+            return Json.Serialize(new
+            {
+                error = "bad_request",
+                detail = $"Unknown force value '{force}'. Valid: auto, incremental, full.",
+            });
+        }
+        if (force == "full")
+        {
+            _manager.RequestFullRebuild();
+            return Json.Serialize(new
+            {
+                queued = true,
+                scope = "full rebuild from scratch",
+                hint = "The index is discarded and rebuilt; poll server_capabilities.index.progress (state 'building') until 'ready'.",
+                meta = Meta.From(_manager.Health(), "indexed", "text"),
+            });
+        }
         // Normalize backslash paths to the workspace-relative forward-slash form the index stores under;
         // otherwise "src\Foo.cs" refreshes as a NEW path, creating a permanent duplicate file/symbol
         // row alongside the indexed "src/Foo.cs" (bug 9h3).
@@ -1704,6 +1734,9 @@ public sealed partial class NavigationTools
         // Inheritance/lifetime modifiers (bt7): "virtual"/"override"/"abstract"/"static sealed"...
         // Omitted when none — in deep hierarchies this picks the override site without opening files.
         modifiers = s.Modifiers,
+        // Per-accessor accessibility (hu7): { get: "public", set: "private" } — ONLY when an
+        // accessor differs from the member's own accessibility (silent-when-nothing-to-say).
+        accessors = AccessorsJson(s.Accessors),
         path = s.FilePath,
         s.StartLine,
         s.EndLine,
@@ -1718,6 +1751,20 @@ public sealed partial class NavigationTools
         orphaned = s.IsOrphaned ? true : (bool?)null,
         attributes = s.AttrMarkers,
     };
+
+    /// <summary>Parses the stored "get=public;set=private" accessor split into a structured
+    /// object (hu7). Null (omitted) when the member's accessors are uniform.</summary>
+    private static Dictionary<string, string>? AccessorsJson(string? accessors)
+    {
+        if (accessors is null) return null;
+        var map = new Dictionary<string, string>();
+        foreach (var part in accessors.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            int eq = part.IndexOf('=');
+            if (eq > 0) map[part[..eq]] = part[(eq + 1)..];
+        }
+        return map.Count > 0 ? map : null;
+    }
 
     private string? NotReady()
     {

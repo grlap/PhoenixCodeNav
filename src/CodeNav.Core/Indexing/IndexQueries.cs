@@ -7,7 +7,8 @@ public sealed record SymbolHit(
     string Accessibility, int StartLine, int EndLine, bool IsPartial, string? AttrMarkers,
     string FilePath, bool FileIsGenerated, long? ParentId, bool IsOrphaned = false,
     int Arity = 0,               // generic type-parameter count — Foo and Foo<T> are DIFFERENT types (szs)
-    string? Modifiers = null);   // "static sealed abstract virtual override new readonly const" subset (bt7)
+    string? Modifiers = null,    // "static sealed abstract virtual override new readonly const" subset (bt7)
+    string? Accessors = null);   // "get=public;set=private" only when an accessor differs (hu7)
 
 public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated);
 
@@ -309,7 +310,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
             FROM symbols s JOIN files f ON f.id = s.file_id
             {where}
             ORDER BY
@@ -327,7 +328,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p
             ORDER BY s.start_line, s.end_line DESC
@@ -349,7 +350,7 @@ public sealed partial class IndexQueries : IDisposable
             var next = Query(
                 """
                 SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
                 FROM symbols s JOIN files f ON f.id = s.file_id
                 WHERE s.id = $id
                 """,
@@ -369,7 +370,7 @@ public sealed partial class IndexQueries : IDisposable
         var hits = Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.id = $id
             """,
@@ -384,7 +385,7 @@ public sealed partial class IndexQueries : IDisposable
         var hits = Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p AND s.start_line <= $l AND s.end_line >= $l
             ORDER BY (s.end_line - s.start_line), s.start_line DESC
@@ -418,7 +419,7 @@ public sealed partial class IndexQueries : IDisposable
             var rows = Query(
                 $"""
                 SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
                 FROM symbols s JOIN files f ON f.id = s.file_id
                 WHERE {string.Join(" OR ", clauses)}
                 """,
@@ -674,7 +675,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.name = $m COLLATE NOCASE AND ({string.Join(" OR ", clauses)})
             ORDER BY f.is_generated, f.path
@@ -695,7 +696,7 @@ public sealed partial class IndexQueries : IDisposable
         var candidates = Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.kind IN ('class','struct','record','record_struct')
               AND s.name <> $n
@@ -1111,7 +1112,8 @@ public sealed partial class IndexQueries : IDisposable
         r.GetString(11), r.GetBoolean(12),
         r.FieldCount > 13 && !r.IsDBNull(13) ? r.GetInt64(13) : null,
         Arity: r.FieldCount > 14 && !r.IsDBNull(14) ? r.GetInt32(14) : 0,
-        Modifiers: r.FieldCount > 15 && !r.IsDBNull(15) ? r.GetString(15) : null);
+        Modifiers: r.FieldCount > 15 && !r.IsDBNull(15) ? r.GetString(15) : null,
+        Accessors: r.FieldCount > 16 && !r.IsDBNull(16) ? r.GetString(16) : null);
 
     private static ProjectRow ReadProject(SqliteDataReader r) => new(
         r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3),
