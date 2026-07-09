@@ -172,7 +172,14 @@ public sealed class IndexManager : IDisposable
     private void InitGitTracking()
     {
         if (_disposed) return; // teardown began before we got here — skip the git shell-outs
-        if (!GitInfo.GitAvailable) return;
+        if (!GitInfo.GitAvailable)
+        {
+            // Say WHY the feature is off (h99): silently degrading to watcher-only made
+            // "why doesn't the index follow my branch switches?" undiagnosable in the field.
+            _log("git executable not found (searched PATH for git.exe/git.cmd/git.bat; " +
+                 "set CODENAV_GIT_EXE to override) — git-aware refresh disabled, watcher-only mode.");
+            return;
+        }
         _gitDir = GitInfo.ResolveGitDir(_workspaceRoot);
         if (_gitDir is null) return;
 

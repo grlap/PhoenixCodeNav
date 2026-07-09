@@ -25,14 +25,23 @@ public static class GitInfo
     /// <summary>Absolute git path resolved from CODENAV_GIT_EXE or PATH, or null when git is not
     /// installed — never the bare name "git", which Windows would resolve through the
     /// cwd-inclusive executable search order (the exact hole the absolute path closes).</summary>
-    private static string? ResolveGitExe()
+    private static string? ResolveGitExe() => ResolveGitExeFrom(
+        Environment.GetEnvironmentVariable("CODENAV_GIT_EXE"),
+        Environment.GetEnvironmentVariable("PATH"));
+
+    /// <summary>Pure resolution core, split out for tests (the Lazy above resolves once per
+    /// process, so env-mutation tests can't exercise it). h99: Windows also accepts git.cmd /
+    /// git.bat — scoop shims and corporate wrappers ship git as a batch launcher, and skipping
+    /// them silently disabled git-aware refresh on those machines. Search order mirrors
+    /// PATHEXT precedence: dir-by-dir, .exe before .cmd before .bat within a dir.</summary>
+    internal static string? ResolveGitExeFrom(string? overridePath, string? pathVar)
     {
-        string? overridePath = Environment.GetEnvironmentVariable("CODENAV_GIT_EXE");
         if (!string.IsNullOrWhiteSpace(overridePath) && File.Exists(overridePath)) return overridePath;
 
-        string[] names = OperatingSystem.IsWindows() ? new[] { "git.exe" } : new[] { "git" };
-        string pathVar = Environment.GetEnvironmentVariable("PATH") ?? "";
-        foreach (var entry in pathVar.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        string[] names = OperatingSystem.IsWindows()
+            ? new[] { "git.exe", "git.cmd", "git.bat" }
+            : new[] { "git" };
+        foreach (var entry in (pathVar ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             string dir = entry.Trim('"');
             foreach (var name in names)
@@ -47,6 +56,20 @@ public static class GitInfo
         }
         return null; // git absent: GitAvailable resolves false, git-aware refresh stays off
     }
+
+    /// <summary>Maps a resolved git launcher to a spawnable (exe, args) pair. A .cmd/.bat wrapper
+    /// cannot be started directly with UseShellExecute=false (CreateProcess rejects non-PE files),
+    /// so it is run through cmd.exe: /d skips AutoRun (no injected user shell config), /s preserves
+    /// the outer quotes so a wrapper path WITH SPACES survives, /c runs-and-exits. The hang-proof
+    /// runner's Kill(entireProcessTree) covers the extra cmd.exe layer. The args tail is
+    /// shell-interpreted by cmd on this path, so it must stay shell-inert: it is built from our
+    /// own literals plus commit ids that IsHexCommit VALIDATED (HeadCommitEx gates what gets
+    /// stored; ChangedFiles gates what gets interpolated) — never free-form caller input. Route
+    /// any future ref/branch/path argument through validation before it reaches an args string.</summary>
+    internal static (string Exe, string Args) Invocation(string gitExe, string args) =>
+        gitExe.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) || gitExe.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)
+            ? (Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe", $"/d /s /c \"\"{gitExe}\" {args}\"")
+            : (gitExe, args);
 
     /// <summary>Absolute path to the resolved git metadata dir — handles the worktree/submodule
     /// case where <c>.git</c> is a file — or null if the root is not inside a git work tree.</summary>
@@ -65,10 +88,28 @@ public static class GitInfo
     public static (string? Value, string Status) HeadCommitEx(string workspaceRoot)
     {
         if (GitExe.Value is not { } gitExe) return (null, "unavailable");
-        var r = RunProcessEx(gitExe, workspaceRoot, GitArgs("rev-parse HEAD"));
+        var (exe, args) = Invocation(gitExe, GitArgs("rev-parse HEAD"));
+        var r = RunProcessEx(exe, workspaceRoot, args);
         if (r.Status is "timed_out" or "drain_timed_out") return (null, "timed_out");
         string? sha = r.Status == "ok" && !r.Truncated ? r.Output?.Trim() : null;
+        // ENFORCED, not assumed (review): this value is stored and later interpolated into git
+        // command lines (ChangedFiles) which, on .cmd/.bat-wrapper machines, pass through cmd.exe —
+        // where a metacharacter would split into a second command. Real rev-parse output is a hex
+        // SHA; anything else (garbled wrapper, hook noise on stdout) is rejected as unavailable.
+        if (sha is not null && !IsHexCommit(sha)) sha = null;
         return string.IsNullOrEmpty(sha) ? (null, "unavailable") : (sha, "ok");
+    }
+
+    /// <summary>True for a plausible commit id: 4-64 ASCII hex chars. The gate that keeps every
+    /// value we later interpolate into a git args string shell-inert on wrapper machines.</summary>
+    internal static bool IsHexCommit(string s)
+    {
+        if (s.Length is < 4 or > 64) return false;
+        foreach (char c in s)
+        {
+            if (!char.IsAsciiHexDigit(c)) return false;
+        }
+        return true;
     }
 
     /// <summary>Current branch name, or null when detached or on failure.</summary>
@@ -86,7 +127,11 @@ public static class GitInfo
     /// </summary>
     public static List<string>? ChangedFiles(string workspaceRoot, string fromCommit, string toCommit)
     {
+        // Both ids are interpolated into the args string below — hex-gate them (review): the
+        // stored indexed_commit is normally our own validated rev-parse output, but this makes
+        // the shell-inertness property hold even against a tampered meta table or future callers.
         if (string.IsNullOrWhiteSpace(fromCommit) || string.IsNullOrWhiteSpace(toCommit)) return null;
+        if (!IsHexCommit(fromCommit) || !IsHexCommit(toCommit)) return null; // caller full-sweeps
         // A TRUNCATED diff must fail this call (null => the caller full-sweeps): acting on a partial
         // changed-file list would silently skip refreshing real changes.
         string? outp = Run(workspaceRoot, $"diff --name-only --no-renames --relative {fromCommit} {toCommit}");
@@ -103,7 +148,8 @@ public static class GitInfo
     private static string? Run(string cwd, string args)
     {
         if (GitExe.Value is not { } gitExe) return null; // git not resolved — feature off
-        var r = RunProcessEx(gitExe, cwd, GitArgs(args));
+        var (exe, wrapped) = Invocation(gitExe, GitArgs(args));
+        var r = RunProcessEx(exe, cwd, wrapped);
         return r.Status == "ok" && !r.Truncated ? r.Output : null;
     }
 
