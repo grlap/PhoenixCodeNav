@@ -24,6 +24,7 @@ public sealed partial class SemanticService
         string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
+        bool loadCompleted = false; // t2b: cold-cluster warm-up vs real scan timeout
         try
         {
             var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
@@ -31,6 +32,7 @@ public sealed partial class SemanticService
 
             var (solution, symbol, coverage, _, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token).ConfigureAwait(false);
+            loadCompleted = true;
             if (symbol is null) return (null, null, "symbol_not_resolved_in_scope");
 
             var callers = await SymbolFinder.FindCallersAsync(symbol, solution, cts.Token).ConfigureAwait(false);
@@ -55,7 +57,8 @@ public sealed partial class SemanticService
         }
         catch (OperationCanceledException)
         {
-            return (null, null, "semantic_timeout");
+            // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
+            return (null, null, loadCompleted ? "semantic_timeout" : "cluster_cold_load");
         }
         catch (Exception ex)
         {
@@ -68,9 +71,11 @@ public sealed partial class SemanticService
         string path, int line, int? column, string? nameHint, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
+        bool loadCompleted = false; // t2b: cold-cluster warm-up vs real scan timeout
         try
         {
             var (solution, symbol, _) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
+            loadCompleted = true;
             if (symbol is null || solution is null) return (null, "symbol_not_resolved");
 
             var byTarget = new Dictionary<ISymbol, List<int>>(SymbolEqualityComparer.Default);
@@ -102,7 +107,8 @@ public sealed partial class SemanticService
         }
         catch (OperationCanceledException)
         {
-            return (null, "semantic_timeout");
+            // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
+            return (null, loadCompleted ? "semantic_timeout" : "cluster_cold_load");
         }
         catch (Exception ex)
         {
@@ -115,6 +121,7 @@ public sealed partial class SemanticService
         string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
+        bool loadCompleted = false; // t2b: cold-cluster warm-up vs real scan timeout
         try
         {
             var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
@@ -137,6 +144,7 @@ public sealed partial class SemanticService
 
             var (solution, symbol, coverage, _, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token, implementerSeeds).ConfigureAwait(false);
+            loadCompleted = true;
             if (symbol is not INamedTypeSymbol type)
             {
                 return (null, null, symbol is null ? "symbol_not_resolved_in_scope" : "not_a_type");
@@ -165,7 +173,8 @@ public sealed partial class SemanticService
         }
         catch (OperationCanceledException)
         {
-            return (null, null, "semantic_timeout");
+            // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
+            return (null, null, loadCompleted ? "semantic_timeout" : "cluster_cold_load");
         }
         catch (Exception ex)
         {

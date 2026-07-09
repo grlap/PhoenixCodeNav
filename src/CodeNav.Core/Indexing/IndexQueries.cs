@@ -934,7 +934,17 @@ public sealed partial class IndexQueries : IDisposable
         return results;
     }
 
-    public sealed record RelatedTestGroup(string TestProject, string Reason, int MatchingFiles, List<TextHit> Samples);
+    /// <summary>Signal (49k) grades the STRONGEST usage shape found in the group's sampled
+    /// mention lines: "callSite" ('Name(' — invocation or construction), "typeUsage"
+    /// ('new Name' / ': Name' / 'Name&lt;' / '&lt;Name' / 'Name.'), "nameMention" (comments,
+    /// strings, usings — the field's complaint: a test whose only link is a string literal
+    /// ranked identically to one that CALLS the symbol). Null for the non-mention reasons
+    /// (naming convention / project reference), whose Reason already carries the tier — and
+    /// for a mention group whose ordinal line scan missed the FTS match (case/tokenizer
+    /// nuances), so ABSENCE of Signal is "ungraded", never a graded nameMention.
+    /// Text-shape heuristics on purpose — related_tests is a heuristic-confidence tool.</summary>
+    public sealed record RelatedTestGroup(string TestProject, string Reason, int MatchingFiles, List<TextHit> Samples,
+        string? Signal = null);
 
     /// <summary>
     /// Likely tests for a symbol: test files naming it (FTS), test classes following the
@@ -950,14 +960,14 @@ public sealed partial class IndexQueries : IDisposable
             WITH m AS MATERIALIZED (
                 SELECT rowid AS fid FROM fts_content WHERE fts_content MATCH $q LIMIT 2000
             )
-            SELECT p.name, f.path, f.is_generated, COUNT(*) OVER (PARTITION BY p.name) FROM m
+            SELECT p.name, f.path, f.is_generated, f.id, COUNT(*) OVER (PARTITION BY p.name) FROM m
             JOIN files f ON f.id = m.fid
             JOIN compile_items ci ON ci.file_id = m.fid
             JOIN projects p ON p.id = ci.project_id
             WHERE p.is_test = 1
             ORDER BY p.name, f.path
             """,
-            r => (Project: r.GetString(0), Path: r.GetString(1), Gen: r.GetBoolean(2), Count: r.GetInt32(3)),
+            r => (Project: r.GetString(0), Path: r.GetString(1), Gen: r.GetBoolean(2), Id: r.GetInt64(3), Count: r.GetInt32(4)),
             ("$q", $"\"{symbolName.Replace("\"", "")}\""));
         foreach (var c in candidates)
         {
@@ -965,7 +975,33 @@ public sealed partial class IndexQueries : IDisposable
             {
                 groups[c.Project] = g = new RelatedTestGroup(c.Project, "references symbol name", c.Count, new List<TextHit>());
             }
-            if (g.Samples.Count < 3) g.Samples.Add(new TextHit(c.Path, 1, "", c.Gen));
+            if (g.Samples.Count >= 3) continue;
+            // 49k: locate the mention LINES (samples used to ship a placeholder line 1 with
+            // empty text) and grade the strongest usage shape — the group keeps its max tier
+            // across the sampled files. Bounded: content is fetched only for the <=3 sample
+            // files per group, and <=20 located lines are graded per file.
+            string? content = ContentById(c.Id);
+            var spans = content is null
+                ? new List<(int Line, int Start, int End)>()
+                : LocateTokenLineSpans(content, symbolName);
+            if (spans.Count == 0)
+            {
+                // FTS matched but the whole-token line scan did not (tokenizer nuances) —
+                // keep the file visible the old way rather than dropping the evidence.
+                g.Samples.Add(new TextHit(c.Path, 1, "", c.Gen));
+                continue;
+            }
+            foreach (var (ln, s, e) in spans.Take(3 - g.Samples.Count))
+            {
+                g.Samples.Add(new TextHit(c.Path, ln, Snippet(content![s..e]), c.Gen));
+            }
+            int tier = SignalTierOf(g.Signal);
+            foreach (var (_, s, e) in spans.Take(20))
+            {
+                tier = Math.Max(tier, UsageTier(content!, s, e, symbolName));
+                if (tier >= 3) break;
+            }
+            groups[c.Project] = g with { Signal = SignalName(tier) }; // Samples list is shared
         }
 
         // 2. {Name}Tests naming convention.
@@ -1438,6 +1474,48 @@ public sealed partial class IndexQueries : IDisposable
         string t = line.TrimEnd('\r').TrimEnd();
         return t.Length <= 240 ? t : t[..240] + "…";
     }
+
+    /// <summary>49k: grade ONE line slice by the strongest whole-token usage shape of the name
+    /// in it — 3 'Name(' (invocation/construction: something EXECUTES), 2 type usage
+    /// ('new Name' / ': Name' / 'Name&lt;' / '&lt;Name' via preceding '&lt;' / 'Name.'), 1 bare
+    /// mention (string literals, comments, usings). Text shapes on purpose: related_tests is a
+    /// heuristic tool, and the tier is a lead-strength label, never a compiler fact.</summary>
+    private static int UsageTier(string content, int lineStart, int lineEnd, string name)
+    {
+        int best = 1;
+        int idx = lineStart;
+        while (best < 3 && idx < lineEnd
+               && (idx = content.IndexOf(name, idx, StringComparison.Ordinal)) >= 0 && idx < lineEnd)
+        {
+            int end = idx + name.Length;
+            bool word = (idx == 0 || !IsIdentChar(content[idx - 1]))
+                        && (end >= content.Length || !IsIdentChar(content[end]));
+            if (!word) { idx = end; continue; }
+
+            int tier = 1;
+            int i = end;
+            while (i < lineEnd && content[i] is ' ' or '\t') i++;
+            if (i < lineEnd && content[i] == '(') tier = 3;
+            else if (i < lineEnd && content[i] is '<' or '.') tier = 2;
+            else
+            {
+                int j = idx - 1;
+                while (j >= lineStart && content[j] is ' ' or '\t') j--;
+                // '.' before = a QUALIFIED reference (Ns.Name / obj.Name) — at least type/member
+                // usage even when the after-char is neutral (e.g. List<LibNs.Zeta> ends in '>').
+                if (j >= lineStart && content[j] is ':' or '<' or '.') tier = 2;
+                else if (j - 2 >= lineStart && content[j] == 'w' && content[j - 1] == 'e' && content[j - 2] == 'n'
+                         && (j - 3 < lineStart || !IsIdentChar(content[j - 3]))) tier = 2; // 'new Name'
+            }
+            if (tier > best) best = tier;
+            idx = end;
+        }
+        return best;
+    }
+
+    private static string SignalName(int tier) => tier switch { 3 => "callSite", 2 => "typeUsage", _ => "nameMention" };
+
+    private static int SignalTierOf(string? signal) => signal switch { "callSite" => 3, "typeUsage" => 2, "nameMention" => 1, _ => 0 };
 
     /// <summary>Lines immediately before/after a 0-based hit line (grep -B/-A), snippet-trimmed and
     /// clamped to file bounds. Returns (null, null) — omitted from the response — when no context is

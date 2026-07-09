@@ -61,10 +61,11 @@ public sealed partial class NavigationTools
                 new { id = "arity-exact-partials", summary = "outline partialFiles match generic arity — partial Foo and partial Foo<T> cross-link only their own halves" },
                 new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. 'partial' is DELIBERATELY not in this string: it has its own isPartial field on every symbol node (plus partialFiles cross-links on outline types). Members also carry 'accessors' ({get: 'public', set: 'private'}) — ONLY when an accessor's accessibility differs from the member's own, so a private setter is no longer invisible. Modifiers since schema v4; accessors since v9" },
                 new { id = "rebuild-hatch", summary = "refresh_index accepts force: 'auto'|'incremental' (delta refresh; hash-identical files skipped — never rebuilds an intact-looking index) or 'full' (delete the index and REBUILD FROM SCRATCH, pump-serialized, works even from state 'failed' — recovery re-attaches the file watcher and git tracking and clears the old error; watch index.progress). The in-band corruption-recovery hatch — no shell access needed" },
-                new { id = "deadline-honesty", summary = "semantic references/implementations/definition/type_hierarchy report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout. references counts are physical-site deduped (one count per project+path+line+kind — twin-declaration types no longer double-count); coverage carries solutionProjects so hits from previously-resident projects are legible; outOfGraphCandidates lists textual mentions with NO graph path to the declarer (plugins, config-wired consumers), previously dropped without a trace" },
+                new { id = "deadline-honesty", summary = "semantic references/implementations/definition/type_hierarchy report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout. A deadline that dies during cluster LOAD (typically the FIRST call after an index build or reload) reports partialReason 'cluster_cold_load' — an immediate retry usually returns exact — instead of masquerading as a scan timeout (token is the string PREFIX; inline advice follows); references/implementations timing adds {clusterLoadMs, queryMs} so the budget split is visible. references counts are physical-site deduped (one count per project+path+line+kind — twin-declaration types no longer double-count); coverage carries solutionProjects so hits from previously-resident projects are legible; outOfGraphCandidates lists textual mentions with NO graph path to the declarer (plugins, config-wired consumers), previously dropped without a trace" },
                 new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Assembly-name collisions (net-old/net-new csproj pairs) resolve to a name-level edge — the graph and the semantic workspace are name-keyed, so paired declarers keep all their consumer edges (schema v6+; edge recovery itself since v5). meta.indexSchema stamped on every response" },
                 new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and every index_building error body carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal (once the scan knows it), elapsedMs} — monotonic counters, no fabricated ETA or percent (derive % from the counters); absent when ready, and background refreshes never show a cold-build bar" },
-                new { id = "edge-provenance", summary = "graph edges carry HOW the coupling is wired (schema v10): 'projectReference' (real <ProjectReference>) vs 'hintPathReference' (recovered from <Reference>+HintPath / bare Include — the multi-staged build). project_graph.edges.kind now reports the truth (previously HARDCODED 'projectReference' for every edge); dependency_path adds structuredPaths with per-hop 'via' (arrow strings stay); context_pack.ownerProjectEdges flags only hintPathReference edges; impact adds directDependentProjects {total, viaProjectReference, viaHintPathOnly} + a risk when consumers are HintPath-only (they bind to the last-BUILT dll and ProjectReference-aware refactor tooling won't follow the edge) — transitive stays one number (mixed-kind paths have no honest per-kind bucket). A pair wired BOTH ways records 'project' (first-writer: ProjectReference edges insert before recovery). Reference groups in files no project compiles are now structured — orphaned:true with the project field OMITTED (house style: null fields don't serialize) — instead of the magic '(no project)' string" },
+                new { id = "edge-provenance", summary = "graph edges carry HOW the coupling is wired (schema v10): 'projectReference' (real <ProjectReference>) vs 'hintPathReference' (recovered from <Reference>+HintPath / bare Include — the multi-staged build). project_graph.edges.kind now reports the truth (previously HARDCODED 'projectReference' for every edge); dependency_path adds structuredPaths with per-hop 'via' (arrow strings stay) and sameProject:true on the trivially-yes X-to-X query; context_pack.ownerProjectEdges flags only hintPathReference edges; impact adds directDependentProjects {total, viaProjectReference, viaHintPathOnly} + a risk when consumers are HintPath-only (they bind to the last-BUILT dll and ProjectReference-aware refactor tooling won't follow the edge) — transitive stays one number (mixed-kind paths have no honest per-kind bucket; impact.transitiveNote states this inline whenever assembly wiring is present). A pair wired BOTH ways records 'project' (first-writer: ProjectReference edges insert before recovery). Reference groups in files no project compiles are now structured — orphaned:true with the project field OMITTED (house style: null fields don't serialize) — instead of the magic '(no project)' string" },
+                new { id = "related-tests-signal", summary = "related_tests / impact / context_pack test groups carry 'signal' — the strongest usage SHAPE among the sampled mention lines: callSite ('Name(' — something executes) > typeUsage ('new Name' / ': Name' / 'Name<' / 'Name.') > nameMention (strings, comments, usings). Heuristic text shapes, a lead-strength label — not a compiler fact; omitted on naming-convention / project-reference groups (Reason already carries their tier) AND on the rare mention group whose ordinal line scan misses the case-insensitive FTS match — absent signal means UNGRADED, never nameMention. related_tests samples carry the real mention line + text when located (previously always line 1 with empty text; the ungraded case keeps that placeholder with text omitted)" },
             },
             tools = new[]
             {
@@ -935,7 +936,7 @@ public sealed partial class NavigationTools
                         d0 is null ? null : BuildDeclarationBody(d0.Path, d0.StartLine, d0.EndLine, budget, preferLive: true);
                     return SerializeBodyBounded(BuildSemantic, includeBody ? MakeSemanticBody(bodyMaxBytes) : null, MakeSemanticBody, bodyMaxBytes);
                 }
-                failReason = reason;
+                failReason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
             }
             else
             {
@@ -1142,7 +1143,8 @@ public sealed partial class NavigationTools
                     partialReason = exhausted
                         ? $"deadline exhausted after {elapsedMs}ms of {deadlineMs}ms — this list is a LOWER BOUND of the implementers (raise timeoutMs)"
                         : null,
-                    timing = new { deadlineMs, elapsedMs },
+                    // t2b: where the budget went — cluster load+resolve vs the finder passes.
+                    timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
                     truncated,
                     hint = concreteCount == 1 && !exhausted
                         ? "One concrete implementation — likely the runtime target. Ranked concrete-first; isAbstract/rank mark non-instantiable scaffolding."
@@ -1152,7 +1154,7 @@ public sealed partial class NavigationTools
             }
             // Semantic RESOLVED the symbol but found no implementers, OR it could not resolve. Be
             // honest about which: bounded coverage (raising maxProjects may help) vs genuinely none.
-            failReason = result is null ? reason
+            failReason = result is null ? ExpandReason(reason)
                 : (result.Coverage.LoadedProjects < result.Coverage.RequestedProjects || result.Coverage.FailedProjects.Count > 0)
                     ? "candidate_cluster_bounded"
                     : "no_semantic_implementers";
@@ -1397,12 +1399,13 @@ public sealed partial class NavigationTools
                         // run indexed mode to see their candidate lines.
                         outOfGraphCandidates = result.OutOfGraphCandidates,
                         note = zeroNote,
-                        timing = new { deadlineMs, elapsedMs },
+                        // t2b: where the budget went — cluster load+resolve vs find+count.
+                        timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
                         truncated,
                         meta = meta0,
                     });
                 }
-                failReason = reason;
+                failReason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
             }
             else
             {
@@ -1714,6 +1717,17 @@ public sealed partial class NavigationTools
         }
         return (hit, null);
     }
+
+    /// <summary>t2b: expand the cluster_cold_load token with inline advice at the moment of
+    /// confusion — the deadline died LOADING compilations (the first call after an index build
+    /// or cluster reload), and an immediate retry usually returns exact. The uniform
+    /// "semantic_timeout" sent agents raising timeoutMs (or distrusting the tool) when the fix
+    /// was simply to call again. Every other reason passes through untouched, and the token
+    /// stays the string's PREFIX so it remains machine-matchable.</summary>
+    internal static string? ExpandReason(string? reason) => // internal: token contract pinned by tests
+        reason == "cluster_cold_load"
+            ? "cluster_cold_load — the deadline expired while loading compilations (first call after an index build or cluster reload); an immediate retry usually returns exact"
+            : reason;
 
     /// <summary>Wire vocabulary for edge provenance (bxw): the stored kind ('project'/'assembly')
     /// maps to 'projectReference'/'hintPathReference' — 'projectReference' predates provenance on

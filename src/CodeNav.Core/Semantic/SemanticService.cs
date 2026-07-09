@@ -35,7 +35,12 @@ public sealed record SemanticReferences(
     bool DeadlineExhausted = false,
     // kbn: textual candidates OUTSIDE the dependency closure (plugins, config-wired consumers) —
     // previously dropped without a trace; capped at 20.
-    List<string>? OutOfGraphCandidates = null);
+    List<string>? OutOfGraphCandidates = null,
+    // t2b: where the deadline budget went — cluster load+resolve vs find+count. The field's
+    // cold-cluster confusion ("first call after rebuild times out, second is instant") is
+    // answerable from these two numbers without guessing.
+    long? ClusterLoadMs = null,
+    long? QueryMs = null);
 
 /// <summary>One implementation / derived class / override, tagged for hierarchy ranking.
 /// <paramref name="Via"/> names the base type that introduces the queried interface when the type
@@ -46,7 +51,9 @@ public sealed record SemanticImplementations(
     SemanticDeclaration Symbol,
     List<SemanticImplementation> Implementations,   // concrete (instantiable) leaves first, then abstract scaffolding
     ClusterCoverage Coverage,
-    bool DeadlineExhausted = false);                // 24n: deadline fired mid-search — list is a lower bound
+    bool DeadlineExhausted = false,                 // 24n: deadline fired mid-search — list is a lower bound
+    long? ClusterLoadMs = null,                     // t2b: deadline budget split — load+resolve vs
+    long? QueryMs = null);                          // find; see SemanticReferences for rationale
 
 /// <summary>
 /// Owns: exact (compiler-backed) navigation operations with deadlines — symbol
@@ -75,6 +82,14 @@ public sealed partial class SemanticService : IDisposable
     /// so parallel tests cannot cross-trip it.</summary>
     internal Action<int>? TestOnlyPerLocationCounted;
 
+    /// <summary>TEST SEAM (t2b): invoked at ReferencesAsync's phase boundaries —
+    /// "beforeScanSetLoad" / "afterScanSetLoad" — so a test can burn the deadline in a CHOSEN
+    /// phase and pin the cluster_cold_load-vs-semantic_timeout ternary deterministically. A
+    /// real cold load's duration is machine-dependent (a warm reference-assembly cache made a
+    /// 21-project load finish inside the minimum 500ms clamp on the dev box, silently skipping
+    /// the cold branch). Never set in production; instance-scoped.</summary>
+    internal Action<string>? TestOnlyPhaseHook;
+
     public bool FrameworkRefsAvailable
     {
         get
@@ -101,15 +116,21 @@ public sealed partial class SemanticService : IDisposable
         string path, int line, int? column, string? nameHint, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 60000));
+        bool loadCompleted = false;
         try
         {
             var (_, symbol, _) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
+            loadCompleted = true;
             if (symbol is null) return (null, "symbol_not_resolved");
             return (Describe(symbol), null);
         }
         catch (OperationCanceledException)
         {
-            return (null, "semantic_timeout");
+            // t2b: a deadline that dies during cluster LOAD is not a scan timeout — it is the
+            // first-call-after-(re)build warm-up, and an immediate retry usually succeeds. The
+            // old uniform "semantic_timeout" sent agents raising timeoutMs (or distrusting the
+            // tool) when the fix was simply to call again.
+            return (null, loadCompleted ? "semantic_timeout" : "cluster_cold_load");
         }
         catch (Exception ex)
         {
@@ -126,6 +147,9 @@ public sealed partial class SemanticService : IDisposable
         bool includeTests = true)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
+        bool loadCompleted = false; // t2b: distinguishes cold-cluster warm-up from a real scan timeout
+        var swPhase = System.Diagnostics.Stopwatch.StartNew();
+        long clusterLoadMs = 0;
         try
         {
             // Phase 1: load the owner closure and resolve, to learn the symbol name.
@@ -149,8 +173,12 @@ public sealed partial class SemanticService : IDisposable
 
             // Phase 2: load the dependent scan set and re-resolve IN that snapshot, then
             // resolve + search against the SAME solution (no snapshot drift).
+            TestOnlyPhaseHook?.Invoke("beforeScanSetLoad");
             var (solution, symbol, coverage, skipped, outOfGraph) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token, implementerSeeds).ConfigureAwait(false);
+            loadCompleted = true;
+            clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find+count
+            TestOnlyPhaseHook?.Invoke("afterScanSetLoad");
             if (symbol is null) return (null, "symbol_not_resolved_in_scope");
 
             var found = await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token).ConfigureAwait(false);
@@ -262,12 +290,15 @@ public sealed partial class SemanticService : IDisposable
                 skipped,
                 kindCounts,
                 deadlineExhausted,
-                outOfGraph.Count > 0 ? outOfGraph : null);
+                outOfGraph.Count > 0 ? outOfGraph : null,
+                ClusterLoadMs: clusterLoadMs,
+                QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs);
             return (result, null);
         }
         catch (OperationCanceledException)
         {
-            return (null, "semantic_timeout");
+            // t2b: cold-cluster warm-up vs real scan timeout — see DefinitionAsync for rationale.
+            return (null, loadCompleted ? "semantic_timeout" : "cluster_cold_load");
         }
         catch (Exception ex)
         {
@@ -282,6 +313,9 @@ public sealed partial class SemanticService : IDisposable
         string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
+        bool loadCompleted = false; // t2b: distinguishes cold-cluster warm-up from a real scan timeout
+        var swPhase = System.Diagnostics.Stopwatch.StartNew();
+        long clusterLoadMs = 0;
         try
         {
             var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
@@ -302,6 +336,8 @@ public sealed partial class SemanticService : IDisposable
 
             var (solution, symbol, coverage, _, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token, implementerSeeds).ConfigureAwait(false);
+            loadCompleted = true;
+            clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find
             if (symbol is null) return (null, "symbol_not_resolved_in_scope");
 
             var results = new List<SemanticImplementation>();
@@ -343,11 +379,13 @@ public sealed partial class SemanticService : IDisposable
                 .ThenBy(r => r.Declaration.SymbolDisplay, StringComparer.Ordinal)
                 .ToList();
 
-            return (new SemanticImplementations(Describe(symbol), results, coverage, deadlineExhausted), null);
+            return (new SemanticImplementations(Describe(symbol), results, coverage, deadlineExhausted,
+                ClusterLoadMs: clusterLoadMs, QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs), null);
         }
         catch (OperationCanceledException)
         {
-            return (null, "semantic_timeout");
+            // t2b: cold-cluster warm-up vs real scan timeout — see DefinitionAsync for rationale.
+            return (null, loadCompleted ? "semantic_timeout" : "cluster_cold_load");
         }
         catch (Exception ex)
         {

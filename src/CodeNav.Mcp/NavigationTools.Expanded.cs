@@ -36,6 +36,7 @@ public sealed partial class NavigationTools
             var (result, coverage, reason) = _semantic
                 .CallersAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
                 .GetAwaiter().GetResult();
+            reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
             if (result is not null)
             {
                 var meta = Meta.From(_manager.Health(), "exact", "semantic");
@@ -79,6 +80,7 @@ public sealed partial class NavigationTools
         var (result, reason) = _semantic
             .CalleesAsync(t.Path, t.Line, t.Column, hint, timeoutMs)
             .GetAwaiter().GetResult();
+        reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
         if (result is null)
         {
             return Json.Serialize(new
@@ -128,6 +130,7 @@ public sealed partial class NavigationTools
         var (result, coverage, reason) = _semantic
             .TypeHierarchyAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
             .GetAwaiter().GetResult();
+        reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
         if (result is null)
         {
             return Json.Serialize(new
@@ -228,8 +231,13 @@ public sealed partial class NavigationTools
             {
                 project = g.TestProject,
                 g.Reason,
+                // 49k (field): the strongest usage SHAPE among the sampled mention lines —
+                // callSite > typeUsage > nameMention — so a test that CALLS the symbol ranks
+                // legibly above one that merely names it in a string. Omitted on the
+                // non-mention reasons (naming convention / project reference).
+                signal = g.Signal,
                 matchingFiles = g.MatchingFiles,
-                samples = g.Samples.Select(s => new { path = s.FilePath, s.Line }),
+                samples = g.Samples.Select(s => new { path = s.FilePath, s.Line, text = s.LineText.Length > 0 ? s.LineText : null }),
             }),
             truncated,
             meta,
@@ -270,12 +278,17 @@ public sealed partial class NavigationTools
                 : new { project = proj, via = (string?)Via(p[i - 1], proj) }).ToList(),
         }).ToList();
         bool found = paths.Count > 0;
+        // eja (field): dependency_path(X, X) returns a trivially-true single-node path — real,
+        // but callers had to compare paths[0] == fromProject to notice. One-token clarity,
+        // omitted on every normal query (house style: silent when nothing to say).
+        bool? sameProject = fromProject.Equals(toProject, StringComparison.OrdinalIgnoreCase) ? true : null;
         var meta = Meta.From(_manager.Health(), "indexed", "text");
         string BuildJson(bool dropStructured) => Json.WithListBudget(pathItems, (items, truncated) => new
         {
             fromProject,
             toProject,
             found,
+            sameProject,
             paths = items.Select(i => i.display),
             structuredPaths = dropStructured ? null : (object?)items.Select(i => i.hops),
             structuredPathsOmitted = dropStructured
@@ -437,7 +450,7 @@ public sealed partial class NavigationTools
             relatedTests = dropTests ? null : new
             {
                 confidence = "heuristic", // naming/project inference, not a compiler fact
-                groups = tests.Select(g => new { project = g.TestProject, g.Reason, g.MatchingFiles }),
+                groups = tests.Select(g => new { project = g.TestProject, g.Reason, signal = g.Signal, g.MatchingFiles }),
             },
             // kind rides only on hintPathReference edges (bxw) — plain ProjectReferences omit it
             // (WhenWritingNull) so the orientation bundle stays compact; unusual coupling is the signal.
@@ -550,10 +563,16 @@ public sealed partial class NavigationTools
                 viaHintPathOnly = hintPathOnlyConsumers,
             },
             transitiveDependentProjects = dependents,
+            // ctx (field): the bare number next to the split READ as an oversight — make the
+            // design decision visible in the response, but only when assembly wiring is actually
+            // in the picture (all-projectReference graphs have nothing to explain).
+            transitiveNote = dependents > 0 && directDependentGroups.Any(g => g.Any(e => e.Kind == "assembly"))
+                ? "transitiveDependentProjects is a single count by design: transitive paths can mix projectReference and hintPathReference hops, so a per-kind transitive split would be dishonest — directDependentProjects carries the per-kind split at depth 1."
+                : null,
             relatedTests = new
             {
                 confidence = "heuristic", // naming/project inference, not a compiler fact
-                groups = tests.Select(g => new { project = g.TestProject, g.Reason }),
+                groups = tests.Select(g => new { project = g.TestProject, g.Reason, signal = g.Signal }),
             },
             publicApi = isPublic,
             risks,
