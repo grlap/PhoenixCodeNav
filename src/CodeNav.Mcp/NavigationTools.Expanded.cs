@@ -330,7 +330,10 @@ public sealed partial class NavigationTools
                 (h.Container?.Contains(c, StringComparison.OrdinalIgnoreCase) ?? false) ||
                 (h.Ns?.Contains(c, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
         }
-        var primaryDecl = indexedDecls.FirstOrDefault();
+        // Same compiled-declaration preference as impact (3tz gate parity): the semantic path is
+        // already gated via ResolveSemanticTarget; this indexed fallback wasn't.
+        var orphanedIdx = q.OrphanedPaths(indexedDecls.Select(d => d.FilePath).Distinct(StringComparer.Ordinal).ToList());
+        var primaryDecl = indexedDecls.FirstOrDefault(d => !orphanedIdx.Contains(d.FilePath)) ?? indexedDecls.FirstOrDefault();
         string? declPath = semDecl?.Declarations.FirstOrDefault()?.Path ?? primaryDecl?.FilePath;
         int declStart = semDecl?.Declarations.FirstOrDefault()?.StartLine ?? primaryDecl?.StartLine ?? 0;
         int declEnd = Math.Min(semDecl?.Declarations.FirstOrDefault()?.EndLine ?? primaryDecl?.EndLine ?? 0, declStart + 60);
@@ -427,7 +430,12 @@ public sealed partial class NavigationTools
                 (h.Container?.Contains(c, StringComparison.OrdinalIgnoreCase) ?? false) ||
                 (h.Ns?.Contains(c, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
         }
-        var primary = decls.FirstOrDefault();
+        // Prefer a COMPILED declaration for ownership — the 3tz resolution-gate parity this
+        // indexed path never got (field 0.7.4: the ORPHANED Core copy of the flagship interface
+        // sorted first, ProjectsContaining(orphanedPath) came back empty, owner stayed null, and
+        // transitiveDependentProjects reported 0 on an interface referenced across 91 projects).
+        var orphanedDecls = q.OrphanedPaths(decls.Select(d => d.FilePath).Distinct(StringComparer.Ordinal).ToList());
+        var primary = decls.FirstOrDefault(d => !orphanedDecls.Contains(d.FilePath)) ?? decls.FirstOrDefault();
         string? owner = primary is not null
             ? q.ProjectsContaining(primary.FilePath).FirstOrDefault(p => !p.IsTest)?.Name
             : null;

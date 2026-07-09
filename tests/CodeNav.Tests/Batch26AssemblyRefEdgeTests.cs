@@ -58,6 +58,34 @@ public class Batch26AssemblyRefEdgeTests
         finally { Cleanup(root); }
     }
 
+    // Field 0.7.4 extended: impact("IPartnerFrameworkInterface") reported
+    // transitiveDependentProjects: 0 against 91 referencing projects — the ORPHANED declaration
+    // sorted first, ProjectsContaining(orphanedPath) was empty, owner stayed null. impact (and
+    // context_pack's indexed fallback) now prefer a COMPILED declaration — the 3tz gate parity
+    // those indexed paths never got. The fixture's orphan sorts FIRST (AaOldCore/) on purpose.
+    [Fact]
+    public void ImpactOwnershipSkipsOrphanedDeclarations()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-lhg-impact").FullName;
+        try
+        {
+            WriteFieldShapedWorkspace(root, emitDll: false);
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var m = new IndexManager(root, dbPath);
+            m.Start();
+            Assert.True(WaitUntil(() => m.IsQueryable, 20000));
+            var tools = new NavigationTools(m, new SemanticService(m));
+
+            var impact = Parse(tools.Impact("IPartnerContract"));
+            // Owner must be the COMPILED declarer, so its dependents (SoapA/SoapB/SoapA.NetNew
+            // via recovered assembly-ref edges) are counted — not the orphaned copy's zero.
+            Assert.True(impact.GetProperty("transitiveDependentProjects").GetInt32() >= 2,
+                "orphaned-first declaration ordering must not zero the dependents count");
+        }
+        finally { Cleanup(root); }
+    }
+
     // Review (LOW): DeltaRefresher must preserve the recovered edges — a csproj touch rebuilds
     // the whole project graph, and losing them would silently re-break cross-project semantics
     // until the next full rebuild. Pin the parity.
@@ -281,7 +309,10 @@ public class Batch26AssemblyRefEdgeTests
         // project — the file-copied-then-removed-from-csproj shape). Resolution must keep ignoring
         // it, and reference counts must not inflate because of it (field P1: totalReferences 13
         // for 8 implementers on exactly this shape).
-        string oldCore = Path.Combine(root, "OldCore");
+        // "Aa" prefix so the ORPHANED copy sorts FIRST among the declarations (the field's real
+        // layout: Core/Core/Interfaces sorts before Core/ExactTarget.API.Generated) — arming the
+        // compiled-declaration-preference asserts instead of passing by lucky path ordering.
+        string oldCore = Path.Combine(root, "AaOldCore");
         Directory.CreateDirectory(oldCore);
         File.WriteAllText(Path.Combine(oldCore, "IPartnerContract.cs"),
             "namespace ET.Api { public interface IPartnerContract { void Execute(); } }");
