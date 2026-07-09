@@ -13,8 +13,11 @@ namespace CodeNav.Core.Indexing;
 /// referencing project consumes the referenced one. That blindness is exactly why
 /// implementations/references on a cross-project interface returned zero while the syntactic
 /// base-list index could see all 8 implementers.
-/// Ambiguous names (two workspace projects producing the same assembly name) create NO edge —
-/// a wrong edge would substitute the wrong SOURCE into semantic compilations, worse than a hole.
+/// Name collisions (two workspace projects producing the same assembly name — the monolith's
+/// net-old/net-new pairing idiom) resolve to the FIRST row: the whole downstream is name-keyed
+/// (graph queries and closures return names; the semantic workspace loads and merges BY name),
+/// so an edge to any row is the same name-level fact — the original no-edge policy silently
+/// severed every consumer of a PAIRED declarer (field 0.7.2: cold references returned exact 0).
 /// A HintPath into a never-indexed dir (packages/bin/obj/...) marks the dll EXTERNAL: no edge
 /// even on a name match (review: the NuGet-vs-vendored-fork false edge). Matching is by the
 /// Include simple name only — no HintPath-basename fallback (review-reproduced false-edge source).
@@ -24,28 +27,36 @@ namespace CodeNav.Core.Indexing;
 /// </summary>
 internal static class AssemblyRefEdges
 {
-    /// <summary>Inserts <c>project_refs</c> edges for assembly refs that uniquely name an
-    /// in-workspace project. Returns (Recovered, Ambiguous) counts for build logs. Idempotent
-    /// with the relpath-resolved ProjectReference edges (INSERT OR IGNORE on the same PK).</summary>
-    public static (int Recovered, int Ambiguous) Write(
+    /// <summary>Inserts <c>project_refs</c> edges for assembly refs that name an in-workspace
+    /// project. Returns (Recovered, NameCollisions) counts for build logs. Idempotent with the
+    /// relpath-resolved ProjectReference edges (INSERT OR IGNORE on the same PK).</summary>
+    public static (int Recovered, int NameCollisions) Write(
         IndexStore store, SqliteTransaction tx,
         IReadOnlyList<ParsedProject> parsedProjects,
         IReadOnlyDictionary<string, long> projectIdsByRelPath)
     {
-        // Assembly-name -> project id, collisions poisoned to null. ParsedProject.Name already
-        // prefers <AssemblyName> over the csproj file name, which is the name a <Reference>'s
-        // Include simple name actually refers to. FAILED-parse projects carry only a file-derived
-        // name guess — they never claim (or poison) a slot (review: a failed csproj file-named
-        // like a real assembly either stole its slot or falsely ambiguated it).
-        var byName = new Dictionary<string, long?>(StringComparer.OrdinalIgnoreCase);
+        // Assembly-name -> project id. ParsedProject.Name already prefers <AssemblyName> over the
+        // csproj file name, which is the name a <Reference>'s Include simple name actually refers
+        // to. FAILED-parse projects carry only a file-derived name guess — they never claim a slot.
+        //
+        // NAME COLLISIONS resolve to the FIRST row, not to no-edge (field 0.7.2 regression): the
+        // monolith's net-old/net-new idiom pairs csprojs under ONE assembly name — including the
+        // flagship declarer itself — and the old poison-to-null silently severed EVERY consumer's
+        // edge to it (cold references loaded 1/1 and returned an "exact" zero). Picking a row is
+        // safe because the entire downstream is NAME-keyed: ProjectGraph/closures return names,
+        // and the semantic workspace loads BY NAME — merging a pair's compile sets into one adhoc
+        // project regardless of which row an edge points at. An edge to any row is the same
+        // name-level fact; no-edge is the only wrong answer.
+        var byName = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        int nameCollisions = 0;
         foreach (var p in parsedProjects)
         {
             if (p.LoadStatus.StartsWith("failed", StringComparison.Ordinal)) continue;
             if (!projectIdsByRelPath.TryGetValue(p.RelPath, out long id)) continue;
-            byName[p.Name] = byName.ContainsKey(p.Name) ? null : id;
+            if (!byName.TryAdd(p.Name, id)) nameCollisions++;
         }
 
-        int recovered = 0, ambiguous = 0;
+        int recovered = 0;
         foreach (var p in parsedProjects)
         {
             if (!projectIdsByRelPath.TryGetValue(p.RelPath, out long fromId)) continue;
@@ -64,13 +75,12 @@ internal static class AssemblyRefEdges
                 // No basename fallback: mapping an aliased Include via its dll file name was
                 // speculative and review-reproduced as a false-edge source (Include="VendorLib"
                 // whose HintPath file name happens to match a workspace project).
-                if (!byName.TryGetValue(assembly, out long? toId)) continue; // not an in-workspace assembly
-                if (toId is null) { ambiguous++; continue; }                 // name collision — no edge
-                if (toId.Value == fromId) continue;                          // self-reference guard
-                store.InsertProjectRef(tx, fromId, toId.Value);
+                if (!byName.TryGetValue(assembly, out long toId)) continue; // not an in-workspace assembly
+                if (toId == fromId) continue;                                // self-reference guard
+                store.InsertProjectRef(tx, fromId, toId);
                 recovered++;
             }
         }
-        return (recovered, ambiguous);
+        return (recovered, nameCollisions);
     }
 }

@@ -43,9 +43,11 @@ public class Batch26AssemblyRefEdgeTests
             Assert.Contains("SoapA", dependents);
             Assert.Contains("SoapB", dependents);
 
-            // Ambiguity guard: two workspace projects both produce assembly 'Dup.Common' —
-            // referencing it must create NO edge (a wrong source substitution beats a hole... not).
-            Assert.DoesNotContain(q.ProjectGraph("RefsDup", 1, "downstream"),
+            // Name collisions resolve to the FIRST row, not to no-edge (field 0.7.2 regression:
+            // no-edge silently severed every consumer of a PAIRED declarer). The edge is a
+            // name-level fact — the semantic workspace loads and merges same-named rows by name
+            // anyway, so RefsDup -> Dup.Common is correct whichever row carries it.
+            Assert.Contains(q.ProjectGraph("RefsDup", 1, "downstream"),
                 e => e.ToProject.Equals("Dup.Common", StringComparison.OrdinalIgnoreCase));
 
             // External-location guard (review): a HintPath into packages/ marks the dll EXTERNAL —
@@ -255,6 +257,26 @@ public class Batch26AssemblyRefEdgeTests
             """);
         File.WriteAllText(Path.Combine(apiDir, "IPartnerContract.cs"),
             "namespace ET.Api { public interface IPartnerContract { void Execute(); } }");
+        // The DECLARER is a same-AssemblyName pair too (field 0.7.2 regression: the monolith's
+        // net-old/net-new idiom applies to ET.Api.Generated ITSELF). The old ambiguity guard
+        // poisoned the paired name to NO edge — silently severing every consumer's edge to the
+        // flagship interface; cold references then loaded 1/1 and returned an "exact" zero.
+        string apiDir2 = Path.Combine(root, "ApiGen.NetNew");
+        Directory.CreateDirectory(apiDir2);
+        File.WriteAllText(Path.Combine(apiDir2, "ApiGen.NetNew.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net9.0</TargetFramework>
+                <AssemblyName>ET.Api.Generated</AssemblyName>
+                <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+              </PropertyGroup>
+              <ItemGroup>
+                <Compile Include="../ApiGen/IPartnerContract.cs" />
+              </ItemGroup>
+            </Project>
+            """);
+
         // The field's twin ingredient: an ORPHANED copy of the interface (indexed, compiled by no
         // project — the file-copied-then-removed-from-csproj shape). Resolution must keep ignoring
         // it, and reference counts must not inflate because of it (field P1: totalReferences 13

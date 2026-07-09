@@ -60,7 +60,7 @@ public sealed partial class NavigationTools
                 new { id = "arity-exact-partials", summary = "outline partialFiles match generic arity — partial Foo and partial Foo<T> cross-link only their own halves" },
                 new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. 'partial' is DELIBERATELY not in this string: it has its own isPartial field on every symbol node (plus partialFiles cross-links on outline types). Index schema v4 (first run after deploy rebuilds the index)" },
                 new { id = "deadline-honesty", summary = "semantic references/implementations/definition/type_hierarchy report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout. references counts are physical-site deduped (one count per project+path+line+kind — twin-declaration types no longer double-count); coverage carries solutionProjects so hits from previously-resident projects are legible" },
-                new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Ambiguous assembly names create no edge. Index schema v5 (first run after deploy rebuilds). meta.indexSchema now stamped on every response" },
+                new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Assembly-name collisions (net-old/net-new csproj pairs) resolve to a name-level edge — the graph and the semantic workspace are name-keyed, so paired declarers keep all their consumer edges. Index schema v5 (first run after deploy rebuilds). meta.indexSchema now stamped on every response" },
                 new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and every index_building error body carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal (once the scan knows it), elapsedMs} — monotonic counters, no fabricated ETA or percent (derive % from the counters); absent when ready, and background refreshes never show a cold-build bar" },
             },
             tools = new[]
@@ -1330,6 +1330,20 @@ public sealed partial class NavigationTools
                     int test0 = groups0.Where(g => g.IsTestProject).Sum(g => g.Count);
                     // "0 test" would misread as "no test usages exist" when they were EXCLUDED.
                     string mix0 = includeTests ? $"{prod0} production, {test0} test" : $"{prod0} production; test projects excluded";
+                    // Field 0.7.2 P2: an exact ZERO when the base-list index KNOWS implementers is
+                    // almost certainly a loading gap, not dead code — say so, actionably. (The
+                    // honesty posture says "0 is a fact", but here the tool holds contrary data.)
+                    string? zeroNote = null;
+                    if (result.TotalLocations == 0)
+                    {
+                        using var qz = _manager.OpenQueries();
+                        string probeName = name ?? hint ?? "";
+                        int baseListNamers = probeName.Length > 0 ? qz.ImplementationCandidates(probeName, 5).Count : 0;
+                        if (baseListNamers > 0)
+                        {
+                            zeroNote = $"0 exact references, but {(baseListNamers >= 5 ? "5+" : baseListNamers.ToString())} indexed types name '{probeName}' in their base lists (see implementations) — if coverage shows few loaded projects, raise maxProjects or scope with pathGlob.";
+                        }
+                    }
                     bool exhausted = result.DeadlineExhausted;
                     bool partial = exhausted || result.SkippedCandidateProjects.Count > 0 || result.Coverage.FailedProjects.Count > 0;
                     // "at least": exhausted counts are a salvaged lower bound (24n), never the census.
@@ -1363,6 +1377,7 @@ public sealed partial class NavigationTools
                                       : "")
                                 : $"skipped {result.SkippedCandidateProjects.Count} candidate projects (raise maxProjects), {result.Coverage.FailedProjects.Count} failed loads",
                         skippedCandidateProjects = result.SkippedCandidateProjects.Count > 0 ? result.SkippedCandidateProjects : null,
+                        note = zeroNote,
                         timing = new { deadlineMs, elapsedMs },
                         truncated,
                         meta = meta0,

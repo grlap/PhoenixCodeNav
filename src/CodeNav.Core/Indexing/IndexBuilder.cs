@@ -101,10 +101,10 @@ public static class IndexBuilder
             }
             // Multi-staged builds reference ASSEMBLIES from a common output folder, not projects
             // (lhg) — recover those as graph edges or the dependency graph is blind to them.
-            var (recovered, ambiguousRefs) = AssemblyRefEdges.Write(store, tx, parsedProjects, projectIds);
-            if (recovered + ambiguousRefs > 0)
+            var (recovered, nameCollisions) = AssemblyRefEdges.Write(store, tx, parsedProjects, projectIds);
+            if (recovered + nameCollisions > 0)
             {
-                progress?.Invoke($"Assembly-ref edges: {recovered} recovered, {ambiguousRefs} ambiguous (skipped)");
+                progress?.Invoke($"Assembly-ref edges: {recovered} recovered ({nameCollisions} assembly-name collisions resolved to their first project row)");
             }
             tx.Commit();
         }

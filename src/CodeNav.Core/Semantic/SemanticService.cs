@@ -122,10 +122,25 @@ public sealed partial class SemanticService : IDisposable
             var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
             if (symbolA is null || owningProject is null) return (null, "symbol_not_resolved");
 
+            // Implementer seeds for TYPE targets — parity with Implementations/TypeHierarchy
+            // (field 0.7.2 regression report): references was the ONLY exact tool relying purely
+            // on graph edges for candidate discovery, so any edge gap (e.g. the paired-declarer
+            // collision) made it load 1/1 and return an "exact" zero while the seeded tools found
+            // all 8. Base-list implementer projects carry usages BY DEFINITION; seed them first.
+            List<string>? implementerSeeds = null;
+            if (symbolA is INamedTypeSymbol)
+            {
+                using var q = _manager.OpenQueries();
+                implementerSeeds = q.ImplementationCandidates(symbolA.Name, 100)
+                    .SelectMany(c => q.ProjectsContaining(c.FilePath).Select(p => p.Name))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
             // Phase 2: load the dependent scan set and re-resolve IN that snapshot, then
             // resolve + search against the SAME solution (no snapshot drift).
             var (solution, symbol, coverage, skipped) = await LoadScanSetAndResolveAsync(
-                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token).ConfigureAwait(false);
+                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token, implementerSeeds).ConfigureAwait(false);
             if (symbol is null) return (null, "symbol_not_resolved_in_scope");
 
             var found = await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token).ConfigureAwait(false);
