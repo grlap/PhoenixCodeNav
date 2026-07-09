@@ -104,6 +104,7 @@ public sealed class IndexStore : IDisposable
             CREATE TABLE project_refs(
               from_id INTEGER NOT NULL,
               to_id INTEGER NOT NULL,
+              kind TEXT NOT NULL DEFAULT 'project',  -- v10 (bxw): 'project' (<ProjectReference>) | 'assembly' (recovered <Reference>+HintPath edge)
               PRIMARY KEY(from_id, to_id)
             ) WITHOUT ROWID;
             CREATE INDEX idx_project_refs_to ON project_refs(to_id);
@@ -270,8 +271,13 @@ public sealed class IndexStore : IDisposable
         return (long)cmd.ExecuteScalar()!;
     }
 
-    public void InsertProjectRef(SqliteTransaction tx, long fromId, long toId) =>
-        ExecTx(tx, "INSERT OR IGNORE INTO project_refs(from_id, to_id) VALUES($a, $b)", ("$a", fromId), ("$b", toId));
+    /// <summary>Edge provenance (bxw): kind 'project' = an explicit &lt;ProjectReference&gt;;
+    /// 'assembly' = a recovered &lt;Reference&gt;+HintPath edge. INSERT OR IGNORE on PK(from,to)
+    /// gives FIRST-WRITER precedence — both graph builders insert relpath ProjectReferences
+    /// BEFORE AssemblyRefEdges runs, so a pair connected both ways records 'project'.</summary>
+    public void InsertProjectRef(SqliteTransaction tx, long fromId, long toId, string kind = "project") =>
+        ExecTx(tx, "INSERT OR IGNORE INTO project_refs(from_id, to_id, kind) VALUES($a, $b, $k)",
+            ("$a", fromId), ("$b", toId), ("$k", kind));
 
     /// <summary>R3 of the isTest rules (field: custom assembly resolution injects test-framework
     /// references OUTSIDE the csproj, so parse-time signals R1/R2 can be structurally blind):

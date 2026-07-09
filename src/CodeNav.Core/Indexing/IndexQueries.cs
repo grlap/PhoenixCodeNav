@@ -28,7 +28,8 @@ public sealed record TextSearchResult(
 
 public sealed record ProjectRow(long Id, string Path, string Name, string Style, string Tfms, bool IsTest, string LoadStatus);
 
-public sealed record GraphEdge(string FromProject, string ToProject);
+public sealed record GraphEdge(string FromProject, string ToProject,
+    string Kind = "project"); // 'project' | 'assembly' — edge provenance (bxw, schema v10)
 
 public sealed record ReferenceGroup(string Project, bool IsTestProject, int Count, List<TextHit> Samples);
 
@@ -475,6 +476,11 @@ public sealed partial class IndexQueries : IDisposable
 
     // ---------------------------------------------------------------- reference candidates
 
+    /// <summary>Group key for candidate files in NO project's compile set (orphaned copies).
+    /// A dictionary key internally — the MCP layer translates it to a structured row
+    /// (project: null, orphaned: true) instead of shipping a magic display string (bxw).</summary>
+    public const string NoProjectGroup = "(no project)";
+
     /// <summary>Result of the indexed reference scan. TotalHits/ProdHits/TestHits are PHYSICAL
     /// line counts (each file counted once — a file linked into several projects is not repeated;
     /// it lands in ProdHits when ANY surviving owner is a production project, else TestHits), so
@@ -521,7 +527,7 @@ public sealed partial class IndexQueries : IDisposable
             // production and test projects keeps its production attribution and is counted ONCE
             // in `total` — summing the per-project group counts instead would double-count files
             // legacy projects link into several compile sets (review-reproduced).
-            var owners = fileProjects.TryGetValue(c.Id, out var list) ? list : new List<(string, bool)> { ("(no project)", false) };
+            var owners = fileProjects.TryGetValue(c.Id, out var list) ? list : new List<(string, bool)> { (NoProjectGroup, false) };
             if (!includeTests) owners = owners.Where(o => !o.Item2).ToList();
             if (owners.Count == 0) continue;
 
@@ -590,7 +596,7 @@ public sealed partial class IndexQueries : IDisposable
         if (depth == 1)
         {
             const string select = """
-                SELECT pf.name, pt.name FROM project_refs r
+                SELECT pf.name, pt.name, r.kind FROM project_refs r
                 JOIN projects pf ON pf.id = r.from_id
                 JOIN projects pt ON pt.id = r.to_id
                 """;
@@ -602,24 +608,42 @@ public sealed partial class IndexQueries : IDisposable
                 _ => null,
             };
             if (sql is null) return new List<GraphEdge>();
-            return Query(sql, r => new GraphEdge(r.GetString(0), r.GetString(1)), ("$n", projectName));
+            return Query(sql, r => new GraphEdge(r.GetString(0), r.GetString(1), r.GetString(2)), ("$n", projectName));
         }
 
         var edges = Query(
             """
-            SELECT pf.name, pt.name FROM project_refs r
+            SELECT pf.name, pt.name, r.kind FROM project_refs r
             JOIN projects pf ON pf.id = r.from_id
             JOIN projects pt ON pt.id = r.to_id
             """,
-            r => new GraphEdge(r.GetString(0), r.GetString(1)));
+            r => new GraphEdge(r.GetString(0), r.GetString(1), r.GetString(2)));
 
         var downstream = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase); // project -> deps
         var upstream = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);   // project -> dependents
+        // Edge provenance survives the BFS (bxw): result edges are reconstructed from the
+        // adjacency maps, so kind must be re-attached from the loaded edge set. The BFS is
+        // NAME-keyed by construction (depth 1 is row-granular: a same-AssemblyName pair can
+        // surface one edge per ROW, each with its own kind) — so a mixed-kind name pair takes
+        // the NAME-LEVEL policy answer here, same as EdgeKindMap: 'project' wins (any real
+        // ProjectReference row means the coupling carries refactors; review F2 — plain
+        // last-writer rode the JOIN's planner-dependent row order and could flip a recovered
+        // coupling invisible at the tool's default depth). Keys are case-folded (review F4:
+        // the adjacency maps and the depth-1 SQL are case-insensitive, and the BFS root node
+        // carries the CALLER's casing — an unfolded lookup missed and defaulted first hops).
+        var kinds = new Dictionary<(string, string), string>();
         foreach (var e in edges)
         {
             (downstream.TryGetValue(e.FromProject, out var d) ? d : downstream[e.FromProject] = new()).Add(e.ToProject);
             (upstream.TryGetValue(e.ToProject, out var u) ? u : upstream[e.ToProject] = new()).Add(e.FromProject);
+            var key = (e.FromProject.ToLowerInvariant(), e.ToProject.ToLowerInvariant());
+            if (!kinds.TryGetValue(key, out var existing) || existing != "project")
+            {
+                kinds[key] = e.Kind;
+            }
         }
+        string KindOf(string from, string to) =>
+            kinds.TryGetValue((from.ToLowerInvariant(), to.ToLowerInvariant()), out var k) ? k : "project";
 
         var result = new List<GraphEdge>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { projectName };
@@ -634,7 +658,7 @@ public sealed partial class IndexQueries : IDisposable
             {
                 foreach (var dep in deps)
                 {
-                    result.Add(new GraphEdge(node, dep));
+                    result.Add(new GraphEdge(node, dep, KindOf(node, dep)));
                     if (visited.Add(dep)) frontier.Enqueue((dep, d + 1));
                 }
             }
@@ -642,7 +666,7 @@ public sealed partial class IndexQueries : IDisposable
             {
                 foreach (var dependent in dependents)
                 {
-                    result.Add(new GraphEdge(dependent, node));
+                    result.Add(new GraphEdge(dependent, node, KindOf(dependent, node)));
                     if (visited.Add(dependent)) frontier.Enqueue((dependent, d + 1));
                 }
             }
@@ -848,6 +872,32 @@ public sealed partial class IndexQueries : IDisposable
             }
         }
         return closure;
+    }
+
+    /// <summary>Edge-kind lookup keyed by (fromName, toName), case-insensitive keys folded to
+    /// lower — annotates dependency_path hops with provenance (bxw): 'project' vs 'assembly'.
+    /// A pair connected via both twin rows keeps 'project' precedence (first-writer insert).</summary>
+    public Dictionary<(string From, string To), string> EdgeKindMap()
+    {
+        var map = new Dictionary<(string, string), string>();
+        foreach (var (from, to, kind) in Query(
+            """
+            SELECT pf.name, pt.name, r.kind FROM project_refs r
+            JOIN projects pf ON pf.id = r.from_id
+            JOIN projects pt ON pt.id = r.to_id
+            """,
+            r => (From: r.GetString(0), To: r.GetString(1), Kind: r.GetString(2))))
+        {
+            var key = (from.ToLowerInvariant(), to.ToLowerInvariant());
+            // Same-name pair rows can carry both kinds for one NAME-level edge — 'project' wins
+            // (an explicit ProjectReference is the stronger provenance claim). The conditional is
+            // load-bearing: plain last-writer would ride the JOIN's planner-dependent row order.
+            if (!map.TryGetValue(key, out var existing) || existing != "project")
+            {
+                map[key] = kind;
+            }
+        }
+        return map;
     }
 
     /// <summary>Shortest dependency paths (project references) from one project to another.</summary>

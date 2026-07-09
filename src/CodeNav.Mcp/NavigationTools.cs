@@ -64,6 +64,7 @@ public sealed partial class NavigationTools
                 new { id = "deadline-honesty", summary = "semantic references/implementations/definition/type_hierarchy report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout. references counts are physical-site deduped (one count per project+path+line+kind — twin-declaration types no longer double-count); coverage carries solutionProjects so hits from previously-resident projects are legible; outOfGraphCandidates lists textual mentions with NO graph path to the declarer (plugins, config-wired consumers), previously dropped without a trace" },
                 new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Assembly-name collisions (net-old/net-new csproj pairs) resolve to a name-level edge — the graph and the semantic workspace are name-keyed, so paired declarers keep all their consumer edges (schema v6+; edge recovery itself since v5). meta.indexSchema stamped on every response" },
                 new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and every index_building error body carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal (once the scan knows it), elapsedMs} — monotonic counters, no fabricated ETA or percent (derive % from the counters); absent when ready, and background refreshes never show a cold-build bar" },
+                new { id = "edge-provenance", summary = "graph edges carry HOW the coupling is wired (schema v10): 'projectReference' (real <ProjectReference>) vs 'hintPathReference' (recovered from <Reference>+HintPath / bare Include — the multi-staged build). project_graph.edges.kind now reports the truth (previously HARDCODED 'projectReference' for every edge); dependency_path adds structuredPaths with per-hop 'via' (arrow strings stay); context_pack.ownerProjectEdges flags only hintPathReference edges; impact adds directDependentProjects {total, viaProjectReference, viaHintPathOnly} + a risk when consumers are HintPath-only (they bind to the last-BUILT dll and ProjectReference-aware refactor tooling won't follow the edge) — transitive stays one number (mixed-kind paths have no honest per-kind bucket). A pair wired BOTH ways records 'project' (first-writer: ProjectReference edges insert before recovery). Reference groups in files no project compiles are now structured — orphaned:true with the project field OMITTED (house style: null fields don't serialize) — instead of the magic '(no project)' string" },
             },
             tools = new[]
             {
@@ -1452,7 +1453,8 @@ public sealed partial class NavigationTools
             groupBy = "project",
             groups = items.Select(g => new
             {
-                project = g.Project,
+                project = GroupProject(g.Project),
+                orphaned = GroupOrphaned(g.Project),
                 isTest = g.IsTestProject,
                 count = g.Count,
                 samples = g.Samples.Select(s => new { path = s.FilePath, s.Line, text = s.LineText }),
@@ -1496,7 +1498,11 @@ public sealed partial class NavigationTools
             direction,
             depth,
             nodeCount = nodes.Count,
-            edges = items.Select(e => new { from = e.FromProject, to = e.ToProject, kind = "projectReference" }),
+            // Edge provenance (bxw, schema v10): 'projectReference' = a real <ProjectReference>;
+            // 'hintPathReference' = recovered from <Reference>+HintPath / bare Include (the
+            // multi-staged build). kind was previously HARDCODED 'projectReference' for every
+            // edge — presenting binary couplings as source-graph ones.
+            edges = items.Select(e => new { from = e.FromProject, to = e.ToProject, kind = EdgeKind(e.Kind) }),
             truncated,
             meta,
         });
@@ -1708,6 +1714,25 @@ public sealed partial class NavigationTools
         }
         return (hit, null);
     }
+
+    /// <summary>Wire vocabulary for edge provenance (bxw): the stored kind ('project'/'assembly')
+    /// maps to 'projectReference'/'hintPathReference' — 'projectReference' predates provenance on
+    /// the wire (project_graph hardcoded it), so the common case keeps its established value.
+    /// Same tokens everywhere kind/via appears (project_graph, dependency_path, context_pack).</summary>
+    private static string EdgeKind(string storedKind) =>
+        storedKind == "assembly" ? "hintPathReference" : "projectReference";
+
+    /// <summary>Structured attribution for reference groups whose files sit in NO project's
+    /// compile set (bxw): the payload used to ship the magic display string "(no project)",
+    /// which callers had to know to string-match. Now the project field is null — which the
+    /// house serialization OMITS (WhenWritingNull) — and orphaned:true rides alongside as the
+    /// positive discriminator, the same 'orphaned' vocabulary search_symbol/repo_overview use.
+    /// Nullable bool so compiled rows stay clean (orphaned omitted too).</summary>
+    private static string? GroupProject(string project) =>
+        project == IndexQueries.NoProjectGroup ? null : project;
+
+    private static bool? GroupOrphaned(string project) =>
+        project == IndexQueries.NoProjectGroup ? true : null;
 
     /// <summary>Short, stable (cross-process) identity hash of a symbol row — FNV-1a over
     /// name/kind/line/path. Embedded in the idx: handle so a rowid the index later reuses for a

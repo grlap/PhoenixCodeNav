@@ -30,6 +30,14 @@ navigation questions in three layers, each labeled with how trustworthy it is:
 Plus structural facts from csproj/sln parsing (`project_graph`, `projects_containing`,
 `dependency_path`, `repo_overview`) and composites (`context_pack`, `impact`, `related_tests`).
 
+The dependency graph also sees what MSBuild's project view hides in legacy monoliths:
+binary `<Reference Include>` + HintPath couplings from **multi-staged builds** (phase one
+builds dlls to a common folder; later projects reference the dll, not the project) count as
+graph edges, so cross-project `references`/`implementations` resolve exactly across them.
+Every edge carries its provenance — `projectReference` vs `hintPathReference` — and `impact`
+flags dependents wired only via HintPath: they bind to the last-*built* dll, and
+ProjectReference-aware refactor tooling won't follow that edge.
+
 **No MSBuild required.** The semantic layer builds Roslyn compilations directly from parsed
 project files (AdhocWorkspace): documents from disk, framework reference assemblies, hint-path
 and NuGet-cache package dlls, in-cluster project references. It works identically for legacy
@@ -49,7 +57,11 @@ and NuGet-cache package dlls, in-cluster project references. It works identicall
 
 Index updates are incremental: a file watcher applies debounced deltas (edit/add/delete,
 FTS-consistent); csproj/sln changes rebuild the project graph (~1 s). A startup sweep
-catches offline edits. Every response carries `indexStatus` / `indexVersion` freshness metadata.
+catches offline edits, and branch switches / pulls are detected by watching `.git`
+(`repo_overview.git` reports indexed vs HEAD commit). Every response carries
+`indexStatus` / `indexVersion` freshness metadata; `refresh_index` is an in-band hatch
+(`force: 'incremental' | 'full'`) that recovers even a corrupted index without shell access,
+and cold builds expose live progress counters (no fabricated ETAs).
 
 ## Install (work machine)
 
@@ -128,13 +140,16 @@ Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.Mcp` (serv
 
 ## Known limitations (v1)
 
-- SDK-style compile items are approximated by longest-dir-prefix globbing (no MSBuild
-  evaluation); explicit legacy `<Compile Include>` items — including linked files — are exact.
-- `search_text` is token-based FTS with substring line-location, not a regex engine.
+- SDK-style compile items are approximated by `<Compile Include>` glob expansion plus
+  longest-dir-prefix heuristics (no MSBuild evaluation); explicit legacy `<Compile Include>`
+  items — including linked files — are exact. Residual gaps: shared `.projitems`, props-level
+  globs, and MSBuild `Condition`s are not evaluated.
+- `search_text` regex mode (`regex:true`) is line-based .NET regex narrowed by FTS tokens —
+  no multi-line patterns.
 - Indexed `references` are whole-identifier text candidates; use `mode="semantic"` (or the
   default auto-upgrade) for compiler-exact results.
 - Semantic scans are scoped to FTS-candidate projects capped by `maxProjects`; skipped
   candidates are always listed so agents can widen deliberately.
 - Multi-TFM projects index a single symbol row per declaration (net472-first design).
-- `recent_changes` (git-aware navigation), `xml_doc`, and `diagnostics` from the brief are
-  not yet implemented.
+- Git awareness covers freshness (indexed vs HEAD commit/branch), not navigation — a
+  `recent_changes` tool, `xml_doc`, and `diagnostics` from the brief are not yet implemented.

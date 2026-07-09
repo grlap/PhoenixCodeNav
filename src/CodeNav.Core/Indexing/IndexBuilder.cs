@@ -52,8 +52,12 @@ public static class IndexBuilder
     /// same-AssemblyName pair rows (half-promotion made the answer scan-order-dependent),
     /// xunit.assert marker.
     /// v9: symbols.accessors (hu7) — per-accessor accessibility ("get=public;set=private")
-    /// when an accessor differs from the member's own.</summary>
-    public const string SchemaVersion = "9";
+    /// when an accessor differs from the member's own.
+    /// v10: project_refs.kind (bxw) — edge provenance 'project' vs 'assembly' (HintPath /
+    /// bare-&lt;Reference&gt; recovered), so graph consumers can flag multi-staged-build couplings
+    /// that a ProjectReference-aware rename/refactor will NOT carry. New column + new stored
+    /// edge content; a deployed v9 index must rebuild to answer kind at all.</summary>
+    public const string SchemaVersion = "10";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null)

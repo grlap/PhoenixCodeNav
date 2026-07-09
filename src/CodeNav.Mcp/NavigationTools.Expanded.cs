@@ -246,14 +246,56 @@ public sealed partial class NavigationTools
         if (NotReady() is { } notReady) return notReady;
         using var q = _manager.OpenQueries();
         var paths = q.DependencyPaths(fromProject, toProject, Math.Clamp(maxPaths, 1, 10));
-        return Json.Serialize(new
+        // Edge provenance per hop (bxw, schema v10): 'projectReference' = a real
+        // <ProjectReference>; 'hintPathReference' = recovered from <Reference>+HintPath / bare
+        // Include (the monolith's multi-staged build). The distinction matters for change
+        // planning: a hintPathReference consumer binds to the last-BUILT dll, so refactors ripple
+        // only after the staged build re-emits it, and ProjectReference-aware tooling (rename,
+        // IDE "find dependent projects") won't see the coupling at all. Arrow strings stay for
+        // display; structuredPaths carries the detail. Every consecutive pair in a returned path
+        // IS a project_refs row read on this same connection, so the lookup cannot miss.
+        var kinds = q.EdgeKindMap();
+        string Via(string from, string to) =>
+            kinds.TryGetValue((from.ToLowerInvariant(), to.ToLowerInvariant()), out var k)
+                ? EdgeKind(k) : EdgeKind("project");
+        // Budget-bounded (review F3): structuredPaths ~2.4x the old payload, and deep monolith
+        // chains with several path variants measured PAST the 24KB hard wire cap under plain
+        // Serialize. Paths trim as PAIRS — the display string and its hops stay in lockstep —
+        // and shortest paths are first in, last dropped. found reflects the pre-trim truth.
+        var pathItems = paths.Select(p => new
+        {
+            display = string.Join(" -> ", p),
+            hops = p.Select((proj, i) => i == 0
+                ? new { project = proj, via = (string?)null }
+                : new { project = proj, via = (string?)Via(p[i - 1], proj) }).ToList(),
+        }).ToList();
+        bool found = paths.Count > 0;
+        var meta = Meta.From(_manager.Health(), "indexed", "text");
+        string BuildJson(bool dropStructured) => Json.WithListBudget(pathItems, (items, truncated) => new
         {
             fromProject,
             toProject,
-            found = paths.Count > 0,
-            paths = paths.Select(p => string.Join(" -> ", p)),
-            meta = Meta.From(_manager.Health(), "indexed", "text"),
+            found,
+            paths = items.Select(i => i.display),
+            structuredPaths = dropStructured ? null : (object?)items.Select(i => i.hops),
+            structuredPathsOmitted = dropStructured
+                ? "a single path exceeded the byte budget — structured hops dropped; the 'paths' strings carry the full chains"
+                : null,
+            truncated,
+            meta,
         });
+        string json = BuildJson(dropStructured: false);
+        // Lone-item overflow (review, verification round): WithListBudget can never trim below
+        // ONE item, and a single very deep path's hops array ALONE can breach the hard cap
+        // (repro: a 120-hop chain with ~90-char names → ~27KB, shipped untruncated). Degrade by
+        // dropping the STRUCTURED dimension this batch added — flagged, never silent — while the
+        // arrow strings keep the full answer at the pre-provenance payload's weight. (A lone
+        // DISPLAY string over the cap would be the pre-existing arrow-string exposure, unchanged.)
+        if (Json.Utf8Bytes(json) > Json.HardBudgetBytes)
+        {
+            json = BuildJson(dropStructured: true);
+        }
+        return json;
     }
 
     [McpServerTool(Name = "config_lookup")]
@@ -383,7 +425,13 @@ public sealed partial class NavigationTools
             references = new
             {
                 totalCandidates = refTotal,
-                topProjects = refGroups.Take(6).Select(g => new { project = g.Project, g.Count, isTest = g.IsTestProject }),
+                topProjects = refGroups.Take(6).Select(g => new
+                {
+                    project = GroupProject(g.Project),
+                    orphaned = GroupOrphaned(g.Project), // was the magic "(no project)" string (bxw)
+                    g.Count,
+                    isTest = g.IsTestProject,
+                }),
                 confidence = "indexed",
             },
             relatedTests = dropTests ? null : new
@@ -391,7 +439,14 @@ public sealed partial class NavigationTools
                 confidence = "heuristic", // naming/project inference, not a compiler fact
                 groups = tests.Select(g => new { project = g.TestProject, g.Reason, g.MatchingFiles }),
             },
-            ownerProjectEdges = dropEdges ? null : edges.Select(e => new { from = e.FromProject, to = e.ToProject }),
+            // kind rides only on hintPathReference edges (bxw) — plain ProjectReferences omit it
+            // (WhenWritingNull) so the orientation bundle stays compact; unusual coupling is the signal.
+            ownerProjectEdges = dropEdges ? null : edges.Select(e => new
+            {
+                from = e.FromProject,
+                to = e.ToProject,
+                kind = e.Kind == "assembly" ? EdgeKind(e.Kind) : null,
+            }),
             siblings = dropSiblings ? null : siblings,
             omittedBecauseBudget = omitted.Count > 0 ? omitted : null,
             meta,
@@ -444,12 +499,24 @@ public sealed partial class NavigationTools
         // several projects, so impact could report more prod+test references than lines exist.
         var (refTotal, prodRefs, testRefs, refGroups) = q.ReferenceCandidates(name, 500, 0);
         int dependents = owner is not null ? q.DependentClosure(owner).Count : 0;
+        // Direct-dependent provenance split (bxw, schema v10): a dependent wired ONLY via
+        // <Reference>+HintPath (kind 'assembly' on every edge — same-name pair rows can mint two)
+        // binds to the last-BUILT dll of the multi-staged build, and ProjectReference-aware
+        // tooling (rename, IDE "find dependent projects") won't follow the edge. A dependent with
+        // ANY real ProjectReference edge is excluded — that wiring does carry refactors.
+        // Grouped by NAME (the graph is name-keyed; pair rows must not count twice).
+        var directDependentGroups = owner is null
+            ? new List<IGrouping<string, GraphEdge>>()
+            : q.ProjectGraph(owner, 1, "upstream").GroupBy(e => e.FromProject, StringComparer.OrdinalIgnoreCase).ToList();
+        int hintPathOnlyConsumers = directDependentGroups.Count(g => g.All(e => e.Kind == "assembly"));
         var tests = q.RelatedTests(name, owner, 6);
         bool isPublic = primary?.Accessibility == "public";
         bool isPartial = primary?.IsPartial ?? false;
 
         var risks = new List<string>();
         if (isPublic && dependents > 0) risks.Add($"Public symbol; {dependents} projects transitively depend on {owner}.");
+        if (hintPathOnlyConsumers > 0) risks.Add(
+            $"{hintPathOnlyConsumers} of {directDependentGroups.Count} direct dependents consume {owner} only via <Reference>/HintPath (multi-staged build) — they bind to the last-built dll and ProjectReference-aware refactor tooling won't follow those edges.");
         if (refGroups.Count > 10) risks.Add($"Referenced in {refGroups.Count} projects — wide blast radius.");
         if (testRefs == 0 && prodRefs > 0) risks.Add("No test references found — behavior changes are unguarded.");
         if (isPartial) risks.Add("Partial declarations — check all declaration files before editing.");
@@ -467,7 +534,20 @@ public sealed partial class NavigationTools
                 production = prodRefs,
                 test = testRefs,
                 projects = refGroups.Count,
-                topProjects = refGroups.Take(8).Select(g => new { project = g.Project, g.Count }),
+                topProjects = refGroups.Take(8).Select(g => new
+                {
+                    project = GroupProject(g.Project),
+                    orphaned = GroupOrphaned(g.Project), // was the magic "(no project)" string (bxw)
+                    g.Count,
+                }),
+            },
+            // Kind split only at depth 1 — transitive stays a single number: a mixed path
+            // (projectRef hop then hintPathRef hop) has no honest single per-kind bucket.
+            directDependentProjects = owner is null ? null : new
+            {
+                total = directDependentGroups.Count,
+                viaProjectReference = directDependentGroups.Count - hintPathOnlyConsumers,
+                viaHintPathOnly = hintPathOnlyConsumers,
             },
             transitiveDependentProjects = dependents,
             relatedTests = new
@@ -501,7 +581,11 @@ public sealed partial class NavigationTools
             totalCandidates = total,
             groups = items.Select(g => new
             {
-                project = g.Project,
+                // Structured orphan attribution here too (review F1): this fallback serves
+                // callers/callees, and it was the ONE group emitter still shipping the magic
+                // "(no project)" string after bxw replaced it everywhere else.
+                project = GroupProject(g.Project),
+                orphaned = GroupOrphaned(g.Project),
                 isTest = g.IsTestProject,
                 count = g.Count,
                 samples = g.Samples.Select(s => new { path = s.FilePath, s.Line, text = s.LineText }),

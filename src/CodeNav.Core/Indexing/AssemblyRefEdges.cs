@@ -82,7 +82,7 @@ internal static class AssemblyRefEdges
                 // its own dependent (contract: "target excluded") and impact inflates its count.
                 if (toId == fromId) continue;
                 if (string.Equals(assembly, p.Name, StringComparison.OrdinalIgnoreCase)) continue;
-                store.InsertProjectRef(tx, fromId, toId);
+                store.InsertProjectRef(tx, fromId, toId, kind: "assembly"); // provenance (bxw)
                 recovered++;
             }
         }
