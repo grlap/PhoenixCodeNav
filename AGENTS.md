@@ -126,3 +126,52 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+## Commit Discipline - NEVER check in without review
+
+Every commit requires an adversarial review round first. There are no risk-tier exemptions:
+documentation-only, test-only, and apparently trivial changes still follow the full loop.
+
+1. Implement the tracked Beads work.
+2. Add regression tests and reintroduction-verify them: temporarily restore the defect or
+   disable the decisive condition, prove the targeted test fails for the intended reason,
+   then restore the implementation and prove it passes.
+3. Run a Release build with literal zero warnings and the complete test suite green. The
+   documented `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` timing flake may be
+   noted only when it is the sole failure and passes in isolation.
+4. Run an adversarial review of the full uncommitted staged, unstaged, and untracked change
+   set. Findings are fixed and verified by the same reviewer until CLEAN. If a reviewer dies
+   mid-pass, the batch is not reviewed.
+5. Only after CLEAN may the outer workflow commit when the active user/repository authority
+   permits it. This review command itself never commits. Push always requires explicit
+   per-changeset approval from Greg.
+6. Close or annotate Beads with the implementation. Bump `BuildInfo.Version` for a changed
+   tool surface or user-visible capability. Bump `IndexBuilder.SchemaVersion` whenever the
+   schema or indexer's stored output changes.
+
+Do not describe a self-review, an incomplete dual review, or fresh replacement reviewers as
+same-session verification.
+
+## Review System - TermAl (Codex + Claude)
+
+The preferred adversarial review gate is `/review-with-delegate`. TermAl resolves the
+project command from `.claude/commands/` for both Codex and Claude, validates the parent
+worktree, then runs exactly one read-only `/review-local` child in each agent and performs
+a durable fan-in.
+
+- `/review-with-delegate` is the only command allowed to spawn TermAl reviewer sessions.
+- `/review-local` is a leaf command: it applies every `.claude/reviewers/*.md` lens inline
+  and never nests delegation or platform subagents.
+- Both commands are review-only. They never edit source, mutate Git, commit, push, or run
+  Dolt remote sync. The parent may reconcile local Beads findings after fan-in.
+- A failed, missing, or dead reviewer makes the review INCONCLUSIVE, never CLEAN.
+- Changes at any depth to `AGENTS.md`/`AGENTS.override.md`, `CLAUDE.md`/`CLAUDE.local.md`,
+  `.mcp.json`, an `.agents`/`.claude`/`.codex` directory, or the review-command contract test
+  cannot be certified by the dirty self-hosted gate. They require an independent external/manual
+  adversarial review or the last committed trusted command/lens versions.
+- If the TermAl MCP bridge is unavailable, stop and report it; a self-review does not
+  substitute for the required independent review round.
+- The current TermAl MCP surface cannot send a follow-up turn to an existing child. When
+  literal same-session verification is required after fixes, continue through the original
+  child session UI or ask for direction; rerunning creates fresh reviewers and must not be
+  described as same-session verification.

@@ -105,3 +105,27 @@ _Add a brief overview of your project architecture_
 ## Conventions & Patterns
 
 _Add your project-specific conventions here_
+
+## Review System - TermAl (Codex + Claude)
+
+The preferred adversarial review gate is `/review-with-delegate`. TermAl resolves the
+project command from `.claude/commands/` for both Codex and Claude, validates the parent
+worktree, then runs exactly one read-only `/review-local` child in each agent and performs
+a durable fan-in.
+
+- `/review-with-delegate` is the only command allowed to spawn TermAl reviewer sessions.
+- `/review-local` is a leaf command: it applies every `.claude/reviewers/*.md` lens inline
+  and never nests delegation or platform subagents.
+- Both commands are review-only. They never edit source, mutate Git, commit, push, or run
+  Dolt remote sync. The parent may reconcile local Beads findings after fan-in.
+- A failed, missing, or dead reviewer makes the review INCONCLUSIVE, never CLEAN.
+- Changes at any depth to `AGENTS.md`/`AGENTS.override.md`, `CLAUDE.md`/`CLAUDE.local.md`,
+  `.mcp.json`, an `.agents`/`.claude`/`.codex` directory, or the review-command contract test
+  cannot be certified by the dirty self-hosted gate. They require an independent external/manual
+  adversarial review or the last committed trusted command/lens versions.
+- If the TermAl MCP bridge is unavailable, stop and report it; a self-review does not
+  substitute for the required independent review round.
+- The current TermAl MCP surface cannot send a follow-up turn to an existing child. When
+  literal same-session verification is required after fixes, continue through the original
+  child session UI or ask for direction; rerunning creates fresh reviewers and must not be
+  described as same-session verification.
