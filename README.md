@@ -30,7 +30,7 @@ navigation questions in three layers, each labeled with how trustworthy it is:
 Plus structural facts from csproj/sln parsing (`project_graph`, `projects_containing`,
 `dependency_path`, `repo_overview`) and composites (`context_pack`, `impact`, `related_tests`).
 
-The dependency graph also sees what MSBuild's project view hides in legacy monoliths:
+The dependency graph also sees what MSBuild's project view hides in large legacy codebases:
 binary `<Reference Include>` + HintPath couplings from **multi-staged builds** (phase one
 builds dlls to a common folder; later projects reference the dll, not the project) count as
 graph edges, so cross-project `references`/`implementations` resolve exactly across them.
@@ -43,20 +43,10 @@ project files (AdhocWorkspace): documents from disk, framework reference assembl
 and NuGet-cache package dlls, in-cluster project references. It works identically for legacy
 (`ToolsVersion=15.0`, `packages.config`) and SDK-style projects.
 
-## Measured performance (synthetic 2,003-project / 2.1M-line workspace)
-
-| Operation | Result |
-|---|---|
-| Cold full index build | ~55 s (54.5k files, 572k symbols, 242 MB db) |
-| `outline` / `symbol_at` / `definition` (indexed) | < 1 ms p95 |
-| `search_text` / `search_symbol` | < 30 ms p95 (worst substring case 153 ms) |
-| `references` indexed candidates, hot symbol, grouped | 41 ms p95 |
-| `definition` semantic, **cold cluster** | ~1 s (then ~10 ms warm) |
-| `references` semantic, hot symbol (24 projects loaded) | ~1.2 s, 2,252 exact refs, skipped candidates reported |
-| Semantic memory after loads | < 300 MB working set (LRU cap: 160 projects) |
+## Keeping the index fresh
 
 Index updates are incremental: a file watcher applies debounced deltas (edit/add/delete,
-FTS-consistent); csproj/sln changes rebuild the project graph (~1 s). A startup sweep
+FTS-consistent); csproj/sln changes rebuild the project graph. A startup sweep
 catches offline edits, and branch switches / pulls are detected by watching `.git`
 (`repo_overview.git` reports indexed vs HEAD commit). Every response carries
 `indexStatus` / `indexVersion` freshness metadata; `refresh_index` is an in-band hatch
@@ -120,7 +110,8 @@ elsewhere.
 ## Git worktrees (review flows)
 
 Each worktree carries its own index under `<worktree>/.codenav/` — indexes are
-workspace-relative, local-only, and never shared or committed (a monolith index runs ~1GB).
+workspace-relative, local-only, and never shared or committed (large-workspace indexes can
+run to gigabytes).
 Phoenix never creates or removes worktrees — its git usage is strictly **read-only**. A
 review system creates the worktree; phoenix seeds and follows it:
 

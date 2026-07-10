@@ -10,9 +10,9 @@ Relates to: [`design.md`](./design.md) (the static index this complements),
 ## Problem
 
 Static navigation — phoenix's syntactic index and its bounded Roslyn semantic layer — resolves
-edges the compiler can see: calls, interface implementations, overrides. In an enterprise .NET
-monolith a large fraction of the *real* call graph is **chosen at runtime** and is invisible to
-that analysis:
+edges the compiler can see: calls, interface implementations, overrides. In a large enterprise
+.NET codebase a large fraction of the *real* call graph is **chosen at runtime** and is
+invisible to that analysis:
 
 - **Castle Windsor DI** — `Component.For<IFoo>().ImplementedBy<Foo>()`, conventions, typed
   factories, interceptors, sub-resolvers. Following `IFoo.Bar` lands on an interface; which

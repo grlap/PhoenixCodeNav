@@ -71,8 +71,9 @@ flags, freshness), `file_contents` + an external-content `fts_content` virtual t
 **Build** (`IndexBuilder`): scan the tree (excluding `.git`, `bin`, `obj`, `packages`,
 `node_modules`, `.vs`, generated files, and symlink/junction targets); parse every
 `.csproj`/`.sln` in parallel; parse every `.cs` with Roslyn syntax on all cores, streaming
-symbol rows through a bounded channel to the single writer. On the synthetic 2k-project /
-2.1M-line workspace this is ~55s cold; the index is ~240 MB.
+symbol rows through a bounded channel to the single writer. A cold build of a
+multi-thousand-project workspace completes in minutes at most; live progress counters
+(phase, files, throughput) report the real numbers for any given machine.
 
 **Compile-item ownership**: legacy projects list `<Compile Include>` explicitly (exact,
 including linked files); SDK-style projects are approximated by longest-dir-prefix globbing.

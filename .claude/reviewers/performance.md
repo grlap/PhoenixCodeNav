@@ -1,6 +1,6 @@
 # Performance / Concurrency Review
 
-Focus: Monolith-scale complexity, bounded resource use, single-writer safety, lifecycle races, and behavior-preserving optimization.
+Focus: Large-workspace complexity, bounded resource use, single-writer safety, lifecycle races, and behavior-preserving optimization.
 
 ## What to check
 
@@ -60,4 +60,4 @@ Focus: Monolith-scale complexity, bounded resource use, single-writer safety, li
 - Cold semantic cluster load around the documented target.
 - The semantic project cap being soft when eviction would dangle references.
 - A bounded rebuild retry merely for using a short sleep.
-- Allocation/style micro-optimizations without demonstrated monolith impact.
+- Allocation/style micro-optimizations without demonstrated large-workspace impact.
