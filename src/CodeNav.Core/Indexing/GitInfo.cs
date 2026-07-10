@@ -210,12 +210,131 @@ public static class GitInfo
         return list;
     }
 
+    /// <summary>Resolve a REF NAME (branch/tag/"HEAD"/merge-base output) to a full commit sha,
+    /// or null. The input is interpolated into a git args string, so it is validated to a
+    /// strict ref charset FIRST (letters/digits and / - _ . only, no leading '-' — never a
+    /// flag, never a shell metacharacter on .cmd-wrapper machines); the OUTPUT is hex-gated
+    /// like every stored commit id. Callers may also pass a raw sha (fast-path, no spawn).</summary>
+    public static string? ResolveRef(string workspaceRoot, string refName)
+    {
+        if (IsHexCommit(refName)) return refName; // already a sha — nothing to resolve
+        if (!IsSafeRefName(refName)) return null;
+        string? outp = Run(workspaceRoot, $"rev-parse --verify --quiet {refName}^{{commit}}")?.Trim();
+        return outp is not null && IsHexCommit(outp) ? outp : null;
+    }
+
+    /// <summary>Strict allowlist for ref names we interpolate: alnum plus / - _ . (covers
+    /// branches, tags, remotes/origin/x, HEAD). Rejects empty, leading '-', '..', and length
+    /// abuse. Deliberately NARROWER than git's own ref grammar — an exotic-but-legal ref can
+    /// be resolved by the caller to a sha instead.</summary>
+    internal static bool IsSafeRefName(string s)
+    {
+        if (s.Length is 0 or > 200 || s[0] == '-' || s.Contains("..", StringComparison.Ordinal)) return false;
+        foreach (char c in s)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c is not ('/' or '-' or '_' or '.')) return false;
+        }
+        return true;
+    }
+
+    /// <summary>One changed file in a working-tree diff: NEW-side line ranges that changed
+    /// (1-based, inclusive; a pure-deletion hunk contributes a 1-line anchor range at its
+    /// position so the surrounding symbol still counts as touched). Deleted is true when the
+    /// file no longer exists on the new side.</summary>
+    public sealed record DiffFile(string Path, bool Deleted, List<(int Start, int End)> Ranges);
+
+    /// <summary>Hunk-level diff of the WORKING TREE against <paramref name="fromCommit"/>
+    /// (staged + unstaged in one pass; untracked files are invisible to diff — callers union
+    /// DirtyFiles for those). Null on any failure (the caller degrades honestly). One spawn,
+    /// `-U0` so hunk headers are exact change ranges. Paths arrive raw UTF-8 (quotepath off).</summary>
+    public static List<DiffFile>? DiffHunks(string workspaceRoot, string fromCommit)
+    {
+        if (!IsHexCommit(fromCommit)) return null;
+        string? outp = Run(workspaceRoot, $"diff -U0 --no-renames --no-color --relative {fromCommit}");
+        if (outp is null) return null;
+        // One record per file section, opened at the "+++" line (the point where BOTH sides
+        // are known): "+++ b/<path>" = surviving file; "+++ /dev/null" = deleted, path taken
+        // from the remembered "--- a/<path>" side. Hunks attach to the open record.
+        var result = new List<DiffFile>();
+        string? oldSide = null;
+        DiffFile? current = null;
+        foreach (var raw in outp.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+            if (line.StartsWith("--- ", StringComparison.Ordinal))
+            {
+                string s = StripHeaderTerminator(line[4..]);
+                oldSide = s.StartsWith("a/", StringComparison.Ordinal) ? s[2..].Replace('\\', '/') : null;
+                current = null; // a new file section begins; the +++ line opens the record
+            }
+            else if (line.StartsWith("+++ ", StringComparison.Ordinal))
+            {
+                string newSide = StripHeaderTerminator(line[4..]);
+                if (newSide == "/dev/null")
+                {
+                    if (oldSide is not null)
+                    {
+                        current = new DiffFile(oldSide, Deleted: true, new List<(int, int)>());
+                        result.Add(current);
+                    }
+                }
+                else if (newSide.StartsWith("b/", StringComparison.Ordinal))
+                {
+                    current = new DiffFile(newSide[2..].Replace('\\', '/'), Deleted: false, new List<(int, int)>());
+                    result.Add(current);
+                }
+            }
+            else if (line.StartsWith("@@ ", StringComparison.Ordinal) && current is not null)
+            {
+                // "@@ -a,b +c,d @@": the NEW-side range is c..c+d-1; d omitted = 1; d==0 is a
+                // pure deletion at position c — anchor 1 line so the enclosing symbol counts.
+                int plus = line.IndexOf('+', 3);
+                if (plus < 0) continue;
+                int end = line.IndexOf(' ', plus);
+                if (end < 0) continue;
+                string span = line[(plus + 1)..end];
+                int comma = span.IndexOf(',');
+                int start, count;
+                if (comma < 0) { _ = int.TryParse(span, out start); count = 1; }
+                else
+                {
+                    _ = int.TryParse(span[..comma], out start);
+                    _ = int.TryParse(span[(comma + 1)..], out count);
+                }
+                if (start <= 0) start = 1;
+                if (count <= 0) count = 1; // deletion anchor
+                current.Ranges.Add((start, start + count - 1));
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Git appends a TAB terminator to diff header paths that CONTAIN SPACES (the GNU
+    /// timestamp-separator convention). Left in place, the "path" carries a trailing '\t'
+    /// (review, reproduced): ShowFile's control-char guard then rejected it — deletion honesty
+    /// silently lost — and the ghost entry double-counted the file while the tab-free dirt
+    /// union re-added it at the wrong granularity. Strip exactly one trailing tab.</summary>
+    private static string StripHeaderTerminator(string s) =>
+        s.EndsWith('\t') ? s[..^1] : s;
+
     private static string? Run(string cwd, string args)
     {
         if (GitExe.Value is not { } gitExe) return null; // git not resolved — feature off
         var (exe, wrapped) = Invocation(gitExe, GitArgs(args));
         var r = RunProcessEx(exe, cwd, wrapped);
         return r.Status == "ok" && !r.Truncated ? r.Output : null;
+    }
+
+    /// <summary>Content of <paramref name="relPath"/> at <paramref name="commit"/> (read-only
+    /// `git show`), or null. For DELETED-file review honesty: the post-change index cannot
+    /// know removed symbols; the base blob re-parsed in memory can. The commit is hex-gated
+    /// and the path charset-validated before interpolation (quoted; '"' and control chars
+    /// rejected) — the shell-inertness rule for wrapper machines.</summary>
+    public static string? ShowFile(string workspaceRoot, string commit, string relPath)
+    {
+        if (!IsHexCommit(commit)) return null;
+        if (relPath.Length is 0 or > 500 || relPath.Contains('"') || relPath.Any(char.IsControl)) return null;
+        return Run(workspaceRoot, $"show \"{commit}:{relPath}\"");
     }
 
     // -c core.fsmonitor=false: on fsmonitor/Scalar-enabled monoliths git auto-spawns a background

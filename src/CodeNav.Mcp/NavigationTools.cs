@@ -65,6 +65,8 @@ public sealed partial class NavigationTools
                 new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Assembly-name collisions (net-old/net-new csproj pairs) resolve to a name-level edge — the graph and the semantic workspace are name-keyed, so paired declarers keep all their consumer edges (schema v6+; edge recovery itself since v5). meta.indexSchema stamped on every response" },
                 new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and every index_building error body carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal (once the scan knows it), elapsedMs} — monotonic counters, no fabricated percent (derive % from the counters); absent when ready, and background refreshes never show a cold-build bar. Loss visibility (efa): filesSkipped (unreadable .cs — absent from the index until a delta refresh retries) and projectsFailed (csproj parse failures — guessed compile sets) appear ONLY when >0. Derived throughput (0tn): filesPerSecond + estimatedRemainingMs appear only during indexing_files once >=100 files over >=1s of THAT phase's clock are measured — labeled estimates that may fluctuate, never extrapolated from another phase. Refresh movement (z4c): server_capabilities.index.pendingProcessed is the MONOTONIC count of applied file deltas, paired with pendingChanges — pending drains while processed climbs; both flat means a stuck pump, not a busy one" },
                 new { id = "edge-provenance", summary = "graph edges carry HOW the coupling is wired (schema v10): 'projectReference' (real <ProjectReference>) vs 'hintPathReference' (recovered from <Reference>+HintPath / bare Include — the multi-staged build). project_graph.edges.kind now reports the truth (previously HARDCODED 'projectReference' for every edge); dependency_path adds structuredPaths with per-hop 'via' (arrow strings stay) and sameProject:true on the trivially-yes X-to-X query; context_pack.ownerProjectEdges flags only hintPathReference edges; impact adds directDependentProjects {total, viaProjectReference, viaHintPathOnly} + a risk when consumers are HintPath-only (they bind to the last-BUILT dll and ProjectReference-aware refactor tooling won't follow the edge) — transitive stays one number (mixed-kind paths have no honest per-kind bucket; impact.transitiveNote states this inline whenever assembly wiring is present). A pair wired BOTH ways records 'project' (first-writer: ProjectReference edges insert before recovery). Reference groups in files no project compiles are now structured — orphaned:true with the project field OMITTED (house style: null fields don't serialize) — instead of the magic '(no project)' string" },
+                new { id = "review-pack", summary = "review_pack: ONE budget-bounded call from diff to impact — changed set (git diff -U0 against a validated baseRef UNION untracked dirt, or explicit paths) -> hunk ranges -> symbol-SPAN intersection in the index (innermost policy: a touched child represents its type) -> per-symbol digests: symbolId handle, owner, directDependentProjects (+viaHintPathOnly), transitive count, publicApi, related_tests with signal, indexed reference candidates, deterministic risks. Deleted .cs files get DELETION honesty: the base blob (read-only git show) is re-parsed in memory and each former top-level type reports danglingCandidates. Everything is INDEXED confidence and says so (notes carry stable ids); no semantic resolution inside — escalate chosen symbols via references(symbolId, mode:'semantic'). baseRef accepts a sha or a strict-charset ref name (rev-parse server-side, result hex-gated)" },
+                new { id = "stable-note-ids", summary = "diagnostic notes carry MACHINE-MATCHABLE stable ids (a0b, field directive: programmatic consumers match ids, not prose): review_pack notes are {id, text} natively; retrofitted ADDITIVELY (prose untouched) elsewhere — references.noteId (zero_loading_gap), impact.transitiveNoteId (transitive_single_count), type_hierarchy.noteId (heuristic_fallback, both fallback shapes), search_text.noteId (did_you_mean | elsewhere_matches | absent_everywhere). Ids are the contract — prose may be reworded, ids may not; one id per CAUSE. The cluster_cold_load prefix token pioneered the pattern" },
                 new { id = "worktree-indexes", summary = "the 'worktrees' tool lists this repo's git worktrees with per-worktree index status (READ-ONLY — phoenix never creates/removes worktrees); 'index_worktree(path, mode auto|create|refresh)' seeds a sibling worktree's index from a transactionally consistent VACUUM INTO snapshot of the LIVE main index (the pump never pauses, the copy can never be torn, the output is compacted — indexes are workspace-RELATIVE so the file is valid under any root) and reconciles it with two read-only git calls: diff of the worktree's indexed_commit->HEAD UNION status dirt -> one targeted delta (usedFullSweep says when the honest fallback ran instead). Targets are validated against git's own worktree list; a worktree whose own phoenix instance is running reports worktree_index_locked instead of contending with a foreign pump. 'Refresh all' = loop worktrees -> index_worktree (per-target results, no opaque batch). The review-system flow: the skill creates the worktree, index_worktree seeds it, the review session's own phoenix opens it queryable immediately" },
                 new { id = "related-tests-signal", summary = "related_tests / impact / context_pack test groups carry 'signal' — the strongest usage SHAPE among the sampled mention lines: callSite ('Name(' — something executes) > typeUsage ('new Name' / ': Name' / 'Name<' / 'Name.') > nameMention (strings, comments, usings). Heuristic text shapes, a lead-strength label — not a compiler fact; omitted on naming-convention / project-reference groups (Reason already carries their tier) AND on the rare mention group whose ordinal line scan misses the case-insensitive FTS match — absent signal means UNGRADED, never nameMention. related_tests samples carry the real mention line + text when located (previously always line 1 with empty text; the ungraded case keeps that placeholder with text omitted)" },
             },
@@ -75,7 +77,7 @@ public sealed partial class NavigationTools
                 "implementations", "callers", "callees", "type_hierarchy", "related_tests",
                 "dependency_path", "config_lookup", "batch_outline", "context_pack", "impact",
                 "project_graph", "projects_containing", "refresh_index",
-                "worktrees", "index_worktree",
+                "worktrees", "index_worktree", "review_pack",
             },
             budgets = new { softBytes = Json.SoftBudgetBytes, hardBytes = Json.HardBudgetBytes, defaultLimit = 20 },
             confidenceModel = new
@@ -254,6 +256,7 @@ public sealed partial class NavigationTools
         object? elsewhere = null;
         object? didYouMean = null;
         string? note = null;
+        string? noteId = null; // a0b: stable id for the CAUSE behind `note` (catalog: NoteIds)
         // Token-VARIANT probe (field: searched 'Mode4', the code says 'Mode 4' -> 0 hits, agent fell
         // back to grep). Probes the split (Mode4 -> "Mode 4") and joined ("Mode 4" -> Mode4) forms; a
         // hit is SUGGESTED via didYouMean, never silently substituted. Called from EVERY zero-precise
@@ -303,6 +306,7 @@ public sealed partial class NavigationTools
                     string msg = $"{what} has at least {vp.TotalPrecise} precise line(s) in the probed candidates (see didYouMean) — retry with that query"
                         + (vp.Hits.All(h => h.IsGenerated) ? " with includeGenerated:true (the probe hits are all in generated files)" : "") + ".";
                     note = replaceNote ? $"No file contains all query tokens together, but {msg}" : $"{note} Also: {msg}";
+                    noteId = NoteIds.SearchDidYouMean; // the suggestion is the actionable cause now
                     break;
                 }
             }
@@ -347,6 +351,7 @@ public sealed partial class NavigationTools
                         ? $"0 hits within your filters, but at least {probe.TotalPrecise} precise line(s) exist outside them (see elsewhere.samplePaths; a sample inside your pathGlob means a different filter — scope/lang/project/excludePath — excluded it) — widen or relax filters."
                           + (probeAllGenerated ? " The probe hits are all in generated files — pass includeGenerated:true." : "")
                         : "The probe found matches only in generated files — pass includeGenerated:true.";
+                    noteId = NoteIds.SearchElsewhereMatches;
                 }
                 else if (probe.TotalPartial > 0)
                 {
@@ -366,6 +371,7 @@ public sealed partial class NavigationTools
                     // Provably index-wide: an FTS AND over all files matched nothing (the inner LIMIT
                     // truncates results, not the match), so no file holds all tokens together.
                     note = "No file contains all query tokens together (whole-word: 'Batch' does not match 'Batching'). Check spelling, drop a token, try search_symbol match='substring' for identifiers, or grep for non-C# file types.";
+                    noteId = NoteIds.SearchAbsentEverywhere; // ProbeVariants upgrades this to did_you_mean when a suggestion lands
                     ProbeVariants(replaceNote: true);
                 }
             }
@@ -412,6 +418,7 @@ public sealed partial class NavigationTools
             // whole-word/precise semantics live in the tool description). Present only when it changes
             // the caller's next move: redirect, absent, partial-leads, or common-term steering.
             note,
+            noteId, // a0b: stable id for the cause (only the cataloged causes carry one)
             meta,
         });
     }
@@ -1461,6 +1468,7 @@ public sealed partial class NavigationTools
                         // run indexed mode to see their candidate lines.
                         outOfGraphCandidates = result.OutOfGraphCandidates,
                         note = zeroNote,
+                        noteId = zeroNote is not null ? NoteIds.ReferencesZeroLoadingGap : null, // a0b: stable, machine-matchable
                         // t2b: where the budget went — cluster load+resolve vs find+count.
                         timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
                         truncated,

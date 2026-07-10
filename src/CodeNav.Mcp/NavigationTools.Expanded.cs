@@ -157,6 +157,7 @@ public sealed partial class NavigationTools
                     name = fallbackName,
                     derivedOrImplementing = items.Select(SymbolJson),
                     derivedConfidence = "heuristic",
+                    noteId = NoteIds.HierarchyHeuristicFallback, // a0b: stable, machine-matchable
                     partialReason = reason,
                     note = "Semantic resolution unavailable (see partialReason) — these types name it in their base list (confidence heuristic). baseTypes/interfaces are omitted: they need the compiler. Verify with source_context, or retry for exact.",
                     timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
@@ -206,6 +207,7 @@ public sealed partial class NavigationTools
                     interfaces = result.Interfaces.Select(SemanticSymbolJson),
                     derivedOrImplementing = items.Select(SymbolJson),
                     derivedConfidence = "heuristic",
+                    noteId = NoteIds.HierarchyHeuristicFallback, // a0b: stable, machine-matchable
                     partialReason = bounded ? "candidate_cluster_bounded" : "no_semantic_derived",
                     // Field (lhg): stale "generated twin" wording replaced — key on the causes we
                     // can actually still hit post-edge-recovery, with the remediation inline.
@@ -619,6 +621,8 @@ public sealed partial class NavigationTools
             transitiveNote = dependents > 0 && directDependentGroups.Any(g => g.Any(e => e.Kind == "assembly"))
                 ? "transitiveDependentProjects is a single count by design: transitive paths can mix projectReference and hintPathReference hops, so a per-kind transitive split would be dishonest — directDependentProjects carries the per-kind split at depth 1."
                 : null,
+            transitiveNoteId = dependents > 0 && directDependentGroups.Any(g => g.Any(e => e.Kind == "assembly"))
+                ? NoteIds.ImpactTransitiveSingleCount : null, // a0b: stable, machine-matchable
             relatedTests = new
             {
                 confidence = "heuristic", // naming/project inference, not a compiler fact

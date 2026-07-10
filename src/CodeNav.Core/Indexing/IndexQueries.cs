@@ -337,6 +337,38 @@ public sealed partial class IndexQueries : IDisposable
             ReadSymbol, ("$p", filePath));
     }
 
+    /// <summary>91u: symbols in one file whose span intersects ANY of the given 1-based
+    /// inclusive line ranges — the server-side hunk-to-symbol mapping for review_pack (the
+    /// index already stores spans, so this is one query instead of N symbol_at calls).
+    /// Returns EVERY intersecting symbol (types and members); the caller applies the
+    /// innermost policy via ParentId. Ranges beyond 64 are IGNORED by this method (SQL
+    /// parameter economy) — callers MUST substitute a whole-file range before calling when
+    /// their set exceeds 64, as review_pack does (review F2: the old wording claimed a
+    /// fallback nobody implemented, and tail hunks were silently dropped).</summary>
+    public List<SymbolHit> SymbolsIntersecting(string filePath, IReadOnlyList<(int Start, int End)> ranges)
+    {
+        if (ranges.Count == 0) return new();
+        var args = new List<(string, object)> { ("$p", filePath) };
+        var predicates = new List<string>();
+        int i = 0;
+        foreach (var (start, end) in ranges.Take(64))
+        {
+            predicates.Add($"(s.start_line <= $e{i} AND s.end_line >= $s{i})");
+            args.Add(($"$s{i}", start));
+            args.Add(($"$e{i}", end));
+            i++;
+        }
+        return Query(
+            $"""
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE f.path = $p AND ({string.Join(" OR ", predicates)})
+            ORDER BY s.start_line, s.end_line DESC
+            """,
+            ReadSymbol, args.ToArray());
+    }
+
     public List<SymbolHit> SymbolAt(string filePath, int line)
     {
         // Smallest containing symbol plus its ancestor chain, innermost first.
