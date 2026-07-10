@@ -117,6 +117,29 @@ answers `index_building` hints meanwhile and everything works from then on). The
 in `<workspace>/.codenav/index.db` — add `.codenav/` to `.gitignore` — or point `--index-db`
 elsewhere.
 
+## Git worktrees (review flows)
+
+Each worktree carries its own index under `<worktree>/.codenav/` — indexes are
+workspace-relative, local-only, and never shared or committed (a monolith index runs ~1GB).
+Phoenix never creates or removes worktrees — its git usage is strictly **read-only**. A
+review system creates the worktree; phoenix seeds and follows it:
+
+```text
+git worktree add ../review-1234 <ref>          # yours (or your review system's)
+index_worktree(path: "../review-1234")         # MCP, on the MAIN instance: a VACUUM INTO
+                                               # snapshot of the live index (never torn, pump
+                                               # never pauses), reconciled with git diff of
+                                               # indexed_commit->HEAD UNION git status dirt —
+                                               # one targeted delta, no fresh-checkout sweep
+```
+
+The review session then starts its own phoenix on the worktree — a **relative**
+`--workspace-root .` in a checked-in `.mcp.json` serves the main enlistment and every
+worktree identically, and the seeded index is queryable immediately. `worktrees` lists all
+worktrees with per-index status (schema, indexed commit, in-sync) — loop it for "refresh
+all". A worktree whose own phoenix instance is running reports `worktree_index_locked`;
+refresh from that session (`refresh_index`) instead.
+
 ## Server CLI
 
 ```text

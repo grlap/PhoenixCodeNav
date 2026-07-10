@@ -145,6 +145,71 @@ public static class GitInfo
         return list;
     }
 
+    /// <summary>One linked/main worktree of the repository containing the root. Branch is null
+    /// when detached. Path is absolute with forward slashes, as git reports it.</summary>
+    public sealed record Worktree(string Path, string? Head, string? Branch);
+
+    /// <summary>All worktrees of the repo containing <paramref name="workspaceRoot"/> (the main
+    /// checkout is first, per git), or null on any failure. READ-ONLY — phoenix never creates or
+    /// removes worktrees (decided with the user); this is the enumeration the review system's
+    /// per-worktree index tools validate targets against, so an arbitrary filesystem path can
+    /// never be smuggled into an index-write operation. Porcelain format is stable by contract;
+    /// no caller input is interpolated into the args (shell-inert on wrapper machines).</summary>
+    public static List<Worktree>? Worktrees(string workspaceRoot)
+    {
+        string? outp = Run(workspaceRoot, "worktree list --porcelain");
+        if (outp is null) return null;
+        var result = new List<Worktree>();
+        string? path = null, head = null, branch = null;
+        foreach (var raw in outp.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+            if (line.StartsWith("worktree ", StringComparison.Ordinal))
+            {
+                if (path is not null) result.Add(new Worktree(path, head, branch));
+                path = line["worktree ".Length..].Replace('\\', '/');
+                head = null; branch = null;
+            }
+            else if (line.StartsWith("HEAD ", StringComparison.Ordinal))
+            {
+                string sha = line["HEAD ".Length..].Trim();
+                head = IsHexCommit(sha) ? sha : null; // same gate as every stored commit id
+            }
+            else if (line.StartsWith("branch ", StringComparison.Ordinal))
+            {
+                branch = line["branch ".Length..].Trim();
+                const string prefix = "refs/heads/";
+                if (branch.StartsWith(prefix, StringComparison.Ordinal)) branch = branch[prefix.Length..];
+            }
+            // "detached" / "bare" / "locked" lines: branch stays null. A bare entry carries no
+            // HEAD line, so Head stays null — WorktreeIndexer.Ensure REFUSES such targets
+            // (worktree_not_indexable; review F2 — the unguarded path wrote a junk index into
+            // the bare repository directory and reported success).
+        }
+        if (path is not null) result.Add(new Worktree(path, head, branch));
+        return result;
+    }
+
+    /// <summary>Repo-root-relative paths (forward slashes) with UNCOMMITTED differences in the
+    /// working tree at <paramref name="workspaceRoot"/> — staged, unstaged, and untracked — or
+    /// null on failure (the caller full-sweeps). NUL-separated output (-z) so git never C-quotes
+    /// special-char paths; renames disabled so every entry is a plain path. This is the second
+    /// half of the worktree reconcile: ChangedFiles covers commit movement, this covers dirt.</summary>
+    public static List<string>? DirtyFiles(string workspaceRoot)
+    {
+        string? outp = Run(workspaceRoot, "status --porcelain=v1 -z -uall --no-renames");
+        if (outp is null) return null;
+        var list = new List<string>();
+        foreach (var entry in outp.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+        {
+            // "XY <path>" — two status chars + space. Anything shorter is malformed; skip.
+            if (entry.Length <= 3) continue;
+            string p = entry[3..].Replace('\\', '/');
+            if (p.Length > 0) list.Add(p);
+        }
+        return list;
+    }
+
     private static string? Run(string cwd, string args)
     {
         if (GitExe.Value is not { } gitExe) return null; // git not resolved — feature off
@@ -158,8 +223,12 @@ public static class GitInfo
     // exactly the hang RunProcessEx guards against. core.useBuiltinFSMonitor covers the Scalar-era
     // microsoft/git 2.33-2.36 builds, which gate the experimental daemon on THAT key. Unknown/unused
     // -c keys are harmless on every git in the wild.
+    // -c core.quotepath=false: with quotepath (git's default) non-ASCII path BYTES are
+    // octal-escaped and double-quoted in diff/status output — the UTF-8 pipe decoding above
+    // would then hand us "L\303\244b.cs" literals instead of paths. Disabled, git writes raw
+    // UTF-8 bytes, which the explicit UTF-8 pipe encoding decodes exactly (review F1 pair).
     private static string GitArgs(string args) =>
-        "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args;
+        "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false -c core.quotepath=false " + args;
 
     /// <summary>Hang-proof process runner (field bug: repo_overview froze inside
     /// StandardOutput.ReadToEnd on a work monolith). The old shape — synchronous ReadToEnd BEFORE
@@ -195,6 +264,14 @@ public static class GitInfo
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
+                // Git emits paths as UTF-8 BYTES; without an explicit encoding, .NET decodes
+                // redirected output with the host CONSOLE CODEPAGE (CP437/CP850 on most Windows
+                // boxes), mangling every non-ASCII path (review, reproduced: 'Ünïcode Dirt.cs'
+                // came back as '├£n├»code…', File.Exists false — and the worktree reconcile,
+                // which has NO watcher backstop, silently LOST the file while reporting
+                // success). UTF-8 on both pipes; pairs with core.quotepath=false in GitArgs.
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
             };
             psi.Environment["GIT_OPTIONAL_LOCKS"] = "0";   // read-only queries must not take index locks
             psi.Environment["GIT_TERMINAL_PROMPT"] = "0";  // never wait on interactive input

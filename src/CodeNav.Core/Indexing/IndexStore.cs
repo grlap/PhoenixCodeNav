@@ -271,6 +271,27 @@ public sealed class IndexStore : IDisposable
         return (long)cmd.ExecuteScalar()!;
     }
 
+    /// <summary>fgq: transactionally consistent snapshot of a (possibly LIVE) index into a
+    /// fresh single-file db at <paramref name="targetDbPath"/>. VACUUM INTO runs as a WAL read
+    /// transaction — the writing pump never pauses, the copy can never be torn (the trap a
+    /// plain file copy of a live WAL db walks into), and the output is compacted (the field's
+    /// 1.1GB db carries FTS bloat). This is the worktree SEED primitive: everything stored is
+    /// workspace-RELATIVE, so the file is valid under any root, and the embedded
+    /// indexed_commit drives the git reconcile at the destination. Refuses to clobber an
+    /// existing target — callers delete explicitly.</summary>
+    public static void SnapshotTo(string sourceDbPath, string targetDbPath)
+    {
+        if (File.Exists(targetDbPath)) throw new IOException($"snapshot target already exists: {targetDbPath}");
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(targetDbPath))!);
+        using var conn = new SqliteConnection($"Data Source={sourceDbPath};Mode=ReadOnly;Pooling=false");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "VACUUM INTO $target";
+        cmd.Parameters.AddWithValue("$target", targetDbPath);
+        cmd.CommandTimeout = 600; // ~seconds for a 1.1GB db on SSD; generous ceiling, not a hang
+        cmd.ExecuteNonQuery();
+    }
+
     /// <summary>Edge provenance (bxw): kind 'project' = an explicit &lt;ProjectReference&gt;;
     /// 'assembly' = a recovered &lt;Reference&gt;+HintPath edge. INSERT OR IGNORE on PK(from,to)
     /// gives FIRST-WRITER precedence — both graph builders insert relpath ProjectReferences
