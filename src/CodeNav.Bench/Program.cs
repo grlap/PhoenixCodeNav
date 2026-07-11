@@ -153,7 +153,11 @@ if (rebuild || !File.Exists(dbPath))
 }
 
 // ---------------------------------------------------------------- sample targets from the index
-using var sampler = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+using var sampler = new SqliteConnection(new SqliteConnectionStringBuilder
+{
+    DataSource = dbPath,
+    Mode = SqliteOpenMode.ReadOnly,
+}.ToString());
 sampler.Open();
 
 List<T> Sample<T>(string sql, Func<SqliteDataReader, T> map)

@@ -1,4 +1,6 @@
 using Microsoft.Data.Sqlite;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 
 namespace CodeNav.Core.Indexing;
 
@@ -8,7 +10,8 @@ public sealed record SymbolHit(
     string FilePath, bool FileIsGenerated, long? ParentId, bool IsOrphaned = false,
     int Arity = 0,               // generic type-parameter count — Foo and Foo<T> are DIFFERENT types (szs)
     string? Modifiers = null,    // "static sealed abstract virtual override new readonly const" subset (bt7)
-    string? Accessors = null);   // "get=public;set=private" only when an accessor differs (hu7)
+    string? Accessors = null,    // "get=public;set=private" only when an accessor differs (hu7)
+    string? DeclarationKey = null);
 
 public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated);
 
@@ -45,12 +48,62 @@ public sealed record OverviewStats(
 /// </summary>
 public sealed partial class IndexQueries : IDisposable
 {
+    private const int DeclarationOffsetParseLimit = 128;
+    private const int DeclarationOffsetPerFileCharLimit = 512 * 1024;
+    private const int DeclarationOffsetCumulativeCharLimit = 4 * 1024 * 1024;
+    private const int DeclarationOffsetPerFileByteLimit = 2 * 1024 * 1024;
+    private const int DeclarationOffsetCumulativeByteLimit = 8 * 1024 * 1024;
     private readonly SqliteConnection _conn;
+    private readonly SqliteTransaction? _readSnapshot;
+    private readonly Action<string>? _afterQueryForTest;
+    private readonly Dictionary<(string Path, string Name),
+        (byte[] ContentHash, List<(int Start, int End)> Offsets)>
+        _declarationOffsets = new();
+    private int _declarationOffsetParses;
+    private int _declarationOffsetChars;
+    private int _declarationOffsetBytes;
 
-    public IndexQueries(string dbPath)
+    public IndexQueries(string dbPath) : this(dbPath, pinReadSnapshot: false)
     {
-        _conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly;Cache=Shared");
-        _conn.Open();
+    }
+
+    internal IndexQueries(string dbPath, bool pinReadSnapshot,
+        Action<string>? afterQueryForTest = null)
+    {
+        // Shared-cache table locks would prevent the WAL writer from refreshing tables while a
+        // long-lived review read transaction is open. Use a private pager cache for that one
+        // snapshot; ordinary short queries retain the pooled shared-cache behavior.
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Cache = pinReadSnapshot ? SqliteCacheMode.Private : SqliteCacheMode.Shared,
+        };
+        _conn = new SqliteConnection(connectionString.ToString());
+        _afterQueryForTest = afterQueryForTest;
+        try
+        {
+            _conn.Open();
+            if (pinReadSnapshot)
+            {
+                // A deferred WAL read transaction allows the refresh writer to keep committing while
+                // every query on this connection continues to see one immutable database snapshot.
+                // SQLite does not pin that snapshot until the first read, so establish it here before
+                // IndexManager validates the surrounding refresh epoch.
+                _readSnapshot = _conn.BeginTransaction(deferred: true);
+                using var pin = CreateCommand();
+                pin.CommandText = "SELECT value FROM meta WHERE key='schema_version'";
+                _ = pin.ExecuteScalar();
+            }
+        }
+        catch
+        {
+            // A failed constructor cannot be disposed by its caller. Release both the partially
+            // pinned transaction and connection before any outer ownership lease can unwind.
+            try { _readSnapshot?.Dispose(); }
+            finally { _conn.Dispose(); }
+            throw;
+        }
     }
 
     // ---------------------------------------------------------------- find_file
@@ -311,7 +364,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
             FROM symbols s JOIN files f ON f.id = s.file_id
             {where}
             ORDER BY
@@ -329,7 +382,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p
             ORDER BY s.start_line, s.end_line DESC
@@ -361,7 +414,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p AND ({string.Join(" OR ", predicates)})
             ORDER BY s.start_line, s.end_line DESC
@@ -383,7 +436,7 @@ public sealed partial class IndexQueries : IDisposable
             var next = Query(
                 """
                 SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
                 FROM symbols s JOIN files f ON f.id = s.file_id
                 WHERE s.id = $id
                 """,
@@ -403,7 +456,7 @@ public sealed partial class IndexQueries : IDisposable
         var hits = Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.id = $id
             """,
@@ -418,7 +471,7 @@ public sealed partial class IndexQueries : IDisposable
         var hits = Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p AND s.start_line <= $l AND s.end_line >= $l
             ORDER BY (s.end_line - s.start_line), s.start_line DESC
@@ -452,7 +505,7 @@ public sealed partial class IndexQueries : IDisposable
             var rows = Query(
                 $"""
                 SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
                 FROM symbols s JOIN files f ON f.id = s.file_id
                 WHERE {string.Join(" OR ", clauses)}
                 """,
@@ -519,16 +572,40 @@ public sealed partial class IndexQueries : IDisposable
     /// ProdHits + TestHits == TotalHits always. Group counts are per-project ATTRIBUTIONS and can
     /// sum higher than TotalHits for linked files (0ok: the summary previously printed those
     /// attribution sums next to the physical total — "4 lines (8 production)").</summary>
-    public sealed record ReferenceCandidateResult(int TotalHits, int ProdHits, int TestHits, List<ReferenceGroup> Groups);
+    public sealed record ReferenceCandidateResult(int TotalHits, int ProdHits, int TestHits,
+        List<ReferenceGroup> Groups)
+    {
+        public bool CandidateFilesTruncated { get; init; }
+        public int CandidateFilesScanned { get; init; }
+        public int CandidateFilesAtLeast { get; init; }
+        public int CandidateFileLimit { get; init; }
+        public bool DeclarationExclusionBudgetHit { get; init; }
+        public bool DeclarationExclusionApplied { get; init; }
+        public int DeclarationFilesParsed { get; init; }
+        public int DeclarationFileParseLimit { get; init; }
+        public int DeclarationCharsParsed { get; init; }
+        public int DeclarationCharLimit { get; init; }
+        public int DeclarationPerFileCharLimit { get; init; }
+        public int DeclarationBytesParsed { get; init; }
+        public int DeclarationByteLimit { get; init; }
+        public int DeclarationPerFileByteLimit { get; init; }
+    }
 
     public ReferenceCandidateResult ReferenceCandidates(
         string symbolName, int maxCandidateFiles = 500, int samplesPerProject = 3,
         string? pathGlob = null, IReadOnlyList<string>? excludePaths = null, bool includeGenerated = true,
-        bool includeTests = true)
+        bool includeTests = true,
+        IReadOnlyList<(string Path, int StartLine, int EndLine)>? excludeSpans = null,
+        IReadOnlyList<(string Path, int StartOffset, int EndOffset)>? excludeOffsets = null,
+        bool excludeDeclarations = false)
     {
+        int boundedCandidateFiles = Math.Max(0, maxCandidateFiles);
+        int queryCandidateFiles = boundedCandidateFiles == int.MaxValue
+            ? int.MaxValue
+            : boundedCandidateFiles + 1;
         var args = new List<(string, object)>
         {
-            ("$q", $"\"{symbolName.Replace("\"", "")}\""), ("$lim", maxCandidateFiles),
+            ("$q", $"\"{symbolName.Replace("\"", "")}\""), ("$lim", queryCandidateFiles),
         };
         // Same include/exclude glob semantics as search_symbol; lets references drop vendored
         // third-party candidate files precisely (counts reflect the filtered set).
@@ -538,14 +615,33 @@ public sealed partial class IndexQueries : IDisposable
         if (!includeGenerated) where.Append(" AND f.is_generated = 0");
         var candidates = Query(
             $"""
-            SELECT f.id, f.path, f.is_generated FROM fts_content
+            SELECT f.id, f.path, f.is_generated, f.size FROM fts_content
             JOIN files f ON f.id = fts_content.rowid
             {where}
             ORDER BY f.is_generated, bm25(fts_content)
             LIMIT $lim
             """,
-            r => (Id: r.GetInt64(0), Path: r.GetString(1), Gen: r.GetBoolean(2)),
+            r => (Id: r.GetInt64(0), Path: r.GetString(1), Gen: r.GetBoolean(2),
+                Size: r.GetInt64(3)),
             args.ToArray());
+        bool candidateFilesTruncated = candidates.Count > boundedCandidateFiles;
+        int candidateFilesAtLeast = candidateFilesTruncated
+            ? boundedCandidateFiles + 1
+            : candidates.Count;
+        if (candidateFilesTruncated)
+            candidates = candidates.Take(boundedCandidateFiles).ToList();
+        int candidateFilesScanned = 0;
+        bool declarationExclusionBudgetHit = false;
+        var excludedSpanMap = excludeSpans?
+            .GroupBy(span => span.Path, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key,
+                group => group.Select(span => (span.StartLine, span.EndLine)).ToList(),
+                StringComparer.Ordinal);
+        var excludedOffsetMap = excludeOffsets?
+            .GroupBy(span => span.Path, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key,
+                group => group.Select(span => (span.StartOffset, span.EndOffset)).ToList(),
+                StringComparer.Ordinal);
 
         // Resolve project ownership for all candidate files in one query per batch.
         var fileProjects = FileProjects(candidates.Select(c => c.Id).ToList());
@@ -563,9 +659,73 @@ public sealed partial class IndexQueries : IDisposable
             if (!includeTests) owners = owners.Where(o => !o.Item2).ToList();
             if (owners.Count == 0) continue;
 
-            string? content = ContentById(c.Id);
-            if (content is null) continue;
-            var spans = LocateTokenLineSpans(content, symbolName);
+            bool declarationCandidate = excludeDeclarations &&
+                                        c.Path.EndsWith(".cs",
+                                            StringComparison.OrdinalIgnoreCase);
+            if (declarationCandidate && c.Size > DeclarationOffsetPerFileByteLimit)
+            {
+                declarationExclusionBudgetHit = true;
+                break;
+            }
+            string? content = declarationCandidate
+                ? ContentByIdBounded(c.Id, DeclarationOffsetPerFileCharLimit)
+                : ContentById(c.Id);
+            if (content is null)
+            {
+                if (declarationCandidate)
+                {
+                    declarationExclusionBudgetHit = true;
+                    break;
+                }
+                continue;
+            }
+            List<(int StartOffset, int EndOffset)>? excludedOffsetsForFile = null;
+            excludedOffsetMap?.TryGetValue(c.Path, out excludedOffsetsForFile);
+            IReadOnlyList<(int StartOffset, int EndOffset)>? effectiveExcludedOffsets =
+                excludedOffsetsForFile;
+            if (declarationCandidate)
+            {
+                byte[] contentHash = SHA256.HashData(
+                    MemoryMarshal.AsBytes(content.AsSpan()));
+                var cacheKey = (c.Path, symbolName);
+                if (!_declarationOffsets.TryGetValue(cacheKey, out var cachedDeclarations) ||
+                    !cachedDeclarations.ContentHash.AsSpan().SequenceEqual(contentHash))
+                {
+                    int contentBytes = System.Text.Encoding.UTF8.GetByteCount(content);
+                    if (_declarationOffsetParses >= DeclarationOffsetParseLimit ||
+                        content.Length > DeclarationOffsetPerFileCharLimit ||
+                        content.Length > DeclarationOffsetCumulativeCharLimit -
+                        _declarationOffsetChars ||
+                        contentBytes > DeclarationOffsetPerFileByteLimit ||
+                        contentBytes > DeclarationOffsetCumulativeByteLimit -
+                        _declarationOffsetBytes)
+                    {
+                        declarationExclusionBudgetHit = true;
+                        break;
+                    }
+                    cachedDeclarations = (contentHash,
+                        SyntaxIndexer.DeclarationIdentifierOffsets(content, symbolName));
+                    _declarationOffsets[cacheKey] = cachedDeclarations;
+                    _declarationOffsetParses++;
+                    _declarationOffsetChars += content.Length;
+                    _declarationOffsetBytes += contentBytes;
+                }
+                if (cachedDeclarations.Offsets.Count > 0)
+                {
+                    effectiveExcludedOffsets = excludedOffsetsForFile is null
+                        ? cachedDeclarations.Offsets
+                        : excludedOffsetsForFile.Concat(cachedDeclarations.Offsets).ToList();
+                }
+            }
+            candidateFilesScanned++;
+            var spans = LocateTokenLineSpans(content, symbolName, effectiveExcludedOffsets);
+            if (excludedSpanMap is not null && excludedSpanMap.TryGetValue(c.Path,
+                    out List<(int StartLine, int EndLine)>? excludedRanges))
+            {
+                spans = spans.Where(span => !excludedRanges.Any(range =>
+                        range.StartLine <= span.Line && span.Line <= range.EndLine))
+                    .ToList();
+            }
             if (spans.Count == 0) continue;
 
             foreach (var (project, isTest) in owners)
@@ -590,7 +750,27 @@ public sealed partial class IndexQueries : IDisposable
             .Select(kv => new ReferenceGroup(kv.Key, kv.Value.IsTest, kv.Value.Count, kv.Value.Samples))
             .OrderByDescending(g => g.Count)
             .ToList();
-        return new ReferenceCandidateResult(total, prodTotal, testTotal, ordered);
+        return new ReferenceCandidateResult(total, prodTotal, testTotal, ordered)
+        {
+            // These are independent coverage causes. The candidate-file cap describes only the
+            // SQL result-set limit; declaration exclusion has its own explicit budget flag below.
+            // Conflating them made review.reference_candidates_cap fire for a parser/content
+            // budget and gave one response two contradictory explanations for the same shortfall.
+            CandidateFilesTruncated = candidateFilesTruncated,
+            CandidateFilesScanned = candidateFilesScanned,
+            CandidateFilesAtLeast = candidateFilesAtLeast,
+            CandidateFileLimit = boundedCandidateFiles,
+            DeclarationExclusionBudgetHit = declarationExclusionBudgetHit,
+            DeclarationExclusionApplied = excludeDeclarations,
+            DeclarationFilesParsed = _declarationOffsetParses,
+            DeclarationFileParseLimit = DeclarationOffsetParseLimit,
+            DeclarationCharsParsed = _declarationOffsetChars,
+            DeclarationCharLimit = DeclarationOffsetCumulativeCharLimit,
+            DeclarationPerFileCharLimit = DeclarationOffsetPerFileCharLimit,
+            DeclarationBytesParsed = _declarationOffsetBytes,
+            DeclarationByteLimit = DeclarationOffsetCumulativeByteLimit,
+            DeclarationPerFileByteLimit = DeclarationOffsetPerFileByteLimit,
+        };
     }
 
     // ---------------------------------------------------------------- projects
@@ -601,6 +781,41 @@ public sealed partial class IndexQueries : IDisposable
             "SELECT id, path, name, style, tfms, is_test, load_status FROM projects WHERE name = $n COLLATE NOCASE LIMIT 1",
             ReadProject, ("$n", name));
         return rows.Count > 0 ? rows[0] : null;
+    }
+
+    public List<ProjectRow> AllProjects() => Query(
+        "SELECT id, path, name, style, tfms, is_test, load_status FROM projects ORDER BY path, name",
+        ReadProject);
+
+    public List<ProjectRow> AllProjects(int limit) => Query(
+        "SELECT id, path, name, style, tfms, is_test, load_status FROM projects " +
+        "ORDER BY path, name LIMIT $lim",
+        ReadProject, ("$lim", Math.Max(0, limit)));
+
+    /// <summary>Current declarations matching source identity while deliberately ignoring the
+    /// signature. Type base-list/signature edits do not change declaration identity, and generated
+    /// declarations remain eligible. The caller supplies a bound and can probe one extra row when
+    /// it needs truncation honesty.</summary>
+    public List<SymbolHit> SymbolsByDeclarationIdentity(string kind, string name, string? ns,
+        string? container, int arity, int limit)
+    {
+        return Query(
+            """
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path,
+                   f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE s.kind = $kind COLLATE BINARY AND s.name = $name COLLATE BINARY
+              AND ((s.ns IS NULL AND $ns IS NULL) OR s.ns = $ns COLLATE BINARY)
+              AND ((s.container IS NULL AND $container IS NULL) OR
+                   s.container = $container COLLATE BINARY)
+              AND s.arity = $arity
+            ORDER BY f.path, s.start_line
+            LIMIT $limit
+            """,
+            ReadSymbol, ("$kind", kind), ("$name", name), ("$ns", ns ?? (object)DBNull.Value),
+            ("$container", container ?? (object)DBNull.Value), ("$arity", arity),
+            ("$limit", Math.Clamp(limit, 1, 10_000)));
     }
 
     public List<ProjectRow> ProjectsContaining(string filePath)
@@ -731,7 +946,7 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.name = $m COLLATE NOCASE AND ({string.Join(" OR ", clauses)})
             ORDER BY f.is_generated, f.path
@@ -752,7 +967,7 @@ public sealed partial class IndexQueries : IDisposable
         var candidates = Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.kind IN ('class','struct','record','record_struct')
               AND s.name <> $n
@@ -1172,11 +1387,30 @@ public sealed partial class IndexQueries : IDisposable
         return rows.Count > 0 ? rows[0] : null;
     }
 
+    public FileHit? FileByPath(string filePath)
+    {
+        var rows = Query(
+            "SELECT id, path, size, line_count, is_generated FROM files WHERE path = $p",
+            r => new FileHit(r.GetInt64(0), r.GetString(1), r.GetInt64(2), r.GetInt32(3),
+                r.GetBoolean(4)), ("$p", filePath));
+        return rows.Count > 0 ? rows[0] : null;
+    }
+
+    public string? ContentByPathBounded(string filePath, int maxChars)
+    {
+        if (maxChars < 0) return null;
+        var rows = Query(
+            "SELECT CASE WHEN length(c.content) <= $max THEN c.content END " +
+            "FROM file_contents c JOIN files f ON f.id = c.file_id WHERE f.path = $p",
+            r => r.IsDBNull(0) ? null : r.GetString(0), ("$p", filePath), ("$max", maxChars));
+        return rows.Count > 0 ? rows[0] : null;
+    }
+
     public OverviewStats Overview()
     {
         long Scalar(string sql)
         {
-            using var cmd = _conn.CreateCommand();
+            using var cmd = CreateCommand();
             cmd.CommandText = sql;
             return (long)(cmd.ExecuteScalar() ?? 0L);
         }
@@ -1208,7 +1442,7 @@ public sealed partial class IndexQueries : IDisposable
 
     private string? MetaValue(string key)
     {
-        using var cmd = _conn.CreateCommand();
+        using var cmd = CreateCommand();
         cmd.CommandText = "SELECT value FROM meta WHERE key=$k";
         cmd.Parameters.AddWithValue("$k", key);
         return cmd.ExecuteScalar() as string;
@@ -1241,9 +1475,19 @@ public sealed partial class IndexQueries : IDisposable
 
     private string? ContentById(long fileId)
     {
-        using var cmd = _conn.CreateCommand();
+        using var cmd = CreateCommand();
         cmd.CommandText = "SELECT content FROM file_contents WHERE file_id = $id";
         cmd.Parameters.AddWithValue("$id", fileId);
+        return cmd.ExecuteScalar() as string;
+    }
+
+    private string? ContentByIdBounded(long fileId, int maxChars)
+    {
+        using var cmd = CreateCommand();
+        cmd.CommandText = "SELECT CASE WHEN length(content) <= $max THEN content END " +
+                          "FROM file_contents WHERE file_id = $id";
+        cmd.Parameters.AddWithValue("$id", fileId);
+        cmd.Parameters.AddWithValue("$max", maxChars);
         return cmd.ExecuteScalar() as string;
     }
 
@@ -1257,7 +1501,8 @@ public sealed partial class IndexQueries : IDisposable
         r.FieldCount > 13 && !r.IsDBNull(13) ? r.GetInt64(13) : null,
         Arity: r.FieldCount > 14 && !r.IsDBNull(14) ? r.GetInt32(14) : 0,
         Modifiers: r.FieldCount > 15 && !r.IsDBNull(15) ? r.GetString(15) : null,
-        Accessors: r.FieldCount > 16 && !r.IsDBNull(16) ? r.GetString(16) : null);
+        Accessors: r.FieldCount > 16 && !r.IsDBNull(16) ? r.GetString(16) : null,
+        DeclarationKey: r.FieldCount > 17 && !r.IsDBNull(17) ? r.GetString(17) : null);
 
     private static ProjectRow ReadProject(SqliteDataReader r) => new(
         r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3),
@@ -1265,13 +1510,23 @@ public sealed partial class IndexQueries : IDisposable
 
     private List<T> Query<T>(string sql, Func<SqliteDataReader, T> map, params (string, object)[] args)
     {
-        using var cmd = _conn.CreateCommand();
+        using var cmd = CreateCommand();
         cmd.CommandText = sql;
         foreach (var (k, v) in args) cmd.Parameters.AddWithValue(k, v);
         var list = new List<T>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read()) list.Add(map(reader));
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read()) list.Add(map(reader));
+        }
+        _afterQueryForTest?.Invoke(sql);
         return list;
+    }
+
+    private SqliteCommand CreateCommand()
+    {
+        SqliteCommand cmd = _conn.CreateCommand();
+        cmd.Transaction = _readSnapshot;
+        return cmd;
     }
 
     private static string KindFilter(IReadOnlyList<string>? kinds)
@@ -1490,7 +1745,8 @@ public sealed partial class IndexQueries : IDisposable
     /// candidate file (~2x the content's allocation, up to 2000 files per references call); snippets
     /// are now substringed lazily by the caller for sampled lines only. '\n'/'\r' are not identifier
     /// chars, so boundary checks against the raw content match the old per-line semantics exactly.</summary>
-    private static List<(int Line, int Start, int End)> LocateTokenLineSpans(string content, string name)
+    private static List<(int Line, int Start, int End)> LocateTokenLineSpans(string content,
+        string name, IReadOnlyList<(int StartOffset, int EndOffset)>? excludedOffsets = null)
     {
         var result = new List<(int, int, int)>();
         // A name containing '\n' could never match a Split('\n') line in the old implementation — and
@@ -1512,7 +1768,9 @@ public sealed partial class IndexQueries : IDisposable
             bool leftOk = idx == 0 || !IsIdentChar(content[idx - 1]);
             int end = idx + name.Length;
             bool rightOk = end >= content.Length || !IsIdentChar(content[end]);
-            if (leftOk && rightOk)
+            bool excluded = excludedOffsets?.Any(range =>
+                range.StartOffset <= idx && end <= range.EndOffset) == true;
+            if (leftOk && rightOk && !excluded)
             {
                 int lineEnd = content.IndexOf('\n', idx);
                 if (lineEnd < 0) lineEnd = content.Length;
@@ -1686,5 +1944,9 @@ public sealed partial class IndexQueries : IDisposable
         return (b, a);
     }
 
-    public void Dispose() => _conn.Dispose();
+    public void Dispose()
+    {
+        _readSnapshot?.Dispose();
+        _conn.Dispose();
+    }
 }

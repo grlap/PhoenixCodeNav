@@ -15,9 +15,11 @@ public sealed record RefreshResult(
 /// </summary>
 public static class DeltaRefresher
 {
+    internal const int MaxIndexedFileBytes = 256 * 1024 * 1024;
+
     public static RefreshResult Refresh(
         IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? changedRelPaths,
-        Action<string>? log = null)
+        Action<string>? log = null, bool removeUnavailableKnown = false)
     {
         var sw = Stopwatch.StartNew();
         var stored = store.AllFilesByPath();
@@ -29,7 +31,7 @@ public static class DeltaRefresher
         if (detectAll)
         {
             scan = WorkspaceScanner.Scan(workspaceRoot);
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(WorkspacePaths.FileSystemPathComparer);
             candidates = new List<string>();
             foreach (var f in scan.CsFiles.Concat(scan.ProjectFiles).Concat(scan.SolutionFiles).Concat(scan.ConfigFiles))
             {
@@ -50,7 +52,7 @@ public static class DeltaRefresher
         }
         else
         {
-            candidates = changedRelPaths!.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            candidates = changedRelPaths!.Distinct(WorkspacePaths.FileSystemPathComparer).ToList();
         }
 
         int added = 0, changed = 0, deleted = 0;
@@ -62,44 +64,67 @@ public static class DeltaRefresher
         {
             foreach (var rel in candidates)
             {
-                // Reject caller-supplied paths (e.g. from refresh_index) that escape the
-                // workspace root, so external files can never be read into the index.
-                if (!WorkspacePaths.TryResolveInside(workspaceRoot, rel, out string full)) continue;
-                // For targeted (caller/watcher) paths, skip any that reach outside through a
-                // symlink/junction on the target or an ancestor. The detect-all sweep's paths
-                // come from the scanner, which already excludes reparse points, so it needs
-                // no per-candidate walk.
-                if (!detectAll && WorkspacePaths.EscapesViaReparsePoint(workspaceRoot, full)) continue;
+                // Every candidate is in the canonical Git/index path domain: scanner and watcher
+                // producers convert only the platform separator, Git already emits '/', and the
+                // MCP boundary normalizes caller paths. Resolve with Git semantics so a literal
+                // backslash in a Unix filename cannot become a directory separator.
+                if (!WorkspacePaths.TryResolveGitPathInside(workspaceRoot, rel,
+                        out string full)) continue;
                 // Excluded-dir parity with the scanner (review): git reconcile and refresh_index feed
                 // RAW paths here (the watcher filters, they don't) — without this, a committed csproj
                 // under packages/ or bin/ becomes a file row and, now that RefreshProjectData sources
                 // its project list from the files table, a phantom project the disk walk never minted.
                 if (!detectAll && WorkspaceScanner.IsExcludedPath(rel)) continue;
-                bool exists = File.Exists(full);
                 bool known = stored.TryGetValue(rel, out var old);
                 string lang = LangOf(rel);
                 if (lang == "other") continue;
+                bool authoritativeProjectInput = lang == "csproj" || IsPackagesConfig(rel);
+                bool projectShapePath = authoritativeProjectInput || lang == "sln";
 
-                if (!exists)
+                GitInfo.WorkspaceFileReadResult read =
+                    GitInfo.ReadBoundedWorkspaceFileResult(workspaceRoot, rel,
+                        MaxIndexedFileBytes);
+                byte[]? bytes = read.Bytes;
+                if (bytes is null)
                 {
-                    if (known)
+                    if (read.Disposition == GitInfo.WorkspaceFileReadDisposition.Missing)
                     {
+                        if (known)
+                        {
+                            store.DeleteFileCascade(tx, old!.Id,
+                                store.GetContentForWrite(old.Id));
+                            deleted++;
+                            if (projectShapePath) projectDataDirty = true;
+                        }
+                        continue;
+                    }
+                    if (authoritativeProjectInput &&
+                        read.Disposition == GitInfo.WorkspaceFileReadDisposition.Unavailable)
+                    {
+                        // Regular project/package inputs are authoritative. Publishing a graph
+                        // that silently retained their old facts—or deleted them in a strict
+                        // worktree sweep—would be a false-complete snapshot. The surrounding
+                        // transaction rolls every preceding file mutation back.
+                        throw new IOException(
+                            $"Authoritative project input could not be captured safely: {rel}");
+                    }
+                    if (known && (removeUnavailableKnown ||
+                        read.Disposition == GitInfo.WorkspaceFileReadDisposition.DefinitelyNonRegular))
+                    {
+                        // A pinned full sweep has proved the leaf non-regular, or the strict
+                        // worktree reconcile could not obtain its complete bounded bytes. Remove
+                        // any seeded row; retaining it would publish source evidence for bytes the
+                        // target index did not inspect.
                         store.DeleteFileCascade(tx, old!.Id, store.GetContentForWrite(old.Id));
                         deleted++;
-                        if (lang is "csproj" or "sln") projectDataDirty = true;
+                        if (projectShapePath) projectDataDirty = true;
                     }
+                    log?.Invoke($"Skipped non-regular, linked, unreadable, or oversized file: {rel}");
                     continue;
                 }
-
-                byte[] bytes;
-                FileInfo info;
-                try
-                {
-                    info = new FileInfo(full);
-                    bytes = File.ReadAllBytes(full);
-                }
-                catch (IOException) { continue; }
-                catch (UnauthorizedAccessException) { continue; }
+                long mtimeTicks;
+                try { mtimeTicks = File.GetLastWriteTimeUtc(full).Ticks; }
+                catch { mtimeTicks = 0; }
 
                 ulong hash = XxHash64.HashToUInt64(bytes);
                 if (known && unchecked((long)hash) == old!.Hash)
@@ -114,7 +139,7 @@ public static class DeltaRefresher
                     if (known)
                     {
                         string oldContent = store.GetContentForWrite(old!.Id) ?? "";
-                        store.UpdateFileRow(tx, old.Id, info.Length, info.LastWriteTimeUtc.Ticks, hash,
+                        store.UpdateFileRow(tx, old.Id, bytes.LongLength, mtimeTicks, hash,
                             parsed.LineCount, parsed.LooksGenerated, parsed.HasTestAttributes);
                         store.ReplaceContent(tx, old.Id, oldContent, content);
                         store.DeleteSymbolsForFile(tx, old.Id);
@@ -123,7 +148,7 @@ public static class DeltaRefresher
                     }
                     else
                     {
-                        long id = store.InsertFile(tx, rel, info.Length, info.LastWriteTimeUtc.Ticks, hash,
+                        long id = store.InsertFile(tx, rel, bytes.LongLength, mtimeTicks, hash,
                             "cs", parsed.LineCount, parsed.LooksGenerated, parsed.HasTestAttributes);
                         store.InsertContent(tx, id, content);
                         store.InsertSymbols(tx, id, parsed.Symbols);
@@ -167,26 +192,25 @@ public static class DeltaRefresher
                     if (known)
                     {
                         string oldContent = store.GetContentForWrite(old!.Id) ?? "";
-                        store.UpdateFileRow(tx, old.Id, info.Length, info.LastWriteTimeUtc.Ticks, hash, lines, false, false);
+                        store.UpdateFileRow(tx, old.Id, bytes.LongLength, mtimeTicks, hash, lines, false, false);
                         store.ReplaceContent(tx, old.Id, oldContent, content);
                         changed++;
                     }
                     else
                     {
-                        long id = store.InsertFile(tx, rel, info.Length, info.LastWriteTimeUtc.Ticks, hash, lang, lines, false, false);
+                        long id = store.InsertFile(tx, rel, bytes.LongLength, mtimeTicks, hash, lang, lines, false, false);
                         store.InsertContent(tx, id, content);
                         added++;
                     }
-                    if (lang is "csproj" or "sln") projectDataDirty = true;
+                    if (projectShapePath) projectDataDirty = true;
                 }
             }
+            if (projectDataDirty)
+            {
+                log?.Invoke("Project files changed — rebuilding project graph ...");
+                RefreshProjectDataCore(store, workspaceRoot, tx, log);
+            }
             tx.Commit();
-        }
-
-        if (projectDataDirty)
-        {
-            log?.Invoke("Project files changed — rebuilding project graph ...");
-            RefreshProjectData(store, workspaceRoot, scan);
         }
 
         if (added + changed + deleted > 0)
@@ -201,56 +225,86 @@ public static class DeltaRefresher
     /// parse) project dirs, keyed for the added-file walk. Built at most once per refresh.</summary>
     private static Dictionary<string, long> BuildGlobRoots(IndexStore store)
     {
-        var roots = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var roots = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
         foreach (var (id, relPath) in store.GlobRootProjects())
         {
-            string dir = Path.GetDirectoryName(relPath)?.Replace('\\', '/') ?? "";
+            string dir = WorkspacePaths.ToGitPath(Path.GetDirectoryName(relPath) ?? "");
             roots[dir] = id;
         }
         return roots;
     }
 
-    /// <summary>Re-parses all csproj/sln files and rebuilds project tables + compile items. When no
-    /// scan is supplied, the file lists come from the FILES TABLE (kept fresh by this refresher) —
-    /// previously every watcher-triggered csproj touch paid a FULL workspace disk walk here (zki).</summary>
+    /// <summary>Re-parses all authoritative project files and rebuilds project tables + compile
+    /// items atomically. Every project snapshot is bounded, no-follow, and hash-bound to the file
+    /// row in the same transaction; one unavailable project aborts instead of publishing a partial
+    /// graph. Solution membership remains optional metadata only.</summary>
     public static void RefreshProjectData(IndexStore store, string workspaceRoot, ScanResult? scan = null)
     {
-        List<string> projectPaths, solutionPaths;
-        if (scan is not null)
+        _ = scan;
+        using var tx = store.BeginTransaction();
+        RefreshProjectDataCore(store, workspaceRoot, tx, log: null);
+        tx.Commit();
+    }
+
+    private static void RefreshProjectDataCore(IndexStore store, string workspaceRoot,
+        Microsoft.Data.Sqlite.SqliteTransaction tx, Action<string>? log)
+    {
+        List<(long Id, string Path, string Lang)> rows = store.FileIdPathLang(tx);
+        Dictionary<string, IndexStore.StoredFile> stored = store.AllFilesByPath(tx);
+        List<string> projectPaths = rows.Where(row => row.Lang == "csproj")
+            .Select(row => row.Path).OrderBy(path => path, StringComparer.Ordinal).ToList();
+        List<string> solutionPaths = rows.Where(row => row.Lang == "sln")
+            .Select(row => row.Path).OrderBy(path => path, StringComparer.Ordinal).ToList();
+        var parsedProjects = new List<ParsedProject>(projectPaths.Count);
+        foreach (string path in projectPaths)
         {
-            projectPaths = scan.ProjectFiles.Select(f => f.RelPath).ToList();
-            solutionPaths = scan.SolutionFiles.Select(f => f.RelPath).ToList();
-        }
-        else
-        {
-            projectPaths = new List<string>();
-            solutionPaths = new List<string>();
-            foreach (var (_, path, lang) in store.FileIdPathLang())
+            byte[]? projectBytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot, path,
+                IndexBuilder.MaxStructuralFileBytes);
+            if (projectBytes is null ||
+                !stored.TryGetValue(path, out IndexStore.StoredFile? projectRow) ||
+                unchecked((long)XxHash64.HashToUInt64(projectBytes)) != projectRow.Hash)
+                throw new IOException($"Project snapshot changed or could not be captured safely: {path}");
+            string packagesPath = PackagesConfigPath(path);
+            byte[]? packagesBytes = null;
+            if (stored.TryGetValue(packagesPath, out IndexStore.StoredFile? packagesRow))
             {
-                if (lang == "csproj") projectPaths.Add(path);
-                else if (lang == "sln") solutionPaths.Add(path);
+                packagesBytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot, packagesPath,
+                    IndexBuilder.MaxStructuralFileBytes);
+                if (packagesBytes is null ||
+                    unchecked((long)XxHash64.HashToUInt64(packagesBytes)) != packagesRow.Hash)
+                    throw new IOException($"packages.config changed or could not be captured safely: {packagesPath}");
             }
+            parsedProjects.Add(ProjectFileParser.ParseSnapshot(path, projectBytes,
+                packagesBytes));
         }
 
-        var parsedProjects = new ParsedProject[projectPaths.Count];
-        Parallel.For(0, projectPaths.Count, i =>
+        var parsedSolutions = new List<ParsedSolution>();
+        long optionalSolutionBytes = 0;
+        foreach (string path in solutionPaths)
         {
-            parsedProjects[i] = ProjectFileParser.Parse(workspaceRoot, projectPaths[i]);
-        });
-        var parsedSolutions = solutionPaths
-            .Select(s => SolutionParser.Parse(workspaceRoot, s))
-            .ToList();
+            if (!stored.TryGetValue(path, out IndexStore.StoredFile? row)) continue;
+            byte[]? bytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot, path,
+                IndexBuilder.MaxStructuralFileBytes);
+            if (bytes is null || unchecked((long)XxHash64.HashToUInt64(bytes)) != row.Hash ||
+                optionalSolutionBytes + bytes.LongLength >
+                IndexBuilder.MaxOptionalSolutionSnapshotBytes)
+            {
+                log?.Invoke($"Skipped unavailable optional solution metadata: {path}");
+                continue;
+            }
+            parsedSolutions.Add(SolutionParser.ParseSnapshot(path, bytes));
+            optionalSolutionBytes += bytes.LongLength;
+        }
 
-        var csFileIds = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (id, path, lang) in store.FileIdPathLang())
+        var csFileIds = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
+        foreach (var (id, path, lang) in rows)
         {
             if (lang == "cs") csFileIds[path] = id;
         }
 
-        using var tx = store.BeginTransaction();
         store.ClearProjectData(tx);
 
-        var projectIds = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var projectIds = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
         foreach (var p in parsedProjects)
         {
             projectIds[p.RelPath] = store.InsertProject(tx, p);
@@ -283,7 +337,6 @@ public static class DeltaRefresher
         // isTest R3 parity with the full build (a .cs file GAINING [TestFixture] converges on the
         // next graph rebuild — csproj-touch or full — an accepted staleness, same as ownership).
         store.PromoteTestProjectsByCompiledAttributes(tx);
-        tx.Commit();
     }
 
     private static string LangOf(string relPath)
@@ -302,9 +355,19 @@ public static class DeltaRefresher
         };
     }
 
+    private static bool IsPackagesConfig(string relPath) =>
+        Path.GetFileName(relPath).Equals("packages.config",
+            StringComparison.OrdinalIgnoreCase);
+
     private static string DecodeUtf8(byte[] bytes)
     {
         string s = Encoding.UTF8.GetString(bytes);
         return s.Length > 0 && s[0] == (char)0xFEFF ? s[1..] : s;
+    }
+
+    private static string PackagesConfigPath(string projectPath)
+    {
+        int slash = projectPath.LastIndexOf('/');
+        return slash < 0 ? "packages.config" : projectPath[..(slash + 1)] + "packages.config";
     }
 }

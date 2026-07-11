@@ -22,9 +22,10 @@ public sealed record SymbolRow(
     string? Modifiers = null,   // space-joined inheritance/lifetime modifiers (static sealed abstract
                                 // virtual override new), null when none — bt7: in deep hierarchies a
                                 // caller needs "override" vs "virtual" to pick the right site
-    string? Accessors = null);  // "get=public;set=private" — ONLY when an accessor's accessibility
+    string? Accessors = null,   // "get=public;set=private" — ONLY when an accessor's accessibility
                                 // differs from the member's own (hu7, field twice-asked: the private
                                 // on a setter was invisible); null when uniform or accessor-less
+    string? DeclarationKey = null);
 
 public sealed record ParsedCsFile(
     string RelPath,
@@ -122,7 +123,7 @@ public static class SyntaxIndexer
                     {
                         string? attrs = AttrMarkers(method.AttributeLists, ref hasTestAttrs);
                         Add(symbols, text, member, parentOrdinal, "method", method.Identifier.ValueText, ns, container,
-                            $"{Compact(method.ReturnType.ToString())} {method.Identifier.ValueText}{TypeParams(method)}{ParamSig(method.ParameterList)}",
+                            $"{Compact(method.ReturnType.ToString())} {ExplicitInterface(method.ExplicitInterfaceSpecifier)}{method.Identifier.ValueText}{TypeParams(method)}{ParamSig(method.ParameterList)}",
                             Access(method.Modifiers, memberDefault),
                             method.Modifiers.Any(SyntaxKind.PartialKeyword),
                             method.TypeParameterList?.Parameters.Count ?? 0, attrs);
@@ -135,17 +136,17 @@ public static class SyntaxIndexer
                         break;
                     case PropertyDeclarationSyntax prop:
                         Add(symbols, text, member, parentOrdinal, "property", prop.Identifier.ValueText, ns, container,
-                            $"{Compact(prop.Type.ToString())} {prop.Identifier.ValueText}",
+                            $"{Compact(prop.Type.ToString())} {ExplicitInterface(prop.ExplicitInterfaceSpecifier)}{prop.Identifier.ValueText}",
                             Access(prop.Modifiers, memberDefault), false, 0, null);
                         break;
                     case IndexerDeclarationSyntax indexer:
                         Add(symbols, text, member, parentOrdinal, "indexer", "this[]", ns, container,
-                            $"{Compact(indexer.Type.ToString())} this{ParamSig(indexer.ParameterList)}",
+                            $"{Compact(indexer.Type.ToString())} {ExplicitInterface(indexer.ExplicitInterfaceSpecifier)}this{ParamSig(indexer.ParameterList)}",
                             Access(indexer.Modifiers, memberDefault), false, 0, null);
                         break;
                     case EventDeclarationSyntax evt:
                         Add(symbols, text, member, parentOrdinal, "event", evt.Identifier.ValueText, ns, container,
-                            $"event {Compact(evt.Type.ToString())} {evt.Identifier.ValueText}",
+                            $"event {Compact(evt.Type.ToString())} {ExplicitInterface(evt.ExplicitInterfaceSpecifier)}{evt.Identifier.ValueText}",
                             Access(evt.Modifiers, memberDefault), false, 0, null);
                         break;
                     case EventFieldDeclarationSyntax evtField:
@@ -165,8 +166,9 @@ public static class SyntaxIndexer
                         }
                         break;
                     case OperatorDeclarationSyntax op:
-                        Add(symbols, text, member, parentOrdinal, "operator", $"operator {op.OperatorToken.ValueText}", ns, container,
-                            $"{Compact(op.ReturnType.ToString())} operator {op.OperatorToken.ValueText}{ParamSig(op.ParameterList)}",
+                        string operatorName = OperatorName(op);
+                        Add(symbols, text, member, parentOrdinal, "operator", operatorName, ns, container,
+                            $"{Compact(op.ReturnType.ToString())} {ExplicitInterface(op.ExplicitInterfaceSpecifier)}{operatorName}{ParamSig(op.ParameterList)}",
                             Access(op.Modifiers, "public"), false, 0, null);
                         break;
                 }
@@ -179,6 +181,137 @@ public static class SyntaxIndexer
         bool looksGenerated = FileClassifier.LooksGenerated(relPath, content);
 
         return new ParsedCsFile(relPath, content, lineCount, looksGenerated, hasTestAttrs, symbols);
+    }
+
+    /// <summary>Exact 1-based line ranges occupied by namespace names (not their bodies).
+    /// Namespace SymbolRows intentionally span the whole declaration for ownership queries; review
+    /// classification needs the narrower name region so a using/directive inside the body is not
+    /// mislabeled as a namespace edit.</summary>
+    public static List<(int Start, int End)> NamespaceNameLineRanges(string content)
+    {
+        var tree = CSharpSyntaxTree.ParseText(SourceText.From(content), ParseOptions);
+        var text = tree.GetText();
+        return tree.GetRoot().DescendantNodes()
+            .OfType<BaseNamespaceDeclarationSyntax>()
+            .Where(declaration => NamespaceNameOccupiesDeclarationOnlyLines(declaration, text))
+            .Select(declaration => text.Lines.GetLinePositionSpan(declaration.Name.Span))
+            .Select(span => (span.Start.Line + 1, span.End.Line + 1))
+            .ToList();
+    }
+
+    private static bool NamespaceNameOccupiesDeclarationOnlyLines(
+        BaseNamespaceDeclarationSyntax declaration, SourceText text)
+    {
+        if (declaration.Name.DescendantTrivia(descendIntoTrivia: true).Any(trivia =>
+                !trivia.IsKind(SyntaxKind.WhitespaceTrivia) &&
+                !trivia.IsKind(SyntaxKind.EndOfLineTrivia)))
+        {
+            // A line hunk touching `A /* marker */ . B` may have changed the comment rather
+            // than the namespace identifier. Treat any non-layout trivia inside the name as
+            // file-level evidence instead of claiming a namespace-name-only edit.
+            return false;
+        }
+        var position = text.Lines.GetLinePositionSpan(declaration.Name.Span);
+        TextLine firstLine = text.Lines[position.Start.Line];
+        TextLine lastLine = text.Lines[position.End.Line];
+        int nameStart = declaration.Name.SpanStart - firstLine.Start;
+        int nameEnd = declaration.Name.Span.End - lastLine.Start;
+        string prefix = firstLine.ToString()[..nameStart].Trim();
+        string suffix = lastLine.ToString()[nameEnd..].Trim();
+        // Mixed-content lines are conservatively file-level: Git's line hunk does not reveal
+        // which column changed, so `namespace N { /* edited */ }` cannot honestly be called a
+        // namespace-name edit. Apply the same endpoint checks to multiline qualified names.
+        return prefix == "namespace" && suffix is "" or ";" or "{";
+    }
+
+    /// <summary>Exact absolute character offsets of indexed declaration identifiers matching
+    /// <paramref name="name"/>. Reference-candidate review excludes these tokens, not their whole
+    /// symbol bodies, so a stale call inside a replacement method remains visible.</summary>
+    public static IReadOnlyDictionary<string, List<(int Start, int End)>>
+        DeclarationIdentifierOffsetMap(string content)
+    {
+        var result = new Dictionary<string, List<(int Start, int End)>>(StringComparer.Ordinal);
+        VisitDeclarationIdentifiers(content, (declarationName, start, end) =>
+        {
+            if (!result.TryGetValue(declarationName, out List<(int Start, int End)>? offsets))
+            {
+                offsets = [];
+                result[declarationName] = offsets;
+            }
+            offsets.Add((start, end));
+        });
+        return result;
+    }
+
+    public static List<(int Start, int End)> DeclarationIdentifierOffsets(string content,
+        string name)
+    {
+        var result = new List<(int Start, int End)>();
+        VisitDeclarationIdentifiers(content, (declarationName, start, end) =>
+        {
+            if (string.Equals(declarationName, name, StringComparison.Ordinal))
+                result.Add((start, end));
+        });
+        return result;
+    }
+
+    private static void VisitDeclarationIdentifiers(string content,
+        Action<string, int, int> visit)
+    {
+        var tree = CSharpSyntaxTree.ParseText(SourceText.From(content), ParseOptions);
+        void VisitToken(SyntaxToken token)
+        {
+            if (!token.IsKind(SyntaxKind.None) && token.ValueText.Length > 0)
+                visit(token.ValueText, token.SpanStart, token.Span.End);
+        }
+        foreach (SyntaxNode node in tree.GetRoot().DescendantNodes())
+        {
+            if (node is BaseNamespaceDeclarationSyntax namespaceDeclaration)
+            {
+                foreach (SyntaxToken token in namespaceDeclaration.Name.DescendantTokens()
+                             .Where(token => token.IsKind(SyntaxKind.IdentifierToken)))
+                {
+                    VisitToken(token);
+                }
+                continue;
+            }
+            if (node is OperatorDeclarationSyntax operatorDeclaration)
+            {
+                visit(OperatorName(operatorDeclaration),
+                    operatorDeclaration.OperatorKeyword.SpanStart,
+                    operatorDeclaration.OperatorToken.Span.End);
+                continue;
+            }
+            SyntaxToken? identifier = node switch
+            {
+                BaseTypeDeclarationSyntax declaration => declaration.Identifier,
+                DelegateDeclarationSyntax declaration => declaration.Identifier,
+                MethodDeclarationSyntax declaration => declaration.Identifier,
+                ConstructorDeclarationSyntax declaration => declaration.Identifier,
+                DestructorDeclarationSyntax declaration => declaration.Identifier,
+                PropertyDeclarationSyntax declaration => declaration.Identifier,
+                EventDeclarationSyntax declaration => declaration.Identifier,
+                EnumMemberDeclarationSyntax declaration => declaration.Identifier,
+                LocalFunctionStatementSyntax declaration => declaration.Identifier,
+                ParameterSyntax declaration => declaration.Identifier,
+                TypeParameterSyntax declaration => declaration.Identifier,
+                VariableDeclaratorSyntax declaration => declaration.Identifier,
+                ForEachStatementSyntax declaration => declaration.Identifier,
+                CatchDeclarationSyntax declaration => declaration.Identifier,
+                SingleVariableDesignationSyntax declaration => declaration.Identifier,
+                LabeledStatementSyntax declaration => declaration.Identifier,
+                FromClauseSyntax declaration => declaration.Identifier,
+                LetClauseSyntax declaration => declaration.Identifier,
+                JoinClauseSyntax declaration => declaration.Identifier,
+                JoinIntoClauseSyntax declaration => declaration.Identifier,
+                QueryContinuationSyntax declaration => declaration.Identifier,
+                ExternAliasDirectiveSyntax declaration => declaration.Identifier,
+                NameEqualsSyntax declaration when declaration.Parent is UsingDirectiveSyntax =>
+                    declaration.Name.Identifier,
+                _ => null,
+            };
+            if (identifier is { } identifierToken) VisitToken(identifierToken);
+        }
     }
 
     private static IEnumerable<SyntaxNode> Members(SyntaxNode node) => node switch
@@ -206,7 +339,8 @@ public static class SyntaxIndexer
             signature.Length > 400 ? signature[..400] : signature,
             accessibility,
             span.Start.Line + 1, span.End.Line + 1,
-            isPartial, arity, attrs, mods, accessors));
+            isPartial, arity, attrs, mods, accessors,
+            DeclarationKey(node, kind, name, arity)));
         return ordinal;
     }
 
@@ -300,6 +434,17 @@ public static class SyntaxIndexer
         return list is null ? "" : $"<{string.Join(", ", list.Parameters.Select(p => p.Identifier.ValueText))}>";
     }
 
+    private static string ExplicitInterface(ExplicitInterfaceSpecifierSyntax? specifier) =>
+        specifier is null ? "" : Compact(specifier.Name.ToString()) + ".";
+
+    private static string OperatorName(OperatorDeclarationSyntax declaration)
+    {
+        string checkedPart = declaration.CheckedKeyword.IsKind(SyntaxKind.CheckedKeyword)
+            ? "checked "
+            : "";
+        return $"operator {checkedPart}{declaration.OperatorToken.ValueText}";
+    }
+
     private static string ParamSig(BaseParameterListSyntax? list)
     {
         if (list is null || list.Parameters.Count == 0) return "()";
@@ -312,6 +457,99 @@ public static class SyntaxIndexer
         });
         return $"({string.Join(", ", parts)})";
     }
+
+    /// <summary>Stable declaration identity, separate from the display signature: return/base/member
+    /// types and parameter names may change without deleting a declaration, while overload parameter
+    /// types/ref-kinds and explicit-interface qualifiers must remain distinct.</summary>
+    private static string DeclarationKey(SyntaxNode node, string kind, string name, int arity)
+    {
+        IReadOnlyDictionary<string, string> typeParameters = TypeParameterReplacements(node);
+        ExplicitInterfaceSpecifierSyntax? explicitInterface = node switch
+        {
+            MethodDeclarationSyntax value => value.ExplicitInterfaceSpecifier,
+            PropertyDeclarationSyntax value => value.ExplicitInterfaceSpecifier,
+            IndexerDeclarationSyntax value => value.ExplicitInterfaceSpecifier,
+            EventDeclarationSyntax value => value.ExplicitInterfaceSpecifier,
+            OperatorDeclarationSyntax value => value.ExplicitInterfaceSpecifier,
+            ConversionOperatorDeclarationSyntax value => value.ExplicitInterfaceSpecifier,
+            _ => null,
+        };
+        BaseParameterListSyntax? parameters = node switch
+        {
+            BaseMethodDeclarationSyntax value => value.ParameterList,
+            IndexerDeclarationSyntax value => value.ParameterList,
+            DelegateDeclarationSyntax value => value.ParameterList,
+            _ => null,
+        };
+        string parameterKey = parameters is null
+            ? ""
+            : string.Join(',', parameters.Parameters.Select(parameter =>
+            {
+                string modifiers = string.Join(' ', parameter.Modifiers
+                    .Where(modifier => modifier.IsKind(SyntaxKind.RefKeyword) ||
+                                       modifier.IsKind(SyntaxKind.OutKeyword) ||
+                                       modifier.IsKind(SyntaxKind.InKeyword))
+                    .Select(modifier => modifier.ValueText));
+                string type = parameter.Type is null
+                    ? ""
+                    : CanonicalSyntax(parameter.Type, typeParameters);
+                return modifiers.Length == 0 ? type : modifiers + " " + type;
+            }));
+        return string.Join('\u001e', kind,
+            explicitInterface is null
+                ? ""
+                : CanonicalSyntax(explicitInterface.Name, typeParameters),
+            name, arity.ToString(System.Globalization.CultureInfo.InvariantCulture), parameterKey);
+    }
+
+    private static IReadOnlyDictionary<string, string> TypeParameterReplacements(SyntaxNode node)
+    {
+        var replacements = new Dictionary<string, string>(StringComparer.Ordinal);
+        int depth = 0;
+        foreach (TypeDeclarationSyntax type in node.Ancestors()
+                     .OfType<TypeDeclarationSyntax>().Reverse())
+        {
+            if (type.TypeParameterList is { } parameters)
+            {
+                for (int i = 0; i < parameters.Parameters.Count; i++)
+                    replacements[parameters.Parameters[i].Identifier.ValueText] =
+                        $"$type{depth}_{i}";
+            }
+            depth++;
+        }
+        SeparatedSyntaxList<TypeParameterSyntax>? ownParameters = node switch
+        {
+            MethodDeclarationSyntax method => method.TypeParameterList?.Parameters,
+            DelegateDeclarationSyntax declaration => declaration.TypeParameterList?.Parameters,
+            _ => null,
+        };
+        if (ownParameters is { } own)
+        {
+            for (int i = 0; i < own.Count; i++)
+                replacements[own[i].Identifier.ValueText] = $"$method_{i}";
+        }
+        return replacements;
+    }
+
+    private static string CanonicalSyntax(SyntaxNode node,
+        IReadOnlyDictionary<string, string> replacements) =>
+        string.Join('\u001d', node.DescendantTokens()
+            // Tuple element names are source-level labels, like parameter names: renaming
+            // `(int left, string right)` to `(int x, string y)` does not replace the method.
+            // Filter only the TupleElementSyntax.Identifier token; the element Type subtree,
+            // punctuation, and nested tuple structure remain in the canonical key.
+            .Where(token => token.Parent is not TupleElementSyntax tupleElement ||
+                            tupleElement.Identifier != token)
+            .Select(token =>
+            token.IsKind(SyntaxKind.IdentifierToken) &&
+            !IsQualifiedNameComponent(token) &&
+            replacements.TryGetValue(token.ValueText, out string? replacement)
+                ? replacement
+                : token.ValueText));
+
+    private static bool IsQualifiedNameComponent(SyntaxToken token) =>
+        token.Parent is SimpleNameSyntax simpleName &&
+        simpleName.Parent is QualifiedNameSyntax or AliasQualifiedNameSyntax;
 
     /// <summary>Collapses newlines/duplicate whitespace so signatures stay single-line.</summary>
     private static string Compact(string s)

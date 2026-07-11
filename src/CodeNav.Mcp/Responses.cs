@@ -1,12 +1,14 @@
 using System.Text.Encodings.Web;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeNav.Core.Indexing;
 
 namespace CodeNav.Mcp;
 
 /// <summary>
-/// Owns: JSON serialization policy, response budgets (8KB soft / 32KB hard), and the
+/// Owns: JSON serialization policy, response budgets (8KB soft / 24KB hard), and the
 /// index-metadata envelope every tool response carries.
 /// Does not own: tool logic (NavigationTools) or index queries (CodeNav.Core).
 /// </summary>
@@ -35,6 +37,92 @@ internal static class Json
     /// bytes, so <c>string.Length</c> would under-count. Every budget check must go through this.</summary>
     public static int Utf8Bytes(string json) => System.Text.Encoding.UTF8.GetByteCount(json);
 
+    /// <summary>Returns a valid-Unicode prefix whose UTF-8 representation is at most
+    /// <paramref name="maxBytes"/> bytes. Capability health fields use this for values whose
+    /// producer is outside the response-size contract (workspace paths and failure text).</summary>
+    public static string Utf8Prefix(string value, int maxBytes, out bool truncated)
+    {
+        if (maxBytes < 0) throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        if (Utf8Bytes(value) <= maxBytes)
+        {
+            truncated = false;
+            return value;
+        }
+
+        var result = new StringBuilder(Math.Min(value.Length, maxBytes));
+        int retainedBytes = 0;
+        foreach (Rune rune in value.EnumerateRunes())
+        {
+            if (retainedBytes + rune.Utf8SequenceLength > maxBytes) break;
+            result.Append(rune.ToString());
+            retainedBytes += rune.Utf8SequenceLength;
+        }
+        truncated = true;
+        return result.ToString();
+    }
+
+    /// <summary>Hard-bounds the capability envelope while retaining every feature id. Longest
+    /// non-review summaries are removed first, deterministically; review summaries are retained
+    /// preferentially because they are the deploy-verification surface for the safety contract.
+    /// The root-level coverage fields make any compaction explicit.</summary>
+    public static string WithCapabilitiesBudget(object envelope)
+    {
+        string json = Serialize(envelope);
+        if (Utf8Bytes(json) <= HardBudgetBytes) return json;
+
+        JsonObject root = JsonNode.Parse(json)?.AsObject()
+            ?? throw new InvalidOperationException("Capability envelope did not serialize as an object.");
+        JsonArray features = root["features"]?.AsArray()
+            ?? throw new InvalidOperationException("Capability envelope has no feature manifest.");
+        var summaries = features
+            .Select(node => node?.AsObject())
+            .Where(feature => feature is not null && feature["summary"] is not null)
+            .Select(feature => new
+            {
+                Feature = feature!,
+                Id = feature!["id"]?.GetValue<string>() ?? "",
+                Bytes = Utf8Bytes(feature!["summary"]?.GetValue<string>() ?? ""),
+            })
+            // Keep review safety summaries available for ordinary deployments whenever possible.
+            .OrderBy(item => item.Id.StartsWith("review-", StringComparison.Ordinal) ||
+                             item.Id.Equals("review-pack", StringComparison.Ordinal) ? 1 : 0)
+            .ThenByDescending(item => item.Bytes)
+            .ThenBy(item => item.Id, StringComparer.Ordinal)
+            .ToList();
+
+        int summariesReturned = summaries.Count;
+        foreach (var item in summaries)
+        {
+            item.Feature.Remove("summary");
+            summariesReturned--;
+            root["featuresCompacted"] = true;
+            root["featureSummariesReturned"] = summariesReturned;
+            json = root.ToJsonString(Options);
+            if (Utf8Bytes(json) <= HardBudgetBytes) return json;
+        }
+
+        // Defensive last resort for future static capability growth. Dynamic health strings are
+        // already bounded by NavigationTools, so this path is not expected for the current
+        // manifest. Preserve the feature ids and the core build/index identity while dropping
+        // optional explanatory sections in a stable order.
+        root["responseCompacted"] = true;
+        foreach (string property in new[]
+                 {
+                     "semantic", "confidenceModel", "tools", "navigationLayers", "languages",
+                 })
+        {
+            root.Remove(property);
+            json = root.ToJsonString(Options);
+            if (Utf8Bytes(json) <= HardBudgetBytes) return json;
+        }
+
+        // Every feature object now contains only its singular id. With today's finite manifest
+        // this is far below the cap; fail closed during development if that invariant ever changes.
+        if (Utf8Bytes(json) > HardBudgetBytes)
+            throw new InvalidOperationException("Feature ids alone exceed the capability hard budget.");
+        return json;
+    }
+
     /// <summary>
     /// Serializes build(items, truncated); if the result exceeds the hard budget the
     /// list is shrunk (and truncated=true) until it fits. Operates on a private COPY so it is
@@ -47,9 +135,13 @@ internal static class Json
         var work = new List<T>(items);
         bool truncated = false;
         string json = Serialize(build(work, truncated));
-        while (Utf8Bytes(json) > cap && work.Count > 1)
+        // A single oversized item must be droppable too. Stopping at one made callers such as
+        // worktrees violate the advertised hard envelope when the only Git worktree path was
+        // itself larger than the response budget.
+        while (Utf8Bytes(json) > cap && work.Count > 0)
         {
-            work.RemoveRange(work.Count / 2, work.Count - work.Count / 2);
+            int keep = work.Count / 2;
+            work.RemoveRange(keep, work.Count - keep);
             truncated = true;
             json = Serialize(build(work, truncated));
         }

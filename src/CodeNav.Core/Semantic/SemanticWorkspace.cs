@@ -153,8 +153,15 @@ public sealed class SemanticWorkspace : IDisposable
         var row = q.ProjectByName(name);
         if (row is null) return null;
 
-        // Re-parse the csproj for load-time fidelity (assembly refs, hint paths).
-        var parsed = ProjectFileParser.Parse(_workspaceRoot, row.Path);
+        // Preserve live load-time fidelity (assembly refs, hint paths), but capture through the
+        // bounded no-follow reader so a project or packages.config FIFO/socket/link cannot block
+        // semantic loading. The byte parser remains BOM/encoding aware.
+        byte[] projectBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, row.Path,
+            IndexBuilder.MaxStructuralFileBytes) ?? [];
+        string packagesPath = PackagesConfigPath(row.Path);
+        byte[]? packagesBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, packagesPath,
+            IndexBuilder.MaxStructuralFileBytes);
+        var parsed = ProjectFileParser.ParseSnapshot(row.Path, projectBytes, packagesBytes);
 
         var files = q.ProjectFiles(name);
         if (files.Count == 0) return null;
@@ -165,14 +172,17 @@ public sealed class SemanticWorkspace : IDisposable
         var projectId = reuseId ?? ProjectId.CreateNewId(debugName: name);
         foreach (var rel in files)
         {
-            string full = Path.Combine(_workspaceRoot, rel.Replace('/', Path.DirectorySeparatorChar));
+            string full = Path.Combine(_workspaceRoot,
+                rel.Replace('/', Path.DirectorySeparatorChar));
             SourceText text;
-            try
+            byte[]? liveBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, rel,
+                DeltaRefresher.MaxIndexedFileBytes);
+            if (liveBytes is not null)
             {
-                using var stream = File.OpenRead(full);
+                using var stream = new MemoryStream(liveBytes, writable: false);
                 text = SourceText.From(stream);
             }
-            catch (Exception)
+            else
             {
                 string? indexed = q.ContentByPath(rel);
                 if (indexed is null) continue;
@@ -393,6 +403,12 @@ public sealed class SemanticWorkspace : IDisposable
         {
             _log($"Semantic cache evicted {evictable.Count} projects (cap {cap}).");
         }
+    }
+
+    private static string PackagesConfigPath(string projectPath)
+    {
+        int slash = projectPath.LastIndexOf('/');
+        return slash < 0 ? "packages.config" : projectPath[..(slash + 1)] + "packages.config";
     }
 
     public void Dispose()

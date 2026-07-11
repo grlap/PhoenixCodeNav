@@ -4,11 +4,15 @@ using CodeNav.Core.Indexing;
 
 namespace CodeNav.Tests;
 
+[CollectionDefinition("Watcher timing isolation", DisableParallelization = true)]
+public sealed class WatcherTimingIsolationCollection { }
+
 /// <summary>
 /// Regression coverage for review batch 3: PhoenixCodeNav-mkf (directory renames must
 /// trigger a sweep), 6d2 (watcher Dispose is race-safe), eot (reparse-point exclusion),
 /// mz6 (IndexManager Dispose is race-safe).
 /// </summary>
+[Collection("Watcher timing isolation")]
 public class WatcherTests
 {
     [Fact]

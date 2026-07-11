@@ -160,6 +160,45 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
     }
 
     [Fact]
+    public void WithListBudgetCanDropOneOversizedItemToZero()
+    {
+        var items = new List<string> { new('\\', Json.HardBudgetBytes) };
+        object Build(List<string> its, bool trunc) => new { data = its, truncated = trunc };
+
+        string json = Json.WithListBudget(items, Build);
+
+        Assert.True(Json.Utf8Bytes(json) <= Json.HardBudgetBytes);
+        JsonElement response = JsonDocument.Parse(json).RootElement;
+        Assert.Empty(response.GetProperty("data").EnumerateArray());
+        Assert.True(response.GetProperty("truncated").GetBoolean());
+        Assert.Single(items); // the caller's list is still untouched
+    }
+
+    [Fact]
+    public void IndexWorktreeResultBoundsDynamicPathAndDetail()
+    {
+        string path = "C:/" + new string('\\', Json.HardBudgetBytes) +
+                      new string('é', Json.HardBudgetBytes);
+        string detail = new string('d', Json.HardBudgetBytes * 2);
+        var result = new WorktreeIndexResult("worktree_not_found", detail,
+            0, 0, 0, 7, null, false);
+        var meta = new Meta("ready", "14", "now", "now", 0,
+            "indexed", "text", Build: "0.11.5+test", IndexSchema: "14");
+
+        string json = NavigationTools.SerializeIndexWorktreeResult(path, result, meta);
+
+        Assert.True(Json.Utf8Bytes(json) <= Json.HardBudgetBytes,
+            $"worktree result used {Json.Utf8Bytes(json)} bytes");
+        JsonElement response = JsonDocument.Parse(json).RootElement;
+        Assert.Equal("worktree_not_found", response.GetProperty("error").GetString());
+        Assert.True(response.GetProperty("pathTruncated").GetBoolean());
+        Assert.Equal(Json.Utf8Bytes(path), response.GetProperty("pathBytes").GetInt32());
+        Assert.True(response.GetProperty("detailTruncated").GetBoolean());
+        Assert.Equal(Json.Utf8Bytes(detail), response.GetProperty("detailBytes").GetInt32());
+        Assert.Equal("ready", response.GetProperty("meta").GetProperty("indexStatus").GetString());
+    }
+
+    [Fact]
     public void DefinitionBodyRespectsByteBudgetAndHints()
     {
         var sb = new System.Text.StringBuilder();

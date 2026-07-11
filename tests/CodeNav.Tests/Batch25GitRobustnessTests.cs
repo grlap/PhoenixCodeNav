@@ -48,7 +48,43 @@ public class Batch25GitRobustnessTests
                 GitInfo.ResolveGitExeFrom(Path.Combine(exeDir, "git.exe"), cmdDir));
             Assert.Equal(Path.Combine(cmdDir, "git.exe"),
                 GitInfo.ResolveGitExeFrom(Path.Combine(root, "nope.exe"), cmdDir));
+            string nonCanonical = Path.Combine(cmdDir, "..", "cmd", "git.exe");
+            Assert.Equal(Path.GetFullPath(Path.Combine(cmdDir, "git.exe")),
+                GitInfo.ResolveGitExeFrom(nonCanonical, null));
             Assert.Null(GitInfo.ResolveGitExeFrom(null, root)); // no git anywhere
+        }
+        finally { try { Directory.Delete(root, recursive: true); } catch { } }
+    }
+
+    [Fact]
+    public void ResolutionRejectsRelativeOverrideAndPathEntries()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-git-resolution").FullName;
+        try
+        {
+            string bin = Directory.CreateDirectory(Path.Combine(root, "hostile-bin")).FullName;
+            string name = OperatingSystem.IsWindows() ? "git.exe" : "git";
+            string absolute = Path.Combine(bin, name);
+            File.WriteAllText(absolute, "");
+            string relativeFile = Path.GetRelativePath(Environment.CurrentDirectory, absolute);
+            string relativeDirectory = Path.GetRelativePath(Environment.CurrentDirectory, bin);
+            Assert.False(Path.IsPathFullyQualified(relativeFile));
+            Assert.False(Path.IsPathFullyQualified(relativeDirectory));
+
+            Assert.Null(GitInfo.ResolveGitExeFrom(relativeFile, null));
+            Assert.Null(GitInfo.ResolveGitExeFrom(null, relativeDirectory));
+            Assert.Equal(Path.GetFullPath(absolute),
+                GitInfo.ResolveGitExeFrom(null, Path.PathSeparator + bin));
+            if (OperatingSystem.IsWindows())
+            {
+                string expanding = Directory.CreateDirectory(
+                    Path.Combine(root, "%USERNAME%", "bin")).FullName;
+                string wrapper = Path.Combine(expanding, "git.cmd");
+                File.WriteAllText(wrapper, "@echo unsafe\r\n");
+                Assert.Null(GitInfo.ResolveGitExeFrom(wrapper, null));
+                Assert.Null(GitInfo.ResolveGitExeFrom(null, expanding));
+                Assert.Throws<ArgumentException>(() => GitInfo.Invocation(wrapper, "status"));
+            }
         }
         finally { try { Directory.Delete(root, recursive: true); } catch { } }
     }
@@ -69,8 +105,24 @@ public class Batch25GitRobustnessTests
             string wrapper = Path.Combine(spaced, "git.cmd");
             File.WriteAllText(wrapper, "@echo fake-git %*\r\n");
 
-            var (exe, args) = GitInfo.Invocation(wrapper, "rev-parse HEAD");
-            Assert.EndsWith("cmd.exe", exe, StringComparison.OrdinalIgnoreCase);
+            string trustedCmd = Path.GetFullPath(Path.Combine(Environment.SystemDirectory, "cmd.exe"));
+            string hostileCmd = Path.Combine(root, "cmd.exe");
+            File.WriteAllText(hostileCmd, "workspace-planted command interpreter");
+            string? priorComSpec = Environment.GetEnvironmentVariable("ComSpec");
+            (string exe, string args) invocation;
+            try
+            {
+                Environment.SetEnvironmentVariable("ComSpec", hostileCmd);
+                invocation = GitInfo.Invocation(wrapper, "rev-parse HEAD");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("ComSpec", priorComSpec);
+            }
+            var (exe, args) = invocation;
+            Assert.Equal(trustedCmd, exe, ignoreCase: true);
+            Assert.True(Path.IsPathFullyQualified(exe));
+            Assert.NotEqual(hostileCmd, exe);
 
             var r = GitInfo.RunProcessEx(exe, root, args);
             Assert.Equal("ok", r.Status); // direct spawn of a .cmd would be spawn_failed

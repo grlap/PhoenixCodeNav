@@ -85,7 +85,7 @@ public static class WorkspaceScanner
                 // attribute-gated LinkTarget check: ordinary files pay nothing, cloud
                 // placeholder source files (bit set, null LinkTarget) are still indexed.
                 if ((fi.Attributes & FileAttributes.ReparsePoint) != 0 && fi.LinkTarget is not null) continue;
-                string rel = Path.GetRelativePath(root, fi.FullName).Replace('\\', '/');
+                string rel = WorkspacePaths.ToGitPath(Path.GetRelativePath(root, fi.FullName));
                 var scanned = new ScannedFile(rel, fi.Length, fi.LastWriteTimeUtc.Ticks);
 
                 string ext = fi.Extension;

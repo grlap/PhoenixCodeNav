@@ -17,14 +17,9 @@ public class Batch8SymbolIdTests : IClassFixture<IndexFixture>
 
     public Batch8SymbolIdTests(IndexFixture fx) => _fx = fx;
 
-    private NavigationTools Tools()
-    {
-        var manager = new IndexManager(_fx.Root, _fx.DbPath);
-        manager.Start();
-        for (int i = 0; i < 100 && !manager.IsQueryable; i++) Thread.Sleep(50);
-        Assert.True(manager.IsQueryable, "index did not become queryable");
-        return new NavigationTools(manager, new CodeNav.Core.Semantic.SemanticService(manager));
-    }
+    // One shared manager per class fixture: the ownership lease is exclusive per database, so a
+    // manager per test (never disposed by xUnit) would starve every open after the first.
+    private NavigationTools Tools() => _fx.SharedTools;
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
 

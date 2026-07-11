@@ -105,7 +105,9 @@ public sealed partial class SemanticService : IDisposable
         {
             lock (_gate)
             {
-                return _workspace ??= new SemanticWorkspace(_manager.WorkspaceRoot, _manager.DbPath, _log);
+                string databasePath = _manager.DatabaseIoPath; // validates held authority each use
+                return _workspace ??= new SemanticWorkspace(_manager.WorkspaceRoot,
+                    databasePath, _log);
             }
         }
     }
@@ -406,7 +408,7 @@ public sealed partial class SemanticService : IDisposable
     private async Task<(Solution? Solution, ISymbol? Symbol, string? OwningProject)> LoadOwnerAndResolveAsync(
         string path, int line, int? column, string? nameHint, CancellationToken ct)
     {
-        string relPath = path.Replace('\\', '/').TrimStart('/');
+        string relPath = WorkspacePaths.Normalize(path);
         string owningProject;
         HashSet<string> closure;
         using (var q = _manager.OpenQueries())
@@ -562,7 +564,7 @@ public sealed partial class SemanticService : IDisposable
             .EnsureLoadedAsync(scanSet, ct, ensureReferenceTo: new[] { owningProject })
             .ConfigureAwait(false);
         var symbol = await ResolveInSolutionAsync(
-            solution, owningProject, path.Replace('\\', '/').TrimStart('/'), line, column, nameHint, ct)
+            solution, owningProject, WorkspacePaths.Normalize(path), line, column, nameHint, ct)
             .ConfigureAwait(false);
         return (solution, symbol, coverage, skipped, outOfGraph);
     }
@@ -630,9 +632,23 @@ public sealed partial class SemanticService : IDisposable
 
     private string ToRelPath(string fullPath)
     {
-        string full = fullPath.Replace('\\', '/');
-        string root = _manager.WorkspaceRoot.Replace('\\', '/').TrimEnd('/') + "/";
-        return full.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? full[root.Length..] : full;
+        try
+        {
+            string root = Path.GetFullPath(_manager.WorkspaceRoot);
+            string full = Path.GetFullPath(fullPath);
+            string relative = Path.GetRelativePath(root, full);
+            if (!Path.IsPathRooted(relative) && relative != ".." &&
+                !relative.StartsWith(".." + Path.DirectorySeparatorChar,
+                    StringComparison.Ordinal))
+            {
+                return WorkspacePaths.ToGitPath(relative);
+            }
+            return WorkspacePaths.ToGitPath(full);
+        }
+        catch
+        {
+            return WorkspacePaths.ToGitPath(fullPath);
+        }
     }
 
     private static string Truncate(string s) => s.Length <= 240 ? s : s[..240] + "…";

@@ -15,6 +15,9 @@ namespace CodeNav.Mcp;
 [McpServerToolType]
 public sealed partial class NavigationTools
 {
+    internal const int CapabilityDynamicTextBytes = 1024;
+    internal const int CapabilityIdentityTextBytes = 96;
+
     private readonly IndexManager _manager;
     private readonly SemanticService _semantic;
 
@@ -30,10 +33,34 @@ public sealed partial class NavigationTools
 
     [McpServerTool(Name = "server_capabilities")]
     [Description("Reports supported languages, available tools, index status, and response budgets. Call this first if unsure what is available or whether the index is ready.")]
-    public string ServerCapabilities()
+    public string ServerCapabilities() => ServerCapabilitiesJson(_manager.Health(),
+        _semantic.FrameworkRefsAvailable);
+
+    internal static string ServerCapabilitiesForTest(IndexHealth health,
+        bool frameworkRefsAvailable = true) =>
+        ServerCapabilitiesJson(health, frameworkRefsAvailable);
+
+    private static string ServerCapabilitiesJson(IndexHealth h, bool frameworkRefsAvailable)
     {
-        var h = _manager.Health();
-        return Json.Serialize(new
+        string state = CapabilityText(h.State, CapabilityIdentityTextBytes,
+            out bool stateTruncated, out int? stateBytes)!;
+        string? indexVersion = CapabilityText(h.IndexVersion, CapabilityIdentityTextBytes,
+            out bool indexVersionTruncated, out int? indexVersionBytes);
+        string? indexedAtUtc = CapabilityText(h.IndexedAtUtc, CapabilityIdentityTextBytes,
+            out bool indexedAtUtcTruncated, out int? indexedAtUtcBytes);
+        string? lastRefreshUtc = CapabilityText(h.LastRefreshUtc, CapabilityIdentityTextBytes,
+            out bool lastRefreshUtcTruncated, out int? lastRefreshUtcBytes);
+        string workspaceRoot = Json.Utf8Prefix(h.WorkspaceRoot, CapabilityDynamicTextBytes,
+            out bool workspaceRootTruncated);
+        int? workspaceRootBytes = workspaceRootTruncated ? Json.Utf8Bytes(h.WorkspaceRoot) : null;
+        string? error = h.Error is null
+            ? null
+            : Json.Utf8Prefix(h.Error, CapabilityDynamicTextBytes, out _);
+        bool errorTruncated = h.Error is not null &&
+            Json.Utf8Bytes(h.Error) > CapabilityDynamicTextBytes;
+        int? errorBytes = errorTruncated ? Json.Utf8Bytes(h.Error!) : null;
+
+        return Json.WithCapabilitiesBudget(new
         {
             server = "phoenixCodeNav",
             version = BuildInfo.Version,
@@ -46,9 +73,11 @@ public sealed partial class NavigationTools
             // trigger its (often silent-when-clean) response fields — grep an id to verify a deploy.
             features = new object[]
             {
+                new { id = "capabilities-hard-budget", summary = "UTF-8 hardBytes; *Truncated/*Bytes and featuresCompacted/featureSummariesReturned disclose compaction; every singular feature id remains" },
+                new { id = "review-ref-resolution", summary = "Hex-only branch/tag names, abbreviations, and object ids are Git-validated and peeled to full commits; repository-format-width objects retain object precedence and distinct short-hex ambiguity is refused" },
                 new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic; confidenceNote only when heuristic (tier meanings live in confidenceModel here); meta.statusNote explains refreshing/stale; meta.build stamps every result meta with version+commit" },
-                new { id = "hierarchy-ranking", summary = "implementations ranked concrete-first with derivation 'via' + a likelyImplementation flag. By design these appear CONDITIONALLY: likelyImplementation only when exactly ONE concrete implementation exists; 'via' only when a type implements the queried interface INDIRECTLY through a base — a flat N-implementer set legitimately shows neither. Example shapes when they DO fire (display values are NAMESPACE-QUALIFIED): {implementations:[{symbol:{display:'Widgets.SqlWidgetStore',...}, rank:'concrete'}], concreteCount:1, likelyImplementation:'Widgets.SqlWidgetStore'} and {symbol:{display:'Widgets.CachedStore',...}, isAbstract:true when abstract (omitted when concrete), rank:'concrete', via:'StoreBase'} (CachedStore : StoreBase : IWidgetStore). Envelope note: implementations wraps hits in {symbol, isAbstract, rank, via}; type_hierarchy.derivedOrImplementing returns flat symbol objects — a historical drift, documented rather than broken; pin shapes per tool" },
-                new { id = "implementer-completeness", summary = "implementations member-mode: the syntactic fallback reports implementerCount + omittedImplementers (silent when none omitted); the exact path reports coverage instead. Mixed-section honesty on every implementations fallback: when the compiler RESOLVED the symbol but implementers came from the index, the payload keeps the exact identity (symbol + symbolConfidence:'exact') beside implementationsConfidence:'heuristic' — mirroring type_hierarchy.derivedConfidence; both fields omitted when the symbol itself never resolved. type_hierarchy's semantic_unavailable path likewise degrades to base-list candidates (derivedConfidence:'heuristic'; baseTypes/interfaces OMITTED — they need the compiler) instead of a bare error" },
+                new { id = "hierarchy-ranking", summary = "implementations ranks concrete hits first; conditional likelyImplementation names the sole concrete hit and via identifies indirect base derivation. implementations wraps hit metadata; type_hierarchy returns flat symbols" },
+                new { id = "implementer-completeness", summary = "Member fallback exposes implementerCount/omittedImplementers. When identity is compiler-resolved but implementers are indexed, symbolConfidence exact and implementationsConfidence heuristic remain separate; type_hierarchy fallback returns heuristic base-list candidates without compiler-only bases/interfaces" },
                 new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (silent when compiled; Include globs expanded, Remove honored — residual gaps: .projitems/props globs/Conditions); repo_overview.orphanedFiles; semantic resolution never targets an uncompiled declaration; impact and context_pack likewise prefer COMPILED declarations for ownership (an orphaned copy sorting first no longer zeroes transitiveDependentProjects)" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is LOGGED, never silent" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
@@ -61,14 +90,51 @@ public sealed partial class NavigationTools
                 new { id = "arity-exact-partials", summary = "outline partialFiles match generic arity — partial Foo and partial Foo<T> cross-link only their own halves" },
                 new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. 'partial' is DELIBERATELY not in this string: it has its own isPartial field on every symbol node (plus partialFiles cross-links on outline types). Members also carry 'accessors' ({get: 'public', set: 'private'}) — ONLY when an accessor's accessibility differs from the member's own, so a private setter is no longer invisible. Modifiers since schema v4; accessors since v9" },
                 new { id = "rebuild-hatch", summary = "refresh_index accepts force: 'auto'|'incremental' (delta refresh; hash-identical files skipped — never rebuilds an intact-looking index) or 'full' (delete the index and REBUILD FROM SCRATCH, pump-serialized, works even from state 'failed' — recovery re-attaches the file watcher and git tracking and clears the old error; watch index.progress). The in-band corruption-recovery hatch — no shell access needed" },
-                new { id = "deadline-honesty", summary = "semantic references/implementations/definition/type_hierarchy report timing {deadlineMs, elapsedMs}; a deadline firing MID-SCAN salvages the counted portion as a hedged lower bound (partial + totalIsLowerBound + 'at least N' summary) instead of discarding completed work into semantic_timeout. A deadline that dies during cluster LOAD (typically the FIRST call after an index build or reload) reports partialReason 'cluster_cold_load' — an immediate retry usually returns exact — instead of masquerading as a scan timeout (token is the string PREFIX; inline advice follows); references/implementations timing adds {clusterLoadMs, queryMs} so the budget split is visible. references counts are physical-site deduped (one count per project+path+line+kind — twin-declaration types no longer double-count); coverage carries solutionProjects so hits from previously-resident projects are legible; outOfGraphCandidates lists textual mentions with NO graph path to the declarer (plugins, config-wired consumers), previously dropped without a trace" },
+                new { id = "deadline-honesty", summary = "Semantic tools return deadlineMs/elapsedMs. Mid-scan expiry keeps partial, totalIsLowerBound, and 'at least N'; cold load uses partialReason cluster_cold_load. references/implementations split clusterLoadMs/queryMs. Reference totals dedupe project+path+line+kind, expose solutionProjects, and retain outOfGraphCandidates" },
                 new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Assembly-name collisions (net-old/net-new csproj pairs) resolve to a name-level edge — the graph and the semantic workspace are name-keyed, so paired declarers keep all their consumer edges (schema v6+; edge recovery itself since v5). meta.indexSchema stamped on every response" },
-                new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and every index_building error body carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal (once the scan knows it), elapsedMs} — monotonic counters, no fabricated percent (derive % from the counters); absent when ready, and background refreshes never show a cold-build bar. Loss visibility (efa): filesSkipped (unreadable .cs — absent from the index until a delta refresh retries) and projectsFailed (csproj parse failures — guessed compile sets) appear ONLY when >0. Derived throughput (0tn): filesPerSecond + estimatedRemainingMs appear only during indexing_files once >=100 files over >=1s of THAT phase's clock are measured — labeled estimates that may fluctuate, never extrapolated from another phase. Refresh movement (z4c): server_capabilities.index.pendingProcessed is the MONOTONIC count of applied file deltas, paired with pendingChanges — pending drains while processed climbs; both flat means a stuck pump, not a busy one" },
-                new { id = "edge-provenance", summary = "graph edges carry HOW the coupling is wired (schema v10): 'projectReference' (real <ProjectReference>) vs 'hintPathReference' (recovered from <Reference>+HintPath / bare Include — the multi-staged build). project_graph.edges.kind now reports the truth (previously HARDCODED 'projectReference' for every edge); dependency_path adds structuredPaths with per-hop 'via' (arrow strings stay) and sameProject:true on the trivially-yes X-to-X query; context_pack.ownerProjectEdges flags only hintPathReference edges; impact adds directDependentProjects {total, viaProjectReference, viaHintPathOnly} + a risk when consumers are HintPath-only (they bind to the last-BUILT dll and ProjectReference-aware refactor tooling won't follow the edge) — transitive stays one number (mixed-kind paths have no honest per-kind bucket; impact.transitiveNote states this inline whenever assembly wiring is present). A pair wired BOTH ways records 'project' (first-writer: ProjectReference edges insert before recovery). Reference groups in files no project compiles are now structured — orphaned:true with the project field OMITTED (house style: null fields don't serialize) — instead of the magic '(no project)' string" },
-                new { id = "review-pack", summary = "review_pack: ONE budget-bounded call from diff to impact — changed set (git diff -U0 against a validated baseRef UNION untracked dirt, or explicit paths) -> hunk ranges -> symbol-SPAN intersection in the index (innermost policy: a touched child represents its type) -> per-symbol digests: symbolId handle, owner, directDependentProjects (+viaHintPathOnly), transitive count, publicApi, related_tests with signal, indexed reference candidates, deterministic risks. Deleted .cs files get DELETION honesty: the base blob (read-only git show) is re-parsed in memory and each former top-level type reports danglingCandidates. Everything is INDEXED confidence and says so (notes carry stable ids); no semantic resolution inside — escalate chosen symbols via references(symbolId, mode:'semantic'). baseRef accepts a sha or a strict-charset ref name (rev-parse server-side, result hex-gated)" },
-                new { id = "stable-note-ids", summary = "diagnostic notes carry MACHINE-MATCHABLE stable ids (a0b, field directive: programmatic consumers match ids, not prose): review_pack notes are {id, text} natively; retrofitted ADDITIVELY (prose untouched) elsewhere — references.noteId (zero_loading_gap), impact.transitiveNoteId (transitive_single_count), type_hierarchy.noteId (heuristic_fallback, both fallback shapes), search_text.noteId (did_you_mean | elsewhere_matches | absent_everywhere). Ids are the contract — prose may be reworded, ids may not; one id per CAUSE. The cluster_cold_load prefix token pioneered the pattern" },
-                new { id = "worktree-indexes", summary = "the 'worktrees' tool lists this repo's git worktrees with per-worktree index status (READ-ONLY — phoenix never creates/removes worktrees); 'index_worktree(path, mode auto|create|refresh)' seeds a sibling worktree's index from a transactionally consistent VACUUM INTO snapshot of the LIVE main index (the pump never pauses, the copy can never be torn, the output is compacted — indexes are workspace-RELATIVE so the file is valid under any root) and reconciles it with two read-only git calls: diff of the worktree's indexed_commit->HEAD UNION status dirt -> one targeted delta (usedFullSweep says when the honest fallback ran instead). Targets are validated against git's own worktree list; a worktree whose own phoenix instance is running reports worktree_index_locked instead of contending with a foreign pump. 'Refresh all' = loop worktrees -> index_worktree (per-target results, no opaque batch). The review-system flow: the skill creates the worktree, index_worktree seeds it, the review session's own phoenix opens it queryable immediately" },
-                new { id = "related-tests-signal", summary = "related_tests / impact / context_pack test groups carry 'signal' — the strongest usage SHAPE among the sampled mention lines: callSite ('Name(' — something executes) > typeUsage ('new Name' / ': Name' / 'Name<' / 'Name.') > nameMention (strings, comments, usings). Heuristic text shapes, a lead-strength label — not a compiler fact; omitted on naming-convention / project-reference groups (Reason already carries their tier) AND on the rare mention group whose ordinal line scan misses the case-insensitive FTS match — absent signal means UNGRADED, never nameMention. related_tests samples carry the real mention line + text when located (previously always line 1 with empty text; the ungraded case keeps that placeholder with text omitted)" },
+                new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and index_building error bodies carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal, elapsedMs} — monotonic counters, no fabricated percent; absent when ready, and background refreshes never show a cold-build bar. filesSkipped and projectsFailed appear only when >0 (efa); filesPerSecond + estimatedRemainingMs appear only during indexing_files once >=100 files over >=1s of that phase are measured (0tn); pendingProcessed is the monotonic applied-delta count paired with pendingChanges — both flat means a stuck pump (z4c)" },
+                new { id = "edge-provenance", summary = "Schema v10 edges distinguish projectReference from hintPathReference; project_graph exposes kind, dependency_path per-hop via, context_pack flags hint-path owners, and impact reports directDependentProjects viaHintPathOnly risk. Mixed paths keep one transitive count/note; dual wiring prefers project; orphan references use orphaned:true with no project" },
+                new { id = "review-pack", summary = "review_pack: ONE budget-bounded call from a changed set (validated-base Git diff union working-tree dirt, or explicit paths) to hunk-mapped symbols and per-symbol impact digests: symbolId handle, owner, directDependentProjects (+viaHintPathOnly), transitive count, publicApi, related_tests with signal, indexed reference candidates, and deterministic risks. Deleted .cs files get DELETION honesty from a read-only base blob: each former top-level type reports danglingCandidates. Everything is INDEXED confidence and says so (notes carry stable ids); no semantic resolution runs inside — escalate chosen symbols via references(symbolId, mode:'semantic'). baseRef accepts a sha or strict-charset ref name" },
+                new { id = "review-git-stdin-transport", summary = "v0.11.1 Git operand transport: review_pack resolves refs with cat-file --batch-check and reads base blobs with cat-file --batch; accepted dynamic ref names and paths travel on stdin, while only validated 4-64 ASCII-hex prefixes may use rev-parse --disambiguate=<hex>, preventing .cmd/.bat metacharacter reinterpretation" },
+                new { id = "review-diff-determinism", summary = "--raw -z --patch uses ordinal/C-quoted path identity; binary/mode/empty/type sections degrade whole-file; old/new hunk-coordinate overflow fails closed as malformed; stage-only unmerged gitlinks report unmerged; process/status failures never become partial success" },
+                new { id = "review-content-filter-refusal", summary = "v0.11.1 content-filter refusal: review_pack discovers configured clean/process drivers and evaluates tracked filter attributes without executing helpers; a path selecting an active driver returns git_filter_unsafe rather than running it or claiming complete coverage" },
+                new { id = "review-content-filter-overlay", summary = "v0.11.1 content-filter race boundary: every worktree comparison uses a private highest-precedence info/attributes overlay ending in * !filter, so no clean/process driver can become selectable after preflight, including a newly introduced driver" },
+                new { id = "review-submodule-coverage", summary = "v0.11.1 submodule boundary: parent review excludes dirty child worktrees and reports that boundary through coverage.submoduleWorktrees plus review.submodule_worktrees_excluded; changedSubmoduleLinks separately reports superproject gitlink pointer changes for child-root follow-up" },
+                new { id = "review-untracked-repository-coverage", summary = "v0.11.1 nested-repository boundary: parent review treats an untracked embedded Git worktree as an atomic excluded path without running child-local helpers, reports bounded coverage.untrackedRepositories, and emits review.untracked_repositories_excluded for child-root follow-up" },
+                new { id = "review-untracked-link-coverage", summary = "v0.11.2 untracked link boundary: Git-reported files reached through a symbolic link or junction are excluded before hashing or review aggregation, reported through bounded coverage.untrackedLinks, and emit review.untracked_links_excluded for target-root follow-up" },
+                new { id = "review-layered-change-refusal", summary = "v0.11.1 layered-change refusal: when independent staged and unstaged manifests contain the same path, review_pack returns git_layered_changes rather than presenting a final-worktree hunk map as coverage of both byte layers" },
+                new { id = "review-snapshot-consistency", summary = "Repeated bounded Git captures compare exact raw patch bytes with typed staged/unstaged/unmerged/untracked manifests; symlink payloads, gitlinks, modes, and tracked bytes must match; snapshot_changed becomes git_worktree_changed with no partial result from different worktree epochs" },
+                new { id = "review-git-launcher-isolation", summary = "Only canonical absolute paths and trusted system cmd.exe launch Git; batch percent expansion is refused, and a missing or non-directory working directory fails before spawn" },
+                new { id = "review-git-transport-isolation", summary = "v0.11.2 Git transport isolation: the highest-precedence GIT_ALLOW_PROTOCOL denylist plus the protocol.allow=never fallback keep read-only plumbing local even when protocol-specific repository config attempts to enable a transport" },
+                new { id = "review-git-environment-isolation", summary = "v0.11.4 clears inherited repository/object/index selectors (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_ALTERNATE_OBJECT_DIRECTORIES) before discovery; the sandbox reinstates only validated paths" },
+                new { id = "review-workspace-path-domain", summary = "v0.11.2 workspace path domain: the safety sandbox binds Git's actual toplevel while --relative scopes every manifest and :./ blob lookup to the configured workspace" },
+                new { id = "unix-git-path-identity", summary = "v0.11.4 Unix literal backslashes, including a root-level leading literal backslash, retain file identity across scan, watcher, refresh, commit reconciliation, and review; Windows still treats backslash as a directory separator" },
+                new { id = "worktree-workspace-path-domain", summary = "v0.11.5 worktree path domain: NUL-framed porcelain roots carry the configured repository-subtree prefix into linked worktrees; host-sensitive identity preserves case-distinct Git paths, and invalid caller roots return structured errors" },
+                new { id = "review-dirt-provenance", summary = "v0.11.2 dirt provenance: ReviewDiff preserves true UntrackedFiles separately from staged and unstaged tracked dirt, so only genuinely untracked files are widened to whole-file evidence or counted as untracked" },
+                new { id = "review-budget-coverage", summary = "v0.11.2 review budget coverage: symbolsCoverage, changedCsFilesCoverage, changedProjectFilesCoverage, deletedFilesCoverage, and per-record former-type totals expose every cap; whole-envelope maxBytes trimming can reduce every optional list to zero without exceeding the accepted UTF-8 budget" },
+                new { id = "review-two-sided-diff-ranges", summary = "v0.11.2 two-sided diff ranges: DiffHunk retains old and new coordinates so deletion and replacement evidence identifies its coordinate side explicitly" },
+                new { id = "review-former-symbol-evidence", summary = "v0.11.2 former-symbol evidence: review_pack reparses bounded base blobs and reports formerSymbols for removed or renamed members, including members lost from modified relocations or deleted partial declarations; current declaration survivors are project-domain/advisory evidence rather than workspace-global proof" },
+                new { id = "review-reference-declaration-budget", summary = "Name-scoped former-reference exclusion is bounded; declarationExclusionBudgetHit plus review.reference_declaration_budget disclose lower-bound candidates" },
+                new { id = "review-declaration-identity", summary = "v0.11.5 review declaration identity (index schema v14) includes parameter types, ancestor generic arity, checked-vs-unchecked operators, and explicit-interface operator qualifiers; tuple labels are omitted while tuple types and nesting remain identity-bearing" },
+                new { id = "review-exact-move-evidence", summary = "v0.11.2 exact move evidence: movedFiles reports unique staged or unstaged .cs raw-byte relocations; untracked candidates are read through size/count-bounded anchored no-follow handles, and normalization-only, oversized, or excess candidates conservatively remain uncorrelated" },
+                new { id = "review-base-blob-recovery-honesty", summary = "v0.11.2 base-blob recovery honesty: per-file size plus cumulative character/attempt/time bounds appear in baseBlobRecoveryCoverage; batch-check rejects oversized blobs before content streaming, failures emit review.base_blob_unavailable, cumulative exhaustion emits review.base_blob_budget, and recoveryStatus/unmapped evidence omits unknown former-type totals instead of serializing false zero coverage" },
+                new { id = "review-namespace-analysis-budget", summary = "v0.11.2 namespace analysis budget: namespace-only classification loads indexed content only for uncovered ranges and stops at per-file plus cumulative character/file/time bounds; namespaceAnalysisCoverage and review.namespace_analysis_budget mark conservative file_level fallback" },
+                new { id = "review-project-shape-budget", summary = "Bounded no-follow XML caps project count, bytes, and time; projectOwnershipFallbackCoverage plus review.project_shape_budget disclose incomplete deleted-path proof" },
+                new { id = "review-project-glob-budget", summary = "Iterative project-ownership glob budget covers default-SDK checks and Include/Exclude; globBudgetHit plus review.project_glob_budget expose segment, operation, or deadline exhaustion and fail proof closed" },
+                new { id = "review-project-shape-completeness", summary = "Unevaluated imports/SDKs/conditions/expressions block deleted-path proof; projectOwnershipFallbackCoverage.evaluationIncomplete and review.project_shape_incomplete disclose it" },
+                new { id = "review-project-file-guidance", summary = "v0.11.4 one classifier drives changedProjectFiles and review.project_files_changed for modified or deleted .csproj/.csproj.user/.shproj/.proj/.projitems/.sln/.slnx/.slnf/.props/.targets and Directory.Build.rsp and MSBuild.rsp inputs" },
+                new { id = "review-default-baseline-honesty", summary = "v0.11.4 bounded git_index_baseline_unavailable gives refresh_index or explicit baseRef guidance; caller-supplied invalid refs remain bad_request" },
+                new { id = "review-unmapped-change-coverage", summary = "v0.11.2 unmapped change coverage: namespace and file-level C# regions not fully covered by reviewable indexed symbols appear in bounded unmappedChanges records with explicit side, old/new coordinates, reason, and total/returned/truncated" },
+                new { id = "review-index-epoch-consistency", summary = "review_pack pins rows and response metadata to one stable SQLite read epoch; an overlapping refresh cannot mix old symbols with new ownership or health evidence" },
+                new { id = "review-per-hunk-type-mapping", summary = "Type/member suppression is evaluated per old/new hunk, so a type-header edit remains reviewable when a separate hunk touches one of its members" },
+                new { id = "stable-note-ids", summary = "diagnostic notes carry MACHINE-MATCHABLE stable ids (a0b): consumers match ids, not prose. review_pack notes are {id, text} natively; retrofitted additively elsewhere — references.noteId (zero_loading_gap), impact.transitiveNoteId (transitive_single_count), type_hierarchy.noteId (heuristic_fallback), search_text.noteId (did_you_mean | elsewhere_matches | absent_everywhere). Ids are the contract — prose may be reworded, ids may not; one id per CAUSE" },
+                new { id = "worktree-indexes", summary = "On Windows and Linux, worktrees lists anchored sibling status and index_worktree creates or refreshes a Git-validated target; macOS is unsupported for both operations" },
+                new { id = "index-write-destination-authority", summary = "IndexManager and direct IndexBuilder writes validate database/WAL/SHM/rollback-journal leaves and parents: Windows pins the full no-delete-share chain, Linux writes through a held directory fd, and macOS performs startup and per-open identity revalidation only" },
+                new { id = "worktree-index-platform-policy", summary = "Windows uses targeted indexed_commit-to-HEAD plus dirt reconciliation, Linux uses an anchored full sweep with usedFullSweep=true, and macOS returns unsupported_platform" },
+                new { id = "worktree-index-destination-isolation", summary = "Sibling SQLite work stays in private staging; an anchored no-follow destination atomically publishes the checkpointed database and refuses linked database, WAL, SHM, and rollback-journal paths without touching their targets" },
+                new { id = "worktree-index-lease", summary = "A cross-process ownership lease guards every writable Phoenix index lifetime; index_worktree returns worktree_index_locked while another Phoenix owns that target" },
+                new { id = "worktree-response-budget", summary = "worktrees may trim every item to zero, and index_worktree UTF-8-bounds reflected paths/details with truncation metadata before enforcing the complete hardBytes envelope" },
+                new { id = "related-tests-signal", summary = "related_tests / impact / context_pack test groups carry 'signal' — the strongest usage shape among sampled mention lines: callSite > typeUsage > nameMention. A heuristic lead-strength label, not a compiler fact; omitted on naming-convention / project-reference groups and on an ungraded mention group — absent means UNGRADED, never nameMention. Samples carry the real mention line + text when located" },
             },
             tools = new[]
             {
@@ -89,29 +155,56 @@ public sealed partial class NavigationTools
             semantic = new
             {
                 engine = "roslyn-adhoc (no MSBuild dependency)",
-                frameworkRefsAvailable = _semantic.FrameworkRefsAvailable,
+                frameworkRefsAvailable,
                 exactTools = new[] { "definition", "references", "implementations" },
                 note = "Exact results are scoped to loaded candidate clusters; coverage/partial fields report anything skipped.",
             },
             index = new
             {
-                state = h.State,
+                state,
+                stateTruncated = stateTruncated ? true : (bool?)null,
+                stateBytes,
                 // Live build progress (bead two, field-requested): phase + monotonic counters +
                 // elapsedMs; filesTotal only once the scan knows it; absent unless building.
                 // No ETA/percent by design — see the BuildProgress doc for the honesty rationale.
                 progress = ProgressJson(h),
-                h.IndexVersion,
-                h.IndexedAtUtc,
-                h.LastRefreshUtc,
+                indexVersion,
+                indexVersionTruncated = indexVersionTruncated ? true : (bool?)null,
+                indexVersionBytes,
+                indexedAtUtc,
+                indexedAtUtcTruncated = indexedAtUtcTruncated ? true : (bool?)null,
+                indexedAtUtcBytes,
+                lastRefreshUtc,
+                lastRefreshUtcTruncated = lastRefreshUtcTruncated ? true : (bool?)null,
+                lastRefreshUtcBytes,
                 h.PendingChanges,
                 // z4c: the pair that turns 'refreshing' from a binary into movement — pending
                 // drains while processed climbs; both flat = a stuck pump, not a busy one.
                 pendingProcessed = h.PendingProcessed,
-                h.Error,
+                error,
+                errorTruncated = errorTruncated ? true : (bool?)null,
+                errorBytes,
                 dbBytes = h.DbBytes,
-                workspaceRoot = h.WorkspaceRoot,
+                workspaceRoot,
+                workspaceRootTruncated = workspaceRootTruncated ? true : (bool?)null,
+                workspaceRootBytes,
             },
         });
+    }
+
+    private static string? CapabilityText(string? value, int maxBytes,
+        out bool truncated, out int? originalBytes)
+    {
+        if (value is null)
+        {
+            truncated = false;
+            originalBytes = null;
+            return null;
+        }
+
+        string result = Json.Utf8Prefix(value, maxBytes, out truncated);
+        originalBytes = truncated ? Json.Utf8Bytes(value) : null;
+        return result;
     }
 
     [McpServerTool(Name = "repo_overview")]
@@ -1602,7 +1695,7 @@ public sealed partial class NavigationTools
     [McpServerTool(Name = "refresh_index")]
     [Description("Queue an index refresh. force='auto'/'incremental': targeted paths or a change-detection sweep — hash-identical files are SKIPPED, so this never rebuilds an intact-looking index. force='full': the 'I know the db is wrong' hatch — delete the index and REBUILD FROM SCRATCH (works even from state 'failed'; watch server_capabilities.index.progress). Normally unnecessary — a file watcher keeps the index fresh.")]
     public string RefreshIndex(
-        [Description("Optional comma-separated EXACT workspace-relative paths to refresh — no globs (a glob silently matches nothing). Ignored with force='full'.")] string? paths = null,
+        [Description("Optional comma-separated EXACT workspace-relative paths to refresh — no globs (a glob silently matches nothing). Use '/' on Unix, where backslash is a legal filename character; Windows accepts either separator. Ignored with force='full'.")] string? paths = null,
         [Description("'auto' (default) / 'incremental': delta refresh, unchanged files skipped. 'full': rebuild from scratch — corruption/recovery hatch.")] string force = "auto")
     {
         // The two paths are EXPLICIT by contract (field: "calling refresh_index and hoping is
@@ -1627,9 +1720,9 @@ public sealed partial class NavigationTools
                 meta = Meta.From(_manager.Health(), "indexed", "text"),
             });
         }
-        // Normalize backslash paths to the workspace-relative forward-slash form the index stores under;
-        // otherwise "src\Foo.cs" refreshes as a NEW path, creating a permanent duplicate file/symbol
-        // row alongside the indexed "src/Foo.cs" (bug 9h3).
+        // Normalize the host platform's separator to the forward-slash form stored by the index.
+        // On Unix a backslash is a legal filename character and must remain byte-for-byte distinct;
+        // on Windows this still accepts either slash style (bug 9h3).
         var list = SplitCsv(paths)?.Select(NormalizePath).ToList();
         _manager.RequestRefresh(list?.Count > 0 ? list : null);
         return Json.Serialize(new
@@ -1901,10 +1994,16 @@ public sealed partial class NavigationTools
 
     /// <summary>Build-progress envelope shared by server_capabilities.index and the
     /// index_building error body — one shape everywhere; null (omitted) unless building.</summary>
-    private static object? ProgressJson(IndexHealth h) =>
-        h.Progress is not { } p ? null : new
+    private static object? ProgressJson(IndexHealth h)
+    {
+        if (h.Progress is not { } p) return null;
+        string phase = Json.Utf8Prefix(p.Phase, CapabilityDynamicTextBytes,
+            out bool phaseTruncated);
+        return new
         {
-            phase = p.Phase,
+            phase,
+            phaseTruncated = phaseTruncated ? true : (bool?)null,
+            phaseBytes = phaseTruncated ? Json.Utf8Bytes(p.Phase) : (int?)null,
             filesIndexed = p.FilesIndexed,
             filesTotal = p.FilesTotal,
             elapsedMs = p.ElapsedMs,
@@ -1919,6 +2018,7 @@ public sealed partial class NavigationTools
             filesPerSecond = p.FilesPerSecond,
             estimatedRemainingMs = p.EstimatedRemainingMs,
         };
+    }
 
     // Cursor is "o:<offset>" or, for a mode-carrying tool (search_symbol auto), "o:<offset>:<mode>".
     private static (int Limit, int Offset, string? Mode) Page(int limit, string? cursor)

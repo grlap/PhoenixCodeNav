@@ -28,9 +28,9 @@ public static class CompileItemResolver
         // Sorted path index so an include glob scans only the range under its literal prefix
         // instead of every file (a 2k-legacy-project monolith would otherwise pay P x F matches).
         var sortedPaths = csFileIdsByPath.Keys.ToArray();
-        Array.Sort(sortedPaths, StringComparer.OrdinalIgnoreCase);
+        Array.Sort(sortedPaths, WorkspacePaths.FileSystemPathComparer);
 
-        var defaultRoots = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var defaultRoots = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
         var removesByPid = new Dictionary<long, List<string>>();
 
         foreach (var p in projects)
@@ -59,7 +59,7 @@ public static class CompileItemResolver
             {
                 // SDK default items (or a failed-parse project, whose shape is unknowable): the
                 // project dir becomes a glob root; ownership resolved in the prefix pass below.
-                string dir = Path.GetDirectoryName(p.RelPath)?.Replace('\\', '/') ?? "";
+                string dir = WorkspacePaths.ToGitPath(Path.GetDirectoryName(p.RelPath) ?? "");
                 defaultRoots[dir] = pid;
             }
 
@@ -128,7 +128,7 @@ public static class CompileItemResolver
         int lo = LowerBound(sortedPaths, prefix);
         for (int i = lo; i < sortedPaths.Length; i++)
         {
-            if (prefix.Length > 0 && !sortedPaths[i].StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) break;
+            if (prefix.Length > 0 && !sortedPaths[i].StartsWith(prefix, WorkspacePaths.FileSystemPathComparison)) break;
             yield return sortedPaths[i];
         }
     }
@@ -140,7 +140,7 @@ public static class CompileItemResolver
         while (lo < hi)
         {
             int mid = (lo + hi) / 2;
-            if (StringComparer.OrdinalIgnoreCase.Compare(sorted[mid], prefix) < 0) lo = mid + 1;
+            if (WorkspacePaths.FileSystemPathComparer.Compare(sorted[mid], prefix) < 0) lo = mid + 1;
             else hi = mid;
         }
         return lo;

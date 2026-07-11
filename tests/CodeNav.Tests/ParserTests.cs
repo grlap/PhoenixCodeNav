@@ -1,11 +1,16 @@
 using CodeNav.Core.Discovery;
 using CodeNav.Core.Indexing;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace CodeNav.Tests;
 
 public class ProjectFileParserTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("codenav-parser").FullName;
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int mkfifo(string pathname, uint mode);
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
@@ -84,6 +89,98 @@ public class ProjectFileParserTests : IDisposable
         Assert.True(p.IsTest); // both name suffix and xunit package
         Assert.Null(p.ExplicitCompileItems); // SDK globbing
         Assert.Equal(new[] { "src/App/App.csproj" }, p.ProjectRefRelPaths);
+    }
+
+    [Fact]
+    public async Task SdkPathParserDoesNotProbeAdjacentLegacyPackagesConfig()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        string rel = WriteFile("src/Sdk/Sdk.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+            </Project>
+            """);
+        string fifo = Path.Combine(_root, "src", "Sdk", "packages.config");
+        Assert.Equal(0, mkfifo(fifo, Convert.ToUInt32("600", 8)));
+
+        Task<ParsedProject> parse = Task.Run(() => ProjectFileParser.Parse(_root, rel));
+        Task first = await Task.WhenAny(parse, Task.Delay(TimeSpan.FromSeconds(1)));
+        bool completedWithoutOpeningFifo = ReferenceEquals(first, parse);
+        if (!completedWithoutOpeningFifo)
+        {
+            // Release a regressed reader so the test process and fixture cleanup cannot hang.
+            await Task.Run(() =>
+            {
+                using (File.Open(fifo, FileMode.Open, FileAccess.Write, FileShare.ReadWrite)) { }
+            });
+            Task released = await Task.WhenAny(parse, Task.Delay(TimeSpan.FromSeconds(5)));
+            Assert.Same(parse, released);
+            Assert.True(parse.IsCompleted,
+                "the parser remained blocked after the FIFO writer released it");
+        }
+
+        Assert.True(completedWithoutOpeningFifo,
+            "SDK parsing must not inspect the legacy packages.config sibling");
+        ParsedProject parsed = await parse;
+        Assert.Equal("sdk", parsed.Style);
+    }
+
+    [Fact]
+    public void ByteSnapshotPreservesUtf16CustomProjectResolutionFacts()
+    {
+        const string projectPath = "src/Custom/Custom.csproj";
+        const string packagesPath = "src/Custom/packages.config";
+        string projectFull = Path.Combine(_root,
+            projectPath.Replace('/', Path.DirectorySeparatorChar));
+        string packagesFull = Path.Combine(_root,
+            packagesPath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(projectFull)!);
+
+        File.WriteAllText(packagesFull, """
+            <?xml version="1.0" encoding="utf-16"?>
+            <packages>
+              <package id="Custom.Package" version="7.4.1" targetFramework="net472" />
+            </packages>
+            """, Encoding.Unicode);
+        File.WriteAllText(projectFull, """
+            <?xml version="1.0" encoding="utf-16"?>
+            <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+              <PropertyGroup>
+                <AssemblyName>Custom.Runtime</AssemblyName>
+                <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+              </PropertyGroup>
+              <ItemGroup>
+                <Compile Include="Generated\Client.cs" />
+                <ProjectReference Include="..\Library\Library.csproj" />
+                <Reference Include="Custom.Dependency, Version=4.0.0.0">
+                  <HintPath>..\..\artifacts\Custom.Dependency.dll</HintPath>
+                </Reference>
+              </ItemGroup>
+            </Project>
+            """, Encoding.Unicode);
+
+        ParsedProject pathParsed = ProjectFileParser.Parse(_root, projectPath);
+        ParsedProject snapshotParsed = ProjectFileParser.ParseSnapshot(projectPath,
+            File.ReadAllBytes(projectFull), File.ReadAllBytes(packagesFull));
+
+        Assert.Equal(pathParsed.Name, snapshotParsed.Name);
+        Assert.Equal(pathParsed.Style, snapshotParsed.Style);
+        Assert.Equal(pathParsed.TargetFrameworks, snapshotParsed.TargetFrameworks);
+        Assert.Equal(pathParsed.IsTest, snapshotParsed.IsTest);
+        Assert.Equal(pathParsed.ProjectRefRelPaths, snapshotParsed.ProjectRefRelPaths);
+        Assert.Equal(pathParsed.PackageRefs, snapshotParsed.PackageRefs);
+        Assert.Equal(pathParsed.AssemblyRefs, snapshotParsed.AssemblyRefs);
+        Assert.Equal(pathParsed.ExplicitCompileItems, snapshotParsed.ExplicitCompileItems);
+        Assert.Equal(pathParsed.CompileOperations, snapshotParsed.CompileOperations);
+        Assert.Equal(pathParsed.DefaultCompileItems, snapshotParsed.DefaultCompileItems);
+        Assert.Equal(pathParsed.LoadStatus, snapshotParsed.LoadStatus);
+
+        Assert.Contains(snapshotParsed.AssemblyRefs, reference =>
+            reference.Assembly == "Custom.Dependency" &&
+            reference.HintPath == "artifacts/Custom.Dependency.dll");
+        Assert.Equal(new[] { "src/Library/Library.csproj" },
+            snapshotParsed.ProjectRefRelPaths);
     }
 
     [Fact]

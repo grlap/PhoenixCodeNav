@@ -15,8 +15,85 @@ namespace CodeNav.Core;
 /// </summary>
 public static class WorkspacePaths
 {
-    /// <summary>Normalizes to forward-slash, workspace-relative form (no leading slash).</summary>
-    public static string Normalize(string path) => path.Replace('\\', '/').TrimStart('/');
+    /// <summary>Comparer for filesystem/Git path identity on this host. Names and language
+    /// identifiers use their own comparers; this is only for path-keyed collections.</summary>
+    public static StringComparer FileSystemPathComparer => OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
+
+    public static StringComparison FileSystemPathComparison => OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+
+    /// <summary>Normalizes a caller/platform path to forward-slash, workspace-relative form.
+    /// Backslash is a separator on Windows, but remains a legal filename character on Unix.</summary>
+    public static string Normalize(string path) =>
+        Normalize(path, Path.DirectorySeparatorChar);
+
+    internal static string Normalize(string path, char directorySeparator) =>
+        ToGitPath(path, directorySeparator).TrimStart('/');
+
+    /// <summary>Converts the current platform's directory separator to Git/index '/' form without
+    /// rewriting a literal Unix backslash. Use this only for paths produced by filesystem APIs;
+    /// Git paths already use '/' and can be retained verbatim.</summary>
+    public static string ToGitPath(string platformPath) =>
+        ToGitPath(platformPath, Path.DirectorySeparatorChar);
+
+    internal static string ToGitPath(string platformPath, char directorySeparator) =>
+        platformPath.Replace(directorySeparator, '/');
+
+    /// <summary>Canonicalizes an absolute caller/filesystem path for comparison and display.
+    /// Only the host separator is rewritten, so a literal Unix backslash cannot alias a
+    /// different slash-delimited path.</summary>
+    public static string NormalizeFullForComparison(string path) =>
+        NormalizeFullForComparison(Path.GetFullPath(path), Path.DirectorySeparatorChar);
+
+    internal static string NormalizeFullForComparison(string fullPath,
+        char directorySeparator)
+    {
+        string normalized = ToGitPath(fullPath, directorySeparator);
+        string root = ToGitPath(Path.GetPathRoot(fullPath) ?? "", directorySeparator);
+        return normalized.Length == root.Length ? normalized : normalized.TrimEnd('/');
+    }
+
+    /// <summary>Attempts to canonicalize an absolute-or-relative caller path for comparison.
+    /// Invalid path strings fail without throwing across the MCP boundary.</summary>
+    public static bool TryNormalizeFullForComparison(string? path, out string normalized)
+    {
+        normalized = "";
+        if (string.IsNullOrWhiteSpace(path)) return false;
+        try
+        {
+            normalized = NormalizeFullForComparison(path);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Compares filesystem paths with the host's path-name case rules. Unix paths are
+    /// ordinal so case-distinct worktrees cannot alias; Windows paths are case-insensitive.</summary>
+    public static bool FullPathsEqual(string left, string right) =>
+        TryNormalizeFullForComparison(left, out string normalizedLeft) &&
+        TryNormalizeFullForComparison(right, out string normalizedRight) &&
+        string.Equals(normalizedLeft, normalizedRight, FileSystemPathComparison);
+
+    /// <summary>True when <paramref name="candidate"/> is the same filesystem path as, or is
+    /// lexically contained by, <paramref name="parent"/> under the host's path rules.</summary>
+    public static bool IsSameOrDescendantPath(string candidate, string parent)
+    {
+        if (!TryNormalizeFullForComparison(candidate, out string normalizedCandidate) ||
+            !TryNormalizeFullForComparison(parent, out string normalizedParent))
+        {
+            return false;
+        }
+
+        if (string.Equals(normalizedCandidate, normalizedParent, FileSystemPathComparison)) return true;
+        string prefix = normalizedParent.EndsWith('/') ? normalizedParent : normalizedParent + "/";
+        return normalizedCandidate.StartsWith(prefix, FileSystemPathComparison);
+    }
 
     /// <summary>
     /// True if the path is a genuine symlink or NTFS junction (has a link target).
@@ -67,7 +144,7 @@ public static class WorkspacePaths
 
         string rootWithSep = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         while (current.Length > rootWithSep.Length &&
-               current.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase))
+               current.StartsWith(rootWithSep, FileSystemPathComparison))
         {
             if (IsReparsePoint(current)) return true; // symlink/junction — not a cloud placeholder
             var parent = Path.GetDirectoryName(current);
@@ -90,9 +167,9 @@ public static class WorkspacePaths
         string normalized = Normalize(relPath);
         if (normalized.Length == 0) return false;
 
-        // Reject drive-rooted ("C:/x") and, after slash normalization, anything the
-        // framework still considers rooted. Leading slashes were already trimmed, so a
-        // UNC "\\server\share" degrades to a harmless relative "server/share".
+        // Reject drive-rooted ("C:/x") and, after platform-aware slash normalization,
+        // anything the framework still considers rooted. On Unix a backslash is a literal
+        // filename character; on Windows it was normalized to '/'.
         if (Path.IsPathRooted(normalized)) return false;
 
         string root, combined, relativeBack;
@@ -121,5 +198,37 @@ public static class WorkspacePaths
 
         fullPath = combined;
         return true;
+    }
+
+    /// <summary>Resolves a Git path, whose separator is always '/', without rewriting a literal
+    /// backslash on Unix (where '\\' is a legal filename character). This is intentionally
+    /// separate from caller-path normalization, which accepts either slash style.</summary>
+    public static bool TryResolveGitPathInside(string workspaceRoot, string gitPath,
+        out string fullPath)
+    {
+        fullPath = "";
+        if (string.IsNullOrWhiteSpace(gitPath) || gitPath[0] == '/' || gitPath.Contains('\0'))
+            return false;
+        string platformPath = gitPath.Replace('/', Path.DirectorySeparatorChar);
+        if (Path.IsPathRooted(platformPath)) return false;
+
+        try
+        {
+            string root = Path.GetFullPath(workspaceRoot);
+            string combined = Path.GetFullPath(Path.Combine(root, platformPath));
+            string relativeBack = Path.GetRelativePath(root, combined);
+            if (Path.IsPathRooted(relativeBack) || relativeBack == ".." ||
+                relativeBack.StartsWith(".." + Path.DirectorySeparatorChar,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+            fullPath = combined;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

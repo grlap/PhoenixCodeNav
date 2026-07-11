@@ -13,6 +13,10 @@ public sealed class IndexFixture : IDisposable
     public string Root { get; }
     public string DbPath { get; }
 
+    private readonly object _toolsGate = new();
+    private IndexManager? _manager;
+    private NavigationTools? _tools;
+
     public IndexFixture()
     {
         Root = Directory.CreateTempSubdirectory("codenav-e2e").FullName;
@@ -23,8 +27,34 @@ public sealed class IndexFixture : IDisposable
 
     public IndexQueries Open() => new(DbPath);
 
+    /// <summary>
+    /// One live IndexManager per fixture instance, created on first use and disposed with the
+    /// fixture. The index ownership lease is exclusive per database — a manager per TEST would
+    /// leak the lease (xUnit never disposes test-created managers) and starve every subsequent
+    /// open of the same db with "another phoenix process owns this index". Lazy so classes that
+    /// only use Open() (direct read connections need no lease) never attach a live watcher.
+    /// </summary>
+    public NavigationTools SharedTools
+    {
+        get
+        {
+            lock (_toolsGate)
+            {
+                if (_tools is not null) return _tools;
+                var manager = new IndexManager(Root, DbPath);
+                manager.Start();
+                for (int i = 0; i < 100 && !manager.IsQueryable; i++) Thread.Sleep(50);
+                Assert.True(manager.IsQueryable, "index did not become queryable");
+                _manager = manager;
+                _tools = new NavigationTools(manager, new CodeNav.Core.Semantic.SemanticService(manager));
+                return _tools;
+            }
+        }
+    }
+
     public void Dispose()
     {
+        _manager?.Dispose(); // releases the store, pooled connections, and the ownership lease
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         try { Directory.Delete(Root, recursive: true); } catch { /* leave temp on Windows lock */ }
     }
@@ -268,15 +298,9 @@ public class McpToolLayerTests : IClassFixture<IndexFixture>
 
     public McpToolLayerTests(IndexFixture fx) => _fx = fx;
 
-    private NavigationTools Tools()
-    {
-        var manager = new IndexManager(_fx.Root, _fx.DbPath);
-        manager.Start();
-        // Index already exists — Start opens it quickly; wait for queryable.
-        for (int i = 0; i < 100 && !manager.IsQueryable; i++) Thread.Sleep(50);
-        Assert.True(manager.IsQueryable, "index did not become queryable");
-        return new NavigationTools(manager, new CodeNav.Core.Semantic.SemanticService(manager));
-    }
+    // One shared manager per class fixture: the ownership lease is exclusive per database, so a
+    // manager per test (never disposed by xUnit) would starve every open after the first.
+    private NavigationTools Tools() => _fx.SharedTools;
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
 

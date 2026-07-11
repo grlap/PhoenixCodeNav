@@ -331,13 +331,22 @@ public sealed partial class NavigationTools
             meta,
         });
         string json = BuildJson(dropStructured: false);
-        // Lone-item overflow (review, verification round): WithListBudget can never trim below
-        // ONE item, and a single very deep path's hops array ALONE can breach the hard cap
-        // (repro: a 120-hop chain with ~90-char names → ~27KB, shipped untruncated). Degrade by
-        // dropping the STRUCTURED dimension this batch added — flagged, never silent — while the
-        // arrow strings keep the full answer at the pre-provenance payload's weight. (A lone
-        // DISPLAY string over the cap would be the pre-existing arrow-string exposure, unchanged.)
-        if (Json.Utf8Bytes(json) > Json.HardBudgetBytes)
+        // Lone-item overflow (review, verification round): a single very deep path's hops array
+        // ALONE can breach the hard cap (repro: a 120-hop chain with ~90-char names → ~27KB).
+        // WithListBudget's floor moved from one item to ZERO (batch-43 envelope honesty for
+        // worktrees), so the overflow no longer ships over-budget — it ships found=true with the
+        // ANSWER trimmed away. Either symptom degrades the same way: drop the STRUCTURED
+        // dimension this batch added — flagged, never silent — while the arrow strings keep the
+        // full answer at the pre-provenance payload's weight. (A lone DISPLAY string over the
+        // cap would be the pre-existing arrow-string exposure, unchanged.)
+        bool answerTrimmedAway = false;
+        if (paths.Count > 0)
+        {
+            using var shipped = System.Text.Json.JsonDocument.Parse(json);
+            answerTrimmedAway =
+                shipped.RootElement.GetProperty("paths").GetArrayLength() == 0;
+        }
+        if (answerTrimmedAway || Json.Utf8Bytes(json) > Json.HardBudgetBytes)
         {
             json = BuildJson(dropStructured: true);
         }

@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using System.Xml;
 
 namespace CodeNav.Core.Discovery;
 
@@ -23,12 +24,16 @@ public sealed record ParsedProject(
     // <Target>-scoped REMOVE is skipped (honoring it would falsely orphan live files).
     List<CompileGlob>? CompileIncludeGlobs = null,  // workspace-relative patterns (may contain * ? **)
     List<string>? CompileRemoveGlobs = null,        // workspace-relative patterns
-    bool DefaultCompileItems = true);               // SDK **/*.cs default; false when EnableDefaultCompileItems=false (always false for legacy)
+    bool DefaultCompileItems = true,                // SDK **/*.cs default; false when EnableDefaultCompileItems=false (always false for legacy)
+    bool CompileOwnershipComplete = true,           // false for bounded review shapes with imports the raw XML cannot evaluate
+    List<CompileMembershipOperation>? CompileOperations = null);
 
 /// <summary>One wildcard/SDK &lt;Compile Include&gt; spec with its own Exclude= filters (Exclude only
 /// prunes THAT item's wildcard expansion — the legacy exclusion idiom, since legacy MSBuild has no
 /// &lt;Compile Remove&gt;).</summary>
 public sealed record CompileGlob(string Include, List<string>? Excludes);
+public sealed record CompileMembershipOperation(bool Include, string Pattern,
+    List<string>? Excludes = null);
 
 /// <summary>
 /// Owns: reading a single .csproj (legacy or SDK style) into a ParsedProject without
@@ -37,6 +42,8 @@ public sealed record CompileGlob(string Include, List<string>? Excludes);
 /// </summary>
 public static class ProjectFileParser
 {
+    private const int MaxSnapshotBytes = 16 * 1024 * 1024;
+
     private static readonly string[] TestPackageMarkers =
     {
         "xunit", "nunit", "mstest.testframework", "microsoft.net.test.sdk",
@@ -70,7 +77,6 @@ public static class ProjectFileParser
     {
         string full = Path.Combine(workspaceRoot, relPath.Replace('/', Path.DirectorySeparatorChar));
         string name = Path.GetFileNameWithoutExtension(relPath);
-        string projectDir = Path.GetDirectoryName(relPath)?.Replace('\\', '/') ?? "";
 
         XDocument doc;
         try
@@ -83,11 +89,62 @@ public static class ProjectFileParser
                 new(), new(), null, new(), $"failed:{ex.GetType().Name}");
         }
 
+        XDocument? packagesDoc = null;
+        string packagesPath = Path.Combine(Path.GetDirectoryName(full)!, "packages.config");
+        if (!IsSdkProject(doc.Root!) && File.Exists(packagesPath))
+        {
+            try { packagesDoc = XDocument.Load(packagesPath); }
+            catch { /* packages.config remains optional/partial */ }
+        }
+        return ParseDocuments(relPath, doc, packagesDoc);
+    }
+
+    /// <summary>Parses a project from the exact bounded, no-follow byte snapshots captured by the
+    /// indexer. The optional packages.config bytes participate in the same parse epoch.</summary>
+    public static ParsedProject ParseSnapshot(string relPath, byte[] projectBytes,
+        byte[]? packagesConfigBytes = null)
+    {
+        string name = Path.GetFileNameWithoutExtension(relPath);
+        try
+        {
+            XDocument project = LoadSnapshotXml(projectBytes);
+            XDocument? packages = null;
+            if (packagesConfigBytes is not null)
+            {
+                try { packages = LoadSnapshotXml(packagesConfigBytes); }
+                catch { /* packages.config remains optional/partial */ }
+            }
+            return ParseDocuments(relPath, project, packages);
+        }
+        catch (Exception ex)
+        {
+            return new ParsedProject(relPath, name, "unknown", null, "",
+                LooksLikeTestName(name), [], [], null, [], $"failed:{ex.GetType().Name}");
+        }
+    }
+
+    private static XDocument LoadSnapshotXml(byte[] bytes)
+    {
+        if (bytes.Length > MaxSnapshotBytes)
+            throw new InvalidDataException("project XML exceeds the snapshot limit");
+        using var stream = new MemoryStream(bytes, writable: false);
+        using XmlReader reader = XmlReader.Create(stream, new XmlReaderSettings
+        {
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null,
+            MaxCharactersInDocument = MaxSnapshotBytes,
+        });
+        return XDocument.Load(reader, LoadOptions.None);
+    }
+
+    private static ParsedProject ParseDocuments(string relPath, XDocument doc,
+        XDocument? packagesConfig)
+    {
+        string name = Path.GetFileNameWithoutExtension(relPath);
+        string projectDir = WorkspacePaths.ToGitPath(Path.GetDirectoryName(relPath) ?? "");
+
         var root = doc.Root!;
-        bool isSdk = root.Attribute("Sdk") is not null ||
-                     root.Elements().Any(e => e.Name.LocalName == "Sdk") ||
-                     root.Descendants().Any(e => e.Name.LocalName == "Import" &&
-                         (e.Attribute("Sdk") is not null));
+        bool isSdk = IsSdkProject(root);
         string style = isSdk ? "sdk" : "legacy";
 
         string? guid = Prop(root, "ProjectGuid")?.Trim('{', '}');
@@ -179,14 +236,14 @@ public static class ProjectFileParser
         bool defaultCompileItems = isSdk &&
             !string.Equals(Prop(root, "EnableDefaultCompileItems")?.Trim(), "false", StringComparison.OrdinalIgnoreCase);
 
-        // packages.config for legacy package refs.
-        string packagesConfig = Path.Combine(Path.GetDirectoryName(full)!, "packages.config");
-        if (!isSdk && File.Exists(packagesConfig))
+        // packages.config for legacy package refs. Snapshot callers supply the exact bounded bytes
+        // captured alongside the project, so graph facts cannot come from a later filesystem epoch.
+        if (!isSdk && packagesConfig is not null)
         {
             try
             {
-                var pkgDoc = XDocument.Load(packagesConfig);
-                foreach (var pkg in pkgDoc.Descendants().Where(e => e.Name.LocalName == "package"))
+                foreach (var pkg in packagesConfig.Descendants().Where(e =>
+                             e.Name.LocalName == "package"))
                 {
                     string? id = pkg.Attribute("id")?.Value;
                     if (id is not null) packageRefs.Add((id, pkg.Attribute("version")?.Value ?? ""));
@@ -216,6 +273,195 @@ public static class ProjectFileParser
             defaultCompileItems);
     }
 
+    /// <summary>Parses only the compile-item shape from an already bounded, no-follow project-file
+    /// snapshot. Review fallback uses this instead of reopening every project and packages.config.</summary>
+    public static ParsedProject ParseCompileShape(string relPath, byte[] xmlBytes)
+    {
+        string name = Path.GetFileNameWithoutExtension(relPath);
+        string projectDir = WorkspacePaths.ToGitPath(Path.GetDirectoryName(relPath) ?? "");
+        XDocument doc;
+        try
+        {
+            using var stream = new MemoryStream(xmlBytes, writable: false);
+            using XmlReader reader = XmlReader.Create(stream, new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+                MaxCharactersInDocument = 512 * 1024,
+            });
+            doc = XDocument.Load(reader, LoadOptions.None);
+        }
+        catch (Exception ex)
+        {
+            return new ParsedProject(relPath, name, "unknown", null, "", false,
+                [], [], null, [], $"failed:{ex.GetType().Name}");
+        }
+
+        XElement? root = doc.Root;
+        if (root is null)
+        {
+            return new ParsedProject(relPath, name, "unknown", null, "", false,
+                [], [], null, [], "failed:missing_root");
+        }
+        bool isSdk = IsSdkProject(root);
+        List<string>? compileItems = isSdk ? null : [];
+        var includeGlobs = new List<CompileGlob>();
+        var removeGlobs = new List<string>();
+        var compileOperations = new List<CompileMembershipOperation>();
+        bool hasUnevaluatedCompileSpec = false;
+        foreach (XElement item in root.Descendants().Where(element =>
+                     element.Name.LocalName == "Compile"))
+        {
+            if (item.Parent?.Name.LocalName != "ItemGroup" || item.Parent.Parent != root)
+            {
+                hasUnevaluatedCompileSpec = true;
+                continue;
+            }
+            hasUnevaluatedCompileSpec |= item.AncestorsAndSelf().Any(ancestor =>
+                ancestor.Attribute("Condition") is not null ||
+                ancestor.Name.LocalName is "Target" or "Choose" or "When" or "Otherwise");
+            if (item.Attribute("Include")?.Value is { } include)
+            {
+                hasUnevaluatedCompileSpec |= ContainsMsBuildExpression(include);
+                List<string>? excludes = null;
+                if (item.Attribute("Exclude")?.Value is { } exclude)
+                {
+                    excludes = [];
+                    foreach (string spec in exclude.Split(';',
+                                 StringSplitOptions.RemoveEmptyEntries |
+                                 StringSplitOptions.TrimEntries))
+                    {
+                        if (TryNormalizeCompileSpec(projectDir, spec, out string normalized))
+                            excludes.Add(normalized);
+                        else
+                            hasUnevaluatedCompileSpec = true;
+                    }
+                }
+                if (item.Attribute("Exclude")?.Value is { } excludeValue)
+                    hasUnevaluatedCompileSpec |= ContainsMsBuildExpression(excludeValue);
+                if (excludes is { Count: 0 }) excludes = null;
+                foreach (string spec in include.Split(';', StringSplitOptions.RemoveEmptyEntries |
+                                                           StringSplitOptions.TrimEntries))
+                {
+                    if (!TryNormalizeCompileSpec(projectDir, spec, out string normalizedSpec))
+                    {
+                        hasUnevaluatedCompileSpec = true;
+                        continue;
+                    }
+                    compileOperations.Add(new CompileMembershipOperation(true, normalizedSpec,
+                        excludes));
+                    if (!isSdk && !spec.Contains('*') && !spec.Contains('?'))
+                        compileItems!.Add(normalizedSpec);
+                    else
+                        includeGlobs.Add(new CompileGlob(normalizedSpec, excludes));
+                }
+            }
+            if (item.Attribute("Remove")?.Value is { } removeValue)
+                hasUnevaluatedCompileSpec |= ContainsMsBuildExpression(removeValue);
+            if (item.Attribute("Remove")?.Value is { } remove &&
+                !IsConditionedOrTargetScoped(item))
+            {
+                foreach (string spec in remove.Split(';', StringSplitOptions.RemoveEmptyEntries |
+                                                          StringSplitOptions.TrimEntries))
+                {
+                    if (!TryNormalizeCompileSpec(projectDir, spec, out string normalizedSpec))
+                    {
+                        hasUnevaluatedCompileSpec = true;
+                        continue;
+                    }
+                    removeGlobs.Add(normalizedSpec);
+                    compileOperations.Add(new CompileMembershipOperation(false, normalizedSpec));
+                }
+            }
+        }
+        List<XElement> defaultCompileProperties = root.Descendants().Where(element =>
+            element.Name.LocalName == "EnableDefaultCompileItems").ToList();
+        string? defaultCompileValue = defaultCompileProperties.FirstOrDefault()?.Value.Trim();
+        bool recognizedDefaultCompileValue = defaultCompileValue is null ||
+            defaultCompileValue.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+            defaultCompileValue.Equals("false", StringComparison.OrdinalIgnoreCase);
+        bool defaultCompileItems = isSdk && (defaultCompileValue is null ||
+            defaultCompileValue.Equals("true", StringComparison.OrdinalIgnoreCase));
+        bool defaultCompileEvaluationComplete = defaultCompileProperties.Count <= 1 &&
+            recognizedDefaultCompileValue &&
+            defaultCompileProperties.All(property =>
+                !ContainsMsBuildExpression(property.Value) &&
+                !property.AncestorsAndSelf().Any(ancestor =>
+                    ancestor.Attribute("Condition") is not null));
+        bool hasUnevaluatedDefaultMembership = root.Descendants()
+            .Any(element => IsUnevaluatedCompileMembershipProperty(element.Name.LocalName));
+        bool hasPackageBuildImports = root.Descendants().Any(element =>
+            element.Name.LocalName == "PackageReference");
+        string? rootSdk = root.Attribute("Sdk")?.Value;
+        bool knownRootSdk = rootSdk is null || rootSdk
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .All(sdk => sdk.Equals("Microsoft.NET.Sdk", StringComparison.OrdinalIgnoreCase) ||
+                        sdk.StartsWith("Microsoft.NET.Sdk/", StringComparison.OrdinalIgnoreCase));
+        bool compileOwnershipComplete = knownRootSdk && defaultCompileEvaluationComplete &&
+            !hasUnevaluatedCompileSpec && !hasUnevaluatedDefaultMembership &&
+            !hasPackageBuildImports &&
+            !root.Elements().Any(element => element.Name.LocalName == "Sdk") &&
+            !root.Descendants().Any(element => element.Name.LocalName == "Import");
+        return new ParsedProject(relPath, name, isSdk ? "sdk" : "legacy", null, "", false,
+            [], [], compileItems, [], "parsed",
+            includeGlobs.Count > 0 ? includeGlobs : null,
+            removeGlobs.Count > 0 ? removeGlobs : null, defaultCompileItems,
+            compileOwnershipComplete, compileOperations);
+    }
+
+    private static bool IsSdkProject(XElement root) =>
+        root.Attribute("Sdk") is not null ||
+        root.Elements().Any(element => element.Name.LocalName == "Sdk") ||
+        root.Descendants().Any(element => element.Name.LocalName == "Import" &&
+            element.Attribute("Sdk") is not null);
+
+    private static bool ContainsMsBuildExpression(string value) =>
+        value.Contains("$(", StringComparison.Ordinal) ||
+        value.Contains("@(", StringComparison.Ordinal) ||
+        value.Contains("%(", StringComparison.Ordinal);
+
+    private static bool TryNormalizeCompileSpec(string projectDir, string spec,
+        out string normalized)
+    {
+        normalized = "";
+        string portable = spec.Replace('\\', '/');
+        if (portable.StartsWith('/') ||
+            (portable.Length >= 2 && char.IsLetter(portable[0]) && portable[1] == ':'))
+            return false;
+        var parts = projectDir.Split('/', StringSplitOptions.RemoveEmptyEntries).ToList();
+        foreach (string part in portable.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (part == ".") continue;
+            if (part == "..")
+            {
+                if (parts.Count == 0) return false;
+                parts.RemoveAt(parts.Count - 1);
+            }
+            else
+            {
+                parts.Add(part);
+            }
+        }
+        normalized = string.Join('/', parts);
+        return normalized.Length > 0;
+    }
+
+    private static bool IsUnevaluatedCompileMembershipProperty(string name) =>
+        name is "EnableDefaultItems" or "DefaultItemExcludes" or
+            "DefaultItemExcludesInProjectFolder" or "DefaultExcludesInProjectFolder" or
+            "BaseOutputPath" or "BaseIntermediateOutputPath" or "OutputPath" or
+            "IntermediateOutputPath" or "MSBuildProjectExtensionsPath" or
+            "ArtifactsPath" or "UseArtifactsOutput" or "DefaultLanguageSourceExtension" or
+            "MSBuildExtensionsPath" or
+            "MSBuildUserExtensionsPath" or "MSBuildToolsVersion" or
+            "CustomBeforeMicrosoftCommonProps" or "CustomAfterMicrosoftCommonProps" or
+            "CustomBeforeMicrosoftCommonTargets" or "CustomAfterMicrosoftCommonTargets" or
+            "CustomBeforeMicrosoftCommonCrossTargetingTargets" or
+            "CustomAfterMicrosoftCommonCrossTargetingTargets" or
+            "CustomBeforeMicrosoftCSharpTargets" or "CustomAfterMicrosoftCSharpTargets" ||
+        name.StartsWith("ImportByWildcard", StringComparison.Ordinal) ||
+        name.StartsWith("ImportUserLocationsByWildcard", StringComparison.Ordinal);
+
     /// <summary>True when the element or any ancestor carries a Condition attribute or is a
     /// &lt;Target&gt; body — contexts where honoring a &lt;Compile Remove&gt; would falsely orphan
     /// live files (the remove may never execute, or only for some TFM).</summary>
@@ -231,9 +477,12 @@ public static class ProjectFileParser
     /// <summary>Resolves an MSBuild relative include against the project dir into a workspace-relative path.</summary>
     internal static string NormalizeRelative(string projectDir, string include)
     {
-        string combined = projectDir.Length == 0 ? include : $"{projectDir}/{include}";
-        var parts = new List<string>();
-        foreach (var part in combined.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries))
+        // projectDir is already in the canonical Git/index domain. Only the MSBuild-authored
+        // include accepts either slash style; rewriting the combined string would reinterpret a
+        // legal literal backslash in a Unix project-directory name as a separator.
+        var parts = projectDir.Split('/', StringSplitOptions.RemoveEmptyEntries).ToList();
+        foreach (var part in include.Replace('\\', '/').Split('/',
+                     StringSplitOptions.RemoveEmptyEntries))
         {
             if (part == ".") continue;
             if (part == "..")

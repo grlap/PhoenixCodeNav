@@ -117,12 +117,17 @@ review system creates the worktree; phoenix seeds and follows it:
 
 ```text
 git worktree add ../review-1234 <ref>          # yours (or your review system's)
-index_worktree(path: "../review-1234")         # MCP, on the MAIN instance: a VACUUM INTO
+index_worktree(path: "../review-1234")         # MCP, on the MAIN instance: seeds a staged
                                                # snapshot of the live index (never torn, pump
-                                               # never pauses), reconciled with git diff of
-                                               # indexed_commit->HEAD UNION git status dirt —
-                                               # one targeted delta, no fresh-checkout sweep
+                                               # never pauses) and installs it atomically into
+                                               # the worktree's anchored .codenav destination,
+                                               # then reconciles. refresh re-seeds the same way.
 ```
+
+Platform policy: **Windows** reconciles with one targeted delta (git diff of
+`indexed_commit->HEAD` UNION git status dirt — no fresh-checkout sweep); **Linux** always
+runs an anchored full sweep of the sibling tree (`usedFullSweep: true`); **macOS** returns
+`unsupported_platform` for both `worktrees` and `index_worktree`.
 
 The review session then starts its own phoenix on the worktree — a **relative**
 `--workspace-root .` in a checked-in `.mcp.json` serves the main enlistment and every

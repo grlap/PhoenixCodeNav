@@ -9,12 +9,15 @@ namespace CodeNav.Core.Indexing;
 /// </summary>
 public sealed class IndexStore : IDisposable
 {
+    internal static Action<string>? AfterOpenBeforeCreateSchemaForTest { get; set; }
     private readonly string _dbPath;
     private readonly SqliteConnection _write;
+    private readonly bool _privateStaging;
 
-    public IndexStore(string dbPath, bool createNew)
+    public IndexStore(string dbPath, bool createNew, bool privateStaging = false)
     {
         _dbPath = dbPath;
+        _privateStaging = privateStaging;
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
         if (createNew)
         {
@@ -22,7 +25,8 @@ public sealed class IndexStore : IDisposable
             // its sidecar deletes leaves an orphaned -wal that a fresh build would otherwise
             // replay stale content from. Main-file check stays only for the main delete.
             SqliteConnection.ClearAllPools();
-            foreach (var sidecar in new[] { dbPath + "-wal", dbPath + "-shm" })
+            foreach (var sidecar in new[]
+                     { dbPath + "-wal", dbPath + "-shm", dbPath + "-journal" })
             {
                 if (File.Exists(sidecar)) File.Delete(sidecar);
             }
@@ -30,21 +34,42 @@ public sealed class IndexStore : IDisposable
         }
 
         _write = Open();
-        if (createNew) CreateSchema();
+        try
+        {
+            if (createNew) AfterOpenBeforeCreateSchemaForTest?.Invoke(_dbPath);
+            if (createNew) CreateSchema();
+        }
+        catch
+        {
+            // A constructor that fails after opening SQLite has no caller-visible instance to
+            // dispose. Close the writer here so an outer ownership lease can unwind safely.
+            _write.Dispose();
+            throw;
+        }
     }
 
     public string DbPath => _dbPath;
 
     private SqliteConnection Open()
     {
-        var conn = new SqliteConnection($"Data Source={_dbPath}");
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            // The store already retains its write connection for its full lifetime. Pooling adds
+            // no hot-path benefit and could retain native DB/WAL handles after the ownership lease
+            // is released by a direct build or manager shutdown.
+            Pooling = false,
+        };
+        var conn = new SqliteConnection(connectionString.ToString());
         try
         {
             conn.Open();
             // First op that touches the header — throws on a corrupt/non-SQLite file. Dispose the
             // connection on failure so its OS handle is released (ClearAllPools can then free it,
             // letting a stale/corrupt-index rebuild delete the file rather than fail on a lock).
-            Exec(conn, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-65536;");
+            Exec(conn, _privateStaging
+                ? "PRAGMA journal_mode=MEMORY; PRAGMA synchronous=OFF; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-65536;"
+                : "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-65536;");
             return conn;
         }
         catch
@@ -150,7 +175,8 @@ public sealed class IndexStore : IDisposable
               arity INTEGER NOT NULL,
               attr_markers TEXT,
               modifiers TEXT,  -- v4 (bt7): space-joined static/sealed/abstract/virtual/override/new/readonly/const
-              accessors TEXT   -- v9 (hu7): "get=public;set=private", only when an accessor differs
+              accessors TEXT,  -- v9 (hu7): "get=public;set=private", only when an accessor differs
+              declaration_key TEXT NOT NULL -- v11: overload/interface identity separate from display signature
             );
             CREATE INDEX idx_symbols_file ON symbols(file_id, start_line);
             CREATE INDEX idx_symbols_name ON symbols(name COLLATE NOCASE);
@@ -203,8 +229,8 @@ public sealed class IndexStore : IDisposable
         // two prepared-statement steps per symbol, ~1.14M steps on a 570k-symbol build).
         cmd.CommandText = """
             INSERT INTO symbols(file_id, parent_id, kind, name, ns, container, signature,
-                                accessibility, start_line, end_line, is_partial, arity, attr_markers, modifiers, accessors)
-            VALUES($f, $p, $k, $n, $ns, $c, $sig, $acc, $sl, $el, $part, $ar, $attr, $mods, $accs)
+                                accessibility, start_line, end_line, is_partial, arity, attr_markers, modifiers, accessors, declaration_key)
+            VALUES($f, $p, $k, $n, $ns, $c, $sig, $acc, $sl, $el, $part, $ar, $attr, $mods, $accs, $decl)
             RETURNING id;
             """;
         var pF = cmd.Parameters.Add("$f", SqliteType.Integer);
@@ -222,6 +248,7 @@ public sealed class IndexStore : IDisposable
         var pAttr = cmd.Parameters.Add("$attr", SqliteType.Text);
         var pMods = cmd.Parameters.Add("$mods", SqliteType.Text);
         var pAccs = cmd.Parameters.Add("$accs", SqliteType.Text);
+        var pDecl = cmd.Parameters.Add("$decl", SqliteType.Text);
 
         var ordinalToId = new long[rows.Count];
         foreach (var row in rows)
@@ -241,6 +268,7 @@ public sealed class IndexStore : IDisposable
             pAttr.Value = (object?)row.AttrMarkers ?? DBNull.Value;
             pMods.Value = (object?)row.Modifiers ?? DBNull.Value;
             pAccs.Value = (object?)row.Accessors ?? DBNull.Value;
+            pDecl.Value = row.DeclarationKey ?? "";
             ordinalToId[row.OrdinalInFile] = (long)cmd.ExecuteScalar()!;
         }
     }
@@ -255,7 +283,8 @@ public sealed class IndexStore : IDisposable
             SELECT last_insert_rowid();
             """;
         cmd.Parameters.AddWithValue("$p", p.RelPath);
-        cmd.Parameters.AddWithValue("$d", Path.GetDirectoryName(p.RelPath)?.Replace('\\', '/') ?? "");
+        cmd.Parameters.AddWithValue("$d",
+            WorkspacePaths.ToGitPath(Path.GetDirectoryName(p.RelPath) ?? ""));
         cmd.Parameters.AddWithValue("$n", p.Name);
         cmd.Parameters.AddWithValue("$st", p.Style);
         cmd.Parameters.AddWithValue("$g", (object?)p.Guid ?? DBNull.Value);
@@ -283,7 +312,50 @@ public sealed class IndexStore : IDisposable
     {
         if (File.Exists(targetDbPath)) throw new IOException($"snapshot target already exists: {targetDbPath}");
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(targetDbPath))!);
-        using var conn = new SqliteConnection($"Data Source={sourceDbPath};Mode=ReadOnly;Pooling=false");
+        SnapshotCore(sourceDbPath, targetDbPath);
+    }
+
+    /// <summary>Writes into an already-reserved empty regular file whose exact handle is held by
+    /// the caller. Anchored worktree staging uses this to close the target-leaf race.</summary>
+    internal static void SnapshotToReserved(string sourceDbPath, string targetDbPath)
+    {
+        if (new FileInfo(targetDbPath).Length != 0)
+            throw new IOException("reserved snapshot target is not empty");
+        using var source = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = sourceDbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
+        using var target = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = targetDbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
+        }.ToString());
+        source.Open();
+        target.Open();
+        using (var mode = target.CreateCommand())
+        {
+            mode.CommandText = "PRAGMA journal_mode=MEMORY; PRAGMA synchronous=OFF;";
+            mode.ExecuteNonQuery();
+        }
+        source.BackupDatabase(target);
+        using (var mode = target.CreateCommand())
+        {
+            mode.CommandText = "PRAGMA journal_mode=MEMORY;";
+            mode.ExecuteNonQuery();
+        }
+    }
+
+    private static void SnapshotCore(string sourceDbPath, string targetDbPath)
+    {
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = sourceDbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString());
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "VACUUM INTO $target";
@@ -367,10 +439,11 @@ public sealed class IndexStore : IDisposable
 
     public sealed record StoredFile(long Id, string Path, long Hash, string Lang);
 
-    public Dictionary<string, StoredFile> AllFilesByPath()
+    public Dictionary<string, StoredFile> AllFilesByPath(SqliteTransaction? tx = null)
     {
-        var map = new Dictionary<string, StoredFile>(StringComparer.OrdinalIgnoreCase);
+        var map = new Dictionary<string, StoredFile>(WorkspacePaths.FileSystemPathComparer);
         using var cmd = _write.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = "SELECT id, path, hash, lang FROM files";
         using var r = cmd.ExecuteReader();
         while (r.Read())
@@ -431,10 +504,12 @@ public sealed class IndexStore : IDisposable
         }
     }
 
-    public List<(long Id, string Path, string Lang)> FileIdPathLang()
+    public List<(long Id, string Path, string Lang)> FileIdPathLang(
+        SqliteTransaction? tx = null)
     {
         var list = new List<(long, string, string)>();
         using var cmd = _write.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = "SELECT id, path, lang FROM files";
         using var r = cmd.ExecuteReader();
         while (r.Read()) list.Add((r.GetInt64(0), r.GetString(1), r.GetString(2)));
@@ -469,6 +544,9 @@ public sealed class IndexStore : IDisposable
         Exec(_write, "INSERT INTO meta(key, value) VALUES($k, $v) ON CONFLICT(key) DO UPDATE SET value=$v",
             ("$k", key), ("$v", value));
 
+    public void DeleteMeta(string key) =>
+        Exec(_write, "DELETE FROM meta WHERE key=$k", ("$k", key));
+
     public string? GetMeta(string key)
     {
         using var cmd = _write.CreateCommand();
@@ -482,6 +560,11 @@ public sealed class IndexStore : IDisposable
         Exec(_write, "INSERT INTO fts_content(fts_content) VALUES('optimize');");
         Exec(_write, "ANALYZE; PRAGMA optimize;");
     }
+
+    /// <summary>Flushes committed WAL content into the main database before an anchored atomic
+    /// install moves that single database file into a worktree destination.</summary>
+    internal void CheckpointForAtomicInstall() =>
+        Exec(_write, "PRAGMA wal_checkpoint(TRUNCATE);");
 
     // ================================================================ helpers
 

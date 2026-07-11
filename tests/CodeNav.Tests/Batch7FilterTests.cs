@@ -55,6 +55,34 @@ public sealed class VendorFixture : IDisposable
 
     public IndexQueries Open() => new(DbPath);
 
+    private readonly object _toolsGate = new();
+    private IndexManager? _manager;
+    private NavigationTools? _tools;
+
+    /// <summary>
+    /// One live IndexManager per fixture instance, created on first use and disposed with the
+    /// fixture. The index ownership lease is exclusive per database — a manager per TEST would
+    /// leak the lease (xUnit never disposes test-created managers) and starve every subsequent
+    /// open of the same db with "another phoenix process owns this index".
+    /// </summary>
+    public NavigationTools SharedTools
+    {
+        get
+        {
+            lock (_toolsGate)
+            {
+                if (_tools is not null) return _tools;
+                var manager = new IndexManager(Root, DbPath);
+                manager.Start();
+                for (int i = 0; i < 100 && !manager.IsQueryable; i++) Thread.Sleep(50);
+                Assert.True(manager.IsQueryable, "index did not become queryable");
+                _manager = manager;
+                _tools = new NavigationTools(manager, new CodeNav.Core.Semantic.SemanticService(manager));
+                return _tools;
+            }
+        }
+    }
+
     private void Write(string rel, string content)
     {
         string full = Path.Combine(Root, rel.Replace('/', Path.DirectorySeparatorChar));
@@ -75,14 +103,9 @@ public class Batch7FilterTests : IClassFixture<VendorFixture>
 
     public Batch7FilterTests(VendorFixture fx) => _fx = fx;
 
-    private NavigationTools Tools()
-    {
-        var manager = new IndexManager(_fx.Root, _fx.DbPath);
-        manager.Start();
-        for (int i = 0; i < 100 && !manager.IsQueryable; i++) Thread.Sleep(50);
-        Assert.True(manager.IsQueryable, "index did not become queryable");
-        return new NavigationTools(manager, new CodeNav.Core.Semantic.SemanticService(manager));
-    }
+    // One shared manager per class fixture: the ownership lease is exclusive per database, so a
+    // manager per test (never disposed by xUnit) would starve every open after the first.
+    private NavigationTools Tools() => _fx.SharedTools;
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
 

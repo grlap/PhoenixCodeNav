@@ -24,8 +24,8 @@ public sealed class WorkspaceWatcher : IDisposable
     private readonly Action<IReadOnlyCollection<string>> _onBatch;
     private readonly Action _onSweep;
     private readonly FileSystemWatcher _fsw;
-    private readonly ConcurrentDictionary<string, byte> _pending = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, byte> _knownDirs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _pending = new(WorkspacePaths.FileSystemPathComparer);
+    private readonly ConcurrentDictionary<string, byte> _knownDirs = new(WorkspacePaths.FileSystemPathComparer);
     private readonly System.Threading.Timer _debounce;
     private readonly object _sync = new();
     private volatile bool _sweepRequested;
@@ -69,7 +69,7 @@ public sealed class WorkspaceWatcher : IDisposable
         string rel;
         try
         {
-            rel = Path.GetRelativePath(_root, fullPath).Replace('\\', '/');
+            rel = WorkspacePaths.ToGitPath(Path.GetRelativePath(_root, fullPath));
         }
         catch
         {
@@ -167,7 +167,7 @@ public sealed class WorkspaceWatcher : IDisposable
                         if (WorkspacePaths.IsReparsePoint(sub)) continue; // don't follow links
                     }
                     catch { clean = false; continue; }
-                    string rel = Path.GetRelativePath(_root, sub).Replace('\\', '/');
+                    string rel = WorkspacePaths.ToGitPath(Path.GetRelativePath(_root, sub));
                     _knownDirs.TryAdd(rel, 0);
                     stack.Push(sub);
                 }

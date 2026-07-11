@@ -62,6 +62,13 @@ public class WorkspacePathsTests
     }
 }
 
+[CollectionDefinition("Batch1 SQLite pool isolation", DisableParallelization = true)]
+public sealed class Batch1SqlitePoolIsolationCollection { }
+
+// IndexFixture and many independent integration-test fixtures still use the provider's
+// process-global ClearAllPools during teardown. This class deliberately pounds live readers;
+// isolate its collection so another fixture cannot invalidate a connection between Open/Read.
+[Collection("Batch1 SQLite pool isolation")]
 public class Batch1ToolTests : IClassFixture<IndexFixture>, IDisposable
 {
     private readonly IndexFixture _fx;
@@ -172,7 +179,9 @@ public class Batch1ToolTests : IClassFixture<IndexFixture>, IDisposable
     [Fact]
     public void OutlineIsBoundedForHugeSingleRootFile()
     {
-        // Build a synthetic 4000-member single-class file and index it via delta refresh.
+        // Build a synthetic 4000-member single-class file in an isolated index. The shared
+        // fixture's IndexManager owns a live watcher; directly delta-refreshing that same DB here
+        // races the watcher and can insert files.path twice under full-suite timing.
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("namespace Acme.Huge {");
         sb.AppendLine("  public class GiganticService {");
@@ -183,21 +192,24 @@ public class Batch1ToolTests : IClassFixture<IndexFixture>, IDisposable
         sb.AppendLine("  }");
         sb.AppendLine("}");
 
-        // Place it inside an existing project directory so it gets indexed.
-        using var q0 = _manager.OpenQueries();
-        var anyCs = q0.FindFiles("*.cs", 1).Single();
-        string dir = Path.GetDirectoryName(anyCs.Path)!.Replace('\\', '/');
-        string rel = $"{dir}/GiganticService.cs";
-        string full = Path.Combine(_fx.Root, rel.Replace('/', Path.DirectorySeparatorChar));
-        File.WriteAllText(full, sb.ToString());
+        string root = Directory.CreateTempSubdirectory("codenav-outline-huge").FullName;
+        const string rel = "GiganticService.cs";
         try
         {
-            using (var store = new IndexStore(_fx.DbPath, createNew: false))
-            {
-                DeltaRefresher.Refresh(store, _fx.Root, new[] { rel });
-            }
+            File.WriteAllText(Path.Combine(root, "Huge.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+                "<TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(root, rel), sb.ToString());
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            using var semantic = new SemanticService(manager);
+            manager.Start();
+            for (int i = 0; i < 100 && !manager.IsQueryable; i++) Thread.Sleep(50);
+            Assert.True(manager.IsQueryable);
+            var tools = new NavigationTools(manager, semantic);
 
-            string raw = _tools.Outline(rel, depth: 2);
+            string raw = tools.Outline(rel, depth: 2);
             Assert.True(raw.Length <= Json.HardBudgetBytes,
                 $"outline of a 4000-member file was {raw.Length} bytes (cap {Json.HardBudgetBytes})");
             var json = Parse(raw);
@@ -207,9 +219,8 @@ public class Batch1ToolTests : IClassFixture<IndexFixture>, IDisposable
         }
         finally
         {
-            File.Delete(full);
-            using var store = new IndexStore(_fx.DbPath, createNew: false);
-            DeltaRefresher.Refresh(store, _fx.Root, new[] { rel });
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch { /* Windows handles */ }
         }
     }
 
