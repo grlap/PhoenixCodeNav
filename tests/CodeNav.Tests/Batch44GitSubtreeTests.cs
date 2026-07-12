@@ -747,6 +747,54 @@ public sealed class Batch44GitSubtreeTests
     }
 
     [Fact]
+    public void ReviewPackRejectsAnUntrackedContentRewriteAfterItsLastAggregationRead()
+    {
+        string? gitExe = FindGit();
+        if (gitExe is null) return;
+        string root = Directory.CreateTempSubdirectory("codenav-44-final-review-epoch").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(root, ".gitignore"), ".codenav/\n");
+            File.WriteAllText(Path.Combine(root, "App.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(root, "Stable.cs"),
+                "public class StableReviewEpoch44 { }\n");
+            InitRepo(root, gitExe);
+            string head = GitOutput(root, gitExe, "rev-parse HEAD").Trim();
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            using var semantic = new SemanticService(manager);
+            manager.Start();
+            Assert.True(WaitUntil(() =>
+            {
+                if (!manager.IsQueryable) return false;
+                var (currentHead, status) = manager.CurrentHeadCommitEx();
+                return status == "ok" && string.Equals(currentHead, head, StringComparison.Ordinal);
+            }, 20_000), "manager did not attach the expected Git baseline");
+
+            string untracked = Path.Combine(root, "Late.cs");
+            File.WriteAllText(untracked, "public class LateReviewEpoch44 { }\n");
+            var tools = new NavigationTools(manager, semantic)
+            {
+                ReviewBeforeFinalWorkspaceValidationForTest = () => File.WriteAllText(untracked,
+                    "public class RewrittenReviewEpoch44 { }\n"),
+            };
+
+            string json = tools.ReviewPack(baseRef: head, maxBytes: 24576);
+            JsonElement response = Parse(json);
+            Assert.True(response.GetProperty("error").GetString() == "git_worktree_changed",
+                json);
+            Assert.False(response.TryGetProperty("changedFiles", out _), json);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
     public void PlatformPathConversionOnlyRewritesTheActualDirectorySeparator()
     {
         const string unixPath = "Folder/Literal\\Name.cs";

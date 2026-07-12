@@ -820,7 +820,7 @@ public sealed partial class IndexQueries : IDisposable
     public ProjectRow? ProjectByName(string name)
     {
         var rows = Query(
-            "SELECT id, path, name, style, tfms, is_test, load_status FROM projects WHERE name = $n COLLATE NOCASE LIMIT 1",
+            "SELECT id, path, name, style, tfms, is_test, load_status FROM projects WHERE name = $n COLLATE NOCASE ORDER BY path LIMIT 1",
             ReadProject, ("$n", name));
         return rows.Count > 0 ? rows[0] : null;
     }
@@ -1034,50 +1034,100 @@ public sealed partial class IndexQueries : IDisposable
         string esc = EscapeLike(name);
         var projects = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        long afterSymbolId = 0;
+        long afterFileId = 0;
         using var ownedSnapshot = _readSnapshot is null ? _conn.BeginTransaction(deferred: true) : null;
         SqliteTransaction snapshot = ownedSnapshot ?? _readSnapshot!;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var batch = QueryCoreCancellable(snapshot,
+            var fileIds = QueryCoreCancellable(snapshot,
                 """
-                SELECT DISTINCT c.id, c.signature, p.name
-                FROM (
+                SELECT rowid AS fid
+                FROM fts_content
+                WHERE fts_content MATCH $q AND rowid > $after
+                ORDER BY rowid
+                LIMIT $batch
+                """,
+                r => r.GetInt64(0),
+                cancellationToken,
+                ("$q", $"\"{name.Replace("\"", "")}\""),
+                ("$after", afterFileId),
+                ("$batch", CandidateDiscoveryBatchSize));
+            if (fileIds.Count == 0) break;
+            afterFileId = fileIds[^1];
+
+            string fileParameters = string.Join(",", fileIds.Select((_, i) => $"$f{i}"));
+            var qualifyingFileIds = new HashSet<long>();
+            long afterSymbolId = 0;
+            while (true)
+            {
+                var args = fileIds.Select((fileId, i) => ($"$f{i}", (object)fileId)).ToList();
+                args.Add(("$n", name));
+                args.Add(("$pat", $"%: %{esc}%"));
+                args.Add(("$afterSymbol", afterSymbolId));
+                args.Add(("$batch", CandidateDiscoveryBatchSize));
+                var symbols = QueryCoreCancellable(snapshot,
+                    $"""
                     SELECT s.id, s.file_id, s.signature
                     FROM symbols s
-                    WHERE s.kind IN ('class','struct','record','record_struct')
+                    WHERE s.file_id IN ({fileParameters})
+                      AND s.id > $afterSymbol
+                      AND s.kind IN ('class','struct','record','record_struct')
                       AND s.name <> $n
                       AND s.signature LIKE $pat ESCAPE '\'
-                      AND s.id > $after
                     ORDER BY s.id
                     LIMIT $batch
-                ) c
-                LEFT JOIN compile_items ci ON ci.file_id = c.file_id
-                LEFT JOIN projects p ON p.id = ci.project_id
-                ORDER BY c.id, p.name COLLATE NOCASE
-                """,
-                r => (Id: r.GetInt64(0), Signature: r.GetString(1),
-                    Project: r.IsDBNull(2) ? null : r.GetString(2)),
-                cancellationToken,
-                ("$n", name), ("$pat", $"%: %{esc}%"), ("$after", afterSymbolId),
-                ("$batch", CandidateDiscoveryBatchSize));
-            if (batch.Count == 0) break;
-            afterSymbolId = batch[^1].Id;
-            foreach (var candidate in batch)
-            {
-                if (candidate.Project is not null &&
-                    ContainsWholeToken(candidate.Signature, name) &&
-                    seen.Add(candidate.Project))
+                    """,
+                    r => (SymbolId: r.GetInt64(0), FileId: r.GetInt64(1), Signature: r.GetString(2)),
+                    cancellationToken,
+                    args.ToArray());
+                if (symbols.Count == 0) break;
+                afterSymbolId = symbols[^1].SymbolId;
+                foreach (var symbol in symbols)
                 {
-                    projects.Add(candidate.Project);
+                    if (ContainsWholeToken(symbol.Signature, name))
+                        qualifyingFileIds.Add(symbol.FileId);
+                }
+                if (symbols.Count < CandidateDiscoveryBatchSize) break;
+            }
+
+            if (qualifyingFileIds.Count > 0)
+            {
+                var qualified = qualifyingFileIds.OrderBy(fileId => fileId).ToList();
+                string qualifiedParameters = string.Join(",", qualified.Select((_, i) => $"$qf{i}"));
+                long afterProjectId = 0;
+                while (true)
+                {
+                    var args = qualified.Select((fileId, i) => ($"$qf{i}", (object)fileId)).ToList();
+                    args.Add(("$afterProject", afterProjectId));
+                    args.Add(("$batch", CandidateDiscoveryBatchSize));
+                    var owners = QueryCoreCancellable(snapshot,
+                        $"""
+                        SELECT DISTINCT p.id, p.name
+                        FROM compile_items ci
+                        JOIN projects p ON p.id = ci.project_id
+                        WHERE ci.file_id IN ({qualifiedParameters})
+                          AND p.id > $afterProject
+                        ORDER BY p.id
+                        LIMIT $batch
+                        """,
+                        r => (ProjectId: r.GetInt64(0), Project: r.GetString(1)),
+                        cancellationToken,
+                        args.ToArray());
+                    if (owners.Count == 0) break;
+                    afterProjectId = owners[^1].ProjectId;
+                    foreach (var owner in owners)
+                    {
+                        if (seen.Add(owner.Project)) projects.Add(owner.Project);
+                    }
+                    if (owners.Count < CandidateDiscoveryBatchSize) break;
                 }
             }
+
             cancellationToken.ThrowIfCancellationRequested();
-            if (batch.Select(candidate => candidate.Id).Distinct().Count() < CandidateDiscoveryBatchSize)
-                break;
+            if (fileIds.Count < CandidateDiscoveryBatchSize) break;
         }
-        return projects;
+        return projects.OrderBy(project => project, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     /// <summary>Project name → is-test flag for the whole workspace (small).</summary>

@@ -17,6 +17,7 @@ public sealed partial class NavigationTools
 {
     internal const int CapabilityDynamicTextBytes = 1024;
     internal const int CapabilityIdentityTextBytes = 96;
+    internal const int CapabilityGrowthReserveBytes = 2 * 1024;
 
     private readonly IndexManager _manager;
     private readonly SemanticService _semantic;
@@ -28,6 +29,15 @@ public sealed partial class NavigationTools
     }
 
     private static readonly string[] TypeKinds = { "class", "interface", "struct", "record", "record_struct", "enum", "delegate" };
+
+    private sealed record ImplementationIdentitySelection(
+        SymbolHit Hit,
+        ProjectRow? Owner,
+        string DocumentationCommentId,
+        string? ContainingTypeIdentity,
+        string IdentityKey,
+        string SymbolFingerprint,
+        string DeclarationFingerprint);
 
     // ---------------------------------------------------------------- capabilities / overview
 
@@ -78,6 +88,7 @@ public sealed partial class NavigationTools
                 new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic; confidenceNote only when heuristic (tier meanings live in confidenceModel here); meta.statusNote explains refreshing/stale; meta.build stamps every result meta with version+commit" },
                 new { id = "hierarchy-ranking", summary = "implementations ranks concrete hits first; conditional likelyImplementation names the sole concrete hit and via identifies indirect base derivation. implementations wraps hit metadata; type_hierarchy returns flat symbols" },
                 new { id = "implementer-completeness", summary = "Member fallback exposes implementerCount/omittedImplementers. When identity is compiler-resolved but implementers are indexed, symbolConfidence exact and implementationsConfidence heuristic remain separate; type_hierarchy fallback returns heuristic base-list candidates without compiler-only bases/interfaces" },
+                new { id = "implementations-symbol-identity", summary = "v0.11.9 implementations rejects ambiguous bare type names and linked-file owners; candidates expose arity and assembly-bound idx handles, while symbolId or path+line pins one verified Roslyn identity" },
                 new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (silent when compiled; Include globs expanded, Remove honored — residual gaps: .projitems/props globs/Conditions); repo_overview.orphanedFiles; semantic resolution never targets an uncompiled declaration; impact and context_pack likewise prefer COMPILED declarations for ownership (an orphaned copy sorting first no longer zeroes transitiveDependentProjects)" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is LOGGED, never silent" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
@@ -103,7 +114,7 @@ public sealed partial class NavigationTools
                 new { id = "review-untracked-repository-coverage", summary = "v0.11.1 nested-repository boundary: parent review treats an untracked embedded Git worktree as an atomic excluded path without running child-local helpers, reports bounded coverage.untrackedRepositories, and emits review.untracked_repositories_excluded for child-root follow-up" },
                 new { id = "review-untracked-link-coverage", summary = "v0.11.2 untracked link boundary: Git-reported files reached through a symbolic link or junction are excluded before hashing or review aggregation, reported through bounded coverage.untrackedLinks, and emit review.untracked_links_excluded for target-root follow-up" },
                 new { id = "review-layered-change-refusal", summary = "v0.11.1 layered-change refusal: when independent staged and unstaged manifests contain the same path, review_pack returns git_layered_changes rather than presenting a final-worktree hunk map as coverage of both byte layers" },
-                new { id = "review-snapshot-consistency", summary = "Repeated bounded Git captures compare exact raw patch bytes with typed staged/unstaged/unmerged/untracked manifests; symlink payloads, gitlinks, modes, and tracked bytes must match; snapshot_changed becomes git_worktree_changed with no partial result from different worktree epochs" },
+                new { id = "review-snapshot-consistency", summary = "Repeated bounded Git captures compare exact raw patch bytes with typed staged/unstaged/unmerged/untracked manifests; symlink payloads, gitlinks, modes, tracked bytes, link classification, exact moves, and bounded live project evidence are revalidated after aggregation; snapshot_changed becomes git_worktree_changed with no partial result from different worktree epochs" },
                 new { id = "review-git-launcher-isolation", summary = "Only canonical absolute paths and trusted system cmd.exe launch Git; batch percent expansion is refused, and a missing or non-directory working directory fails before spawn" },
                 new { id = "review-git-transport-isolation", summary = "v0.11.2 Git transport isolation: the highest-precedence GIT_ALLOW_PROTOCOL denylist plus the protocol.allow=never fallback keep read-only plumbing local even when protocol-specific repository config attempts to enable a transport" },
                 new { id = "review-git-environment-isolation", summary = "v0.11.4 clears inherited repository/object/index selectors (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_ALTERNATE_OBJECT_DIRECTORIES) before discovery; the sandbox reinstates only validated paths" },
@@ -135,7 +146,8 @@ public sealed partial class NavigationTools
                 new { id = "worktree-index-lease", summary = "A cross-process ownership lease guards every writable Phoenix index lifetime; index_worktree returns worktree_index_locked while another Phoenix owns that target" },
                 new { id = "worktree-response-budget", summary = "worktrees may trim every item to zero, and index_worktree UTF-8-bounds reflected paths/details with truncation metadata before enforcing the complete hardBytes envelope" },
                 new { id = "index-read-followers", summary = "Windows writer/followers; rebuild drains readers; modes writer|follower|unavailable; index_writer_required" },
-                new { id = "semantic-large-repo-budget", summary = "default all candidates; positive maxProjects bounds" },
+                new { id = "semantic-large-repo-budget", summary = "Semantic scans default to 128 optional candidate projects; maxProjects 0 loads every candidate and positive values have no fixed maximum; mandatory owner dependencies do not consume the budget" },
+                new { id = "semantic-candidate-budget-coverage", summary = "coverage.candidateProjects reports the complete optional candidate set before selection and candidateProjectBudget reports the applied bound; unbounded maxProjects 0 omits the bound" },
                 new { id = "semantic-rebuild-coordination", summary = "semantic loads drain; rebuild resumes after readers" },
                 new { id = "related-tests-signal", summary = "related_tests / impact / context_pack test groups carry 'signal' — the strongest usage shape among sampled mention lines: callSite > typeUsage > nameMention. A heuristic lead-strength label, not a compiler fact; omitted on naming-convention / project-reference groups and on an ungraded mention group — absent means UNGRADED, never nameMention. Samples carry the real mention line + text when located" },
             },
@@ -196,7 +208,7 @@ public sealed partial class NavigationTools
                 workspaceRootTruncated = workspaceRootTruncated ? true : (bool?)null,
                 workspaceRootBytes,
             },
-        });
+        }, minimumRemainingBytes: CapabilityGrowthReserveBytes);
     }
 
     private static string? CapabilityText(string? value, int maxBytes,
@@ -978,7 +990,7 @@ public sealed partial class NavigationTools
         return Json.WithListBudget(hits, (items, truncated) => new
         {
             matchMode = effectiveMatch,
-            symbols = items.Select(SymbolJson),
+            symbols = items.Select(item => SymbolJson(item, q)),
             // Carry the resolved mode so a later page continues it (bug cli); resume at the returned
             // count so a byte-budget shrink doesn't skip the dropped tail (bug e2q).
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}:{effectiveMatch}" : null,
@@ -1009,7 +1021,7 @@ public sealed partial class NavigationTools
             path,
             line,
             found = chain.Count > 0,
-            chain = chain.Select(SymbolJson),
+            chain = chain.Select(item => SymbolJson(item, q)),
             owningProjects = projects.Select(p => new { p.Name, p.Path, p.Style, p.IsTest }),
             meta = Meta.From(_manager.Health(), "indexed", "syntax"),
         });
@@ -1135,7 +1147,7 @@ public sealed partial class NavigationTools
         string Build(object? body) => Json.WithListBudget(hits, (items, truncated) => new
         {
             name = lookupName,
-            declarations = items.Select(SymbolJson),
+            declarations = items.Select(item => SymbolJson(item, q)),
             body,
             partialReason = failReason,
             hint = items.Count == 0
@@ -1240,19 +1252,141 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "implementations")]
-    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to base-list name matching (confidence 'heuristic', unranked). For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead.")]
+    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). Ambiguous bare type names return symbol_ambiguous candidates; select one with symbolId or path+line. A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to base-list name matching (confidence 'heuristic', unranked). For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead.")]
     public string Implementations(
         [Description("Interface/type/member name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration or a usage (position mode).")] string? path = null,
         [Description("1-based line for position mode.")] int line = 0,
         [Description("1-based column for position mode (optional).")] int column = 0,
-        [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
-        [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000)
+        [Description("Candidate-project budget (default 128); 0 loads all matching projects; positive values have no fixed maximum.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
+        [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000,
+        [Description("Resolve by a current implementations candidate's idx: handle instead of an ambiguous bare name or linked-file owner. Takes precedence over name and path+line; owner-bound handles are accepted only by implementations.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        ImplementationIdentitySelection? selectedIdentity = null;
+        SemanticTargetIdentity? positionOwnerIdentity = null;
+        if (symbolId is { Length: > 0 })
+        {
+            var (hit, selection, error) = ResolveImplementationSymbolIdHandle(symbolId);
+            if (error is not null) return error;
+            name = hit!.Name;
+            path = hit.FilePath;
+            line = hit.StartLine;
+            column = 0;
+            selectedIdentity = selection;
+        }
         if (name is null && (path is null || line <= 0))
         {
-            return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
+            return Json.Serialize(new { error = "bad_request", detail = "Provide 'symbolId', 'name', or 'path'+'line'." });
+        }
+
+        // A bare C# type name is not an identity. ICache, ICache<TKey,TValue>, and two ICache
+        // declarations in different namespaces are distinct symbols even though the name index
+        // intentionally returns all of them. Never let ResolveSemanticTarget's deterministic
+        // first-hit ordering silently turn that ambiguity into an "exact" answer. Partial
+        // declarations collapse only when documentation identity, ancestor arity, declaration key,
+        // and owning project assembly all agree.
+        if (string.IsNullOrEmpty(symbolId) && path is null && name is { Length: > 0 } bareName)
+        {
+            using var identityQueries = _manager.OpenQueries();
+            var typeHits = identityQueries.SearchSymbols(
+                bareName,
+                "exact",
+                new[] { "interface", "class", "struct", "record", "record_struct" },
+                101,
+                includeGenerated: true);
+            bool identitySearchTruncated = typeHits.Count >= 101;
+            if (typeHits.Count > 0)
+            {
+                var orphaned = identityQueries.OrphanedPaths(typeHits
+                    .Select(hit => hit.FilePath)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList());
+                var compiled = typeHits.Where(hit => !orphaned.Contains(hit.FilePath)).ToList();
+                if (compiled.Count > 0) typeHits = compiled;
+            }
+
+            var identities = BuildImplementationIdentitySelections(identityQueries, typeHits);
+            if (identities.Count > 1 || identitySearchTruncated)
+            {
+                return ImplementationAmbiguityResponse(bareName, identities,
+                    identitySearchTruncated);
+            }
+
+            // One logical type identity may have several partial/generated declaration rows. Pin
+            // the semantic request to the chosen declaration rather than asking the shared resolver
+            // to choose from the unfiltered simple-name hit set again.
+            if (identities.Count == 1)
+            {
+                selectedIdentity = identities[0];
+                SymbolHit selected = selectedIdentity.Hit;
+                path = selected.FilePath;
+                line = selected.StartLine;
+                column = 0;
+            }
+        }
+
+        // Position mode can still be ambiguous when two declarations share a line or one file is
+        // linked into several project compilations. The index is used only to detect that ambiguity
+        // and pin the owning DOCUMENT; Roslyn must resolve the actual token. Treating every indexed
+        // type span that contains the line as the target can select a same-named enclosing type at a
+        // usage site.
+        if (selectedIdentity is null && string.IsNullOrEmpty(symbolId) &&
+            path is { Length: > 0 } selectedPath && line > 0)
+        {
+            using var positionQueries = _manager.OpenQueries();
+            string normalizedPath = NormalizePath(selectedPath);
+            string? selectedName = name is { Length: > 0 } value ? value : null;
+            var positionHits = positionQueries.SymbolsIntersecting(
+                    normalizedPath, [(line, line)])
+                .Where(hit => hit.StartLine == line &&
+                              TypeKinds.Contains(hit.Kind, StringComparer.Ordinal) &&
+                              (selectedName is null || string.Equals(hit.Name, selectedName,
+                                  StringComparison.Ordinal)))
+                .ToList();
+            var positionIdentities = BuildImplementationIdentitySelections(
+                positionQueries, positionHits);
+            if (positionIdentities.Count > 1)
+            {
+                ProjectRow[] owners = positionIdentities.Select(identity => identity.Owner)
+                    .Where(owner => owner is not null).Cast<ProjectRow>()
+                    .DistinctBy(owner => owner.Path, StringComparer.Ordinal).ToArray();
+                if (column > 0 && owners.Length == 1)
+                {
+                    positionOwnerIdentity = new SemanticTargetIdentity(
+                        DocumentationCommentId: null, owners[0].Name, owners[0].Path,
+                        RequireSymbolAssemblyMatch: false);
+                }
+                else
+                {
+                    return ImplementationAmbiguityResponse(
+                        selectedName ?? positionIdentities[0].Hit.Name,
+                        positionIdentities, searchTruncated: false);
+                }
+            }
+            else if (positionIdentities.Count == 1 &&
+                     positionIdentities[0].Owner is { } declarationOwner)
+            {
+                positionOwnerIdentity = new SemanticTargetIdentity(
+                    DocumentationCommentId: null, declarationOwner.Name, declarationOwner.Path,
+                    RequireSymbolAssemblyMatch: false);
+            }
+            else if (positionIdentities.Count == 0)
+            {
+                ProjectRow[] owners = positionQueries.ProjectsContaining(normalizedPath)
+                    .DistinctBy(owner => owner.Path, StringComparer.Ordinal)
+                    .OrderBy(owner => owner.Path, StringComparer.Ordinal)
+                    .ToArray();
+                if (owners.Length > 1)
+                    return ImplementationOwnerAmbiguityResponse(
+                        selectedName, normalizedPath, line, owners);
+                if (owners.Length == 1)
+                {
+                    positionOwnerIdentity = new SemanticTargetIdentity(
+                        DocumentationCommentId: null, owners[0].Name, owners[0].Path,
+                        RequireSymbolAssemblyMatch: false);
+                }
+            }
         }
 
         string? failReason = null;
@@ -1261,14 +1395,23 @@ public sealed partial class NavigationTools
         // mixed-section honesty (symbol exact, list heuristic), mirroring type_hierarchy's
         // derivedConfidence split.
         SemanticDeclaration? resolvedSymbol = null;
+        SemanticImplementations? semanticResult = null;
         int deadlineMs = Math.Clamp(timeoutMs, 500, 120000); // mirror the service clamp (24n)
         var swSem = System.Diagnostics.Stopwatch.StartNew();
         var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column);
         if (target is { } t)
         {
+            SemanticTargetIdentity? semanticTargetIdentity = selectedIdentity is { Owner: not null }
+                ? new SemanticTargetIdentity(
+                    selectedIdentity.DocumentationCommentId,
+                    selectedIdentity.Owner.Name,
+                    selectedIdentity.Owner.Path)
+                : positionOwnerIdentity;
             var (result, reason) = _semantic
-                .ImplementationsAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
+                .ImplementationsAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs,
+                    semanticTargetIdentity)
                 .GetAwaiter().GetResult();
+            semanticResult = result;
             resolvedSymbol = result?.Symbol;
             if (result is { Implementations.Count: > 0 })
             {
@@ -1332,6 +1475,11 @@ public sealed partial class NavigationTools
                     : "no_semantic_implementers";
         }
 
+        bool semanticCoverageBounded = semanticResult is not null &&
+            (semanticResult.SkippedCandidateProjects.Count > 0 ||
+             semanticResult.Coverage.FailedProjects.Count > 0 ||
+             semanticResult.Coverage.LoadedProjects < semanticResult.Coverage.RequestedProjects);
+
         // Heuristic fallback: types whose base list textually mentions the name — a naming
         // guess, not a compiler fact, so it is labeled confidence 'heuristic'.
         using var q = _manager.OpenQueries();
@@ -1387,7 +1535,9 @@ public sealed partial class NavigationTools
                 // without this override) is legitimately omitted — say how many, so the caller knows.
                 int matchedTypes = memberImpls.Select(m => (m.Ns ?? "", m.Container ?? "")).Distinct().Count();
                 int omitted = Math.Max(0, implementerCount - matchedTypes);
-                return Json.WithListBudget(memberImpls, (items, truncated) => new
+                return Json.WithAuxiliaryListBudget(memberImpls,
+                    semanticResult?.SkippedCandidateProjects ?? [],
+                    (items, truncated, skippedItems, skippedTruncated) => new
                 {
                     name = lookupName,
                     declaringType = targetSym!.Container,
@@ -1397,8 +1547,21 @@ public sealed partial class NavigationTools
                     implementationsConfidence = resolvedSymbol is not null ? "heuristic" : null,
                     implementerCount,
                     omittedImplementers = omitted > 0 ? omitted : (int?)null,
-                    implementations = items.Select(SymbolJson),
-                    partialReason = "member_scoped_syntactic",
+                    implementations = items.Select(item => SymbolJson(item, q)),
+                    coverage = semanticResult is not null
+                        ? CoverageJson(semanticResult.Coverage)
+                        : null,
+                    skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
+                    skippedCandidateProjectCount = semanticResult is
+                        { SkippedCandidateProjects.Count: > 0 }
+                        ? semanticResult.SkippedCandidateProjects.Count
+                        : (int?)null,
+                    skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+                    partial = semanticCoverageBounded ? true : (bool?)null,
+                    partialReason = semanticCoverageBounded
+                        ? $"candidate_cluster_bounded: skipped {semanticResult!.SkippedCandidateProjects.Count} candidate projects and {semanticResult.Coverage.FailedProjects.Count} failed loads (raise maxProjects)"
+                        : "member_scoped_syntactic",
+                    fallbackReason = "member_scoped_syntactic",
                     note = $"Same-named members of the syntactic implementers of {targetSym!.Container} (confidence heuristic — compiler-exact override resolution found none, likely a type-twin identity mismatch)."
                         + (omitted > 0 ? $" {omitted} of {implementerCount} implementer(s) declare no such member and were omitted." : "")
                         + " Verify with source_context.",
@@ -1408,13 +1571,28 @@ public sealed partial class NavigationTools
             }
             // Nothing to scope to — honest empty + the recovery note. Policy reason, not the transient
             // semantic one: the type-only heuristic won't help on retry.
-            return Json.Serialize(new
+            return Json.WithAuxiliaryListBudget(new List<SymbolHit>(),
+                semanticResult?.SkippedCandidateProjects ?? [],
+                (items, _, skippedItems, skippedTruncated) => new
             {
                 name = lookupName,
                 symbol = resolvedSymbol is not null ? SemanticSymbolJson(resolvedSymbol) : null,
                 symbolConfidence = resolvedSymbol is not null ? "exact" : null,
-                implementations = Array.Empty<object>(),
-                partialReason = "member_fallback_type_scoped",
+                implementations = items.Select(item => SymbolJson(item, q)),
+                coverage = semanticResult is not null
+                    ? CoverageJson(semanticResult.Coverage)
+                    : null,
+                skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
+                skippedCandidateProjectCount = semanticResult is
+                    { SkippedCandidateProjects.Count: > 0 }
+                    ? semanticResult.SkippedCandidateProjects.Count
+                    : (int?)null,
+                skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+                partial = semanticCoverageBounded ? true : (bool?)null,
+                partialReason = semanticCoverageBounded
+                    ? $"candidate_cluster_bounded: skipped {semanticResult!.SkippedCandidateProjects.Count} candidate projects and {semanticResult.Coverage.FailedProjects.Count} failed loads (raise maxProjects)"
+                    : "member_fallback_type_scoped",
+                fallbackReason = "member_fallback_type_scoped",
                 semanticReason = failReason, // why the exact path returned nothing (context, not actionable)
                 note = "No compiler-exact member implementations in the loaded cluster (possibly a type-twin identity mismatch), and no same-named member found in the declaring type's implementers. Run implementations on the declaring interface/type, then read this member in each implementer.",
                 meta,
@@ -1422,7 +1600,9 @@ public sealed partial class NavigationTools
         }
 
         var heuristic = q.ImplementationCandidates(lookupName, 50);
-        return Json.WithListBudget(heuristic, (items, truncated) => new
+        return Json.WithAuxiliaryListBudget(heuristic,
+            semanticResult?.SkippedCandidateProjects ?? [],
+            (items, truncated, skippedItems, skippedTruncated) => new
         {
             name = lookupName,
             // dve (b): mixed-section honesty, mirroring type_hierarchy.derivedConfidence — the
@@ -1432,8 +1612,17 @@ public sealed partial class NavigationTools
             symbol = resolvedSymbol is not null ? SemanticSymbolJson(resolvedSymbol) : null,
             symbolConfidence = resolvedSymbol is not null ? "exact" : null,
             implementationsConfidence = resolvedSymbol is not null ? "heuristic" : null,
-            implementations = items.Select(SymbolJson),
-            partialReason = failReason ?? "semantic_unavailable",
+            implementations = items.Select(item => SymbolJson(item, q)),
+            coverage = semanticResult is not null ? CoverageJson(semanticResult.Coverage) : null,
+            skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
+            skippedCandidateProjectCount = semanticResult is { SkippedCandidateProjects.Count: > 0 }
+                ? semanticResult.SkippedCandidateProjects.Count
+                : (int?)null,
+            skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+            partial = semanticCoverageBounded ? true : (bool?)null,
+            partialReason = semanticCoverageBounded
+                ? $"candidate_cluster_bounded: skipped {semanticResult!.SkippedCandidateProjects.Count} candidate projects and {semanticResult.Coverage.FailedProjects.Count} failed loads (raise maxProjects)"
+                : failReason ?? "semantic_unavailable",
             note = items.Count > 0 && failReason is "no_semantic_implementers" or "candidate_cluster_bounded"
                 // Field (lhg): the old "declared in more than one assembly / generated twin" wording
                 // went stale once compiled-awareness + assembly-ref edges landed — say what we now
@@ -1460,7 +1649,7 @@ public sealed partial class NavigationTools
         [Description("Restrict candidate paths to this glob (supplying a path filter runs indexed candidates).")] string? pathGlob = null,
         [Description("Exclude candidate paths matching this glob, e.g. '3rdparty/**' (supplying a path filter runs indexed candidates).")] string? excludePath = null,
         [Description("Max candidate files scanned in indexed mode (default 500).")] int maxFiles = 500,
-        [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
+        [Description("Candidate-project budget (default 128); 0 loads all matching projects; positive values have no fixed maximum.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
         [Description("Sample lines per project group (default 3).")] int samplesPerGroup = 3,
         [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000,
         [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex; a documentationCommentId is not yet accepted here.")] string? symbolId = null)
@@ -1546,9 +1735,16 @@ public sealed partial class NavigationTools
                         }
                     }
                     bool exhausted = result.DeadlineExhausted;
-                    bool partial = exhausted || result.SkippedCandidateProjects.Count > 0 || result.Coverage.FailedProjects.Count > 0;
-                    // "at least": exhausted counts are a salvaged lower bound (24n), never the census.
-                    string atLeast = exhausted ? "at least " : "";
+                    int missingProjectLoads = Math.Max(0,
+                        result.Coverage.RequestedProjects - result.Coverage.LoadedProjects);
+                    bool totalIsLowerBound = exhausted || coverageBounded;
+                    bool partial = totalIsLowerBound;
+                    // Deadline and candidate/load bounds all leave a salvaged lower bound, never a
+                    // census. Keep the prose and the machine-readable marker driven by one condition.
+                    string atLeast = totalIsLowerBound ? "at least " : "";
+                    string candidateCoverageReason =
+                        $"candidate_cluster_bounded: skipped {result.SkippedCandidateProjects.Count} candidate projects (raise maxProjects), " +
+                        $"{result.Coverage.FailedProjects.Count} failed loads, {missingProjectLoads} requested projects not loaded";
                     var meta0 = Meta.From(_manager.Health(), "exact", "semantic");
                     long elapsedMs = swSem.ElapsedMilliseconds;
                     return Json.WithAuxiliaryListBudget(groups0, result.SkippedCandidateProjects,
@@ -1557,7 +1753,7 @@ public sealed partial class NavigationTools
                         symbol = SemanticSymbolJson(result.Symbol),
                         summary = $"{atLeast}{result.TotalLocations} exact references across {groups0.Count} projects ({mix0}).",
                         totalReferences = result.TotalLocations,
-                        totalIsLowerBound = exhausted ? true : (bool?)null,
+                        totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
                         // HOW the symbol is used, e.g. {"call":20,"xmldoc":480} — the anti-"500 refs
                         // that are mostly doc mentions" signal. Filter with usageKinds.
                         kinds = result.KindCounts is { Count: > 0 } ? result.KindCounts : null,
@@ -1574,10 +1770,8 @@ public sealed partial class NavigationTools
                         partialReason = !partial ? null
                             : exhausted
                                 ? $"deadline exhausted after {elapsedMs}ms of {deadlineMs}ms — counts cover the scanned portion only (raise timeoutMs)"
-                                  + (result.SkippedCandidateProjects.Count > 0 || result.Coverage.FailedProjects.Count > 0
-                                      ? $"; also skipped {result.SkippedCandidateProjects.Count} candidate projects, {result.Coverage.FailedProjects.Count} failed loads"
-                                      : "")
-                                : $"skipped {result.SkippedCandidateProjects.Count} candidate projects (raise maxProjects), {result.Coverage.FailedProjects.Count} failed loads",
+                                  + (coverageBounded ? $"; also {candidateCoverageReason}" : "")
+                                : candidateCoverageReason,
                         skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
                         skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
                             ? result.SkippedCandidateProjects.Count
@@ -1826,6 +2020,194 @@ public sealed partial class NavigationTools
         return ((best.FilePath, best.StartLine, null), name);
     }
 
+    private List<ImplementationIdentitySelection> BuildImplementationIdentitySelections(
+        IndexQueries queries, IEnumerable<SymbolHit> hits)
+    {
+        var expanded = new List<ImplementationIdentitySelection>();
+        foreach (SymbolHit hit in hits)
+        {
+            if (!TypeKinds.Contains(hit.Kind, StringComparer.Ordinal)) continue;
+            List<SymbolHit> ancestors = IndexedAncestors(queries, hit);
+            (string documentationId, string? containingIdentity) =
+                IndexedTypeDocumentationIdentity(hit, ancestors);
+            string symbolFingerprint = Fingerprint(hit, ancestors);
+            string declarationFingerprint = IdentityFingerprint(
+                string.Join('\u001f', symbolFingerprint, documentationId));
+            List<ProjectRow> owners = queries.ProjectsContaining(hit.FilePath);
+            if (owners.Count == 0)
+            {
+                string key = ImplementationIdentityKey(hit, documentationId, owner: null);
+                expanded.Add(new ImplementationIdentitySelection(hit, null, documentationId,
+                    containingIdentity, key, symbolFingerprint, declarationFingerprint));
+                continue;
+            }
+
+            foreach (ProjectRow owner in owners)
+            {
+                string key = ImplementationIdentityKey(hit, documentationId, owner);
+                expanded.Add(new ImplementationIdentitySelection(hit, owner, documentationId,
+                    containingIdentity, key, symbolFingerprint, declarationFingerprint));
+            }
+        }
+
+        return expanded
+            .GroupBy(selection => selection.IdentityKey, StringComparer.Ordinal)
+            .Select(group => group
+                .OrderBy(selection => selection.Hit.FileIsGenerated)
+                .ThenBy(selection => selection.Hit.FilePath, StringComparer.Ordinal)
+                .ThenBy(selection => selection.Hit.StartLine)
+                .ThenBy(selection => selection.Owner?.Path, StringComparer.Ordinal)
+                .First())
+            .OrderBy(selection => selection.Hit.Ns, StringComparer.Ordinal)
+            .ThenBy(selection => selection.ContainingTypeIdentity, StringComparer.Ordinal)
+            .ThenBy(selection => selection.Hit.Arity)
+            .ThenBy(selection => selection.Hit.Kind, StringComparer.Ordinal)
+            .ThenBy(selection => selection.Owner?.Path, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static List<SymbolHit> IndexedAncestors(IndexQueries queries, SymbolHit hit)
+    {
+        var containingTypes = new Stack<SymbolHit>();
+        long? parentId = hit.ParentId;
+        int guard = 0;
+        while (parentId is { } id && guard++ < 32)
+        {
+            SymbolHit? parent = queries.SymbolById(id);
+            if (parent is null) break;
+            containingTypes.Push(parent);
+            parentId = parent.ParentId;
+        }
+        return containingTypes.ToList();
+    }
+
+    private static (string DocumentationId, string? ContainingTypeIdentity)
+        IndexedTypeDocumentationIdentity(SymbolHit hit, IReadOnlyList<SymbolHit> ancestors)
+    {
+        var metadataNames = ancestors
+            .Where(parent => TypeKinds.Contains(parent.Kind, StringComparer.Ordinal))
+            .Select(TypeMetadataName)
+            .ToList();
+        string? containingIdentity = metadataNames.Count > 0
+            ? string.Join('.', metadataNames)
+            : null;
+        metadataNames.Add(TypeMetadataName(hit));
+        string qualifiedType = string.Join('.', metadataNames);
+        string documentationId = string.IsNullOrEmpty(hit.Ns)
+            ? $"T:{qualifiedType}"
+            : $"T:{hit.Ns}.{qualifiedType}";
+        return (documentationId, containingIdentity);
+    }
+
+    private static string TypeMetadataName(SymbolHit hit) => hit.Arity > 0
+        ? $"{hit.Name}`{hit.Arity}"
+        : hit.Name;
+
+    private static string ImplementationIdentityKey(SymbolHit hit, string documentationId,
+        ProjectRow? owner) => string.Join('\u001f', hit.Kind, documentationId,
+        hit.DeclarationKey ?? hit.Signature,
+        owner?.Name.ToUpperInvariant() ?? "(no-project)");
+
+    private string ImplementationAmbiguityResponse(string name,
+        List<ImplementationIdentitySelection> identities, bool searchTruncated)
+    {
+        var shown = identities.Take(20).ToList();
+        return Json.WithListBudget(shown, (items, byteTruncated) => new
+        {
+            error = "symbol_ambiguous",
+            name,
+            detail = identities.Count > 1
+                ? "The name or source position resolves to multiple C# type identities or owning project assemblies. Select one candidate with symbolId."
+                : "The bounded identity search could not prove this is the only C# type identity. Select the candidate with symbolId or narrow the source position.",
+            candidates = items.Select(ImplementationIdentityCandidateJson),
+            candidateCount = identities.Count,
+            candidateCountIsLowerBound = searchTruncated ? true : (bool?)null,
+            candidatesTruncated = byteTruncated || identities.Count > shown.Count || searchTruncated
+                ? true
+                : (bool?)null,
+            meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+        });
+    }
+
+    private string ImplementationOwnerAmbiguityResponse(string? name, string path, int line,
+        IReadOnlyList<ProjectRow> owners)
+    {
+        var shown = owners.Take(20).ToList();
+        return Json.WithListBudget(shown, (items, byteTruncated) => new
+        {
+            error = "symbol_ambiguous",
+            name,
+            path,
+            line,
+            detail = "The source position belongs to multiple project compilations, so path+line alone cannot identify one Roslyn symbol. Provide the symbol name to receive owner-bound symbolId candidates.",
+            owningProjects = items.Select(owner => new
+            {
+                owningProject = owner.Name,
+                owningProjectPath = owner.Path,
+                assembly = owner.Name,
+            }),
+            candidateCount = owners.Count,
+            candidatesTruncated = byteTruncated || owners.Count > shown.Count ? true : (bool?)null,
+            meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+        });
+    }
+
+    private (SymbolHit? Hit, ImplementationIdentitySelection? Selection, string? Error)
+        ResolveImplementationSymbolIdHandle(string symbolId)
+    {
+        var (hit, error) = ResolveSymbolIdHandle(symbolId, allowOwnerSelector: true);
+        if (error is not null || hit is null) return (hit, null, error);
+        if (!TypeKinds.Contains(hit.Kind, StringComparer.Ordinal)) return (hit, null, null);
+
+        using var queries = _manager.OpenQueries();
+        List<ImplementationIdentitySelection> identities =
+            BuildImplementationIdentitySelections(queries, [hit]);
+        string? implementationFingerprint = ImplementationFingerprintFromHandle(symbolId);
+        if (implementationFingerprint is not null &&
+            !identities.Any(identity => string.Equals(
+                ImplementationDeclarationFingerprint(identity), implementationFingerprint,
+                StringComparison.Ordinal)))
+        {
+            return (hit, null, StaleImplementationHandle(hit.Id,
+                "The containing-type identity changed since the handle was issued. Select a current implementations candidate."));
+        }
+        int ownerMarker = symbolId.IndexOf('@');
+        if (ownerMarker < 0)
+        {
+            if (identities.Count > 1)
+                return (hit, null, ImplementationAmbiguityResponse(hit.Name, identities,
+                    searchTruncated: false));
+            return (hit, identities.SingleOrDefault(), null);
+        }
+
+        string ownerToken = symbolId[(ownerMarker + 1)..];
+        int separator = ownerToken.IndexOf('~');
+        if (separator <= 0 ||
+            !long.TryParse(ownerToken[..separator], out long projectId) ||
+            ownerToken[(separator + 1)..] is not { Length: > 0 } projectFingerprint)
+        {
+            return (hit, null, Json.Serialize(new
+            {
+                error = "bad_request",
+                detail = "The implementations symbolId contains an invalid owning-project selector. Select a current candidate from symbol_ambiguous.",
+            }));
+        }
+
+        ImplementationIdentitySelection? selected = identities.SingleOrDefault(identity =>
+            identity.Owner?.Id == projectId &&
+            string.Equals(ProjectFingerprint(identity.Owner), projectFingerprint,
+                StringComparison.Ordinal));
+        if (selected is null)
+        {
+            return (hit, null, Json.Serialize(new
+            {
+                error = "stale_handle",
+                detail = "The implementations symbolId owning project no longer compiles this declaration. Request current symbol_ambiguous candidates and select again.",
+            }));
+        }
+        return (hit, selected, null);
+    }
+
     // Cap on declaration sites emitted for one symbol. A namespace or heavily-partial type can
     // have hundreds of spans; this bounds the count for tools that serialize it via a plain
     // Serialize (implementations/references/etc.). definition additionally routes its (single)
@@ -1858,10 +2240,12 @@ public sealed partial class NavigationTools
         };
     }
 
-    private static object CoverageJson(ClusterCoverage c) => new
+    internal static object CoverageJson(ClusterCoverage c) => new
     {
         loadedProjects = c.LoadedProjects,
         requestedProjects = c.RequestedProjects,
+        candidateProjects = c.CandidateProjects,
+        candidateProjectBudget = c.CandidateProjectBudget,
         // Field 0.7.0: SymbolFinder scans the WHOLE solution (including projects loaded by earlier
         // calls), so hits can legitimately exceed the requested set — this makes that legible
         // instead of "coverage 1/1 but 8 hits from 8 projects".
@@ -1894,14 +2278,45 @@ public sealed partial class NavigationTools
     /// handle (from any search_symbol / symbol_at / definition result) — index-local, so it changes
     /// on reindex. A documentationCommentId is not yet accepted as an input handle. Returns the hit
     /// on success, or an error-JSON string to hand straight back to the caller.</summary>
-    private (SymbolHit? Hit, string? Error) ResolveSymbolIdHandle(string symbolId)
+    private (SymbolHit? Hit, string? Error) ResolveSymbolIdHandle(string symbolId,
+        bool allowOwnerSelector = false)
     {
         // Handle shape: idx:<rowid>[~<fingerprint>]. The fingerprint is optional so a hand-typed
         // idx:<rowid> still resolves (best-effort, unverified); emitted handles always carry it.
         string body = symbolId.StartsWith("idx:", StringComparison.Ordinal) ? symbolId[4..] : "";
         string? fp = null;
         int tilde = body.IndexOf('~');
-        if (tilde >= 0) { fp = body[(tilde + 1)..]; body = body[..tilde]; }
+        if (tilde >= 0)
+        {
+            fp = body[(tilde + 1)..];
+            body = body[..tilde];
+            int ownerMarker = fp.IndexOf('@');
+            if (ownerMarker >= 0)
+            {
+                if (!allowOwnerSelector)
+                {
+                    return (null, Json.Serialize(new
+                    {
+                        error = "bad_request",
+                        detail = "This idx handle includes an implementations-only owning-project selector. Pass it back to implementations; use a regular search_symbol handle for other tools.",
+                    }));
+                }
+                fp = fp[..ownerMarker];
+            }
+            int implementationMarker = fp.IndexOf('!');
+            if (implementationMarker >= 0)
+            {
+                if (!allowOwnerSelector || implementationMarker == fp.Length - 1)
+                {
+                    return (null, Json.Serialize(new
+                    {
+                        error = "bad_request",
+                        detail = "This idx handle includes an implementations-only declaration-identity selector. Pass it back to implementations; use a regular search_symbol handle for other tools.",
+                    }));
+                }
+                fp = fp[..implementationMarker];
+            }
+        }
         if (body.Length == 0 || !long.TryParse(body, out long id))
         {
             return (null, Json.Serialize(new
@@ -1920,7 +2335,7 @@ public sealed partial class NavigationTools
                 detail = $"No indexed symbol with id {id}. 'idx:' handles are index-local — re-run search_symbol for a current handle.",
             }));
         }
-        if (fp is not null && !string.Equals(fp, Fingerprint(hit), StringComparison.Ordinal))
+        if (fp is not null && !string.Equals(fp, Fingerprint(hit, q), StringComparison.Ordinal))
         {
             // The rowid still exists but now holds a DIFFERENT symbol (a reindex reused it). Refuse
             // rather than return the wrong symbol as if the handle were exact.
@@ -1964,22 +2379,72 @@ public sealed partial class NavigationTools
         project == IndexQueries.NoProjectGroup ? true : null;
 
     /// <summary>Short, stable (cross-process) identity hash of a symbol row — FNV-1a over
-    /// name/kind/line/path. Embedded in the idx: handle so a rowid the index later reuses for a
-    /// different symbol fails the check instead of resolving silently.</summary>
-    private static string Fingerprint(SymbolHit s)
+    /// the complete indexed declaration identity. A reused row cannot silently cross namespace,
+    /// containing-type, arity, or declaration-key boundaries.</summary>
+    private static string Fingerprint(SymbolHit s, IndexQueries queries) =>
+        Fingerprint(s, IndexedAncestors(queries, s));
+
+    private static string Fingerprint(SymbolHit s, IReadOnlyList<SymbolHit> ancestors)
     {
-        string identity = $"{s.Name}{s.Kind}{s.StartLine}{s.FilePath}";
+        string identity = string.Join('\u001d', ancestors
+            .Select(SymbolFingerprintComponent)
+            .Append(SymbolFingerprintComponent(s)));
+        return IdentityFingerprint(identity);
+    }
+
+    private static string SymbolFingerprintComponent(SymbolHit s) =>
+        string.Join('\u001f', s.Name, s.Kind, s.Ns ?? "", s.Container ?? "",
+            s.Arity.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            s.DeclarationKey ?? s.Signature, s.StartLine.ToString(
+                System.Globalization.CultureInfo.InvariantCulture), s.FilePath);
+
+    private static string ProjectFingerprint(ProjectRow project) => IdentityFingerprint(
+        string.Join('\u001f', project.Name, project.Path));
+
+    private static string ImplementationDeclarationFingerprint(
+        ImplementationIdentitySelection selection) => selection.DeclarationFingerprint;
+
+    private static string? ImplementationFingerprintFromHandle(string symbolId)
+    {
+        int marker = symbolId.IndexOf('!');
+        if (marker < 0) return null;
+        int end = symbolId.IndexOf('@', marker + 1);
+        string value = end < 0
+            ? symbolId[(marker + 1)..]
+            : symbolId[(marker + 1)..end];
+        return value.Length == 0 ? null : value;
+    }
+
+    private static string StaleImplementationHandle(long id, string reason) => Json.Serialize(new
+    {
+        error = "stale_handle",
+        detail = $"symbolId 'idx:{id}' no longer identifies the same implementation target. {reason}",
+    });
+
+    private static string IdentityFingerprint(string identity)
+    {
         uint h = 2166136261u;
         foreach (char c in identity) h = (h ^ c) * 16777619u;
         return h.ToString("x8");
     }
 
-    private static object SymbolJson(SymbolHit s) => new
+    private static string SymbolHandle(SymbolHit symbol, IndexQueries queries) =>
+        $"idx:{symbol.Id}~{Fingerprint(symbol, queries)}";
+
+    private static string ImplementationSymbolHandle(ImplementationIdentitySelection selection)
+    {
+        string handle = $"idx:{selection.Hit.Id}~{selection.SymbolFingerprint}!{ImplementationDeclarationFingerprint(selection)}";
+        return selection.Owner is null
+            ? handle
+            : $"{handle}@{selection.Owner.Id}~{ProjectFingerprint(selection.Owner)}";
+    }
+
+    private static object SymbolJson(SymbolHit s, IndexQueries queries) => new
     {
         // idx:<rowid>~<identity fingerprint>. The fingerprint lets a rowid that delta refresh
         // reused/reassigned be DETECTED on the way back in (stale_handle) rather than silently
         // resolving to a different symbol — the id alone is not stable across reindex.
-        symbolId = $"idx:{s.Id}~{Fingerprint(s)}",
+        symbolId = SymbolHandle(s, queries),
         s.Name,
         s.Kind,
         ns = s.Ns,
@@ -2005,6 +2470,30 @@ public sealed partial class NavigationTools
         // props-level globs, and ignored Conditions — near-proof, not absolute proof.
         orphaned = s.IsOrphaned ? true : (bool?)null,
         attributes = s.AttrMarkers,
+    };
+
+    /// <summary>Bounded disambiguation payload for implementations. Arity is deliberately explicit:
+    /// C# permits ICache and ICache&lt;TKey,TValue&gt; in the same namespace, and a simple-name-only
+    /// candidate without arity would force the caller to parse display text to select safely.</summary>
+    private static object ImplementationIdentityCandidateJson(
+        ImplementationIdentitySelection selection) => new
+    {
+        symbolId = ImplementationSymbolHandle(selection),
+        selection.Hit.Name,
+        selection.Hit.Kind,
+        selection.Hit.Arity,
+        ns = selection.Hit.Ns,
+        containingType = selection.Hit.Container,
+        containingTypeIdentity = selection.ContainingTypeIdentity,
+        documentationCommentId = selection.DocumentationCommentId,
+        owningProject = selection.Owner?.Name,
+        owningProjectPath = selection.Owner?.Path,
+        assembly = selection.Owner?.Name,
+        selection.Hit.Signature,
+        path = selection.Hit.FilePath,
+        selection.Hit.StartLine,
+        selection.Hit.EndLine,
+        isGenerated = selection.Hit.FileIsGenerated ? true : (bool?)null,
     };
 
     /// <summary>Parses the stored "get=public;set=private" accessor split into a structured

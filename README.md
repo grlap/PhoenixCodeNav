@@ -193,9 +193,11 @@ Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.Mcp` (serv
   no multi-line patterns.
 - Indexed `references` are whole-identifier text candidates; use `mode="semantic"` (or the
   default auto-upgrade) for compiler-exact results.
-- Semantic scans load all matching candidate projects by default (`maxProjects:0`). A positive
-  `maxProjects` value is an explicit latency/memory tradeoff; bounded responses report the total
-  skipped count and a size-bounded sample.
+- Semantic scans use a 128-project candidate budget by default; `maxProjects:0` explicitly loads
+  every matching project and positive values have no fixed upper ceiling. Candidate discovery
+  completes before selection. Coverage reports the optional candidate count and active bound
+  (omitted for unbounded `maxProjects:0`); bounded reference totals are marked as lower bounds,
+  and bounded responses report the authoritative skipped count and a size-bounded sample.
 - Multi-TFM projects index a single symbol row per declaration (net472-first design).
 - Git awareness covers freshness (indexed vs HEAD commit/branch), not navigation — a
   `recent_changes` tool, `xml_doc`, and `diagnostics` from the brief are not yet implemented.

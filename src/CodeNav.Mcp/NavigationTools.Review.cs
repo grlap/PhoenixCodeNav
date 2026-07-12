@@ -27,6 +27,7 @@ namespace CodeNav.Mcp;
 public sealed partial class NavigationTools
 {
     internal Func<GlobMatchBudget>? ReviewProjectGlobBudgetFactoryForTest;
+    internal Action? ReviewBeforeFinalWorkspaceValidationForTest;
     private const int ReviewMaxFiles = 200;        // changed .cs files mapped to symbols
     private const int ReviewMaxDeletedFiles = 20;  // deleted files re-parsed from the base blob
     private const int ReviewMaxTypesPerDeleted = 5;
@@ -80,6 +81,49 @@ public sealed partial class NavigationTools
     private sealed record ReviewDeletedFile(string Path, List<ReviewFormerSymbol>? FormerTypes,
         int? FormerTypesTotal, bool? FormerTypesTruncated, string? RecoveryStatus = null);
     private sealed record ReviewMovedFile(string From, string To, string Match);
+    private sealed record ReviewFileObservation(int MaxBytes, string? Digest);
+
+    private sealed class ReviewLiveWorkspaceEvidence(string root)
+    {
+        private readonly Dictionary<string, ReviewFileObservation> _reads = new(
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        private readonly Dictionary<string, bool> _existence = new(
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+        public byte[]? ReadBounded(string fullPath, int maxBytes)
+        {
+            byte[]? bytes = GitInfo.ReadBoundedRegularFile(fullPath, maxBytes, root);
+            _reads[fullPath] = new ReviewFileObservation(maxBytes, Digest(bytes));
+            return bytes;
+        }
+
+        public bool Exists(string fullPath)
+        {
+            bool exists = File.Exists(fullPath);
+            _existence[fullPath] = exists;
+            return exists;
+        }
+
+        public bool Validate()
+        {
+            foreach ((string path, ReviewFileObservation observation) in _reads)
+            {
+                byte[]? bytes = GitInfo.ReadBoundedRegularFile(path, observation.MaxBytes, root);
+                if (!string.Equals(observation.Digest, Digest(bytes), StringComparison.Ordinal))
+                    return false;
+            }
+            foreach ((string path, bool existed) in _existence)
+            {
+                if (File.Exists(path) != existed) return false;
+            }
+            return true;
+        }
+
+        private static string? Digest(byte[]? bytes) => bytes is null
+            ? null
+            : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+    }
+
     internal sealed record ReviewProjectShapeSnapshot(List<ProjectRow> Projects,
         Dictionary<long, ParsedProject> Parsed, int RequestedAtLeast, int Attempted, int BytesRead,
         long LoadElapsedMilliseconds, bool ShapeBudgetHit, bool EvaluationIncomplete,
@@ -153,6 +197,16 @@ public sealed partial class NavigationTools
         IndexQueries q = pinnedSnapshot.Queries;
         IndexHealth pinnedIndexHealth = pinnedSnapshot.Health;
         string root = _manager.WorkspaceRoot;
+        var liveWorkspaceEvidence = new ReviewLiveWorkspaceEvidence(root);
+        bool ReviewGitPathExists(string gitPath)
+        {
+            if (!CodeNav.Core.WorkspacePaths.TryResolveGitPathInside(root, gitPath,
+                    out string fullPath) ||
+                CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(root, fullPath))
+                return false;
+            return liveWorkspaceEvidence.Exists(fullPath);
+        }
+        GitInfo.ReviewDiffResult? capturedGitSnapshot = null;
         ReviewProjectShapeSnapshot? cachedProjectShapes = null;
         ReviewProjectShapeSnapshot ProjectShapes()
         {
@@ -163,7 +217,9 @@ public sealed partial class NavigationTools
                 if (projectCountLimited) candidates.RemoveAt(candidates.Count - 1);
                 cachedProjectShapes = LoadProjectShapesBounded(root, candidates,
                     projectCountLimited,
-                    matchBudgetOverride: ReviewProjectGlobBudgetFactoryForTest?.Invoke());
+                    matchBudgetOverride: ReviewProjectGlobBudgetFactoryForTest?.Invoke(),
+                    readBounded: liveWorkspaceEvidence.ReadBounded,
+                    pathExists: liveWorkspaceEvidence.Exists);
             }
             return cachedProjectShapes;
         }
@@ -296,6 +352,7 @@ public sealed partial class NavigationTools
                         maxBytes, Meta.From(pinnedIndexHealth, "indexed", "text"));
             }
             var reviewDiff = GitInfo.ReviewDiff(root, resolvedBase);
+            capturedGitSnapshot = reviewDiff;
             excludedSubmoduleWorktrees = reviewDiff.ExcludedSubmoduleWorktrees;
             excludedUntrackedRepositories = reviewDiff.ExcludedUntrackedRepositories;
             excludedUntrackedLinks = reviewDiff.ExcludedUntrackedLinks;
@@ -327,7 +384,7 @@ public sealed partial class NavigationTools
                     if (f.MovedToPath is not null)
                     {
                         movedFiles.Add(new ReviewMovedFile(f.Path, f.MovedToPath, "exact_blob"));
-                        if (resolvedBase is null || !MovePreservesReviewableCSharp(root,
+                        if (resolvedBase is null || !MovePreservesReviewableCSharp(
                                 f.Path, f.MovedToPath, q, BaseContent, OwnerIds, Outline,
                                 projectShapeChanged))
                         {
@@ -353,11 +410,11 @@ public sealed partial class NavigationTools
             // whole-file (they are entirely new, and files deleted-on-disk stay with `deleted`).
             foreach (var p in untracked)
             {
-                if (!changed.ContainsKey(p) && !deleted.Contains(p, StringComparer.Ordinal)
-                    && CodeNav.Core.WorkspacePaths.TryResolveGitPathInside(root, p,
-                        out string fullPath)
-                    && File.Exists(fullPath) &&
-                    !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(root, fullPath))
+                // ReviewDiff already classified this exact captured path as an ordinary untracked
+                // regular file rather than a nested repository or link escape. Reopening it here
+                // created a post-capture epoch; the final snapshot identity validation below owns
+                // any later disappearance or reclassification.
+                if (!changed.ContainsKey(p) && !deleted.Contains(p, StringComparer.Ordinal))
                 {
                     changed[p] = WholeFile();
                     untrackedCount++;
@@ -643,10 +700,10 @@ public sealed partial class NavigationTools
                                  "record_struct" or "enum" or "delegate")
                          .Take(ReviewMaxTypesPerDeleted))
                 {
-                    List<SymbolHit> survivingDeclarations = FilterExistingReviewDeclarations(root,
-                            path, q.SymbolsByDeclarationIdentity(formerType.Kind,
+                    List<SymbolHit> survivingDeclarations = FilterExistingReviewDeclarations(
+                            path, deleted, q.SymbolsByDeclarationIdentity(formerType.Kind,
                                 formerType.Name, formerType.Namespace, formerType.Container,
-                                formerType.Arity, 17))
+                                formerType.Arity, 17), ReviewGitPathExists)
                         .Take(16).ToList();
                     foreach (string survivingPath in survivingDeclarations
                                  .Select(hit => hit.FilePath)
@@ -789,7 +846,7 @@ public sealed partial class NavigationTools
 
             return (object)new
             {
-                symbol = SymbolJson(h),
+                symbol = SymbolJson(h, q),
                 owningProject = owner,
                 directDependentProjects = owner is null ? null : new
                 {
@@ -844,9 +901,10 @@ public sealed partial class NavigationTools
                 var formerTypes = new List<ReviewFormerSymbol>();
                 foreach (SymbolRow formerType in allFormerTypes.Take(ReviewMaxTypesPerDeleted))
                 {
-                    List<SymbolHit> declarationProbe = FilterExistingReviewDeclarations(root,
-                        path, q.SymbolsByDeclarationIdentity(formerType.Kind, formerType.Name,
-                            formerType.Namespace, formerType.Container, formerType.Arity, 17));
+                    List<SymbolHit> declarationProbe = FilterExistingReviewDeclarations(
+                        path, deleted, q.SymbolsByDeclarationIdentity(formerType.Kind, formerType.Name,
+                            formerType.Namespace, formerType.Container, formerType.Arity, 17),
+                        ReviewGitPathExists);
                     bool declarationsTruncated = declarationProbe.Count > 16;
                     survivingDeclarationsCapHit |= declarationsTruncated;
                     List<SymbolHit> survivingDeclarations = declarationProbe.Take(16).ToList();
@@ -1029,6 +1087,37 @@ public sealed partial class NavigationTools
         {
             notes.Add(new ReviewNote(NoteIds.ReviewProjectShapeIncomplete,
                 "Deleted-path project ownership depends on MSBuild evaluation the raw bounded project model cannot prove; preservation suppression is disabled and extra former evidence may remain."));
+        }
+
+        // No workspace-dependent reads are permitted after this point. Revalidate every bounded
+        // file/existence observation, then recapture the complete Git/link/move identity. Any
+        // mismatch means the accumulated evidence spans more than one workspace epoch, so return
+        // no partial review result.
+        bool workspaceEvidenceStable;
+        try
+        {
+            ReviewBeforeFinalWorkspaceValidationForTest?.Invoke();
+            workspaceEvidenceStable = liveWorkspaceEvidence.Validate();
+        }
+        catch
+        {
+            workspaceEvidenceStable = false;
+        }
+        if (workspaceEvidenceStable && capturedGitSnapshot is not null)
+        {
+            GitInfo.ReviewDiffResult finalGitSnapshot = resolvedBase is null
+                ? new GitInfo.ReviewDiffResult(
+                    new GitInfo.DiffHunksResult("snapshot_changed", null), null, null, [])
+                : GitInfo.ReviewDiff(root, resolvedBase);
+            workspaceEvidenceStable = capturedGitSnapshot.SnapshotIdentity is not null &&
+                string.Equals(capturedGitSnapshot.SnapshotIdentity,
+                    finalGitSnapshot.SnapshotIdentity, StringComparison.Ordinal);
+        }
+        if (!workspaceEvidenceStable)
+        {
+            var (error, detail) = ReviewGitFailure("snapshot_changed");
+            return BoundedReviewError(error, detail, maxBytes,
+                Meta.From(pinnedIndexHealth, "indexed", "text"));
         }
 
         notes.Add(new ReviewNote(NoteIds.ReviewIndexedOnly,
@@ -1436,8 +1525,13 @@ public sealed partial class NavigationTools
 
     internal static ReviewProjectShapeSnapshot LoadProjectShapesBounded(string root,
         IReadOnlyList<ProjectRow> projects, bool projectCountLimited = false,
-        GlobMatchBudget? matchBudgetOverride = null)
+        GlobMatchBudget? matchBudgetOverride = null,
+        Func<string, int, byte[]?>? readBounded = null,
+        Func<string, bool>? pathExists = null)
     {
+        readBounded ??= (fullPath, maxBytes) =>
+            GitInfo.ReadBoundedRegularFile(fullPath, maxBytes, root);
+        pathExists ??= File.Exists;
         var parsed = new Dictionary<long, ParsedProject>();
         GlobMatchBudget matchBudget = matchBudgetOverride ?? new GlobMatchBudget(
             ReviewMaxProjectGlobSegments, ReviewMaxProjectGlobOperations,
@@ -1476,8 +1570,8 @@ public sealed partial class NavigationTools
             }
 
             attempted++;
-            byte[]? snapshot = GitInfo.ReadBoundedRegularFile(fullPath,
-                Math.Min(ReviewMaxProjectShapePerFileBytes, remainingBytes), root);
+            byte[]? snapshot = readBounded(fullPath,
+                Math.Min(ReviewMaxProjectShapePerFileBytes, remainingBytes));
             if (snapshot is null)
             {
                 budgetHit = true;
@@ -1491,7 +1585,7 @@ public sealed partial class NavigationTools
                 continue;
             }
             if (!shape.CompileOwnershipComplete ||
-                HasImplicitBuildCustomization(root, fullPath))
+                HasImplicitBuildCustomization(root, fullPath, pathExists))
             {
                 evaluationIncomplete = true;
                 continue;
@@ -1506,7 +1600,8 @@ public sealed partial class NavigationTools
             timer.ElapsedMilliseconds, budgetHit, evaluationIncomplete, matchBudget);
     }
 
-    private static bool HasImplicitBuildCustomization(string root, string projectFullPath)
+    private static bool HasImplicitBuildCustomization(string root, string projectFullPath,
+        Func<string, bool> pathExists)
     {
         string normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         string? directory = Path.GetDirectoryName(projectFullPath);
@@ -1517,17 +1612,17 @@ public sealed partial class NavigationTools
             return true;
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory, "Directory.Build.props")) ||
-                File.Exists(Path.Combine(directory, "Directory.Build.targets")) ||
-                File.Exists(Path.Combine(directory, "Directory.Packages.props")) ||
-                File.Exists(Path.Combine(directory, "Directory.Build.rsp")) ||
-                File.Exists(Path.Combine(directory, "MSBuild.rsp")))
+            if (pathExists(Path.Combine(directory, "Directory.Build.props")) ||
+                pathExists(Path.Combine(directory, "Directory.Build.targets")) ||
+                pathExists(Path.Combine(directory, "Directory.Packages.props")) ||
+                pathExists(Path.Combine(directory, "Directory.Build.rsp")) ||
+                pathExists(Path.Combine(directory, "MSBuild.rsp")))
             {
                 return true;
             }
             directory = Path.GetDirectoryName(directory);
         }
-        if (File.Exists(projectFullPath + ".user")) return true;
+        if (pathExists(projectFullPath + ".user")) return true;
         return false;
     }
 
@@ -1671,8 +1766,8 @@ public sealed partial class NavigationTools
         return gaps;
     }
 
-    private static bool MovePreservesReviewableCSharp(string root,
-        string fromPath, string toPath, IndexQueries queries,
+    private static bool MovePreservesReviewableCSharp(string fromPath, string toPath,
+        IndexQueries queries,
         Func<string, string?> baseContent,
         Func<string, HashSet<long>> ownerIds,
         Func<string, List<SymbolHit>> outline,
@@ -1680,14 +1775,10 @@ public sealed partial class NavigationTools
     {
         if (projectShapeChanged ||
             !fromPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
-            !toPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
-            !CodeNav.Core.WorkspacePaths.TryResolveGitPathInside(root, toPath,
-                out string fullPath) ||
-            !File.Exists(fullPath))
+            !toPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
-        if (CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(root, fullPath)) return false;
 
         string? oldContent = baseContent(fromPath);
         if (oldContent is null) return false;
@@ -1725,15 +1816,13 @@ public sealed partial class NavigationTools
     internal static Dictionary<string, List<(int Start, int End)>> NewReviewPathMap() =>
         new(StringComparer.Ordinal);
 
-    internal static bool ReviewGitPathExists(string workspaceRoot, string gitPath) =>
-        CodeNav.Core.WorkspacePaths.TryResolveGitPathInside(workspaceRoot, gitPath,
-            out string fullPath) && File.Exists(fullPath);
-
-    internal static List<SymbolHit> FilterExistingReviewDeclarations(string workspaceRoot,
-        string excludedGitPath, IEnumerable<SymbolHit> candidates) => candidates
+    internal static List<SymbolHit> FilterExistingReviewDeclarations(
+        string excludedGitPath, IReadOnlyCollection<string> capturedDeletedPaths,
+        IEnumerable<SymbolHit> candidates, Func<string, bool> pathExists) => candidates
         .Where(hit => !string.Equals(hit.FilePath, excludedGitPath,
                           StringComparison.Ordinal) &&
-                      ReviewGitPathExists(workspaceRoot, hit.FilePath))
+                      !capturedDeletedPaths.Contains(hit.FilePath, StringComparer.Ordinal) &&
+                      pathExists(hit.FilePath))
         .ToList();
 
     internal static (string Error, string Detail) ReviewGitFailure(string status) =>

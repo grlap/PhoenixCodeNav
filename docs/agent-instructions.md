@@ -35,9 +35,11 @@ Default flow:
 9. Trust `meta.confidence`:
    - `exact` — compiler-verified (Roslyn); safe to act on.
    - `indexed` — index/syntax-backed leads; verify with `source_context` before
-     large edits. `partial: true` or a `partialReason` means coverage was bounded —
-      use `maxProjects: 0` after an explicitly bounded call, raise `timeoutMs`, or narrow the
-      target if completeness matters; Phoenix does not impose a fixed project ceiling.
+      large edits. `partial: true` or a `partialReason` means coverage was bounded —
+       raise `maxProjects` or use `maxProjects: 0` for every candidate after a bounded call, raise
+       `timeoutMs`, or narrow the target if completeness matters; the default is 128 and positive
+       values have no fixed maximum. Treat `totalIsLowerBound:true` reference totals as a floor,
+       not a complete census.
 10. Keep limits small and tighten filters before paging. Fall back to shell `rg` only when
     the server reports `index_building`/`index_unavailable`, the path is outside the
     workspace, or you need true regex matching.

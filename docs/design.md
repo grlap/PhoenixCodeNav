@@ -93,10 +93,12 @@ This is the part designed specifically for net472 enterprise scale.
   see `ReferenceAssemblyLocator`), hint-path/NuGet package dlls, and in-cluster project
   references. This avoids `MSBuildWorkspace.OpenSolutionAsync`, which does not scale to a
   few-thousand-project solution.
-- **Lazy, FTS-scoped clusters.** A reference query loads the declaring project's dependency
-  closure plus every matching FTS-candidate dependent project by default (`maxProjects: 0`).
-  A positive value opts into a bound; bounded responses report the total skipped count and a
-  size-limited sample. Phoenix has no hidden candidate-project ceiling.
+- **Lazy, FTS-scoped clusters.** A reference query always loads the declaring project's dependency
+  closure, then selects up to 128 optional candidate projects by default. `maxProjects: 0` selects
+  all candidates and positive values have no fixed upper ceiling. Complete candidate discovery
+  precedes selection; coverage excludes the mandatory closure from its candidate count, omits the
+  applied bound for unbounded selection, and marks bounded reference totals as lower bounds. Bounded
+  responses report the authoritative skipped count plus a size-limited sample.
 - **One snapshot per operation.** Each op resolves the symbol against, *and* runs
   `SymbolFinder` against, a single pinned `Solution` — so a background reload/eviction can't
   orphan the symbol mid-query (which previously produced empty "exact" results).

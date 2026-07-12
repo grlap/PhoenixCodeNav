@@ -2505,7 +2505,7 @@ public class Batch42Tests
     }
 
     [Fact]
-    public void ReviewSurvivorPathCheckPreservesLiteralBackslashesOnUnix()
+    public void ReviewSurvivorFilterUsesCapturedGitPathsWithLiteralBackslashesOnUnix()
     {
         if (OperatingSystem.IsWindows()) return;
         string root = Path.GetFullPath(
@@ -2523,10 +2523,48 @@ public class Batch42Tests
                 gitPath, false, null);
             var excluded = literal with { Id = 2, FilePath = "Deleted.cs" };
             var missing = literal with { Id = 3, FilePath = "Survivors/Missing.cs" };
-            List<SymbolHit> survivors = NavigationTools.FilterExistingReviewDeclarations(root,
-                "Deleted.cs", [literal, excluded, missing]);
+            List<SymbolHit> survivors = NavigationTools.FilterExistingReviewDeclarations(
+                "Deleted.cs", ["Deleted.cs"],
+                [literal, excluded, missing], Exists);
 
             Assert.Equal(literal, Assert.Single(survivors));
+
+            bool Exists(string path) =>
+                CodeNav.Core.WorkspacePaths.TryResolveGitPathInside(root, path,
+                    out string fullPath) &&
+                !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(root, fullPath) &&
+                File.Exists(fullPath);
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void ReviewSurvivorFilterRejectsMissingPathOutsideDeletionManifest()
+    {
+        string root = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-42-stale-survivor").FullName);
+        try
+        {
+            string directory = Path.Combine(root, "Survivors");
+            Directory.CreateDirectory(directory);
+            const string livePath = "Survivors/Live.cs";
+            File.WriteAllText(Path.Combine(directory, "Live.cs"),
+                "public class LiveSurvivor42 { }\n");
+
+            var live = new SymbolHit(1, "class", "LiveSurvivor42", null,
+                null, "class LiveSurvivor42", "public", 1, 1, false, null,
+                livePath, false, null);
+            var stale = live with { Id = 2, FilePath = "Survivors/Stale.cs" };
+            List<SymbolHit> survivors = NavigationTools.FilterExistingReviewDeclarations(
+                "Deleted.cs", ["Deleted.cs"], [live, stale], Exists);
+
+            Assert.Equal(live, Assert.Single(survivors));
+
+            bool Exists(string path) =>
+                CodeNav.Core.WorkspacePaths.TryResolveGitPathInside(root, path,
+                    out string fullPath) &&
+                !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(root, fullPath) &&
+                File.Exists(fullPath);
         }
         finally { Cleanup(root); }
     }

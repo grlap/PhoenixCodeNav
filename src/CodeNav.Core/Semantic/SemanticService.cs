@@ -47,6 +47,17 @@ public sealed record SemanticReferences(
 /// implements it indirectly (null = implements it directly, or not applicable to the query).</summary>
 public sealed record SemanticImplementation(SemanticDeclaration Declaration, string? Via);
 
+/// <summary>Indexed identity that a compiler-backed operation must preserve while resolving a
+/// source position. The project path disambiguates linked files and same-named project rows; the
+/// documentation id disambiguates same-line and nested-generic declarations inside that project.
+/// Position-only usage resolution can pin the document owner without asserting that the referenced
+/// symbol is declared by that same assembly.</summary>
+public sealed record SemanticTargetIdentity(
+    string? DocumentationCommentId,
+    string AssemblyName,
+    string ProjectPath,
+    bool RequireSymbolAssemblyMatch = true);
+
 public sealed record SemanticImplementations(
     SemanticDeclaration Symbol,
     List<SemanticImplementation> Implementations,   // concrete (instantiable) leaves first, then abstract scaffolding
@@ -65,13 +76,17 @@ public sealed record SemanticImplementations(
 /// </summary>
 public sealed partial class SemanticService : IDisposable
 {
-    // Large-repository default: zero is the public "all matching projects" sentinel. Phoenix does
-    // not silently discard candidate projects; callers that need a latency/memory tradeoff can opt
-    // into one by supplying a positive maxProjects value.
-    public const int DefaultCandidateProjectBudget = 0;
+    // Large-repository default: broad enough to cover the field canary while avoiding an implicit
+    // all-project Roslyn load when callers omit the argument. Positive caller values have no
+    // Phoenix-owned upper ceiling; candidate discovery still completes before this budget applies.
+    public const int DefaultCandidateProjectBudget = 128;
 
-    internal static int NormalizeCandidateProjectBudget(int maxProjects) =>
-        maxProjects == DefaultCandidateProjectBudget ? int.MaxValue : Math.Max(1, maxProjects);
+    internal static int NormalizeCandidateProjectBudget(int maxProjects) => maxProjects switch
+    {
+        0 => int.MaxValue, // Backward-compatible explicit completeness sentinel.
+        < 0 => DefaultCandidateProjectBudget,
+        _ => maxProjects,
+    };
 
     private readonly IndexManager _manager;
     private readonly Action<string> _log;
@@ -328,7 +343,8 @@ public sealed partial class SemanticService : IDisposable
     // ---------------------------------------------------------------- implementations
 
     public async Task<(SemanticImplementations? Result, string? FailReason)> ImplementationsAsync(
-        string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs)
+        string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs,
+        SemanticTargetIdentity? targetIdentity = null)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         bool clusterLoadInProgress = true;
@@ -340,7 +356,8 @@ public sealed partial class SemanticService : IDisposable
             if (indexSnapshot is null) return (null, "index_snapshot_unavailable");
 
             var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
-                path, line, column, nameHint, cts.Token, indexSnapshot.Queries).ConfigureAwait(false);
+                path, line, column, nameHint, cts.Token, indexSnapshot.Queries, targetIdentity)
+                .ConfigureAwait(false);
             clusterLoadInProgress = false;
             if (symbolA is null || owningProject is null) return (null, "symbol_not_resolved");
 
@@ -355,7 +372,8 @@ public sealed partial class SemanticService : IDisposable
             clusterLoadInProgress = true;
             var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
-                indexSnapshot.Queries, cts.Token, implementerSeeds).ConfigureAwait(false);
+                indexSnapshot.Queries, cts.Token, implementerSeeds, targetIdentity)
+                .ConfigureAwait(false);
             clusterLoadInProgress = false;
             clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find
             if (symbol is null) return (null, "symbol_not_resolved_in_scope");
@@ -425,7 +443,7 @@ public sealed partial class SemanticService : IDisposable
     /// </summary>
     private async Task<(Solution? Solution, ISymbol? Symbol, string? OwningProject)> LoadOwnerAndResolveAsync(
         string path, int line, int? column, string? nameHint, CancellationToken ct,
-        IndexQueries? snapshotQueries = null)
+        IndexQueries? snapshotQueries = null, SemanticTargetIdentity? targetIdentity = null)
     {
         string relPath = WorkspacePaths.Normalize(path);
         string owningProject;
@@ -434,7 +452,15 @@ public sealed partial class SemanticService : IDisposable
         {
             var owners = snapshotQueries.ProjectsContaining(relPath);
             if (owners.Count == 0) return (null, null, null);
-            owningProject = (owners.FirstOrDefault(o => !o.IsTest) ?? owners[0]).Name;
+            ProjectRow? selectedOwner = targetIdentity is null
+                ? owners.FirstOrDefault(o => !o.IsTest) ?? owners[0]
+                : owners.SingleOrDefault(o =>
+                    string.Equals(o.Name, targetIdentity.AssemblyName,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(o.Path, targetIdentity.ProjectPath,
+                        StringComparison.Ordinal));
+            if (selectedOwner is null) return (null, null, null);
+            owningProject = selectedOwner.Name;
             closure = snapshotQueries.DependencyClosure(new[] { owningProject });
         }
         else
@@ -442,12 +468,21 @@ public sealed partial class SemanticService : IDisposable
             using var queries = _manager.OpenQueries();
             var owners = queries.ProjectsContaining(relPath);
             if (owners.Count == 0) return (null, null, null);
-            owningProject = (owners.FirstOrDefault(o => !o.IsTest) ?? owners[0]).Name;
+            ProjectRow? selectedOwner = targetIdentity is null
+                ? owners.FirstOrDefault(o => !o.IsTest) ?? owners[0]
+                : owners.SingleOrDefault(o =>
+                    string.Equals(o.Name, targetIdentity.AssemblyName,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(o.Path, targetIdentity.ProjectPath,
+                        StringComparison.Ordinal));
+            if (selectedOwner is null) return (null, null, null);
+            owningProject = selectedOwner.Name;
             closure = queries.DependencyClosure(new[] { owningProject });
         }
 
         var (solution, _) = await Workspace.EnsureLoadedAsync(closure, ct).ConfigureAwait(false);
-        var symbol = await ResolveInSolutionAsync(solution, owningProject, relPath, line, column, nameHint, ct)
+        var symbol = await ResolveInSolutionAsync(solution, owningProject, relPath, line, column,
+                nameHint, ct, targetIdentity)
             .ConfigureAwait(false);
         return (solution, symbol, owningProject);
     }
@@ -458,15 +493,20 @@ public sealed partial class SemanticService : IDisposable
     /// the workspace, so the returned symbol is valid for SymbolFinder on the same snapshot.
     /// </summary>
     private async Task<ISymbol?> ResolveInSolutionAsync(
-        Solution solution, string owningProject, string relPath, int line, int? column, string? nameHint, CancellationToken ct)
+        Solution solution, string owningProject, string relPath, int line, int? column,
+        string? nameHint, CancellationToken ct, SemanticTargetIdentity? targetIdentity = null)
     {
         var project = solution.Projects.FirstOrDefault(p =>
-            string.Equals(p.Name, owningProject, StringComparison.OrdinalIgnoreCase));
+            string.Equals(p.Name, owningProject, StringComparison.OrdinalIgnoreCase) &&
+            (targetIdentity is null ||
+             string.Equals(ToRelPath(p.FilePath ?? ""), targetIdentity.ProjectPath,
+                 StringComparison.Ordinal)));
         if (project is null) return null;
 
         string fullPath = Path.GetFullPath(Path.Combine(_manager.WorkspaceRoot, relPath.Replace('/', Path.DirectorySeparatorChar)));
-        var docId = solution.GetDocumentIdsWithFilePath(fullPath).FirstOrDefault(d => d.ProjectId == project.Id)
-                    ?? solution.GetDocumentIdsWithFilePath(fullPath).FirstOrDefault();
+        var docId = solution.GetDocumentIdsWithFilePath(fullPath).FirstOrDefault(d => d.ProjectId == project.Id);
+        if (docId is null && targetIdentity is null)
+            docId = solution.GetDocumentIdsWithFilePath(fullPath).FirstOrDefault();
         if (docId is null) return null;
         var document = solution.GetDocument(docId);
         if (document is null) return null;
@@ -479,12 +519,41 @@ public sealed partial class SemanticService : IDisposable
         var model = await document.GetSemanticModelAsync(ct).ConfigureAwait(false);
         if (root is null || model is null) return null;
 
+        if (targetIdentity?.DocumentationCommentId is { Length: > 0 } expectedDocumentationId)
+        {
+            Compilation? compilation = await project.GetCompilationAsync(ct).ConfigureAwait(false);
+            ISymbol? exact = compilation is null
+                ? null
+                : DocumentationCommentId.GetFirstSymbolForDeclarationId(
+                    expectedDocumentationId, compilation);
+            if (exact is null ||
+                !string.Equals(exact.GetDocumentationCommentId(),
+                    expectedDocumentationId, StringComparison.Ordinal) ||
+                !string.Equals(exact.ContainingAssembly?.Name,
+                    targetIdentity.AssemblyName, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            bool declaresAtIndexedSite = exact.DeclaringSyntaxReferences.Any(reference =>
+            {
+                if (!string.Equals(ToRelPath(reference.SyntaxTree.FilePath), relPath,
+                        StringComparison.Ordinal)) return false;
+                FileLinePositionSpan span = reference.SyntaxTree.GetLineSpan(reference.Span);
+                int start = span.StartLinePosition.Line + 1;
+                int end = span.EndLinePosition.Line + 1;
+                return line >= start && line <= end;
+            });
+            return declaresAtIndexedSite ? exact : null;
+        }
+
         var token = root.FindToken(position);
         for (SyntaxNode? node = token.Parent; node is not null; node = node.Parent)
         {
             var declared = model.GetDeclaredSymbol(node, ct);
             if (declared is not null &&
-                (nameHint is null || declared.Name.Equals(nameHint, StringComparison.Ordinal)))
+                (nameHint is null || declared.Name.Equals(nameHint, StringComparison.Ordinal)) &&
+                (targetIdentity is null || !targetIdentity.RequireSymbolAssemblyMatch ||
+                 string.Equals(declared.ContainingAssembly?.Name,
+                     targetIdentity.AssemblyName, StringComparison.OrdinalIgnoreCase)))
             {
                 // With a name hint we require an exact name match: the old `token.ValueText ==
                 // declared.Name` fallback accepted a sibling declarator on a multi-variable line
@@ -497,7 +566,14 @@ public sealed partial class SemanticService : IDisposable
             }
         }
 
-        return await SymbolFinder.FindSymbolAtPositionAsync(document, position, ct).ConfigureAwait(false);
+        ISymbol? found = await SymbolFinder.FindSymbolAtPositionAsync(document, position, ct)
+            .ConfigureAwait(false);
+        return found is not null && (targetIdentity is null ||
+            !targetIdentity.RequireSymbolAssemblyMatch ||
+            string.Equals(found.ContainingAssembly?.Name, targetIdentity.AssemblyName,
+                StringComparison.OrdinalIgnoreCase))
+            ? found
+            : null;
     }
 
     private static int ComputePosition(TextLine textLine, int? column, string? nameHint)
@@ -548,15 +624,20 @@ public sealed partial class SemanticService : IDisposable
     private async Task<(Solution Solution, ISymbol? Symbol, ClusterCoverage Coverage, List<string> Skipped, List<string> OutOfGraph)> LoadScanSetAndResolveAsync(
         string symbolName, string owningProject, string path, int line, int? column, string? nameHint,
         int maxProjects, IndexQueries q, CancellationToken ct,
-        IReadOnlyList<string>? prioritySeeds = null)
+        IReadOnlyList<string>? prioritySeeds = null,
+        SemanticTargetIdentity? targetIdentity = null)
     {
         List<string> skipped;
         var outOfGraph = new List<string>();
         HashSet<string> scanSet;
+        int candidateProjectCount;
         {
             var dependents = q.DependentClosure(owningProject);
             dependents.Add(owningProject);
             int budget = NormalizeCandidateProjectBudget(maxProjects);
+            // The declaration project and its dependencies are correctness-mandatory and load
+            // regardless of maxProjects. Do not charge them against the optional candidate budget.
+            HashSet<string> mandatoryScanSet = q.DependencyClosure(new[] { owningProject });
 
             var chosen = new List<string>();
             var chosenSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -568,11 +649,13 @@ public sealed partial class SemanticService : IDisposable
             // otherwise exhaust the budget first, leaving the implementers unloaded).
             var orderedSeeds = (prioritySeeds ?? [])
                 .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(project => project, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             void Consider(string project)
             {
                 if (relevantSet.Add(project)) relevant.Add(project);
+                if (mandatoryScanSet.Contains(project)) return;
                 if (chosen.Count < budget && chosenSet.Add(project)) chosen.Add(project);
             }
 
@@ -601,19 +684,30 @@ public sealed partial class SemanticService : IDisposable
                     !outOfGraph.Contains(project, StringComparer.OrdinalIgnoreCase))
                     outOfGraph.Add(project);
             }
-            scanSet = q.DependencyClosure(new[] { owningProject });
+            scanSet = new HashSet<string>(mandatoryScanSet, StringComparer.OrdinalIgnoreCase);
             foreach (var p in chosen) scanSet.Add(p);
             // The owning project's mandatory dependency closure is loaded regardless of the
             // optional candidate budget. Report only relevant projects absent from the FINAL scan
             // set, otherwise a budget filled by seeds can falsely mark a project that was loaded.
             skipped = relevant.Where(project => !scanSet.Contains(project)).ToList();
+            candidateProjectCount = relevant.Count(project => !mandatoryScanSet.Contains(project));
         }
 
         var (solution, coverage) = await Workspace
             .EnsureLoadedAsync(scanSet, ct, ensureReferenceTo: new[] { owningProject })
             .ConfigureAwait(false);
+        coverage = coverage with
+        {
+            CandidateProjects = candidateProjectCount,
+            // maxProjects:0 is the public unbounded sentinel. Keep the normalized int.MaxValue
+            // implementation detail out of the response contract; null serializes as omission.
+            CandidateProjectBudget = maxProjects == 0
+                ? null
+                : NormalizeCandidateProjectBudget(maxProjects),
+        };
         var symbol = await ResolveInSolutionAsync(
-            solution, owningProject, WorkspacePaths.Normalize(path), line, column, nameHint, ct)
+            solution, owningProject, WorkspacePaths.Normalize(path), line, column, nameHint, ct,
+            targetIdentity)
             .ConfigureAwait(false);
         return (solution, symbol, coverage, skipped, outOfGraph);
     }

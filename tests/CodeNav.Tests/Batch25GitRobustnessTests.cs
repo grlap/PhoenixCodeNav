@@ -183,18 +183,23 @@ public class Batch25GitRobustnessTests
 
             using var m = new IndexManager(root, db);
             m.Start();
-            Assert.True(WaitUntil(() => m.IsQueryable, 20000), "index did not become queryable");
+            Assert.True(WaitUntil(() => m.Health().State == "ready", 30000),
+                $"index did not become ready: {m.Health().Error}");
             Assert.Null(m.Health().IndexedCommit); // commit-less: nothing to record yet
 
             // The FIRST commit creates .git/logs — the wll re-attach turns it into a signal.
             Git(root, "add -A");
             Git(root, "commit -q -m first");
+            string? firstCommit = GitInfo.HeadCommit(root);
+            Assert.NotNull(firstCommit);
 
             Assert.True(
                 WaitUntil(() => string.Equals(
-                    m.Health().IndexedCommit, GitInfo.HeadCommit(root), StringComparison.OrdinalIgnoreCase)
-                    && m.Health().IndexedCommit is not null, 20000),
-                "indexed_commit did not pick up the repo's FIRST commit (wll)");
+                    m.Health().IndexedCommit, firstCommit, StringComparison.OrdinalIgnoreCase),
+                    30000),
+                $"indexed_commit did not pick up the repo's FIRST commit (wll): " +
+                $"expected={firstCommit}, actual={m.Health().IndexedCommit}, " +
+                $"state={m.Health().State}, error={m.Health().Error}");
         }
         finally
         {

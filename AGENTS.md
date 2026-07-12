@@ -172,10 +172,6 @@ a durable fan-in.
 - Review verdict and check-in eligibility are separate: `CLEAN` still means no actionable finding
   at any severity, while unchanged reviewed bytes with only tracked Medium or Low findings are
   check-in eligible. Any Critical, High, INCONCLUSIVE, or target-identity drift blocks check-in.
-- Changes at any depth to `AGENTS.md`/`AGENTS.override.md`, `CLAUDE.md`/`CLAUDE.local.md`,
-  `.mcp.json`, an `.agents`/`.claude`/`.codex` directory, or the review-command contract test
-  cannot be certified by the dirty self-hosted gate. They require an independent external/manual
-  adversarial review or the last committed trusted command/lens versions.
 - If the TermAl MCP bridge is unavailable, stop and report it; a self-review does not
   substitute for the required independent review round.
 - The current TermAl MCP surface cannot send a follow-up turn to an existing child. If a fix

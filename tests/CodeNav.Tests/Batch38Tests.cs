@@ -239,11 +239,16 @@ public class Batch38Tests
             if (!sem.FrameworkRefsAvailable) return; // env guard
             var tools = new NavigationTools(m, sem);
 
-            // The type-twin mismatch: AaCore.IFoo resolves (path-sorted first), ZzOther's Impl
-            // implements ZzOther's OWN IFoo — compiler-exact implementers of AaCore.IFoo is
-            // zero while the base-list index names Impl. The fallback must keep the exact
-            // identity beside the heuristic list.
-            var impls = Parse(tools.Implementations(name: "IFoo", timeoutMs: 90000));
+            // A bare twin name is no longer allowed to select AaCore merely because its path sorts
+            // first. Pin AaCore by declaration position to retain this test's original purpose:
+            // compiler-exact implementers of AaCore.IFoo is zero while the base-list index names
+            // ZzOther.Impl, so the fallback must keep the exact identity beside the heuristic list.
+            var ambiguous = Parse(tools.Implementations(name: "IFoo", timeoutMs: 90000));
+            Assert.Equal("symbol_ambiguous", ambiguous.GetProperty("error").GetString());
+            Assert.Equal(2, ambiguous.GetProperty("candidates").GetArrayLength());
+
+            var impls = Parse(tools.Implementations(
+                name: "IFoo", path: "AaCore/IFoo.cs", line: 3, timeoutMs: 90000));
             Assert.Equal("exact", impls.GetProperty("symbolConfidence").GetString());
             Assert.Contains("IFoo", impls.GetProperty("symbol").GetProperty("display").GetString());
             Assert.Equal("heuristic", impls.GetProperty("implementationsConfidence").GetString());
@@ -282,7 +287,12 @@ public class Batch38Tests
         }
 
         WriteProject(root, "AaCore",
-            ("IFoo.cs", "namespace AaCore { public interface IFoo { void Go(); } }"),
+            ("IFoo.cs", """
+                namespace AaCore
+                {
+                    public interface IFoo { void Go(); }
+                }
+                """),
             ("Dual.cs", "namespace AaCore { public class Dual { } }"));
         WriteProject(root, "ZzOther",
             ("IFoo.cs", "namespace ZzOther { public interface IFoo { void Go(); } }"),

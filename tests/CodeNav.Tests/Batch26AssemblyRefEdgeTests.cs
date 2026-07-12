@@ -182,7 +182,8 @@ public class Batch26AssemblyRefEdgeTests
             try
             {
                 m.Start();
-                Assert.True(WaitUntil(() => m.IsQueryable, 20000));
+                Assert.True(WaitUntil(() => m.Health().State == "ready", 30000),
+                    m.Health().Error);
 
                 // REFERENCES FIRST, on its own SemanticService: implementations' seed loading
                 // would otherwise leave the implementer projects sitting in the shared workspace

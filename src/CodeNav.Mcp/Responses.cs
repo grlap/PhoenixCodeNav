@@ -65,10 +65,13 @@ internal static class Json
     /// non-review summaries are removed first, deterministically; review summaries are retained
     /// preferentially because they are the deploy-verification surface for the safety contract.
     /// The root-level coverage fields make any compaction explicit.</summary>
-    public static string WithCapabilitiesBudget(object envelope)
+    public static string WithCapabilitiesBudget(object envelope, int minimumRemainingBytes = 0)
     {
+        if (minimumRemainingBytes < 0 || minimumRemainingBytes >= HardBudgetBytes)
+            throw new ArgumentOutOfRangeException(nameof(minimumRemainingBytes));
+        int targetBytes = HardBudgetBytes - minimumRemainingBytes;
         string json = Serialize(envelope);
-        if (Utf8Bytes(json) <= HardBudgetBytes) return json;
+        if (Utf8Bytes(json) <= targetBytes) return json;
 
         JsonObject root = JsonNode.Parse(json)?.AsObject()
             ?? throw new InvalidOperationException("Capability envelope did not serialize as an object.");
@@ -98,7 +101,7 @@ internal static class Json
             root["featuresCompacted"] = true;
             root["featureSummariesReturned"] = summariesReturned;
             json = root.ToJsonString(Options);
-            if (Utf8Bytes(json) <= HardBudgetBytes) return json;
+            if (Utf8Bytes(json) <= targetBytes) return json;
         }
 
         // Defensive last resort for future static capability growth. Dynamic health strings are
@@ -113,13 +116,13 @@ internal static class Json
         {
             root.Remove(property);
             json = root.ToJsonString(Options);
-            if (Utf8Bytes(json) <= HardBudgetBytes) return json;
+            if (Utf8Bytes(json) <= targetBytes) return json;
         }
 
         // Every feature object now contains only its singular id. With today's finite manifest
         // this is far below the cap; fail closed during development if that invariant ever changes.
-        if (Utf8Bytes(json) > HardBudgetBytes)
-            throw new InvalidOperationException("Feature ids alone exceed the capability hard budget.");
+        if (Utf8Bytes(json) > targetBytes)
+            throw new InvalidOperationException("Feature ids alone exceed the capability target budget.");
         return json;
     }
 

@@ -21,7 +21,7 @@ public sealed partial class NavigationTools
         [Description("Workspace-relative path of the declaration or a usage.")] string? path = null,
         [Description("1-based line.")] int line = 0,
         [Description("1-based column (optional).")] int column = 0,
-        [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
+        [Description("Candidate-project budget (default 128); 0 loads all matching projects; positive values have no fixed maximum.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
         [Description("Deadline in ms (default 15000).")] int timeoutMs = 15000)
     {
         if (NotReady() is { } notReady) return notReady;
@@ -122,7 +122,7 @@ public sealed partial class NavigationTools
         [Description("Workspace-relative path of the declaration or a usage.")] string? path = null,
         [Description("1-based line.")] int line = 0,
         [Description("1-based column (optional).")] int column = 0,
-        [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
+        [Description("Candidate-project budget (default 128); 0 loads all matching projects; positive values have no fixed maximum.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
         [Description("Deadline in ms (default 15000).")] int timeoutMs = 15000)
     {
         if (NotReady() is { } notReady) return notReady;
@@ -155,19 +155,17 @@ public sealed partial class NavigationTools
             // presented a class as "deriving from" a same-named METHOD. A definitive answer
             // is never overridden by a heuristic sweep.
             string fallbackName = reason is "not_a_type" ? "" : name ?? hint ?? "";
-            List<SymbolHit> candidates = new();
-            if (fallbackName.Length > 0)
-            {
-                using var qf = _manager.OpenQueries();
-                candidates = qf.ImplementationCandidates(fallbackName, 50);
-            }
+            using var qf = _manager.OpenQueries();
+            List<SymbolHit> candidates = fallbackName.Length > 0
+                ? qf.ImplementationCandidates(fallbackName, 50)
+                : new();
             if (candidates.Count > 0)
             {
                 var metaH = Meta.From(_manager.Health(), "heuristic", "syntax");
                 return Json.WithListBudget(candidates, (items, truncated) => new
                 {
                     name = fallbackName,
-                    derivedOrImplementing = items.Select(SymbolJson),
+                    derivedOrImplementing = items.Select(item => SymbolJson(item, qf)),
                     derivedConfidence = "heuristic",
                     noteId = NoteIds.HierarchyHeuristicFallback, // a0b: stable, machine-matchable
                     partialReason = reason,
@@ -220,7 +218,7 @@ public sealed partial class NavigationTools
                     symbol = SemanticSymbolJson(result.Symbol),
                     baseTypes = result.BaseTypes.Select(SemanticSymbolJson),
                     interfaces = result.Interfaces.Select(SemanticSymbolJson),
-                    derivedOrImplementing = items.Select(SymbolJson),
+                    derivedOrImplementing = items.Select(item => SymbolJson(item, q0)),
                     derivedConfidence = "heuristic",
                     noteId = NoteIds.HierarchyHeuristicFallback, // a0b: stable, machine-matchable
                     skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
@@ -504,7 +502,7 @@ public sealed partial class NavigationTools
             name,
             summary = $"{name}: declared in {owner ?? "unknown project"}; {refTotal} candidate references across {refGroups.Count} projects; {tests.Count} related test groups.",
             symbol = semDecl is not null ? SemanticSymbolJson(semDecl) : null,
-            declarations = indexedDecls.Select(SymbolJson),
+            declarations = indexedDecls.Select(item => SymbolJson(item, q)),
             primarySource = dropSource ? null : primarySource,
             references = new
             {
@@ -629,7 +627,7 @@ public sealed partial class NavigationTools
         return Json.Serialize(new
         {
             name,
-            declaration = primary is null ? null : SymbolJson(primary),
+            declaration = primary is null ? null : SymbolJson(primary, q),
             owningProject = owner,
             references = new
             {

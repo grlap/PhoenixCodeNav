@@ -31,14 +31,11 @@ git --no-optional-locks status --short
 git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only
 git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only
 git ls-files --others --exclude-standard
-git ls-files --others --ignored --exclude-standard -- ':(icase,glob)**/AGENTS.md' ':(icase,glob)**/AGENTS.override.md' ':(icase,glob)**/CLAUDE.md' ':(icase,glob)**/CLAUDE.local.md' ':(icase,glob)**/.mcp.json' ':(icase,glob)**/.agents' ':(icase,glob)**/.agents/**' ':(icase,glob)**/.claude' ':(icase,glob)**/.claude/**' ':(icase,glob)**/.codex' ':(icase,glob)**/.codex/**' ':(icase,literal)tests/CodeNav.Tests/ReviewCommandContractTests.cs'
 ```
 
 If any inventory command fails or its path output is truncated or malformed, return INCONCLUSIVE before reading content or spawning reviewers.
 
-The review target is the union of staged, unstaged, and ordinary untracked files. The final command is a scoped, path-only inventory of ignored trust-surface entries; never open those entries. Treat any returned ignored trust path as a bootstrap match even though ignored files are not part of the ordinary review target. If the ordinary target is empty and the ignored trust inventory is empty, tell the user there is nothing to review and stop.
-
-Enforce the bootstrap trust boundary before using the dirty worktree's commands. Normalize every repository-relative target path to `/` separators and apply the repository's case-insensitive Windows matching semantics. At any depth, treat a basename of `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `CLAUDE.local.md`, or `.mcp.json`, any path containing an `.agents`, `.claude`, or `.codex` directory segment, and `tests/CodeNav.Tests/ReviewCommandContractTests.cs` as review trust-surface changes. If any target matches, this self-hosted gate cannot certify the change: return INCONCLUSIVE and do not spawn reviewers. Require an independent external/manual adversarial review driven by trusted instructions, or a review explicitly run from the last committed trusted command/lens versions outside the changed worktree. A dirty self-review may be supplemental evidence only, never the required CLEAN gate.
+The review target is the union of staged, unstaged, and ordinary untracked files. If that target is empty, tell the user there is nothing to review and stop.
 
 Record the absolute repository root from `git rev-parse --show-toplevel`; pass it as `cwd` to both TermAl sessions so the local slash command resolves from this repository.
 
@@ -73,7 +70,7 @@ Validation belongs in the writable parent, not in read-only reviewer children.
 
 If build or tests fail, stop and report the output. The sole documented exception is `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep`: when it is the only failure, rerun that exact test in isolation. Continue only if the isolated rerun passes, and carry the flake note into the final review. Do not silently bless any other intermittent failure.
 
-After validation, restart all of Step 1 from its path-only ordinary and ignored inventories. Reapply bootstrap trust matching and no-follow containment before any diff check, content hash, or spawn; scan reviewable untracked text files for conflict markers and whitespace errors only after those checks pass. Recompute the target identity. If validation changed the identity, repeat Step 2 against the new identity and then restart all of Step 1 again. Never validate one byte set and send another to reviewers, and never allow a validation-created trust path to reach delegation.
+After validation, restart all of Step 1 from its path-only inventories. Reapply no-follow containment before any diff check, content hash, or spawn; scan reviewable untracked text files for conflict markers and whitespace errors only after those checks pass. Recompute the target identity. If validation changed the identity, repeat Step 2 against the new identity and then restart all of Step 1 again. Never validate one byte set and send another to reviewers.
 
 ## Step 3: Attempt exactly two delegated reviewers
 

@@ -387,6 +387,12 @@ public static class GitInfo
         List<string>? ExcludedLinkedPaths = null,
         byte[]? SnapshotDigest = null);
 
+    private sealed record UntrackedFileSnapshot(string Path, byte[] Content);
+
+    private const int ReviewSnapshotMaxUntrackedFiles = 4096;
+    private const int ReviewSnapshotMaxUntrackedFileBytes = 8 * 1024 * 1024;
+    private const int ReviewSnapshotMaxUntrackedAggregateBytes = 32 * 1024 * 1024;
+
     internal static List<string>? DirtyFiles(string workspaceRoot, string? gitExe,
         IReadOnlyDictionary<string, string?>? environmentOverrides = null)
     {
@@ -774,6 +780,12 @@ public static class GitInfo
         /// <summary>True ordinary untracked files only. Dirty remains the compatibility union of
         /// staged, unstaged, unmerged, and untracked paths for reconcile callers.</summary>
         public List<string>? UntrackedFiles { get; init; }
+
+        /// <summary>Stable identity of the exact raw diff, typed dirt manifest, bounded ordinary-
+        /// untracked contents, untracked link/repository classification, and exact-move correlation
+        /// returned by this capture. A higher-level review can recapture after its last live read
+        /// and refuse mixed epochs.</summary>
+        public string? SnapshotIdentity { get; init; }
     }
 
     /// <summary>Hunk-level diff of the WORKING TREE against <paramref name="fromCommit"/>
@@ -914,20 +926,139 @@ public static class GitInfo
             return new ReviewDiffResult(diff, null, coverage,
                 changedSubmoduleLinks, untrackedCoverage, untrackedLinkCoverage);
         }
-        if (dirty.Status == "ok" && diff.Files is not null && dirty.UntrackedFiles is not null)
+        if (dirty.UntrackedFiles is null)
         {
-            CorrelateUntrackedExactMoves(workspaceRoot, diff.Files, dirty.UntrackedFiles,
+            return new ReviewDiffResult(new DiffHunksResult("status_failed", null, coverage),
+                null, coverage, [], untrackedCoverage, untrackedLinkCoverage);
+        }
+        var (untrackedSnapshotStatus, untrackedSnapshots) = CaptureUntrackedContents(
+            workspaceRoot, dirty.UntrackedFiles);
+        if (untrackedSnapshotStatus != "ok" || untrackedSnapshots is null)
+        {
+            return new ReviewDiffResult(
+                new DiffHunksResult(untrackedSnapshotStatus, null, coverage), null, coverage, [],
+                untrackedCoverage, untrackedLinkCoverage);
+        }
+        if (diff.Files is not null)
+        {
+            CorrelateUntrackedExactMoves(diff.Files, untrackedSnapshots,
                 afterUntrackedMoveRead);
+        }
+        string? snapshotIdentity = BuildReviewSnapshotIdentity(diff, dirty, untrackedSnapshots);
+        if (snapshotIdentity is null)
+        {
+            return new ReviewDiffResult(new DiffHunksResult("status_failed", null, coverage),
+                null, coverage, [], untrackedCoverage, untrackedLinkCoverage);
         }
         return new ReviewDiffResult(diff, dirty.Status == "ok" ? dirty.Files : null,
             coverage, changedSubmoduleLinks, untrackedCoverage, untrackedLinkCoverage)
         {
             UntrackedFiles = dirty.Status == "ok" ? dirty.UntrackedFiles : null,
+            SnapshotIdentity = snapshotIdentity,
         };
     }
 
-    private static void CorrelateUntrackedExactMoves(string workspaceRoot, List<DiffFile> files,
-        IReadOnlyList<string> untrackedFiles, Action? afterUntrackedMoveRead = null)
+    /// <summary>Capture every ordinary-untracked file through the anchored no-follow reader. The
+    /// identity must be complete: exceeding any bound is a status failure, while disappearance or
+    /// replacement by a non-regular path is an epoch change.</summary>
+    private static (string Status, List<UntrackedFileSnapshot>? Files) CaptureUntrackedContents(
+        string workspaceRoot, IReadOnlyList<string> untrackedFiles)
+    {
+        try
+        {
+            List<string> paths = untrackedFiles.Distinct(StringComparer.Ordinal)
+                .OrderBy(path => path, StringComparer.Ordinal).ToList();
+            if (paths.Count > ReviewSnapshotMaxUntrackedFiles)
+                return ("status_failed", null);
+
+            var snapshots = new List<UntrackedFileSnapshot>(paths.Count);
+            long aggregateBytes = 0;
+            foreach (string path in paths)
+            {
+                WorkspaceFileReadResult read = ReadBoundedWorkspaceFileResult(workspaceRoot, path,
+                    ReviewSnapshotMaxUntrackedFileBytes);
+                if (read.Disposition is WorkspaceFileReadDisposition.Missing or
+                    WorkspaceFileReadDisposition.DefinitelyNonRegular)
+                {
+                    return ("snapshot_changed", null);
+                }
+                if (read.Disposition != WorkspaceFileReadDisposition.Success || read.Bytes is null)
+                    return ("status_failed", null);
+                aggregateBytes += read.Bytes.Length;
+                if (aggregateBytes > ReviewSnapshotMaxUntrackedAggregateBytes)
+                    return ("status_failed", null);
+                snapshots.Add(new UntrackedFileSnapshot(path, read.Bytes));
+            }
+            return ("ok", snapshots);
+        }
+        catch
+        {
+            return ("status_failed", null);
+        }
+    }
+
+    private static string? BuildReviewSnapshotIdentity(DiffHunksResult diff,
+        DirtyFilesResult dirty, IReadOnlyList<UntrackedFileSnapshot> untrackedSnapshots)
+    {
+        if (diff.RawCaptureDigest is null || dirty.SnapshotDigest is null) return null;
+        try
+        {
+            using IncrementalHash digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            byte[] separator = [0];
+            void Add(string? value)
+            {
+                digest.AppendData(Encoding.UTF8.GetBytes(value ?? ""));
+                digest.AppendData(separator);
+            }
+            void AddBytes(string component, byte[] value)
+            {
+                Add(component);
+                digest.AppendData(value);
+                digest.AppendData(separator);
+            }
+            void AddPaths(string component, IEnumerable<string>? paths)
+            {
+                Add(component);
+                foreach (string path in (paths ?? []).OrderBy(path => path,
+                             StringComparer.Ordinal))
+                    Add(path);
+            }
+
+            AddBytes("raw-diff", diff.RawCaptureDigest);
+            AddBytes("typed-dirt", dirty.SnapshotDigest);
+            Add(dirty.Status);
+            AddPaths("ordinary-untracked", dirty.UntrackedFiles);
+            Add("ordinary-untracked-content");
+            foreach (UntrackedFileSnapshot snapshot in untrackedSnapshots.OrderBy(
+                         snapshot => snapshot.Path, StringComparer.Ordinal))
+            {
+                Add(snapshot.Path);
+                Add(snapshot.Content.Length.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+                AddBytes("sha256", SHA256.HashData(snapshot.Content));
+            }
+            AddPaths("excluded-untracked-repositories", dirty.ExcludedUntrackedRepositories);
+            AddPaths("excluded-untracked-links", dirty.ExcludedLinkedPaths);
+            Add("exact-moves");
+            foreach (DiffFile file in (diff.Files ?? [])
+                         .Where(file => file.MovedFromPath is not null || file.MovedToPath is not null)
+                         .OrderBy(file => file.Path, StringComparer.Ordinal))
+            {
+                Add(file.Path);
+                Add(file.MovedFromPath);
+                Add(file.MovedToPath);
+            }
+            return Convert.ToHexString(digest.GetHashAndReset());
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void CorrelateUntrackedExactMoves(List<DiffFile> files,
+        IReadOnlyList<UntrackedFileSnapshot> untrackedFiles,
+        Action? afterUntrackedMoveRead = null)
     {
         const int maxCandidates = 64;
         const int maxCandidateBytes = 8 * 1024 * 1024;
@@ -943,18 +1074,17 @@ public static class GitInfo
         var candidates = new List<(string Path, byte[] Content)>();
         int retainedBytes = 0;
         int attempted = 0;
-        foreach (string path in untrackedFiles.Where(IsReviewableCSharpPath)
-                     .Distinct(StringComparer.Ordinal).OrderBy(path => path, StringComparer.Ordinal))
+        foreach (UntrackedFileSnapshot snapshot in untrackedFiles
+                     .Where(snapshot => IsReviewableCSharpPath(snapshot.Path))
+                     .OrderBy(snapshot => snapshot.Path, StringComparer.Ordinal))
         {
             if (attempted++ >= maxCandidates || retainedBytes >= maxAggregateBytes) break;
-            if (!WorkspacePaths.TryResolveGitPathInside(workspaceRoot, path, out string fullPath))
-                continue;
             int remaining = maxAggregateBytes - retainedBytes;
-            byte[]? content = ReadExistingBoundedRegularFile(fullPath,
-                Math.Min(maxCandidateBytes, remaining), workspaceRoot);
-            if (content is null) continue;
-            candidates.Add((path, content));
-            retainedBytes += content.Length;
+            if (snapshot.Content.Length > maxCandidateBytes ||
+                snapshot.Content.Length > remaining)
+                continue;
+            candidates.Add((snapshot.Path, snapshot.Content));
+            retainedBytes += snapshot.Content.Length;
         }
         if (candidates.Count == 0) return;
         // The bytes above were obtained through anchored component-by-component no-follow opens.

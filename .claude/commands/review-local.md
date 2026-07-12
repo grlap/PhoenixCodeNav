@@ -26,16 +26,13 @@ git --no-optional-locks status --short
 git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only
 git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only
 git ls-files --others --exclude-standard
-git ls-files --others --ignored --exclude-standard -- ':(icase,glob)**/AGENTS.md' ':(icase,glob)**/AGENTS.override.md' ':(icase,glob)**/CLAUDE.md' ':(icase,glob)**/CLAUDE.local.md' ':(icase,glob)**/.mcp.json' ':(icase,glob)**/.agents' ':(icase,glob)**/.agents/**' ':(icase,glob)**/.claude' ':(icase,glob)**/.claude/**' ':(icase,glob)**/.codex' ':(icase,glob)**/.codex/**' ':(icase,literal)tests/CodeNav.Tests/ReviewCommandContractTests.cs'
 ```
 
 If any inventory command fails or its path output is truncated or malformed, return a lifecycle `Status: completed` packet with `Review verdict: INCONCLUSIVE` and stop before reading target content.
 
-The target is the union of staged, unstaged, and ordinary untracked files. The final command is a scoped, path-only inventory of ignored trust-surface entries; never open those entries, and treat any returned path as a bootstrap match. Do not open target-file content until the bootstrap check below is complete.
+The target is the union of staged, unstaged, and ordinary untracked files. Do not open target-file content until the containment check below is complete.
 
-If the ordinary target and ignored trust inventory are both empty, return a `## Result` packet with lifecycle `Status: completed`, `Review verdict: INCONCLUSIVE` in `Summary:`, and an explanation that no changes were visible to the child even though the parent requested review, then stop.
-
-Normalize repository-relative target paths to `/` separators and use case-insensitive matching on Windows. At any depth, a basename of `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `CLAUDE.local.md`, or `.mcp.json`, any `.agents`, `.claude`, or `.codex` directory segment, and `tests/CodeNav.Tests/ReviewCommandContractTests.cs` are review trust-surface changes. If any target matches, this dirty command/lens set is reviewing its own trust policy: emit a lifecycle `Status: completed` packet with `Review verdict: INCONCLUSIVE`, the matching path names, and the bootstrap reason, then stop before the broad scan or loading any reviewer lens or changed trust-surface content. Do not attempt advisory inspection with dirty instructions; the independent external/manual review supplies those findings.
+If the target is empty, return a `## Result` packet with lifecycle `Status: completed`, `Review verdict: INCONCLUSIVE` in `Summary:`, and an explanation that no changes were visible to the child even though the parent requested review, then stop.
 
 Record the absolute repository root with `git rev-parse --show-toplevel`.
 

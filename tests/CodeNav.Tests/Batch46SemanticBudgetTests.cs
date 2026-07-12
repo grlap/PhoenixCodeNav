@@ -27,12 +27,14 @@ public class Batch46SemanticBudgetTests
         Assert.Equal(SemanticService.DefaultCandidateProjectBudget, parameter.DefaultValue);
         string description = Assert.IsType<DescriptionAttribute>(
             parameter.GetCustomAttribute<DescriptionAttribute>()).Description;
-        Assert.Contains("0 (default) loads all matching projects", description, StringComparison.Ordinal);
-        Assert.Contains("positive value opts into a bound", description, StringComparison.Ordinal);
+        Assert.Equal(128, SemanticService.DefaultCandidateProjectBudget);
+        Assert.Contains("default 128", description, StringComparison.Ordinal);
+        Assert.Contains("0 loads all matching projects", description, StringComparison.Ordinal);
+        Assert.Contains("no fixed maximum", description, StringComparison.Ordinal);
     }
 
     [Theory]
-    [InlineData(-1, 1)]
+    [InlineData(-1, 128)]
     [InlineData(0, int.MaxValue)]
     [InlineData(1, 1)]
     [InlineData(128, 128)]
@@ -55,7 +57,10 @@ public class Batch46SemanticBudgetTests
             using (var store = new IndexStore(dbPath, createNew: true))
             using (var transaction = store.BeginTransaction())
             {
-                for (int i = 0; i < projectCount; i++)
+                var projectIds = new List<long>(projectCount);
+                // Insert in reverse order so deterministic project ordering cannot accidentally
+                // inherit parallel/index insertion order.
+                for (int i = projectCount - 1; i >= 0; i--)
                 {
                     string projectName = $"P{i:D4}";
                     long projectId = store.InsertProject(transaction, new ParsedProject(
@@ -70,6 +75,7 @@ public class Batch46SemanticBudgetTests
                         ExplicitCompileItems: null,
                         AssemblyRefs: [],
                         LoadStatus: "parsed"));
+                    projectIds.Add(projectId);
                     string content = $"public sealed class Impl{i:D4} : IProbe {{ }}";
                     long fileId = store.InsertFile(transaction,
                         $"{projectName}/Impl{i:D4}.cs", content.Length, 0, (ulong)(i + 1),
@@ -94,10 +100,40 @@ public class Batch46SemanticBudgetTests
                     ]);
                     store.InsertCompileItem(transaction, projectId, fileId);
                 }
+
+                // One FTS-selected file deliberately has more than one discovery page of matching
+                // symbols and more than one page of compile owners. A combined symbol×owner join
+                // would materialize 513×513 rows; the production query must page each dimension
+                // independently while preserving every owner.
+                const int stressCardinality = 513;
+                const string sharedContent = "internal static class SharedMarker { private const string Token = nameof(IProbe); }";
+                long sharedFileId = store.InsertFile(transaction,
+                    "Shared/ManyImplementers.cs", sharedContent.Length, 0, 9_999,
+                    "cs", 1, isGenerated: false, hasTestAttrs: false);
+                store.InsertContent(transaction, sharedFileId, sharedContent);
+                store.InsertSymbols(transaction, sharedFileId,
+                    Enumerable.Range(0, stressCardinality).Select(i => new SymbolRow(
+                        OrdinalInFile: i,
+                        ParentOrdinal: -1,
+                        Kind: "class",
+                        Name: $"SharedImpl{i:D3}",
+                        Namespace: null,
+                        Container: null,
+                        Signature: $"internal sealed class SharedImpl{i:D3} : IProbe",
+                        Accessibility: "internal",
+                        StartLine: 1,
+                        EndLine: 1,
+                        IsPartial: false,
+                        Arity: 0,
+                        AttrMarkers: null)).ToList());
+                foreach (long projectId in projectIds.Take(stressCardinality))
+                    store.InsertCompileItem(transaction, projectId, sharedFileId);
                 transaction.Commit();
             }
 
-            using var queries = new IndexQueries(dbPath);
+            var executedSql = new List<string>();
+            using var queries = new IndexQueries(dbPath, pinReadSnapshot: false,
+                afterQueryForTest: executedSql.Add);
             var textCandidates = queries.CandidateProjectsForName("IProbe");
             Assert.Equal(projectCount, textCandidates.Count);
             Assert.Contains(textCandidates, candidate => candidate.Project == "P2000");
@@ -105,6 +141,23 @@ public class Batch46SemanticBudgetTests
             var implementationCandidates = queries.ImplementationCandidateProjects("IProbe");
             Assert.Equal(projectCount, implementationCandidates.Count);
             Assert.Contains("P2000", implementationCandidates);
+            Assert.Equal(Enumerable.Range(0, projectCount).Select(i => $"P{i:D4}"),
+                implementationCandidates);
+            Assert.Contains(executedSql, sql =>
+                sql.Contains("FROM fts_content", StringComparison.Ordinal) &&
+                !sql.Contains("JOIN symbols", StringComparison.Ordinal) &&
+                !sql.Contains("JOIN compile_items", StringComparison.Ordinal));
+            Assert.True(executedSql.Count(sql =>
+                    sql.Contains("FROM symbols s", StringComparison.Ordinal) &&
+                    sql.Contains("LIMIT $batch", StringComparison.Ordinal)) >= 2,
+                "matching symbols were not independently page-bounded");
+            Assert.True(executedSql.Count(sql =>
+                    sql.Contains("FROM compile_items ci", StringComparison.Ordinal) &&
+                    sql.Contains("LIMIT $batch", StringComparison.Ordinal)) >= 2,
+                "compile owners were not independently page-bounded");
+            Assert.DoesNotContain(executedSql, sql =>
+                sql.Contains("JOIN symbols", StringComparison.Ordinal) &&
+                sql.Contains("JOIN compile_items", StringComparison.Ordinal));
         }
         finally
         {
@@ -126,7 +179,8 @@ public class Batch46SemanticBudgetTests
 
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000), "index did not become queryable");
+            Assert.True(WaitUntil(() => manager.Health().State == "ready", 30_000),
+                "index did not reach a stable ready state");
 
             SymbolHit target;
             using (var queries = manager.OpenQueries())
@@ -151,6 +205,8 @@ public class Batch46SemanticBudgetTests
             Assert.Equal(implementerCount, result.Implementations.Count);
             Assert.Empty(result.Coverage.SkippedProjects);
             Assert.True(result.Coverage.RequestedProjects >= implementerCount + 1);
+            Assert.Equal(128, result.Coverage.CandidateProjectBudget);
+            Assert.Equal(implementerCount, result.Coverage.CandidateProjects);
         }
         finally
         {
@@ -171,7 +227,8 @@ public class Batch46SemanticBudgetTests
 
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000), "index did not become queryable");
+            Assert.True(WaitUntil(() => manager.Health().State == "ready", 30_000),
+                "index did not reach a stable ready state");
 
             using (var probe = new SemanticService(manager))
             {
@@ -191,6 +248,22 @@ public class Batch46SemanticBudgetTests
                 name: "Run", maxProjects: 1, timeoutMs: 120_000));
             AssertPartial(callers);
 
+            JsonElement boundedReferences = Invoke(tools => tools.References(
+                name: "IBudgetProbe", maxProjects: 1, timeoutMs: 120_000));
+            AssertPartial(boundedReferences);
+            Assert.True(boundedReferences.GetProperty("totalIsLowerBound").GetBoolean());
+            Assert.StartsWith("at least ", boundedReferences.GetProperty("summary").GetString(),
+                StringComparison.Ordinal);
+
+            JsonElement completeReferences = Invoke(tools => tools.References(
+                name: "IBudgetProbe", maxProjects: 0, timeoutMs: 120_000));
+            Assert.False(completeReferences.GetProperty("partial").GetBoolean());
+            Assert.False(completeReferences.TryGetProperty("totalIsLowerBound", out _));
+            Assert.False(completeReferences.GetProperty("summary").GetString()!
+                .StartsWith("at least ", StringComparison.Ordinal));
+            Assert.False(completeReferences.GetProperty("coverage")
+                .TryGetProperty("candidateProjectBudget", out _));
+
             JsonElement Invoke(Func<NavigationTools, string> invoke)
             {
                 using var semantic = new SemanticService(manager);
@@ -206,12 +279,84 @@ public class Batch46SemanticBudgetTests
                     response.GetProperty("partialReason").GetString()!.Split(':')[0]);
                 Assert.NotEmpty(response.GetProperty("skippedCandidateProjects").EnumerateArray());
                 Assert.Equal("exact", response.GetProperty("meta").GetProperty("confidence").GetString());
+                JsonElement coverage = response.GetProperty("coverage");
+                Assert.Equal(1, coverage.GetProperty("candidateProjectBudget").GetInt32());
+                Assert.True(coverage.GetProperty("candidateProjects").GetInt32() > 1);
             }
         }
         finally
         {
             SqliteConnection.ClearAllPools();
             try { Directory.Delete(root, recursive: true); } catch { /* Windows may retain a handle briefly. */ }
+        }
+    }
+
+    [Fact]
+    public void BoundedZeroImplementationFallbackRetainsSemanticCoverage()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-semantic-zero-partial").FullName;
+        try
+        {
+            string contracts = Path.Combine(root, "Contracts");
+            Directory.CreateDirectory(contracts);
+            File.WriteAllText(Path.Combine(contracts, "Contracts.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+                "<TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(contracts, "IBudgetProbe.cs"),
+                "namespace Budget.Contracts; public interface IBudgetProbe { }");
+
+            string decoy = Path.Combine(root, "ADecoy");
+            Directory.CreateDirectory(decoy);
+            File.WriteAllText(Path.Combine(decoy, "ADecoy.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+                "<TargetFramework>net9.0</TargetFramework></PropertyGroup>" +
+                "<ItemGroup><ProjectReference Include=\"../Contracts/Contracts.csproj\" />" +
+                "</ItemGroup></Project>");
+            File.WriteAllText(Path.Combine(decoy, "Decoy.cs"),
+                "namespace Budget.Decoy; public interface IBudgetProbe { } " +
+                "public sealed class Decoy : IBudgetProbe { }");
+
+            string real = Path.Combine(root, "BReal");
+            Directory.CreateDirectory(real);
+            File.WriteAllText(Path.Combine(real, "BReal.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+                "<TargetFramework>net9.0</TargetFramework></PropertyGroup>" +
+                "<ItemGroup><ProjectReference Include=\"../Contracts/Contracts.csproj\" />" +
+                "</ItemGroup></Project>");
+            File.WriteAllText(Path.Combine(real, "Real.cs"),
+                "namespace Budget.Real; public sealed class Real : Budget.Contracts.IBudgetProbe { }");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.Health().State == "ready", 30_000),
+                manager.Health().Error);
+            using var semantic = new SemanticService(manager);
+            if (!semantic.FrameworkRefsAvailable) return;
+            var tools = new NavigationTools(manager, semantic);
+
+            using JsonDocument document = JsonDocument.Parse(tools.Implementations(
+                name: "IBudgetProbe", path: "Contracts/IBudgetProbe.cs", line: 1,
+                maxProjects: 1, timeoutMs: 120_000));
+            JsonElement response = document.RootElement;
+
+            Assert.True(response.TryGetProperty("partial", out JsonElement partial),
+                response.GetRawText());
+            Assert.True(partial.GetBoolean(), response.GetRawText());
+            Assert.Equal("candidate_cluster_bounded",
+                response.GetProperty("partialReason").GetString()!.Split(':')[0]);
+            Assert.Equal(1, response.GetProperty("coverage")
+                .GetProperty("candidateProjectBudget").GetInt32());
+            Assert.True(response.GetProperty("coverage")
+                .GetProperty("candidateProjects").GetInt32() > 1);
+            Assert.True(response.GetProperty("skippedCandidateProjectCount").GetInt32() >= 1);
+            Assert.NotEmpty(response.GetProperty("skippedCandidateProjects").EnumerateArray());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
 
@@ -227,7 +372,8 @@ public class Batch46SemanticBudgetTests
 
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000), manager.Health().Error);
+            Assert.True(WaitUntil(() => manager.Health().State == "ready", 30_000),
+                manager.Health().Error);
             using var semantic = new SemanticService(manager);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
@@ -247,6 +393,59 @@ public class Batch46SemanticBudgetTests
             SqliteConnection.ClearAllPools();
             try { Directory.Delete(root, recursive: true); } catch { }
         }
+    }
+
+    [Fact]
+    public void MandatoryOwnerDoesNotConsumeTheOptionalCallerBudget()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-semantic-owner-budget").FullName;
+        try
+        {
+            WriteWorkspace(root, implementerCount: 2);
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.Health().State == "ready", 30_000),
+                manager.Health().Error);
+            using var semantic = new SemanticService(manager);
+            if (!semantic.FrameworkRefsAvailable) return;
+            var tools = new NavigationTools(manager, semantic);
+            using JsonDocument document = JsonDocument.Parse(tools.Callers(
+                name: "Run", maxProjects: 1, timeoutMs: 120_000));
+            JsonElement response = document.RootElement;
+
+            Assert.Equal("exact", response.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.Single(response.GetProperty("callers").EnumerateArray());
+            JsonElement coverage = response.GetProperty("coverage");
+            Assert.Equal(1, coverage.GetProperty("candidateProjectBudget").GetInt32());
+            Assert.Equal(2, coverage.GetProperty("candidateProjects").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void CoverageSerializerOmitsCandidateBudgetFieldsWhenTheyDoNotApply()
+    {
+        var coverage = new ClusterCoverage(
+            LoadedProjects: 1,
+            RequestedProjects: 1,
+            SkippedProjects: [],
+            FailedProjects: [],
+            FrameworkRefsAvailable: true);
+
+        using JsonDocument document = JsonDocument.Parse(
+            Json.Serialize(NavigationTools.CoverageJson(coverage)));
+        JsonElement response = document.RootElement;
+
+        Assert.Equal(1, response.GetProperty("loadedProjects").GetInt32());
+        Assert.False(response.TryGetProperty("candidateProjects", out _));
+        Assert.False(response.TryGetProperty("candidateProjectBudget", out _));
     }
 
     [Theory]
@@ -350,7 +549,8 @@ public class Batch46SemanticBudgetTests
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000), manager.Health().Error);
+            Assert.True(WaitUntil(() => manager.Health().State == "ready", 30_000),
+                manager.Health().Error);
 
             Assert.True(IndexDirectoryAuthority.TryOpen(dbPath, createDirectory: false,
                 out IndexDirectoryAuthority? authority));
@@ -407,7 +607,8 @@ public class Batch46SemanticBudgetTests
                 FullRebuildCompletedForTest = () => rebuildCompleted.Set(),
             };
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000), manager.Health().Error);
+            Assert.True(WaitUntil(() => manager.Health().State == "ready", 30_000),
+                manager.Health().Error);
 
             int rebuildRequested = 0;
             manager.ReviewSnapshotAfterQueryForTest = _ =>
@@ -436,7 +637,8 @@ public class Batch46SemanticBudgetTests
                 "the original queued rebuild did not resume after the semantic guard released");
             Assert.Equal(0, Volatile.Read(ref activeAtBoundary));
             Assert.True(rebuildCompleted.Wait(TimeSpan.FromSeconds(40)));
-            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000), manager.Health().Error);
+            Assert.True(WaitUntil(() => manager.Health().State == "ready", 20_000),
+                manager.Health().Error);
         }
         finally
         {

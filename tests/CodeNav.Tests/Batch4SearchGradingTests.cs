@@ -217,7 +217,13 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
     {
         var tools = new NavigationTools(_manager, _semantic);
         var json = Parse(tools.ServerCapabilities());
-        Assert.False(json.TryGetProperty("featuresCompacted", out _));
+        if (json.TryGetProperty("featuresCompacted", out JsonElement compacted))
+        {
+            Assert.True(compacted.GetBoolean());
+            Assert.Equal(json.GetProperty("features").EnumerateArray()
+                    .Count(feature => feature.TryGetProperty("summary", out _)),
+                json.GetProperty("featureSummariesReturned").GetInt32());
+        }
         var ids = json.GetProperty("features").EnumerateArray()
             .Select(f => f.GetProperty("id").GetString()).ToHashSet();
         Assert.Contains("compiled-awareness", ids);
@@ -225,12 +231,30 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
         Assert.Contains("semantic-large-repo-budget", ids);
+        Assert.Contains("semantic-candidate-budget-coverage", ids);
         Assert.Contains("semantic-rebuild-coordination", ids);
+        Assert.Contains("implementations-symbol-identity", ids);
         string semanticBudget = Assert.Single(json.GetProperty("features").EnumerateArray(),
             feature => feature.GetProperty("id").GetString() == "semantic-large-repo-budget")
             .GetProperty("summary").GetString()!;
-        Assert.Contains("default all candidates", semanticBudget);
-        Assert.Contains("positive maxProjects bounds", semanticBudget);
+        Assert.Contains("default to 128 optional candidate projects", semanticBudget);
+        Assert.Contains("maxProjects 0 loads every candidate", semanticBudget);
+        Assert.Contains("no fixed maximum", semanticBudget);
+        string semanticCoverage = Assert.Single(json.GetProperty("features").EnumerateArray(),
+            feature => feature.GetProperty("id").GetString() == "semantic-candidate-budget-coverage")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("complete optional candidate set", semanticCoverage);
+        Assert.Contains("applied bound", semanticCoverage);
+        Assert.Contains("unbounded maxProjects 0 omits the bound", semanticCoverage);
+        string semanticRebuild = Assert.Single(json.GetProperty("features").EnumerateArray(),
+            feature => feature.GetProperty("id").GetString() == "semantic-rebuild-coordination")
+            .GetProperty("summary").GetString()!;
+        Assert.Equal("semantic loads drain; rebuild resumes after readers", semanticRebuild);
+        string implementationIdentity = Assert.Single(json.GetProperty("features").EnumerateArray(),
+            feature => feature.GetProperty("id").GetString() == "implementations-symbol-identity")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("rejects ambiguous bare type names", implementationIdentity);
+        Assert.Contains("symbolId or path+line", implementationIdentity);
     }
 
     [Fact]
@@ -483,9 +507,9 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         string healthyJson = NavigationTools.ServerCapabilitiesForTest(
             Health("C:/" + new string('r', 257)));
         int healthyMargin = Json.HardBudgetBytes - Json.Utf8Bytes(healthyJson);
-        Assert.True(healthyMargin >= 2 * 1024,
+        Assert.True(healthyMargin >= NavigationTools.CapabilityGrowthReserveBytes,
             $"healthy capabilities retained only {healthyMargin} bytes of growth margin");
-        Assert.False(Parse(healthyJson).TryGetProperty("featuresCompacted", out _));
+        Assert.True(Parse(healthyJson).GetProperty("featuresCompacted").GetBoolean());
 
         string exactRoot = new('é', NavigationTools.CapabilityDynamicTextBytes / 2);
         string exactJson = NavigationTools.ServerCapabilitiesForTest(Health(exactRoot));

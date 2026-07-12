@@ -14,7 +14,12 @@ public sealed record ClusterCoverage(
     bool FrameworkRefsAvailable,
     // Field 0.7.0 ("coverage 1/1 but 8 hits from 8 projects"): SymbolFinder scans the WHOLE
     // solution, including projects resident from earlier calls — this makes that visible.
-    int SolutionProjects = 0);
+    int SolutionProjects = 0,
+    // Complete OPTIONAL semantic candidate set before maxProjects selection, excluding the owning
+    // project's mandatory dependency closure, plus the normalized budget applied to that set.
+    // Null for operations without candidate loading; skippedCandidateProjects remains authoritative.
+    int? CandidateProjects = null,
+    int? CandidateProjectBudget = null);
 
 /// <summary>
 /// Owns: an AdhocWorkspace populated lazily with per-project compilations built from
