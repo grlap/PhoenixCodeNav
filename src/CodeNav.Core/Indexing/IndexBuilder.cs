@@ -105,12 +105,15 @@ public static class IndexBuilder
                     throw new IOException("index destination changed during ownership acquisition");
                 IndexLeaseIdentity ownedIdentity = afterLease!;
 
+                if (!authority.TryAnchorReviewCoordinationFile(create: true))
+                    throw new IOException(
+                        "index reader coordination could not be initialized safely");
+
                 IndexReviewCoordinationLease? rebuildLease = null;
-                if (OperatingSystem.IsWindows() &&
-                    ownedIdentity.DatabaseIdentity is { Length: > 0 })
+                if (OperatingSystem.IsWindows())
                 {
                     IndexReviewCoordinationAcquireResult coordination =
-                        IndexReviewCoordinationLease.TryAcquireExclusive(ownedIdentity,
+                        IndexReviewCoordinationLease.TryAcquireExclusive(authority,
                             reviewWaitTimeout, waitingForReviewReaders, out rebuildLease);
                     if (coordination != IndexReviewCoordinationAcquireResult.Acquired)
                         throw new IOException(

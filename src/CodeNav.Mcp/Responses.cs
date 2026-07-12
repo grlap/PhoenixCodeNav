@@ -147,6 +147,41 @@ internal static class Json
         }
         return json;
     }
+
+    /// <summary>Budgets a primary result list plus a diagnostic auxiliary list. The auxiliary
+    /// list is first reduced to a useful sample, preserving primary answers; if the fixed envelope
+    /// still cannot fit, the primary list and finally the sample are reduced to zero. Counts live
+    /// outside this helper so callers can report complete totals even when samples are omitted.</summary>
+    public static string WithAuxiliaryListBudget<T, TAux>(
+        List<T> items,
+        List<TAux> auxiliary,
+        Func<List<T>, bool, List<TAux>, bool, object> build,
+        int? maxBytes = null)
+    {
+        const int auxiliarySampleItems = 16;
+        int cap = Math.Min(maxBytes ?? HardBudgetBytes, HardBudgetBytes);
+        var work = new List<T>(items);
+        var auxWork = auxiliary.Take(auxiliarySampleItems).ToList();
+        bool truncated = false;
+        bool auxiliaryTruncated = auxiliary.Count > auxWork.Count;
+        string json = Serialize(build(work, truncated, auxWork, auxiliaryTruncated));
+
+        while (Utf8Bytes(json) > cap && work.Count > 0)
+        {
+            int keep = work.Count / 2;
+            work.RemoveRange(keep, work.Count - keep);
+            truncated = true;
+            json = Serialize(build(work, truncated, auxWork, auxiliaryTruncated));
+        }
+        while (Utf8Bytes(json) > cap && auxWork.Count > 0)
+        {
+            int keep = auxWork.Count / 2;
+            auxWork.RemoveRange(keep, auxWork.Count - keep);
+            auxiliaryTruncated = true;
+            json = Serialize(build(work, truncated, auxWork, auxiliaryTruncated));
+        }
+        return json;
+    }
 }
 
 internal sealed record Meta(

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace CodeNav.Core.Indexing;
 
@@ -12,119 +13,127 @@ internal enum IndexReviewCoordinationAcquireResult
 }
 
 /// <summary>
-/// Cross-process reader/rebuild coordination for one physical index database on Windows.
-/// Review snapshots briefly pass a named turnstile and retain one of a fixed set of reader
-/// slots. A destructive rebuild retains the turnstile while draining every slot, preventing new
-/// snapshots from entering until replacement finishes. Dedicated owner threads preserve named
-/// Mutex thread affinity and abandoned mutexes make process crashes self-healing.
+/// Scalable cross-process reader/rebuild coordination for one physical Windows index. A brief
+/// named turnstile prevents reader barging once a rebuild is waiting. Readers retain only a shared
+/// handle to one anchored regular sidecar, so their population is limited by the OS rather than a
+/// Phoenix slot table. A rebuild retains the turnstile while opening that sidecar exclusively and
+/// through database replacement. Kernel handles and an abandoned mutex recover on process death.
 /// </summary>
 internal sealed class IndexReviewCoordinationLease : IDisposable
 {
-    private const int ReaderSlotCount = 32;
+    private static readonly TimeSpan RetryInterval = TimeSpan.FromMilliseconds(10);
     private static readonly TimeSpan ExitTimeout = TimeSpan.FromSeconds(5);
 
-    private readonly Mutex _turnstile;
-    private readonly Mutex[] _readerSlots;
-    private readonly bool _exclusive;
+    private SafeFileHandle? _readerHandle;
+    private readonly Mutex? _turnstile;
+    private readonly IndexDirectoryAuthority? _authority;
     private readonly TimeSpan _timeout;
     private readonly Action? _waiting;
-    private readonly ManualResetEventSlim _release = new(false);
-    private readonly ManualResetEventSlim _exited = new(false);
-    private readonly Thread _ownerThread;
+    private readonly CancellationToken _cancellationToken;
+    private readonly ManualResetEventSlim? _ready;
+    private readonly ManualResetEventSlim? _release;
+    private readonly ManualResetEventSlim? _exited;
+    private readonly Thread? _ownerThread;
+    private IndexReviewCoordinationAcquireResult _result =
+        IndexReviewCoordinationAcquireResult.Failed;
     private int _disposed;
 
-    private IndexReviewCoordinationLease(Mutex turnstile, Mutex[] readerSlots,
-        bool exclusive, TimeSpan timeout, Action? waiting,
-        ManualResetEventSlim ready,
-        Action<IndexReviewCoordinationAcquireResult> publishResult)
+    private IndexReviewCoordinationLease(SafeFileHandle? readerHandle)
     {
+        _readerHandle = readerHandle;
+    }
+
+    private IndexReviewCoordinationLease(IndexDirectoryAuthority authority, Mutex turnstile,
+        TimeSpan timeout, Action? waiting, CancellationToken cancellationToken)
+    {
+        _authority = authority;
         _turnstile = turnstile;
-        _readerSlots = readerSlots;
-        _exclusive = exclusive;
         _timeout = timeout;
         _waiting = waiting;
-        _ownerThread = new Thread(() => OwnCoordination(ready, publishResult))
+        _cancellationToken = cancellationToken;
+        _ready = new ManualResetEventSlim(false);
+        _release = new ManualResetEventSlim(false);
+        _exited = new ManualResetEventSlim(false);
+        _ownerThread = new Thread(OwnExclusiveCoordination)
         {
             IsBackground = true,
-            Name = exclusive
-                ? "PhoenixCodeNav index rebuild gate"
-                : "PhoenixCodeNav index review reader",
+            Name = "PhoenixCodeNav index rebuild gate",
         };
     }
 
     internal static IndexReviewCoordinationAcquireResult TryAcquireReader(
-        IndexLeaseIdentity identity, TimeSpan timeout,
-        out IndexReviewCoordinationLease? lease) =>
-        TryAcquire(identity, exclusive: false, timeout, waiting: null, out lease);
-
-    internal static IndexReviewCoordinationAcquireResult TryAcquireExclusive(
-        IndexLeaseIdentity identity, TimeSpan timeout, Action? waiting,
-        out IndexReviewCoordinationLease? lease) =>
-        TryAcquire(identity, exclusive: true, timeout, waiting, out lease);
-
-    private static IndexReviewCoordinationAcquireResult TryAcquire(
-        IndexLeaseIdentity identity, bool exclusive, TimeSpan timeout, Action? waiting,
-        out IndexReviewCoordinationLease? lease)
+        IndexDirectoryAuthority authority, TimeSpan timeout,
+        out IndexReviewCoordinationLease? lease,
+        CancellationToken cancellationToken = default)
     {
         lease = null;
-        if (!OperatingSystem.IsWindows() || identity.DatabaseIdentity is not { Length: > 0 })
+        if (!OperatingSystem.IsWindows())
+        {
+            lease = new IndexReviewCoordinationLease(readerHandle: null);
+            return IndexReviewCoordinationAcquireResult.Acquired;
+        }
+        if (!TryCreateTurnstile(authority, out Mutex? turnstile))
             return IndexReviewCoordinationAcquireResult.Failed;
 
-        Mutex? turnstile = null;
-        var slots = new Mutex[ReaderSlotCount];
+        bool held = false;
         try
         {
-            string key = Hash(identity.DatabaseIdentity);
-            turnstile = new Mutex(initiallyOwned: false,
-                $"Global\\PhoenixCodeNav.Index.Review.{key}.Turnstile");
-            for (int i = 0; i < slots.Length; i++)
+            held = Wait(turnstile!, timeout, cancellationToken);
+            if (!held) return IndexReviewCoordinationAcquireResult.Contended;
+            cancellationToken.ThrowIfCancellationRequested();
+            IndexReviewCoordinationAcquireResult result =
+                authority.TryOpenReviewCoordinationHandle(exclusive: false,
+                    out SafeFileHandle? handle);
+            if (result == IndexReviewCoordinationAcquireResult.Acquired)
+                lease = new IndexReviewCoordinationLease(handle);
+            return result;
+        }
+        finally
+        {
+            if (held)
             {
-                slots[i] = new Mutex(initiallyOwned: false,
-                    $"Global\\PhoenixCodeNav.Index.Review.{key}.Reader.{i:D2}");
+                try { turnstile!.ReleaseMutex(); } catch { }
             }
+            turnstile!.Dispose();
         }
-        catch
-        {
-            turnstile?.Dispose();
-            foreach (Mutex? slot in slots) slot?.Dispose();
-            return IndexReviewCoordinationAcquireResult.Failed;
-        }
+    }
 
-        using var ready = new ManualResetEventSlim(false);
-        IndexReviewCoordinationAcquireResult result =
-            IndexReviewCoordinationAcquireResult.Failed;
-        var candidate = new IndexReviewCoordinationLease(turnstile, slots, exclusive,
-            timeout, waiting, ready, value => result = value);
-        bool ownerThreadStarted = false;
+    internal static IndexReviewCoordinationAcquireResult TryAcquireExclusive(
+        IndexDirectoryAuthority authority, TimeSpan timeout, Action? waiting,
+        out IndexReviewCoordinationLease? lease,
+        CancellationToken cancellationToken = default)
+    {
+        lease = null;
+        if (!OperatingSystem.IsWindows())
+        {
+            lease = new IndexReviewCoordinationLease(readerHandle: null);
+            return IndexReviewCoordinationAcquireResult.Acquired;
+        }
+        if (!TryCreateTurnstile(authority, out Mutex? turnstile))
+            return IndexReviewCoordinationAcquireResult.Failed;
+
+        var candidate = new IndexReviewCoordinationLease(authority, turnstile!, timeout,
+            waiting, cancellationToken);
         try
         {
-            candidate._ownerThread.Start();
-            ownerThreadStarted = true;
-            TimeSpan coordinationWait = timeout + ExitTimeout;
-            if (!ready.Wait(coordinationWait))
+            candidate._ownerThread!.Start();
+            TimeSpan readyTimeout = timeout + ExitTimeout;
+            if (!candidate._ready!.Wait(readyTimeout, cancellationToken))
             {
-                candidate._release.Set();
-                candidate.CleanupFailedAcquisition();
+                candidate.Dispose();
                 return IndexReviewCoordinationAcquireResult.Failed;
             }
         }
         catch
         {
-            if (ownerThreadStarted)
-            {
-                candidate._release.Set();
-                candidate.CleanupFailedAcquisition();
-            }
-            else
-            {
-                candidate.CleanupUnstartedAcquisition();
-            }
-            return IndexReviewCoordinationAcquireResult.Failed;
+            candidate.Dispose();
+            throw;
         }
 
-        if (result != IndexReviewCoordinationAcquireResult.Acquired)
+        if (candidate._result != IndexReviewCoordinationAcquireResult.Acquired)
         {
-            candidate.CleanupFailedAcquisition();
+            IndexReviewCoordinationAcquireResult result = candidate._result;
+            candidate.Dispose();
             return result;
         }
 
@@ -132,106 +141,59 @@ internal sealed class IndexReviewCoordinationLease : IDisposable
         return IndexReviewCoordinationAcquireResult.Acquired;
     }
 
-    public void Dispose()
+    private void OwnExclusiveCoordination()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        try { _release.Set(); }
-        catch { return; }
-        try
-        {
-            if (_exited.Wait(ExitTimeout))
-            {
-                _release.Dispose();
-                _exited.Dispose();
-            }
-        }
-        catch
-        {
-            // The owner thread releases every kernel mutex in its finally block. Disposal remains
-            // bounded even if the host is shutting down while kernel coordination is delayed.
-        }
-    }
-
-    private void CleanupFailedAcquisition()
-    {
-        try
-        {
-            if (_exited.Wait(ExitTimeout))
-            {
-                Interlocked.Exchange(ref _disposed, 1);
-                _release.Dispose();
-                _exited.Dispose();
-            }
-        }
-        catch { }
-    }
-
-    private void CleanupUnstartedAcquisition()
-    {
-        Interlocked.Exchange(ref _disposed, 1);
-        try { _turnstile.Dispose(); } catch { }
-        foreach (Mutex slot in _readerSlots)
-        {
-            try { slot.Dispose(); } catch { }
-        }
-        try { _release.Dispose(); } catch { }
-        try { _exited.Dispose(); } catch { }
-    }
-
-    private void OwnCoordination(ManualResetEventSlim ready,
-        Action<IndexReviewCoordinationAcquireResult> publishResult)
-    {
-        bool turnstileHeld = false;
-        int readerSlot = -1;
-        int exclusiveSlotsHeld = 0;
+        bool held = false;
         bool published = false;
         bool waitingPublished = false;
         long started = Stopwatch.GetTimestamp();
         try
         {
-            turnstileHeld = Wait(_turnstile, Remaining(started));
-            if (!turnstileHeld)
+            held = Wait(_turnstile!, Remaining(started), _cancellationToken);
+            if (!held)
             {
                 Publish(IndexReviewCoordinationAcquireResult.Contended);
                 return;
             }
 
-            if (_exclusive)
+            while (true)
             {
-                for (; exclusiveSlotsHeld < _readerSlots.Length; exclusiveSlotsHeld++)
+                _cancellationToken.ThrowIfCancellationRequested();
+                IndexReviewCoordinationAcquireResult result =
+                    _authority!.TryOpenReviewCoordinationHandle(exclusive: true,
+                        out SafeFileHandle? handle);
+                if (result == IndexReviewCoordinationAcquireResult.Acquired)
                 {
-                    if (TryWait(_readerSlots[exclusiveSlotsHeld])) continue;
-                    PublishWaiting();
-                    if (!Wait(_readerSlots[exclusiveSlotsHeld], Remaining(started)))
-                    {
-                        Publish(IndexReviewCoordinationAcquireResult.Contended);
-                        return;
-                    }
-                }
-            }
-            else
-            {
-                int first = (int)((uint)Environment.CurrentManagedThreadId %
-                                  (uint)_readerSlots.Length);
-                for (int offset = 0; offset < _readerSlots.Length; offset++)
-                {
-                    int candidate = (first + offset) % _readerSlots.Length;
-                    if (!TryWait(_readerSlots[candidate])) continue;
-                    readerSlot = candidate;
+                    _readerHandle = handle;
                     break;
                 }
-                if (readerSlot < 0)
+                if (result == IndexReviewCoordinationAcquireResult.Failed)
+                {
+                    Publish(result);
+                    return;
+                }
+                if (!waitingPublished)
+                {
+                    waitingPublished = true;
+                    try { _waiting?.Invoke(); } catch { }
+                }
+                TimeSpan remaining = Remaining(started);
+                if (remaining <= TimeSpan.Zero)
                 {
                     Publish(IndexReviewCoordinationAcquireResult.Contended);
                     return;
                 }
-
-                _turnstile.ReleaseMutex();
-                turnstileHeld = false;
+                TimeSpan delay = remaining < RetryInterval ? remaining : RetryInterval;
+                if (_cancellationToken.WaitHandle.WaitOne(delay))
+                    _cancellationToken.ThrowIfCancellationRequested();
             }
 
             Publish(IndexReviewCoordinationAcquireResult.Acquired);
-            _release.Wait();
+            _release!.Wait();
+        }
+        catch (OperationCanceledException)
+        {
+            if (!published) Publish(IndexReviewCoordinationAcquireResult.Contended);
         }
         catch
         {
@@ -239,38 +201,21 @@ internal sealed class IndexReviewCoordinationLease : IDisposable
         }
         finally
         {
-            if (readerSlot >= 0)
+            Interlocked.Exchange(ref _readerHandle, null)?.Dispose();
+            if (held)
             {
-                try { _readerSlots[readerSlot].ReleaseMutex(); } catch { }
+                try { _turnstile!.ReleaseMutex(); } catch { }
             }
-            for (int i = exclusiveSlotsHeld - 1; i >= 0; i--)
-            {
-                try { _readerSlots[i].ReleaseMutex(); } catch { }
-            }
-            if (turnstileHeld)
-            {
-                try { _turnstile.ReleaseMutex(); } catch { }
-            }
-            try { _turnstile.Dispose(); } catch { }
-            foreach (Mutex slot in _readerSlots)
-            {
-                try { slot.Dispose(); } catch { }
-            }
-            try { _exited.Set(); } catch { }
+            try { _turnstile!.Dispose(); } catch { }
+            try { _exited!.Set(); } catch { }
         }
 
-        void Publish(IndexReviewCoordinationAcquireResult value)
+        void Publish(IndexReviewCoordinationAcquireResult result)
         {
             if (published) return;
             published = true;
-            try { publishResult(value); } finally { ready.Set(); }
-        }
-
-        void PublishWaiting()
-        {
-            if (waitingPublished) return;
-            waitingPublished = true;
-            try { _waiting?.Invoke(); } catch { }
+            _result = result;
+            _ready!.Set();
         }
     }
 
@@ -280,19 +225,58 @@ internal sealed class IndexReviewCoordinationLease : IDisposable
         return elapsed >= _timeout ? TimeSpan.Zero : _timeout - elapsed;
     }
 
-    private static bool TryWait(Mutex mutex)
+    private static bool TryCreateTurnstile(IndexDirectoryAuthority authority,
+        out Mutex? turnstile)
     {
-        try { return mutex.WaitOne(0); }
-        catch (AbandonedMutexException) { return true; }
+        turnstile = null;
+        try
+        {
+            if (!authority.TryGetReviewCoordinationKey(out string? key)) return false;
+            string hash = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(key!)));
+            turnstile = new Mutex(initiallyOwned: false,
+                $"Global\\PhoenixCodeNav.Index.Readers.{hash}.Turnstile");
+            return true;
+        }
+        catch
+        {
+            turnstile?.Dispose();
+            turnstile = null;
+            return false;
+        }
     }
 
-    private static bool Wait(Mutex mutex, TimeSpan timeout)
+    private static bool Wait(Mutex mutex, TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
-        if (timeout <= TimeSpan.Zero) return TryWait(mutex);
-        try { return mutex.WaitOne(timeout); }
-        catch (AbandonedMutexException) { return true; }
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            if (!cancellationToken.CanBeCanceled) return mutex.WaitOne(timeout);
+            int signaled = WaitHandle.WaitAny(
+                [mutex, cancellationToken.WaitHandle], timeout);
+            if (signaled == 1) cancellationToken.ThrowIfCancellationRequested();
+            return signaled == 0;
+        }
+        catch (AbandonedMutexException)
+        {
+            return true;
+        }
     }
 
-    private static string Hash(string value) => Convert.ToHexString(
-        SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        if (_ownerThread is null)
+        {
+            Interlocked.Exchange(ref _readerHandle, null)?.Dispose();
+            return;
+        }
+
+        try { _release!.Set(); } catch { }
+        try { _exited!.Wait(ExitTimeout); } catch { }
+        try { _ready!.Dispose(); } catch { }
+        try { _release!.Dispose(); } catch { }
+        try { _exited!.Dispose(); } catch { }
+    }
 }

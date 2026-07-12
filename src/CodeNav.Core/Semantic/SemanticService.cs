@@ -51,6 +51,7 @@ public sealed record SemanticImplementations(
     SemanticDeclaration Symbol,
     List<SemanticImplementation> Implementations,   // concrete (instantiable) leaves first, then abstract scaffolding
     ClusterCoverage Coverage,
+    List<string> SkippedCandidateProjects,
     bool DeadlineExhausted = false,                 // 24n: deadline fired mid-search — list is a lower bound
     long? ClusterLoadMs = null,                     // t2b: deadline budget split — load+resolve vs
     long? QueryMs = null);                          // find; see SemanticReferences for rationale
@@ -64,6 +65,14 @@ public sealed record SemanticImplementations(
 /// </summary>
 public sealed partial class SemanticService : IDisposable
 {
+    // Large-repository default: zero is the public "all matching projects" sentinel. Phoenix does
+    // not silently discard candidate projects; callers that need a latency/memory tradeoff can opt
+    // into one by supplying a positive maxProjects value.
+    public const int DefaultCandidateProjectBudget = 0;
+
+    internal static int NormalizeCandidateProjectBudget(int maxProjects) =>
+        maxProjects == DefaultCandidateProjectBudget ? int.MaxValue : Math.Max(1, maxProjects);
+
     private readonly IndexManager _manager;
     private readonly Action<string> _log;
     private readonly object _gate = new();
@@ -121,7 +130,10 @@ public sealed partial class SemanticService : IDisposable
         bool loadCompleted = false;
         try
         {
-            var (_, symbol, _) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
+            using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
+            if (indexSnapshot is null) return (null, "index_snapshot_unavailable");
+            var (_, symbol, _) = await LoadOwnerAndResolveAsync(
+                path, line, column, nameHint, cts.Token, indexSnapshot.Queries).ConfigureAwait(false);
             loadCompleted = true;
             if (symbol is null) return (null, "symbol_not_resolved");
             return (Describe(symbol), null);
@@ -149,13 +161,18 @@ public sealed partial class SemanticService : IDisposable
         bool includeTests = true)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
-        bool loadCompleted = false; // t2b: distinguishes cold-cluster warm-up from a real scan timeout
+        bool clusterLoadInProgress = true;
         var swPhase = System.Diagnostics.Stopwatch.StartNew();
         long clusterLoadMs = 0;
         try
         {
+            using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
+            if (indexSnapshot is null) return (null, "index_snapshot_unavailable");
+
             // Phase 1: load the owner closure and resolve, to learn the symbol name.
-            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
+            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
+                path, line, column, nameHint, cts.Token, indexSnapshot.Queries).ConfigureAwait(false);
+            clusterLoadInProgress = false; // candidate discovery is a query phase, not cold loading
             if (symbolA is null || owningProject is null) return (null, "symbol_not_resolved");
 
             // Implementer seeds for TYPE targets — parity with Implementations/TypeHierarchy
@@ -166,19 +183,18 @@ public sealed partial class SemanticService : IDisposable
             List<string>? implementerSeeds = null;
             if (symbolA is INamedTypeSymbol)
             {
-                using var q = _manager.OpenQueries();
-                implementerSeeds = q.ImplementationCandidates(symbolA.Name, 100)
-                    .SelectMany(c => q.ProjectsContaining(c.FilePath).Select(p => p.Name))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
+                implementerSeeds = indexSnapshot.Queries
+                    .ImplementationCandidateProjects(symbolA.Name, cts.Token);
             }
 
             // Phase 2: load the dependent scan set and re-resolve IN that snapshot, then
             // resolve + search against the SAME solution (no snapshot drift).
+            clusterLoadInProgress = true;
             TestOnlyPhaseHook?.Invoke("beforeScanSetLoad");
             var (solution, symbol, coverage, skipped, outOfGraph) = await LoadScanSetAndResolveAsync(
-                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token, implementerSeeds).ConfigureAwait(false);
-            loadCompleted = true;
+                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
+                indexSnapshot.Queries, cts.Token, implementerSeeds).ConfigureAwait(false);
+            clusterLoadInProgress = false;
             clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find+count
             TestOnlyPhaseHook?.Invoke("afterScanSetLoad");
             if (symbol is null) return (null, "symbol_not_resolved_in_scope");
@@ -300,7 +316,7 @@ public sealed partial class SemanticService : IDisposable
         catch (OperationCanceledException)
         {
             // t2b: cold-cluster warm-up vs real scan timeout — see DefinitionAsync for rationale.
-            return (null, loadCompleted ? "semantic_timeout" : "cluster_cold_load");
+            return (null, clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout");
         }
         catch (Exception ex)
         {
@@ -315,12 +331,17 @@ public sealed partial class SemanticService : IDisposable
         string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
-        bool loadCompleted = false; // t2b: distinguishes cold-cluster warm-up from a real scan timeout
+        bool clusterLoadInProgress = true;
         var swPhase = System.Diagnostics.Stopwatch.StartNew();
         long clusterLoadMs = 0;
         try
         {
-            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
+            using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
+            if (indexSnapshot is null) return (null, "index_snapshot_unavailable");
+
+            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
+                path, line, column, nameHint, cts.Token, indexSnapshot.Queries).ConfigureAwait(false);
+            clusterLoadInProgress = false;
             if (symbolA is null || owningProject is null) return (null, "symbol_not_resolved");
 
             // Seed the scan-set with the projects that syntactically implement/derive the type (base-list
@@ -328,17 +349,14 @@ public sealed partial class SemanticService : IDisposable
             // implemented in leaf projects — resolves to an empty list because the implementer projects
             // never entered the semantic cluster (they name the interface too rarely to rank in).
             List<string> implementerSeeds;
-            using (var q = _manager.OpenQueries())
-            {
-                implementerSeeds = q.ImplementationCandidates(symbolA.Name, 100)
-                    .SelectMany(c => q.ProjectsContaining(c.FilePath).Select(p => p.Name))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-            }
+            implementerSeeds = indexSnapshot.Queries
+                .ImplementationCandidateProjects(symbolA.Name, cts.Token);
 
-            var (solution, symbol, coverage, _, _) = await LoadScanSetAndResolveAsync(
-                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token, implementerSeeds).ConfigureAwait(false);
-            loadCompleted = true;
+            clusterLoadInProgress = true;
+            var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
+                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
+                indexSnapshot.Queries, cts.Token, implementerSeeds).ConfigureAwait(false);
+            clusterLoadInProgress = false;
             clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find
             if (symbol is null) return (null, "symbol_not_resolved_in_scope");
 
@@ -381,13 +399,13 @@ public sealed partial class SemanticService : IDisposable
                 .ThenBy(r => r.Declaration.SymbolDisplay, StringComparer.Ordinal)
                 .ToList();
 
-            return (new SemanticImplementations(Describe(symbol), results, coverage, deadlineExhausted,
+            return (new SemanticImplementations(Describe(symbol), results, coverage, skipped, deadlineExhausted,
                 ClusterLoadMs: clusterLoadMs, QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs), null);
         }
         catch (OperationCanceledException)
         {
             // t2b: cold-cluster warm-up vs real scan timeout — see DefinitionAsync for rationale.
-            return (null, loadCompleted ? "semantic_timeout" : "cluster_cold_load");
+            return (null, clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout");
         }
         catch (Exception ex)
         {
@@ -406,17 +424,26 @@ public sealed partial class SemanticService : IDisposable
     /// silently orphans the symbol and yields empty "exact" results).
     /// </summary>
     private async Task<(Solution? Solution, ISymbol? Symbol, string? OwningProject)> LoadOwnerAndResolveAsync(
-        string path, int line, int? column, string? nameHint, CancellationToken ct)
+        string path, int line, int? column, string? nameHint, CancellationToken ct,
+        IndexQueries? snapshotQueries = null)
     {
         string relPath = WorkspacePaths.Normalize(path);
         string owningProject;
         HashSet<string> closure;
-        using (var q = _manager.OpenQueries())
+        if (snapshotQueries is not null)
         {
-            var owners = q.ProjectsContaining(relPath);
+            var owners = snapshotQueries.ProjectsContaining(relPath);
             if (owners.Count == 0) return (null, null, null);
             owningProject = (owners.FirstOrDefault(o => !o.IsTest) ?? owners[0]).Name;
-            closure = q.DependencyClosure(new[] { owningProject });
+            closure = snapshotQueries.DependencyClosure(new[] { owningProject });
+        }
+        else
+        {
+            using var queries = _manager.OpenQueries();
+            var owners = queries.ProjectsContaining(relPath);
+            if (owners.Count == 0) return (null, null, null);
+            owningProject = (owners.FirstOrDefault(o => !o.IsTest) ?? owners[0]).Name;
+            closure = queries.DependencyClosure(new[] { owningProject });
         }
 
         var (solution, _) = await Workspace.EnsureLoadedAsync(closure, ct).ConfigureAwait(false);
@@ -520,26 +547,39 @@ public sealed partial class SemanticService : IDisposable
     /// </summary>
     private async Task<(Solution Solution, ISymbol? Symbol, ClusterCoverage Coverage, List<string> Skipped, List<string> OutOfGraph)> LoadScanSetAndResolveAsync(
         string symbolName, string owningProject, string path, int line, int? column, string? nameHint,
-        int maxProjects, CancellationToken ct, IReadOnlyList<string>? prioritySeeds = null)
+        int maxProjects, IndexQueries q, CancellationToken ct,
+        IReadOnlyList<string>? prioritySeeds = null)
     {
         List<string> skipped;
         var outOfGraph = new List<string>();
         HashSet<string> scanSet;
-        using (var q = _manager.OpenQueries())
         {
             var dependents = q.DependentClosure(owningProject);
             dependents.Add(owningProject);
-            int budget = Math.Clamp(maxProjects, 1, 200);
+            int budget = NormalizeCandidateProjectBudget(maxProjects);
 
             var chosen = new List<string>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var chosenSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var relevant = new List<string>();
+            var relevantSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             // Priority seeds (e.g. the projects that syntactically IMPLEMENT the type) load first —
             // they carry the answer even though they rank low on raw name-mention frequency (a class
             // names the interface once, while heavy consumers name it dozens of times and would
             // otherwise exhaust the budget first, leaving the implementers unloaded).
-            if (prioritySeeds is not null)
-                foreach (var p in prioritySeeds)
-                    if (chosen.Count < budget && seen.Add(p)) chosen.Add(p);
+            var orderedSeeds = (prioritySeeds ?? [])
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            void Consider(string project)
+            {
+                if (relevantSet.Add(project)) relevant.Add(project);
+                if (chosen.Count < budget && chosenSet.Add(project)) chosen.Add(project);
+            }
+
+            // Graph-valid implementer seeds are strongest: they both name the type in a base list
+            // and can legally reach its declaring project. Same-simple-name seeds outside the graph
+            // are recovery candidates, but must not starve graph-valid textual consumers.
+            foreach (string project in orderedSeeds.Where(dependents.Contains)) Consider(project);
 
             // kbn: textual candidates OUTSIDE the dependency closure (and not seed-chosen) were
             // dropped SILENTLY — not even in `skipped`. Post-lhg the closure covers assembly-ref
@@ -547,17 +587,26 @@ public sealed partial class SemanticService : IDisposable
             // projects that mention the name but have no graph path to the declarer. Report them
             // (capped) so a caller can see there was textual smoke beyond the graph.
             var candidates = new List<(string Project, int FileCount)>();
-            foreach (var c in q.CandidateProjectsForName(symbolName))
+            foreach (var c in q.CandidateProjectsForName(symbolName, ct))
             {
                 if (dependents.Contains(c.Project)) candidates.Add(c);
-                else if (!seen.Contains(c.Project) && outOfGraph.Count < 20) outOfGraph.Add(c.Project);
+                else if (!chosenSet.Contains(c.Project) && outOfGraph.Count < 20) outOfGraph.Add(c.Project);
             }
             foreach (var c in candidates)
-                if (chosen.Count < budget && seen.Add(c.Project)) chosen.Add(c.Project);
-            skipped = candidates.Select(c => c.Project).Where(p => !seen.Contains(p)).ToList();
-
+                Consider(c.Project);
+            foreach (string project in orderedSeeds.Where(project => !dependents.Contains(project)))
+            {
+                Consider(project);
+                if (outOfGraph.Count < 20 &&
+                    !outOfGraph.Contains(project, StringComparer.OrdinalIgnoreCase))
+                    outOfGraph.Add(project);
+            }
             scanSet = q.DependencyClosure(new[] { owningProject });
             foreach (var p in chosen) scanSet.Add(p);
+            // The owning project's mandatory dependency closure is loaded regardless of the
+            // optional candidate budget. Report only relevant projects absent from the FINAL scan
+            // set, otherwise a budget filled by seeds can falsely mark a project that was loaded.
+            skipped = relevant.Where(project => !scanSet.Contains(project)).ToList();
         }
 
         var (solution, coverage) = await Workspace

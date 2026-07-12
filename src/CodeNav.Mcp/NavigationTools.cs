@@ -134,7 +134,9 @@ public sealed partial class NavigationTools
                 new { id = "worktree-index-destination-isolation", summary = "Sibling SQLite work stays in private staging; an anchored no-follow destination atomically publishes the checkpointed database and refuses linked database, WAL, SHM, and rollback-journal paths without touching their targets" },
                 new { id = "worktree-index-lease", summary = "A cross-process ownership lease guards every writable Phoenix index lifetime; index_worktree returns worktree_index_locked while another Phoenix owns that target" },
                 new { id = "worktree-response-budget", summary = "worktrees may trim every item to zero, and index_worktree UTF-8-bounds reflected paths/details with truncation metadata before enforcing the complete hardBytes envelope" },
-                new { id = "index-read-followers", summary = "Windows: one writer, compatible read-only followers; index-backed evidence is committed while live evidence keeps its own provenance; review readers drain before rebuild. index.mode/meta.indexMode: writer|follower|unavailable; pendingChangesKnown=false; mutations return index_writer_required" },
+                new { id = "index-read-followers", summary = "Windows writer/followers; rebuild drains readers; modes writer|follower|unavailable; index_writer_required" },
+                new { id = "semantic-large-repo-budget", summary = "default all candidates; positive maxProjects bounds" },
+                new { id = "semantic-rebuild-coordination", summary = "semantic loads drain; rebuild resumes after readers" },
                 new { id = "related-tests-signal", summary = "related_tests / impact / context_pack test groups carry 'signal' — the strongest usage shape among sampled mention lines: callSite > typeUsage > nameMention. A heuristic lead-strength label, not a compiler fact; omitted on naming-convention / project-reference groups and on an ungraded mention group — absent means UNGRADED, never nameMention. Samples carry the real mention line + text when located" },
             },
             tools = new[]
@@ -1244,7 +1246,7 @@ public sealed partial class NavigationTools
         [Description("Workspace-relative path of the declaration or a usage (position mode).")] string? path = null,
         [Description("1-based line for position mode.")] int line = 0,
         [Description("1-based column for position mode (optional).")] int column = 0,
-        [Description("Max candidate projects loaded semantically (default 24).")] int maxProjects = 24,
+        [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
         [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000)
     {
         if (NotReady() is { } notReady) return notReady;
@@ -1273,9 +1275,14 @@ public sealed partial class NavigationTools
                 var impls = result.Implementations; // already ranked concrete-first by the semantic layer
                 int concreteCount = impls.Count(r => !r.Declaration.IsAbstract);
                 bool exhausted = result.DeadlineExhausted;
+                bool bounded = result.SkippedCandidateProjects.Count > 0 ||
+                    result.Coverage.FailedProjects.Count > 0 ||
+                    result.Coverage.LoadedProjects < result.Coverage.RequestedProjects;
+                bool partial = exhausted || bounded;
                 var meta0 = Meta.From(_manager.Health(), "exact", "semantic");
                 long elapsedMs = swSem.ElapsedMilliseconds;
-                return Json.WithListBudget(impls, (items, truncated) => new
+                return Json.WithAuxiliaryListBudget(impls, result.SkippedCandidateProjects,
+                    (items, truncated, skippedItems, skippedTruncated) => new
                 {
                     symbol = SemanticSymbolJson(result.Symbol),
                     implementations = items.Select(r => new
@@ -1289,18 +1296,27 @@ public sealed partial class NavigationTools
                     // High-signal case: exactly one instantiable implementation is very likely THE
                     // runtime type; anything else is abstract scaffolding. Never claimed when the
                     // deadline cut the search short — the "one" may just be the one found in time.
-                    likelyImplementation = concreteCount == 1 && !exhausted
+                    likelyImplementation = concreteCount == 1 && !partial
                         ? impls.First(r => !r.Declaration.IsAbstract).Declaration.SymbolDisplay
                         : null,
                     coverage = CoverageJson(result.Coverage),
-                    partial = exhausted ? true : (bool?)null,
-                    partialReason = exhausted
-                        ? $"deadline exhausted after {elapsedMs}ms of {deadlineMs}ms — this list is a LOWER BOUND of the implementers (raise timeoutMs)"
+                    skippedCandidateProjects = skippedItems.Count > 0
+                        ? skippedItems
                         : null,
+                    skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
+                        ? result.SkippedCandidateProjects.Count
+                        : (int?)null,
+                    skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+                    partial = partial ? true : (bool?)null,
+                    partialReason = exhausted
+                        ? $"semantic_timeout: deadline exhausted after {elapsedMs}ms of {deadlineMs}ms; this list is a lower bound (raise timeoutMs)"
+                        : bounded
+                            ? $"candidate_cluster_bounded: skipped {result.SkippedCandidateProjects.Count} candidate projects and {result.Coverage.FailedProjects.Count} failed loads (raise maxProjects)"
+                            : null,
                     // t2b: where the budget went — cluster load+resolve vs the finder passes.
                     timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
                     truncated,
-                    hint = concreteCount == 1 && !exhausted
+                    hint = concreteCount == 1 && !partial
                         ? "One concrete implementation — likely the runtime target. Ranked concrete-first; isAbstract/rank mark non-instantiable scaffolding."
                         : null,
                     meta = meta0,
@@ -1309,7 +1325,9 @@ public sealed partial class NavigationTools
             // Semantic RESOLVED the symbol but found no implementers, OR it could not resolve. Be
             // honest about which: bounded coverage (raising maxProjects may help) vs genuinely none.
             failReason = result is null ? ExpandReason(reason)
-                : (result.Coverage.LoadedProjects < result.Coverage.RequestedProjects || result.Coverage.FailedProjects.Count > 0)
+                : (result.SkippedCandidateProjects.Count > 0 ||
+                   result.Coverage.LoadedProjects < result.Coverage.RequestedProjects ||
+                   result.Coverage.FailedProjects.Count > 0)
                     ? "candidate_cluster_bounded"
                     : "no_semantic_implementers";
         }
@@ -1442,7 +1460,7 @@ public sealed partial class NavigationTools
         [Description("Restrict candidate paths to this glob (supplying a path filter runs indexed candidates).")] string? pathGlob = null,
         [Description("Exclude candidate paths matching this glob, e.g. '3rdparty/**' (supplying a path filter runs indexed candidates).")] string? excludePath = null,
         [Description("Max candidate files scanned in indexed mode (default 500).")] int maxFiles = 500,
-        [Description("Max projects loaded semantically (default 24; raise for hot symbols).")] int maxProjects = 24,
+        [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
         [Description("Sample lines per project group (default 3).")] int samplesPerGroup = 3,
         [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000,
         [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex; a documentationCommentId is not yet accepted here.")] string? symbolId = null)
@@ -1533,7 +1551,8 @@ public sealed partial class NavigationTools
                     string atLeast = exhausted ? "at least " : "";
                     var meta0 = Meta.From(_manager.Health(), "exact", "semantic");
                     long elapsedMs = swSem.ElapsedMilliseconds;
-                    return Json.WithListBudget(groups0, (items, truncated) => new
+                    return Json.WithAuxiliaryListBudget(groups0, result.SkippedCandidateProjects,
+                        (items, truncated, skippedItems, skippedTruncated) => new
                     {
                         symbol = SemanticSymbolJson(result.Symbol),
                         summary = $"{atLeast}{result.TotalLocations} exact references across {groups0.Count} projects ({mix0}).",
@@ -1559,7 +1578,11 @@ public sealed partial class NavigationTools
                                       ? $"; also skipped {result.SkippedCandidateProjects.Count} candidate projects, {result.Coverage.FailedProjects.Count} failed loads"
                                       : "")
                                 : $"skipped {result.SkippedCandidateProjects.Count} candidate projects (raise maxProjects), {result.Coverage.FailedProjects.Count} failed loads",
-                        skippedCandidateProjects = result.SkippedCandidateProjects.Count > 0 ? result.SkippedCandidateProjects : null,
+                        skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
+                        skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
+                            ? result.SkippedCandidateProjects.Count
+                            : (int?)null,
+                        skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
                         // kbn: projects that textually mention the symbol but have NO graph path
                         // to its declarer (plugins, config-wired consumers) — previously dropped
                         // without a trace. Not loadable via maxProjects; scope with pathGlob or
@@ -1843,7 +1866,15 @@ public sealed partial class NavigationTools
         // calls), so hits can legitimately exceed the requested set — this makes that legible
         // instead of "coverage 1/1 but 8 hits from 8 projects".
         solutionProjects = c.SolutionProjects > 0 ? c.SolutionProjects : (int?)null,
-        failedProjects = c.FailedProjects.Count > 0 ? c.FailedProjects : null,
+        failedProjects = c.FailedProjects.Count > 0
+            ? c.FailedProjects.Take(8).Select(project =>
+                Json.Utf8Prefix(project, 256, out _)).ToList()
+            : null,
+        failedProjectCount = c.FailedProjects.Count > 0 ? c.FailedProjects.Count : (int?)null,
+        failedProjectsTruncated = c.FailedProjects.Count > 8 ||
+                                  c.FailedProjects.Any(project => Json.Utf8Bytes(project) > 256)
+            ? true
+            : (bool?)null,
         frameworkRefsAvailable = c.FrameworkRefsAvailable,
     };
 

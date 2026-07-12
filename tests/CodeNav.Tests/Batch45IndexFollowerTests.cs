@@ -343,8 +343,8 @@ public sealed class Batch45IndexFollowerTests
             Assert.True(waiting.Wait(TimeSpan.FromSeconds(10)),
                 "writer never observed the follower's cross-manager review slot");
             Assert.True(WaitUntil(() => writer.Health().Error?.Contains(
-                    "full rebuild deferred", StringComparison.OrdinalIgnoreCase) == true, 5_000),
-                "writer did not report the bounded active-reader deferral");
+                    "waiting for active index readers", StringComparison.OrdinalIgnoreCase) == true, 5_000),
+                "writer did not report the active-reader wait");
             Assert.False(boundary.IsSet,
                 "writer crossed the destructive boundary while a follower snapshot was active");
             Assert.Equal("ready", writer.State);
@@ -355,7 +355,6 @@ public sealed class Batch45IndexFollowerTests
             snapshot = null;
             secondSnapshot.Dispose();
             secondSnapshot = null;
-            Assert.True(writer.RequestFullRebuild());
             Assert.True(boundary.Wait(TimeSpan.FromSeconds(10)));
             Assert.Equal(0, activeAtBoundary);
             Assert.True(completed.Wait(TimeSpan.FromSeconds(40)),
@@ -475,8 +474,8 @@ public sealed class Batch45IndexFollowerTests
                 "successor startup reached neither reader coordination nor its rebuild boundary");
             Assert.True(waiting.IsSet,
                 "successor startup bypassed the surviving follower review slot");
-            Assert.True(WaitUntil(() => successor.State == "failed" &&
-                successor.Health().Error?.Contains("full rebuild deferred",
+            Assert.True(WaitUntil(() => successor.State == "building" &&
+                successor.Health().Error?.Contains("waiting for active index readers",
                     StringComparison.OrdinalIgnoreCase) == true, 5_000),
                 successor.Health().Error);
             Assert.True(successor.IsWriter);
@@ -486,7 +485,6 @@ public sealed class Batch45IndexFollowerTests
 
             snapshot.Dispose();
             snapshot = null;
-            Assert.True(successor.RequestFullRebuild());
             Assert.True(boundary.Wait(TimeSpan.FromSeconds(10)));
             Assert.True(completed.Wait(TimeSpan.FromSeconds(40)),
                 "successor did not rebuild after the surviving follower released its snapshot");
@@ -597,8 +595,8 @@ public sealed class Batch45IndexFollowerTests
             JsonElement held = await WaitForWriterCapabilitiesAsync(writer,
                 index => index.TryGetProperty("error", out JsonElement error) &&
                          error.ValueKind == JsonValueKind.String &&
-                         error.GetString()!.Contains("full rebuild deferred",
-                             StringComparison.OrdinalIgnoreCase),
+                         error.GetString()!.Contains("waiting for active index readers",
+                              StringComparison.OrdinalIgnoreCase),
                 45_000);
             Assert.NotEqual("failed", held.GetProperty("state").GetString());
             Assert.Equal("writer", held.GetProperty("mode").GetString());
@@ -606,9 +604,6 @@ public sealed class Batch45IndexFollowerTests
 
             snapshot.Dispose();
             snapshot = null;
-            JsonElement retry = await CallJsonAsync(writer, "refresh_index",
-                new Dictionary<string, object?> { ["force"] = "full" });
-            Assert.True(retry.GetProperty("queued").GetBoolean());
             JsonElement rebuilt = await WaitForWriterCapabilitiesAsync(writer,
                 index => index.GetProperty("state").GetString() == "ready" &&
                          index.GetProperty("indexVersion").GetString() != oldVersion,
@@ -674,19 +669,38 @@ public sealed class Batch45IndexFollowerTests
                 Assert.True(WaitUntil(() => follower.State == "failed", 20_000),
                     $"{scenario}: expected follower refusal, got {follower.State}");
                 Assert.False(follower.IsWriter);
-                Assert.Equal("follower", follower.AccessMode);
+                Assert.Equal(scenario is "missing" or "corrupt" ? "unavailable" : "follower",
+                    follower.AccessMode);
                 Assert.False(follower.IsQueryable);
-                Assert.Contains("writer", follower.Health().Error ?? "",
-                    StringComparison.OrdinalIgnoreCase);
-                Assert.Contains("compatible index", follower.Health().Error ?? "",
-                    StringComparison.OrdinalIgnoreCase);
+                if (follower.IsFollower)
+                {
+                    Assert.Contains("writer", follower.Health().Error ?? "",
+                        StringComparison.OrdinalIgnoreCase);
+                    Assert.Contains("compatible index", follower.Health().Error ?? "",
+                        StringComparison.OrdinalIgnoreCase);
+                }
+                else
+                {
+                    Assert.Contains("coordination", follower.Health().Error ?? "",
+                        StringComparison.OrdinalIgnoreCase);
+                }
                 Assert.False(follower.RequestRefresh());
                 Assert.False(follower.RequestFullRebuild());
                 using var semantic = new SemanticService(follower);
                 var tools = new NavigationTools(follower, semantic);
-                AssertWriterRequired(Parse(tools.RefreshIndex(force: "full")));
-                AssertWriterRequired(Parse(tools.IndexWorktree(
-                    Path.Combine(root, "never-created-worktree"))));
+                JsonElement refresh = Parse(tools.RefreshIndex(force: "full"));
+                JsonElement worktree = Parse(tools.IndexWorktree(
+                    Path.Combine(root, "never-created-worktree")));
+                if (follower.IsFollower)
+                {
+                    AssertWriterRequired(refresh);
+                    AssertWriterRequired(worktree);
+                }
+                else
+                {
+                    Assert.Equal("index_unavailable", refresh.GetProperty("error").GetString());
+                    Assert.Equal("index_unavailable", worktree.GetProperty("error").GetString());
+                }
             }
 
             switch (scenario)

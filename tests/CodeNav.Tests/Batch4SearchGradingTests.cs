@@ -224,6 +224,13 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("implementer-completeness", ids);
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
+        Assert.Contains("semantic-large-repo-budget", ids);
+        Assert.Contains("semantic-rebuild-coordination", ids);
+        string semanticBudget = Assert.Single(json.GetProperty("features").EnumerateArray(),
+            feature => feature.GetProperty("id").GetString() == "semantic-large-repo-budget")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("default all candidates", semanticBudget);
+        Assert.Contains("positive maxProjects bounds", semanticBudget);
     }
 
     [Fact]

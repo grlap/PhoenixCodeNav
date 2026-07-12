@@ -67,8 +67,9 @@ Followers never build or repair an index; `refresh_index` and `index_worktree` r
 evidence reads committed writer state, while tools explicitly labeled live and compiler-backed
 semantic operations may read newer workspace bytes. Followers cannot observe the writer process's
 pending watcher queue, so capabilities report `pendingChangesKnown: false` rather than presenting
-a local zero as freshness evidence. Long review snapshots use cross-process reader slots; a full
-rebuild drains those readers before replacing the Windows database. If the writer exits, followers
+  a local zero as freshness evidence. Review snapshots and semantic loads retain scalable shared
+  Windows reader handles; a full rebuild takes a writer-intent turnstile and drains those readers
+  before replacing the database. The queued rebuild resumes automatically after release. If the writer exits, followers
 stop reporting query-ready until another writer appears; they never silently promote themselves,
 so restart a follower when it should take writer ownership.
 
@@ -192,8 +193,9 @@ Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.Mcp` (serv
   no multi-line patterns.
 - Indexed `references` are whole-identifier text candidates; use `mode="semantic"` (or the
   default auto-upgrade) for compiler-exact results.
-- Semantic scans are scoped to FTS-candidate projects capped by `maxProjects`; skipped
-  candidates are always listed so agents can widen deliberately.
+- Semantic scans load all matching candidate projects by default (`maxProjects:0`). A positive
+  `maxProjects` value is an explicit latency/memory tradeoff; bounded responses report the total
+  skipped count and a size-bounded sample.
 - Multi-TFM projects index a single symbol row per declaration (net472-first design).
 - Git awareness covers freshness (indexed vs HEAD commit/branch), not navigation — a
   `recent_changes` tool, `xml_doc`, and `diagnostics` from the brief are not yet implemented.

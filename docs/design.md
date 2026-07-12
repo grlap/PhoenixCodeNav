@@ -93,17 +93,23 @@ This is the part designed specifically for net472 enterprise scale.
   see `ReferenceAssemblyLocator`), hint-path/NuGet package dlls, and in-cluster project
   references. This avoids `MSBuildWorkspace.OpenSolutionAsync`, which does not scale to a
   few-thousand-project solution.
-- **Lazy, FTS-scoped clusters.** A reference query loads only the declaring project's
-  dependency closure plus the FTS-candidate dependent projects (bounded by `maxProjects`),
-  never the whole repo. Skipped candidates are reported so the agent can widen deliberately.
+- **Lazy, FTS-scoped clusters.** A reference query loads the declaring project's dependency
+  closure plus every matching FTS-candidate dependent project by default (`maxProjects: 0`).
+  A positive value opts into a bound; bounded responses report the total skipped count and a
+  size-limited sample. Phoenix has no hidden candidate-project ceiling.
 - **One snapshot per operation.** Each op resolves the symbol against, *and* runs
   `SymbolFinder` against, a single pinned `Solution` — so a background reload/eviction can't
   orphan the symbol mid-query (which previously produced empty "exact" results).
+- **Rebuild-coordinated long scans.** Candidate enumeration and semantic cluster loading hold a
+  shared cross-process reader guard, so a destructive Windows rebuild drains them before replacing
+  the SQLite database.
 - **Reload keeps identity.** A changed project reloads under its *existing* `ProjectId`, and
   eviction only removes projects nothing loaded references — so dependents' references never
   dangle. An LRU soft-caps the loaded set (~160 projects).
 
-Cold cluster load is ~1s; warm queries ~10ms; working set stays under ~300 MB.
+Cold-cluster latency and working set scale with the selected project budget; use
+`CodeNav.Bench` against the target repository for deployment sizing. Warm clusters avoid
+reloading unchanged projects.
 
 ## Freshness — and how git operations are handled
 
@@ -129,9 +135,10 @@ The index is kept live without rebuilding on every keystroke:
   in-process queue. Live source/Git and compiler-backed semantic fields retain their own provenance.
   A follower also becomes unavailable when its writer exits and recovers when another writer owns
   the lease; promotion to writer is deliberately restart-only.
-- Review snapshots retain one of a bounded set of Windows cross-process reader slots. Full rebuild
-  holds a turnstile, drains every slot, and only then replaces the database; new reviews receive a
-  bounded retry response while that destructive boundary is active.
+- Review snapshots and semantic loads retain shared handles to one anchored Windows coordination
+  file; there is no configured reader-slot ceiling. Full rebuild holds a writer-intent turnstile,
+  drains the shared handles, and only then replaces the database. Its queued request remains pending
+  and resumes automatically after readers release; new readers cannot barge ahead of it.
 
 ### `git checkout <branch>` / `git pull` / `merge` / `rebase`
 

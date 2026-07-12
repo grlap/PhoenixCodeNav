@@ -64,7 +64,7 @@ public sealed class IndexManager : IDisposable
     private const string FollowerWriterUnavailable =
         "the index writer is no longer running; restart this follower to acquire writer mode, or start another writer process";
     private const string FullRebuildDeferredForReaders =
-        "full rebuild deferred while another process holds a review snapshot; retry the full rebuild";
+        "full rebuild is waiting for active index readers; the queued rebuild remains pending";
 
     private sealed record FollowerPublication(
         IndexMetadataSnapshot? Metadata,
@@ -254,6 +254,18 @@ public sealed class IndexManager : IDisposable
             {
                 if (leaseResult == IndexLeaseAcquireResult.Contended && OperatingSystem.IsWindows())
                 {
+                    if (!authority.TryAnchorReviewCoordinationFile(create: false))
+                    {
+                        authority.Dispose();
+                        _directoryAuthority = null;
+                        _authorityDirectoryIdentity = null;
+                        _databaseIoPath = _dbPath;
+                        _accessMode = UnavailableAccessMode;
+                        _error = "index reader coordination is unavailable; restart after the writer is upgraded or restarted";
+                        _state = "failed";
+                        _log("Read-only follower refused: the active writer has not published a safe reader/rebuild coordination file.");
+                        return;
+                    }
                     // SQLite WAL supports concurrent committed readers. A contending Phoenix is a
                     // follower: retain only the no-follow directory authority and open short-lived,
                     // nonpooled read-only connections. It never starts a store, pump, or watcher.
@@ -305,6 +317,20 @@ public sealed class IndexManager : IDisposable
                 _log("Index startup refused: index destination changed during ownership acquisition.");
                 return;
             }
+            if (!authority.TryAnchorReviewCoordinationFile(create: true))
+            {
+                _ownershipLease!.Dispose();
+                _ownershipLease = null;
+                authority.Dispose();
+                _directoryAuthority = null;
+                _authorityDirectoryIdentity = null;
+                _databaseIoPath = _dbPath;
+                _accessMode = UnavailableAccessMode;
+                _error = "index reader coordination could not be initialized safely";
+                _state = "failed";
+                _log("Index startup refused: reader/rebuild coordination could not be initialized safely.");
+                return;
+            }
             _accessMode = WriterAccessMode;
             // Publish both tasks while holding the same lock Dispose uses. Dispose can therefore
             // never release the lease between its acquisition and publication of the workers.
@@ -340,15 +366,31 @@ public sealed class IndexManager : IDisposable
                     }
                     if (build)
                     {
-                        IndexReviewCoordinationAcquireResult coordination =
-                            TryAcquireFullRebuildReviewLease(
-                                out IndexReviewCoordinationLease? startupRebuildLease);
+                        IndexReviewCoordinationAcquireResult coordination;
+                        IndexReviewCoordinationLease? startupRebuildLease;
+                        bool waitingLogged = false;
+                        do
+                        {
+                            coordination = TryAcquireFullRebuildReviewLease(
+                                out startupRebuildLease);
+                            if (coordination != IndexReviewCoordinationAcquireResult.Contended)
+                                break;
+                            _error = FullRebuildDeferredForReaders;
+                            _state = "building";
+                            if (!waitingLogged)
+                            {
+                                waitingLogged = true;
+                                _log("Startup rebuild is waiting for active cross-process index readers; " +
+                                     "the rebuild remains pending.");
+                            }
+                            if (!_disposed) Thread.Sleep(50);
+                        } while (!_disposed);
+                        if (_disposed) return;
                         if (coordination != IndexReviewCoordinationAcquireResult.Acquired)
                         {
-                            _error = FullRebuildDeferredForReaders;
+                            _error = "startup rebuild reader coordination failed";
                             _state = "failed";
-                            _log($"Startup rebuild deferred before database replacement ({coordination}): " +
-                                 "another process may hold a review snapshot; retry the full rebuild.");
+                            _log("Startup rebuild refused: cross-process reader coordination failed safely.");
                             return;
                         }
 
@@ -370,6 +412,7 @@ public sealed class IndexManager : IDisposable
                                  $"{buildResult.Symbols} symbols in " +
                                  $"{buildResult.TotalTime.TotalSeconds:F0}s");
                             _buildProgress = null;
+                            FullRebuildCompletedForTest?.Invoke();
                         }
                     }
 
@@ -631,7 +674,7 @@ public sealed class IndexManager : IDisposable
             return IndexReviewCoordinationAcquireResult.Acquired;
 
         IndexReviewCoordinationAcquireResult result =
-            IndexReviewCoordinationLease.TryAcquireExclusive(before,
+            IndexReviewCoordinationLease.TryAcquireExclusive(_directoryAuthority!,
                 FullRebuildReviewWaitTimeoutForTest,
                 FullRebuildWaitingForReviewSnapshotsForTest, out lease);
         if (result != IndexReviewCoordinationAcquireResult.Acquired) return result;
@@ -659,9 +702,23 @@ public sealed class IndexManager : IDisposable
                     TryAcquireFullRebuildReviewLease(out IndexReviewCoordinationLease? rebuildLease);
                 if (coordination != IndexReviewCoordinationAcquireResult.Acquired)
                 {
-                    _error = FullRebuildDeferredForReaders;
-                    _log($"Full rebuild deferred before database replacement ({coordination}): " +
-                         "another process may hold a review snapshot; retry the full rebuild.");
+                    if (coordination == IndexReviewCoordinationAcquireResult.Contended)
+                    {
+                        _error = FullRebuildDeferredForReaders;
+                        _log("Full rebuild is waiting for active cross-process index readers; " +
+                             "the queued rebuild remains pending.");
+                        if (!_disposed) _refreshQueue.Writer.TryWrite(req);
+                        continue;
+                    }
+                    _error = "full rebuild reader coordination failed";
+                    _state = "failed";
+                    _log("Full rebuild reader coordination failed safely; the queued rebuild " +
+                         "remains pending and will be retried.");
+                    if (!_disposed)
+                    {
+                        await Task.Delay(250).ConfigureAwait(false);
+                        if (!_disposed) _refreshQueue.Writer.TryWrite(req);
+                    }
                     continue;
                 }
                 using (rebuildLease)
@@ -928,12 +985,12 @@ public sealed class IndexManager : IDisposable
     /// epoch. Returns null when a refresh overlaps snapshot creation; callers should fail closed
     /// and invite a retry instead of combining evidence from different commits.
     /// </summary>
-    public IndexReadSnapshot? TryOpenReviewSnapshot()
+    public IndexReadSnapshot? TryOpenReviewSnapshot(CancellationToken cancellationToken = default)
     {
         // Ordinary delta refreshes are short. Give the serialized pump a bounded chance to reach
         // its next committed epoch so review_pack does not fail spuriously just after a caller's
         // own refresh; a long rebuild still returns the bounded retry response.
-        if (!_stableIndexEpoch.Wait(TimeSpan.FromSeconds(2))) return null;
+        if (!_stableIndexEpoch.Wait(TimeSpan.FromSeconds(2), cancellationToken)) return null;
 
         if (!TryGetSafeDatabaseStatus(out IndexLeaseIdentity? databaseBefore,
                 out long databaseBytes) || databaseBefore?.DatabaseIdentity is null)
@@ -941,8 +998,8 @@ public sealed class IndexManager : IDisposable
 
         IndexReviewCoordinationLease? coordinationLease = null;
         if (OperatingSystem.IsWindows() &&
-            IndexReviewCoordinationLease.TryAcquireReader(databaseBefore,
-                TimeSpan.FromSeconds(2), out coordinationLease) !=
+            IndexReviewCoordinationLease.TryAcquireReader(_directoryAuthority!,
+                TimeSpan.FromSeconds(2), out coordinationLease, cancellationToken) !=
             IndexReviewCoordinationAcquireResult.Acquired)
             return null;
 

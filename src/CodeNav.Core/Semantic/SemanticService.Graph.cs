@@ -20,20 +20,28 @@ public sealed record SemanticTypeHierarchy(
 /// </summary>
 public sealed partial class SemanticService
 {
-    public async Task<(List<SemanticCaller>? Result, ClusterCoverage? Coverage, string? FailReason)> CallersAsync(
+    public async Task<(List<SemanticCaller>? Result, ClusterCoverage? Coverage,
+        List<string>? SkippedCandidateProjects, string? FailReason)> CallersAsync(
         string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
-        bool loadCompleted = false; // t2b: cold-cluster warm-up vs real scan timeout
+        bool clusterLoadInProgress = true;
         try
         {
-            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
-            if (symbolA is null || owningProject is null) return (null, null, "symbol_not_resolved");
+            using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
+            if (indexSnapshot is null) return (null, null, null, "index_snapshot_unavailable");
 
-            var (solution, symbol, coverage, _, _) = await LoadScanSetAndResolveAsync(
-                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token).ConfigureAwait(false);
-            loadCompleted = true;
-            if (symbol is null) return (null, null, "symbol_not_resolved_in_scope");
+            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
+                path, line, column, nameHint, cts.Token, indexSnapshot.Queries).ConfigureAwait(false);
+            clusterLoadInProgress = false;
+            if (symbolA is null || owningProject is null) return (null, null, null, "symbol_not_resolved");
+
+            clusterLoadInProgress = true;
+            var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
+                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
+                indexSnapshot.Queries, cts.Token).ConfigureAwait(false);
+            clusterLoadInProgress = false;
+            if (symbol is null) return (null, null, null, "symbol_not_resolved_in_scope");
 
             var callers = await SymbolFinder.FindCallersAsync(symbol, solution, cts.Token).ConfigureAwait(false);
             var testFlags = ProjectTestFlags();
@@ -53,17 +61,17 @@ public sealed partial class SemanticService
                 }
                 results.Add(new SemanticCaller(Describe(info.CallingSymbol), sites));
             }
-            return (results, coverage, null);
+            return (results, coverage, skipped, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
-            return (null, null, loadCompleted ? "semantic_timeout" : "cluster_cold_load");
+            return (null, null, null, clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout");
         }
         catch (Exception ex)
         {
             _log($"Semantic callers failed: {ex}");
-            return (null, null, $"semantic_error:{ex.GetType().Name}");
+            return (null, null, null, $"semantic_error:{ex.GetType().Name}");
         }
     }
 
@@ -74,7 +82,10 @@ public sealed partial class SemanticService
         bool loadCompleted = false; // t2b: cold-cluster warm-up vs real scan timeout
         try
         {
-            var (solution, symbol, _) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
+            using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
+            if (indexSnapshot is null) return (null, "index_snapshot_unavailable");
+            var (solution, symbol, _) = await LoadOwnerAndResolveAsync(
+                path, line, column, nameHint, cts.Token, indexSnapshot.Queries).ConfigureAwait(false);
             loadCompleted = true;
             if (symbol is null || solution is null) return (null, "symbol_not_resolved");
 
@@ -117,16 +128,22 @@ public sealed partial class SemanticService
         }
     }
 
-    public async Task<(SemanticTypeHierarchy? Result, ClusterCoverage? Coverage, string? FailReason)> TypeHierarchyAsync(
+    public async Task<(SemanticTypeHierarchy? Result, ClusterCoverage? Coverage,
+        List<string>? SkippedCandidateProjects, string? FailReason)> TypeHierarchyAsync(
         string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
-        bool loadCompleted = false; // t2b: cold-cluster warm-up vs real scan timeout
+        bool clusterLoadInProgress = true;
         try
         {
-            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(path, line, column, nameHint, cts.Token).ConfigureAwait(false);
-            if (symbolA is null || owningProject is null) return (null, null, "symbol_not_resolved");
-            if (symbolA is not INamedTypeSymbol) return (null, null, "not_a_type");
+            using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
+            if (indexSnapshot is null) return (null, null, null, "index_snapshot_unavailable");
+
+            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
+                path, line, column, nameHint, cts.Token, indexSnapshot.Queries).ConfigureAwait(false);
+            clusterLoadInProgress = false;
+            if (symbolA is null || owningProject is null) return (null, null, null, "symbol_not_resolved");
+            if (symbolA is not INamedTypeSymbol) return (null, null, null, "not_a_type");
 
             // Implementer seeds, same as ImplementationsAsync (field 0.7.0: type_hierarchy showed
             // 8 exact hits with coverage 1/1 — the hits were RESIDUE from a prior implementations
@@ -134,20 +151,17 @@ public sealed partial class SemanticService
             // cross-project interface finds nothing). Seeding makes it self-sufficient AND makes
             // coverage describe the projects this answer actually needed.
             List<string> implementerSeeds;
-            using (var q = _manager.OpenQueries())
-            {
-                implementerSeeds = q.ImplementationCandidates(symbolA.Name, 100)
-                    .SelectMany(c => q.ProjectsContaining(c.FilePath).Select(p => p.Name))
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-            }
+            implementerSeeds = indexSnapshot.Queries
+                .ImplementationCandidateProjects(symbolA.Name, cts.Token);
 
-            var (solution, symbol, coverage, _, _) = await LoadScanSetAndResolveAsync(
-                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects, cts.Token, implementerSeeds).ConfigureAwait(false);
-            loadCompleted = true;
+            clusterLoadInProgress = true;
+            var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
+                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
+                indexSnapshot.Queries, cts.Token, implementerSeeds).ConfigureAwait(false);
+            clusterLoadInProgress = false;
             if (symbol is not INamedTypeSymbol type)
             {
-                return (null, null, symbol is null ? "symbol_not_resolved_in_scope" : "not_a_type");
+                return (null, null, null, symbol is null ? "symbol_not_resolved_in_scope" : "not_a_type");
             }
 
             var baseTypes = new List<SemanticDeclaration>();
@@ -169,17 +183,17 @@ public sealed partial class SemanticService
                 down.AddRange(derived.OfType<ISymbol>().Select(Describe));
             }
 
-            return (new SemanticTypeHierarchy(Describe(type), baseTypes, interfaces, down), coverage, null);
+            return (new SemanticTypeHierarchy(Describe(type), baseTypes, interfaces, down), coverage, skipped, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
-            return (null, null, loadCompleted ? "semantic_timeout" : "cluster_cold_load");
+            return (null, null, null, clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout");
         }
         catch (Exception ex)
         {
             _log($"Semantic type hierarchy failed: {ex}");
-            return (null, null, $"semantic_error:{ex.GetType().Name}");
+            return (null, null, null, $"semantic_error:{ex.GetType().Name}");
         }
     }
 }

@@ -57,6 +57,7 @@ internal sealed record IndexMetadataSnapshot(
 /// </summary>
 public sealed partial class IndexQueries : IDisposable
 {
+    private const int CandidateDiscoveryBatchSize = 512;
     private const int DeclarationOffsetParseLimit = 128;
     private const int DeclarationOffsetPerFileCharLimit = 512 * 1024;
     private const int DeclarationOffsetCumulativeCharLimit = 4 * 1024 * 1024;
@@ -1021,6 +1022,64 @@ public sealed partial class IndexQueries : IDisposable
         return candidates.Where(h => ContainsWholeToken(h.Signature, name)).Take(limit).ToList();
     }
 
+    /// <summary>
+    /// Every project containing a type whose base list names <paramref name="name"/> as a whole
+    /// identifier token. Semantic cluster discovery must enumerate projects before applying its
+    /// caller-selected project budget; a symbol-hit cap here would silently make maxProjects lie.
+    /// </summary>
+    public List<string> ImplementationCandidateProjects(
+        string name, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(name)) return new();
+        string esc = EscapeLike(name);
+        var projects = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        long afterSymbolId = 0;
+        using var ownedSnapshot = _readSnapshot is null ? _conn.BeginTransaction(deferred: true) : null;
+        SqliteTransaction snapshot = ownedSnapshot ?? _readSnapshot!;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var batch = QueryCoreCancellable(snapshot,
+                """
+                SELECT DISTINCT c.id, c.signature, p.name
+                FROM (
+                    SELECT s.id, s.file_id, s.signature
+                    FROM symbols s
+                    WHERE s.kind IN ('class','struct','record','record_struct')
+                      AND s.name <> $n
+                      AND s.signature LIKE $pat ESCAPE '\'
+                      AND s.id > $after
+                    ORDER BY s.id
+                    LIMIT $batch
+                ) c
+                LEFT JOIN compile_items ci ON ci.file_id = c.file_id
+                LEFT JOIN projects p ON p.id = ci.project_id
+                ORDER BY c.id, p.name COLLATE NOCASE
+                """,
+                r => (Id: r.GetInt64(0), Signature: r.GetString(1),
+                    Project: r.IsDBNull(2) ? null : r.GetString(2)),
+                cancellationToken,
+                ("$n", name), ("$pat", $"%: %{esc}%"), ("$after", afterSymbolId),
+                ("$batch", CandidateDiscoveryBatchSize));
+            if (batch.Count == 0) break;
+            afterSymbolId = batch[^1].Id;
+            foreach (var candidate in batch)
+            {
+                if (candidate.Project is not null &&
+                    ContainsWholeToken(candidate.Signature, name) &&
+                    seen.Add(candidate.Project))
+                {
+                    projects.Add(candidate.Project);
+                }
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (batch.Select(candidate => candidate.Id).Distinct().Count() < CandidateDiscoveryBatchSize)
+                break;
+        }
+        return projects;
+    }
+
     /// <summary>Project name → is-test flag for the whole workspace (small).</summary>
     public Dictionary<string, bool> AllProjectTestFlags()
     {
@@ -1102,25 +1161,62 @@ public sealed partial class IndexQueries : IDisposable
     }
 
     /// <summary>
-    /// Projects whose files textually contain the identifier (FTS whole-token candidates),
-    /// ordered by match volume. This bounds which projects can possibly reference a symbol.
+    /// Every project whose files textually contain the identifier (FTS whole-token candidates),
+    /// ordered by match volume. Project selection is bounded later by the caller's maxProjects;
+    /// truncating matching files before this GROUP BY silently hid projects in large repositories.
     /// </summary>
-    public List<(string Project, int FileCount)> CandidateProjectsForName(string name, int maxFiles = 2000)
+    public List<(string Project, int FileCount)> CandidateProjectsForName(
+        string name, CancellationToken cancellationToken = default)
     {
-        return Query(
-            """
-            WITH m AS MATERIALIZED (
-                SELECT rowid AS fid FROM fts_content
-                WHERE fts_content MATCH $q LIMIT $lim
-            )
-            SELECT p.name, COUNT(DISTINCT m.fid) FROM m
-            JOIN compile_items ci ON ci.file_id = m.fid
-            JOIN projects p ON p.id = ci.project_id
-            GROUP BY p.name
-            ORDER BY COUNT(DISTINCT m.fid) DESC, p.name
-            """,
-            r => (Project: r.GetString(0), FileCount: r.GetInt32(1)),
-            ("$q", $"\"{name.Replace("\"", "")}\""), ("$lim", maxFiles));
+        if (string.IsNullOrEmpty(name)) return new();
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        long afterFileId = 0;
+        using var ownedSnapshot = _readSnapshot is null ? _conn.BeginTransaction(deferred: true) : null;
+        SqliteTransaction snapshot = ownedSnapshot ?? _readSnapshot!;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var batch = QueryCoreCancellable(snapshot,
+                """
+                SELECT DISTINCT m.fid, p.name
+                FROM (
+                    SELECT rowid AS fid
+                    FROM fts_content
+                    WHERE fts_content MATCH $q AND rowid > $after
+                    ORDER BY rowid
+                    LIMIT $batch
+                ) m
+                LEFT JOIN compile_items ci ON ci.file_id = m.fid
+                LEFT JOIN projects p ON p.id = ci.project_id
+                ORDER BY m.fid, p.name COLLATE NOCASE
+                """,
+                r => (FileId: r.GetInt64(0), Project: r.IsDBNull(1) ? null : r.GetString(1)),
+                cancellationToken,
+                ("$q", $"\"{name.Replace("\"", "")}\""), ("$after", afterFileId),
+                ("$batch", CandidateDiscoveryBatchSize));
+            if (batch.Count == 0) break;
+            afterFileId = batch[^1].FileId;
+            long currentFileId = -1;
+            var projectsForFile = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var match in batch)
+            {
+                if (match.FileId != currentFileId)
+                {
+                    currentFileId = match.FileId;
+                    projectsForFile.Clear();
+                }
+                if (match.Project is not null && projectsForFile.Add(match.Project))
+                    counts[match.Project] = counts.GetValueOrDefault(match.Project) + 1;
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (batch.Select(match => match.FileId).Distinct().Count() < CandidateDiscoveryBatchSize)
+                break;
+        }
+        return counts
+            .Select(entry => (Project: entry.Key, FileCount: entry.Value))
+            .OrderByDescending(entry => entry.FileCount)
+            .ThenBy(entry => entry.Project, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     /// <summary>All transitive dependency project names (downstream closure), targets included.</summary>
@@ -1549,16 +1645,42 @@ public sealed partial class IndexQueries : IDisposable
         r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3),
         r.GetString(4), r.GetBoolean(5), r.GetString(6));
 
-    private List<T> Query<T>(string sql, Func<SqliteDataReader, T> map, params (string, object)[] args)
+    private List<T> Query<T>(string sql, Func<SqliteDataReader, T> map, params (string, object)[] args) =>
+        QueryCore(_readSnapshot, sql, map, args);
+
+    private List<T> QueryCore<T>(SqliteTransaction? transaction, string sql,
+        Func<SqliteDataReader, T> map, params (string, object)[] args)
+        => QueryCoreCancellable(transaction, sql, map, CancellationToken.None, args);
+
+    private List<T> QueryCoreCancellable<T>(SqliteTransaction? transaction, string sql,
+        Func<SqliteDataReader, T> map, CancellationToken cancellationToken,
+        params (string, object)[] args)
     {
-        using var cmd = CreateCommand();
+        using var cmd = _conn.CreateCommand();
+        cmd.Transaction = transaction;
         cmd.CommandText = sql;
         foreach (var (k, v) in args) cmd.Parameters.AddWithValue(k, v);
         var list = new List<T>();
-        using (var reader = cmd.ExecuteReader())
+        using CancellationTokenRegistration registration = cancellationToken.Register(
+            static state =>
+            {
+                try { ((SqliteCommand)state!).Cancel(); } catch { }
+            }, cmd);
+        cancellationToken.ThrowIfCancellationRequested();
+        try
         {
-            while (reader.Read()) list.Add(map(reader));
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                list.Add(map(reader));
+            }
         }
+        catch (SqliteException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
         _afterQueryForTest?.Invoke(sql);
         return list;
     }

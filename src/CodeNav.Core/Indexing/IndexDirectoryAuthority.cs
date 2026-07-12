@@ -17,6 +17,7 @@ internal sealed class IndexDirectoryAuthority : IDisposable
     private const uint FileShareRead = 1;
     private const uint FileShareWrite = 2;
     private const uint OpenExisting = 3;
+    private const uint OpenAlways = 4;
     private const uint FileFlagBackupSemantics = 0x02000000;
     private const uint FileFlagOpenReparsePoint = 0x00200000;
     private const uint FileAttributeDirectory = 0x10;
@@ -26,6 +27,9 @@ internal sealed class IndexDirectoryAuthority : IDisposable
     private readonly List<SafeFileHandle> _handles;
     private readonly SafeFileHandle? _directoryHandle;
     private readonly string _displayDatabasePath;
+    private readonly object _reviewCoordinationGate = new();
+    private SafeFileHandle? _reviewCoordinationAnchor;
+    private string? _reviewCoordinationIdentity;
 
     private IndexDirectoryAuthority(List<SafeFileHandle> handles,
         SafeFileHandle? directoryHandle, string displayDatabasePath, string databasePath)
@@ -37,6 +41,99 @@ internal sealed class IndexDirectoryAuthority : IDisposable
     }
 
     internal string DatabasePath { get; }
+
+    /// <summary>
+    /// Pins the regular coordination leaf without read/write/delete access. The zero-access anchor
+    /// prevents path replacement while remaining compatible with both shared-reader and exclusive
+    /// rebuild handles. Only the writer may create the leaf; followers must open an existing one.
+    /// </summary>
+    internal bool TryAnchorReviewCoordinationFile(bool create)
+    {
+        if (!OperatingSystem.IsWindows()) return true;
+        lock (_reviewCoordinationGate)
+        {
+            return TryAnchorReviewLeaf(ReviewCoordinationPath(), create,
+                ref _reviewCoordinationAnchor, ref _reviewCoordinationIdentity);
+        }
+    }
+
+    internal bool TryGetReviewCoordinationKey(out string? key)
+    {
+        lock (_reviewCoordinationGate)
+        {
+            key = _reviewCoordinationIdentity;
+            return key is { Length: > 0 };
+        }
+    }
+
+    private static bool TryAnchorReviewLeaf(string path, bool create,
+        ref SafeFileHandle? anchor, ref string? identity)
+    {
+        if (anchor is { IsInvalid: false, IsClosed: false }) return true;
+        SafeFileHandle handle = CreateFileW(path, 0,
+            FileShareRead | FileShareWrite, IntPtr.Zero,
+            create ? OpenAlways : OpenExisting,
+            FileFlagOpenReparsePoint, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            handle.Dispose();
+            return false;
+        }
+        if (!TryValidateWindowsRegularFile(handle, out string? openedIdentity))
+        {
+            handle.Dispose();
+            return false;
+        }
+
+        anchor = handle;
+        identity = openedIdentity;
+        return true;
+    }
+
+    /// <summary>Attempts one OS-level reader/exclusive open against the pinned coordination leaf.
+    /// Sharing violations are ordinary contention; every other failure is a coordination fault.</summary>
+    internal IndexReviewCoordinationAcquireResult TryOpenReviewCoordinationHandle(
+        bool exclusive, out SafeFileHandle? handle)
+    {
+        handle = null;
+        if (!OperatingSystem.IsWindows()) return IndexReviewCoordinationAcquireResult.Acquired;
+        if (!TryAnchorReviewCoordinationFile(create: false))
+            return IndexReviewCoordinationAcquireResult.Failed;
+
+        SafeFileHandle candidate = CreateFileW(ReviewCoordinationPath(), GenericRead,
+            exclusive ? 0 : FileShareRead, IntPtr.Zero, OpenExisting,
+            FileFlagOpenReparsePoint, IntPtr.Zero);
+        if (candidate.IsInvalid)
+        {
+            int error = Marshal.GetLastPInvokeError();
+            candidate.Dispose();
+            return error is 32 or 33
+                ? IndexReviewCoordinationAcquireResult.Contended
+                : IndexReviewCoordinationAcquireResult.Failed;
+        }
+        if (!TryValidateWindowsRegularFile(candidate, out string? identity) ||
+            !string.Equals(identity, _reviewCoordinationIdentity, StringComparison.Ordinal))
+        {
+            candidate.Dispose();
+            return IndexReviewCoordinationAcquireResult.Failed;
+        }
+
+        handle = candidate;
+        return IndexReviewCoordinationAcquireResult.Acquired;
+    }
+
+    private string ReviewCoordinationPath() => _displayDatabasePath + ".readers";
+
+    private static bool TryValidateWindowsRegularFile(SafeFileHandle handle, out string? identity)
+    {
+        identity = null;
+        if (!GetFileInformationByHandle(handle, out WinFileInfo info) ||
+            (info.FileAttributes & (FileAttributeDirectory | FileAttributeReparsePoint)) != 0 ||
+            info.NumberOfLinks != 1)
+            return false;
+        identity = WindowsIdentity(info);
+        return true;
+    }
 
     internal static bool TryOpen(string dbPath, bool createDirectory,
         out IndexDirectoryAuthority? authority)
@@ -372,6 +469,12 @@ internal sealed class IndexDirectoryAuthority : IDisposable
 
     public void Dispose()
     {
+        lock (_reviewCoordinationGate)
+        {
+            _reviewCoordinationAnchor?.Dispose();
+            _reviewCoordinationAnchor = null;
+            _reviewCoordinationIdentity = null;
+        }
         for (int i = _handles.Count - 1; i >= 0; i--) _handles[i].Dispose();
         _handles.Clear();
     }

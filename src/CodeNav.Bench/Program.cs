@@ -95,27 +95,30 @@ static async Task<int> RunSemanticScenario(string workspace, string dbPath)
         return d is not null ? "ok" : $"FAILED: {r}";
     });
 
-    await Time($"references MEDIUM ({ifaceName}, maxProjects 24)", async () =>
+    await Time($"references MEDIUM ({ifaceName}, default maxProjects {SemanticService.DefaultCandidateProjectBudget})", async () =>
     {
-        var (res, r) = await sem.ReferencesAsync(ifacePath, ifaceLine, null, ifaceName, 24, 2, 120000);
+        var (res, r) = await sem.ReferencesAsync(ifacePath, ifaceLine, null, ifaceName,
+            SemanticService.DefaultCandidateProjectBudget, 2, 120000);
         return res is not null
             ? $"→ {res.TotalLocations} refs, {res.Groups.Count} projects, skipped {res.SkippedCandidateProjects.Count}"
             : $"FAILED: {r}";
     });
 
-    await Time("references HOT (Guard, maxProjects 24 of ~85 candidates)", async () =>
+    await Time($"references HOT (Guard, default maxProjects {SemanticService.DefaultCandidateProjectBudget} of ~85 candidates)", async () =>
     {
         using var q = manager.OpenQueries();
         var guard = q.SearchSymbols("Guard", "exact", new[] { "class" }, 1).Single();
-        var (res, r) = await sem.ReferencesAsync(guard.FilePath, guard.StartLine, null, "Guard", 24, 1, 120000);
+        var (res, r) = await sem.ReferencesAsync(guard.FilePath, guard.StartLine, null, "Guard",
+            SemanticService.DefaultCandidateProjectBudget, 1, 120000);
         return res is not null
-            ? $"→ {res.TotalLocations} refs, {res.Groups.Count} projects, skipped {res.SkippedCandidateProjects.Count} (partial by design)"
+            ? $"→ {res.TotalLocations} refs, {res.Groups.Count} projects, skipped {res.SkippedCandidateProjects.Count}"
             : $"FAILED: {r}";
     });
 
     await Time($"implementations ({ifaceName})", async () =>
     {
-        var (res, r) = await sem.ImplementationsAsync(ifacePath, ifaceLine, null, ifaceName, 24, 120000);
+        var (res, r) = await sem.ImplementationsAsync(ifacePath, ifaceLine, null, ifaceName,
+            SemanticService.DefaultCandidateProjectBudget, 120000);
         return res is not null ? $"→ {res.Implementations.Count} implementations" : $"FAILED: {r}";
     });
 

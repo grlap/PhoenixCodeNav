@@ -21,7 +21,7 @@ public sealed partial class NavigationTools
         [Description("Workspace-relative path of the declaration or a usage.")] string? path = null,
         [Description("1-based line.")] int line = 0,
         [Description("1-based column (optional).")] int column = 0,
-        [Description("Max candidate projects loaded (default 24).")] int maxProjects = 24,
+        [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
         [Description("Deadline in ms (default 15000).")] int timeoutMs = 15000)
     {
         if (NotReady() is { } notReady) return notReady;
@@ -33,14 +33,19 @@ public sealed partial class NavigationTools
         var (target, hint) = ResolveSemanticTarget(name, null, "method,property,constructor", path, line, column);
         if (target is { } t)
         {
-            var (result, coverage, reason) = _semantic
+            var (result, coverage, skippedCandidateProjects, reason) = _semantic
                 .CallersAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
                 .GetAwaiter().GetResult();
             reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
             if (result is not null)
             {
+                bool bounded = (skippedCandidateProjects?.Count ?? 0) > 0 ||
+                    (coverage?.FailedProjects.Count ?? 0) > 0 ||
+                    (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects);
                 var meta = Meta.From(_manager.Health(), "exact", "semantic");
-                return Json.WithListBudget(result, (items, truncated) => new
+                var skippedProjects = skippedCandidateProjects ?? new List<string>();
+                return Json.WithAuxiliaryListBudget(result, skippedProjects,
+                    (items, truncated, skippedItems, skippedTruncated) => new
                 {
                     callers = items.Select(c => new
                     {
@@ -48,6 +53,13 @@ public sealed partial class NavigationTools
                         callSites = c.CallSites.Select(s => new { s.Path, s.Line, text = s.LineText }),
                     }),
                     coverage = coverage is null ? null : CoverageJson(coverage),
+                    skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
+                    skippedCandidateProjectCount = skippedProjects.Count > 0
+                        ? skippedProjects.Count
+                        : (int?)null,
+                    skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+                    partial = bounded ? true : (bool?)null,
+                    partialReason = bounded ? "candidate_cluster_bounded" : null,
                     truncated,
                     meta,
                 });
@@ -110,7 +122,7 @@ public sealed partial class NavigationTools
         [Description("Workspace-relative path of the declaration or a usage.")] string? path = null,
         [Description("1-based line.")] int line = 0,
         [Description("1-based column (optional).")] int column = 0,
-        [Description("Max candidate projects loaded (default 24).")] int maxProjects = 24,
+        [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
         [Description("Deadline in ms (default 15000).")] int timeoutMs = 15000)
     {
         if (NotReady() is { } notReady) return notReady;
@@ -127,7 +139,7 @@ public sealed partial class NavigationTools
         {
             return Json.Serialize(new { error = "target_not_found_in_index", name });
         }
-        var (result, coverage, reason) = _semantic
+        var (result, coverage, skippedCandidateProjects, reason) = _semantic
             .TypeHierarchyAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
             .GetAwaiter().GetResult();
         reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
@@ -176,6 +188,10 @@ public sealed partial class NavigationTools
         }
         var down = result.DerivedOrImplementing;
         var meta1 = Meta.From(_manager.Health(), "exact", "semantic");
+        var skippedProjects = skippedCandidateProjects ?? new List<string>();
+        bool coverageBounded = (skippedCandidateProjects?.Count ?? 0) > 0 ||
+            (coverage?.FailedProjects.Count ?? 0) > 0 ||
+            (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects);
 
         // Parity with implementations: when compiler-exact finds no derived/implementing types — often
         // a type-twin identity mismatch across assemblies, or bounded coverage — surface the index
@@ -198,9 +214,8 @@ public sealed partial class NavigationTools
             var heuristic = isType && lookupName.Length > 0 ? q0.ImplementationCandidates(lookupName, 50) : new List<SymbolHit>();
             if (heuristic.Count > 0)
             {
-                bool bounded = coverage is not null &&
-                    (coverage.LoadedProjects < coverage.RequestedProjects || coverage.FailedProjects.Count > 0);
-                return Json.WithListBudget(heuristic, (items, truncated) => new
+                return Json.WithAuxiliaryListBudget(heuristic, skippedProjects,
+                    (items, truncated, skippedItems, skippedTruncated) => new
                 {
                     symbol = SemanticSymbolJson(result.Symbol),
                     baseTypes = result.BaseTypes.Select(SemanticSymbolJson),
@@ -208,7 +223,13 @@ public sealed partial class NavigationTools
                     derivedOrImplementing = items.Select(SymbolJson),
                     derivedConfidence = "heuristic",
                     noteId = NoteIds.HierarchyHeuristicFallback, // a0b: stable, machine-matchable
-                    partialReason = bounded ? "candidate_cluster_bounded" : "no_semantic_derived",
+                    skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
+                    skippedCandidateProjectCount = skippedProjects.Count > 0
+                        ? skippedProjects.Count
+                        : (int?)null,
+                    skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+                    partial = coverageBounded ? true : (bool?)null,
+                    partialReason = coverageBounded ? "candidate_cluster_bounded" : "no_semantic_derived",
                     // Field (lhg): stale "generated twin" wording replaced — key on the causes we
                     // can actually still hit post-edge-recovery, with the remediation inline.
                     note = "Compiler-exact resolution found no derived/implementing types, but these name it in their base list (derivedOrImplementing is heuristic here). Implementer projects were likely not loaded into the semantic cluster (raise maxProjects, or scope with pathGlob), or the implementers bind the name to a declaration outside the workspace. baseTypes/interfaces remain exact. Verify with source_context.",
@@ -220,13 +241,21 @@ public sealed partial class NavigationTools
             }
         }
 
-        return Json.WithListBudget(down, (items, truncated) => new
+        return Json.WithAuxiliaryListBudget(down, skippedProjects,
+            (items, truncated, skippedItems, skippedTruncated) => new
         {
             symbol = SemanticSymbolJson(result.Symbol),
             baseTypes = result.BaseTypes.Select(SemanticSymbolJson),
             interfaces = result.Interfaces.Select(SemanticSymbolJson),
             derivedOrImplementing = items.Select(SemanticSymbolJson),
             coverage = coverage is null ? null : CoverageJson(coverage),
+            skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
+            skippedCandidateProjectCount = skippedProjects.Count > 0
+                ? skippedProjects.Count
+                : (int?)null,
+            skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+            partial = coverageBounded ? true : (bool?)null,
+            partialReason = coverageBounded ? "candidate_cluster_bounded" : null,
             timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
             truncated,
             meta = meta1,
