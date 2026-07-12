@@ -140,11 +140,15 @@ documentation-only, test-only, and apparently trivial changes still follow the f
    documented `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` timing flake may be
    noted only when it is the sole failure and passes in isolation.
 4. Run an adversarial review of the full uncommitted staged, unstaged, and untracked change
-   set. Findings are fixed and verified by the same reviewer until CLEAN. If a reviewer dies
-   mid-pass, the batch is not reviewed.
-5. Only after CLEAN may the outer workflow commit when the active user/repository authority
-   permits it. This review command itself never commits. Push always requires explicit
-   per-changeset approval from Greg.
+   set. Both requested reviewers must complete against the same target identity.
+   Critical and High findings block check-in and require a new complete review after any fix.
+   Medium and Low findings must be recorded in Beads but do not block check-in. If a reviewer dies mid-pass,
+   the batch is not reviewed.
+5. The outer workflow may commit only when the exact reviewed target identity remains unchanged
+   and the complete review reports no unresolved Critical or High finding. A `NOT CLEAN` verdict
+   caused only by Medium or Low findings is check-in eligible after Beads reconciliation. This
+   review command itself never commits. Push always requires explicit per-changeset approval
+   from Greg.
 6. Close or annotate Beads with the implementation. Bump `BuildInfo.Version` for a changed
    tool surface or user-visible capability. Bump `IndexBuilder.SchemaVersion` whenever the
    schema or indexer's stored output changes.
@@ -165,13 +169,16 @@ a durable fan-in.
 - Both commands are review-only. They never edit source, mutate Git, commit, push, or run
   Dolt remote sync. The parent may reconcile local Beads findings after fan-in.
 - A failed, missing, or dead reviewer makes the review INCONCLUSIVE, never CLEAN.
+- Review verdict and check-in eligibility are separate: `CLEAN` still means no actionable finding
+  at any severity, while unchanged reviewed bytes with only tracked Medium or Low findings are
+  check-in eligible. Any Critical, High, INCONCLUSIVE, or target-identity drift blocks check-in.
 - Changes at any depth to `AGENTS.md`/`AGENTS.override.md`, `CLAUDE.md`/`CLAUDE.local.md`,
   `.mcp.json`, an `.agents`/`.claude`/`.codex` directory, or the review-command contract test
   cannot be certified by the dirty self-hosted gate. They require an independent external/manual
   adversarial review or the last committed trusted command/lens versions.
 - If the TermAl MCP bridge is unavailable, stop and report it; a self-review does not
   substitute for the required independent review round.
-- The current TermAl MCP surface cannot send a follow-up turn to an existing child. When
-  literal same-session verification is required after fixes, continue through the original
-  child session UI or ask for direction; rerunning creates fresh reviewers and must not be
-  described as same-session verification.
+- The current TermAl MCP surface cannot send a follow-up turn to an existing child. If a fix
+  changes the target identity, run a new complete dual review against the new bytes. Fresh
+  reviewers are acceptable for that new identity, but must not be described as same-session
+  verification.

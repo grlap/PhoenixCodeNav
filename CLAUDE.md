@@ -75,14 +75,17 @@ The loop, in order — no step skipped or reordered:
 3. `dotnet build` at **0 warnings**; `dotnet test` green. Known flake:
    `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` (watcher timing) — if it fires
    in a full run, verify it passes isolated and note it.
-4. **Adversarial subagent review of the full uncommitted diff**, with empirical reproduction
-   required for findings. Findings → fix → verification round (same reviewer) until CLEAN.
-5. Only after CLEAN: commit. (Autonomous commit on a clean review was EXPLICITLY
-   pre-authorized by Greg for this repository's batch loop — "when review is clean, check-in
-   and let me know", reaffirmed 2026-07-09 — which is what lets it override the global
-   do-not-commit rule here; in any session where Greg has not affirmed this workflow, the
-   global rule wins and every commit needs his explicit word.
-   **Push always needs explicit per-changeset approval from Greg — no standing grant exists.**)
+4. **Adversarial subagent review of the full uncommitted diff.** Both requested reviewers must
+   complete against the same target identity. Critical and High findings block check-in and
+   require a new complete review after any fix. Medium and Low findings must be recorded in
+   Beads but do not block check-in.
+5. Commit only when the exact reviewed target identity remains unchanged and the complete review
+   reports no unresolved Critical or High finding. A `NOT CLEAN` verdict caused only by Medium
+   or Low findings is check-in eligible after Beads reconciliation. Autonomous commit on an
+   eligible review was EXPLICITLY pre-authorized by Greg for this repository's batch loop. In
+   any session where Greg has not affirmed this workflow, the global rule wins and every commit
+   needs his explicit word.
+   **Push always needs explicit per-changeset approval from Greg — no standing grant exists.**
 6. Close/annotate beads in the same commit. Bump `BuildInfo.Version` when the tool surface or
    a user-visible capability changes; bump `IndexBuilder.SchemaVersion` whenever the schema
    **or the indexer's stored output** changes (it forces the rebuild deployments rely on —
@@ -119,13 +122,16 @@ a durable fan-in.
 - Both commands are review-only. They never edit source, mutate Git, commit, push, or run
   Dolt remote sync. The parent may reconcile local Beads findings after fan-in.
 - A failed, missing, or dead reviewer makes the review INCONCLUSIVE, never CLEAN.
+- Review verdict and check-in eligibility are separate: `CLEAN` still means no actionable finding
+  at any severity, while unchanged reviewed bytes with only tracked Medium or Low findings are
+  check-in eligible. Any Critical, High, INCONCLUSIVE, or target-identity drift blocks check-in.
 - Changes at any depth to `AGENTS.md`/`AGENTS.override.md`, `CLAUDE.md`/`CLAUDE.local.md`,
   `.mcp.json`, an `.agents`/`.claude`/`.codex` directory, or the review-command contract test
   cannot be certified by the dirty self-hosted gate. They require an independent external/manual
   adversarial review or the last committed trusted command/lens versions.
 - If the TermAl MCP bridge is unavailable, stop and report it; a self-review does not
   substitute for the required independent review round.
-- The current TermAl MCP surface cannot send a follow-up turn to an existing child. When
-  literal same-session verification is required after fixes, continue through the original
-  child session UI or ask for direction; rerunning creates fresh reviewers and must not be
-  described as same-session verification.
+- The current TermAl MCP surface cannot send a follow-up turn to an existing child. If a fix
+  changes the target identity, run a new complete dual review against the new bytes. Fresh
+  reviewers are acceptable for that new identity, but must not be described as same-session
+  verification.

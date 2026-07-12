@@ -9,7 +9,7 @@ metadata:
 
 Review the current staged, unstaged, and untracked changes by running `/review-local` in one Codex and one Claude TermAl reviewer session.
 
-**IMPORTANT: This is a review-only command. Do not modify source files, stage, stash, checkout, reset, commit, push, run `bd dolt push`, or run any other mutating Git/remote-sync operation. Parent validation may create normal ignored build/test artifacts; parent-session local Beads reconciliation is the only permitted tracked/project workflow mutation. This command grants no commit authority; after a CLEAN result the outer workflow must still follow `CLAUDE.md` / `AGENTS.md`. Push always requires explicit per-changeset approval.**
+**IMPORTANT: This is a review-only command. Do not modify source files, stage, stash, checkout, reset, commit, push, run `bd dolt push`, or run any other mutating Git/remote-sync operation. Parent validation may create normal ignored build/test artifacts; parent-session local Beads reconciliation is the only permitted tracked/project workflow mutation. This command grants no commit authority; after a check-in-eligible result the outer workflow must still follow `CLAUDE.md` / `AGENTS.md`. Push always requires explicit per-changeset approval.**
 
 **IMPORTANT: Beads (`bd`) is the canonical tracker for findings. Do not create markdown bug lists. Delegated read-only reviewers propose Beads actions; this parent command performs deduplicated reconciliation after fan-in.**
 
@@ -152,9 +152,19 @@ Use this shape:
 
 ## Verdict
 - CLEAN | NOT CLEAN | INCONCLUSIVE
+
+## Check-in Gate
+- ELIGIBLE | BLOCKED | INCONCLUSIVE
 ```
 
 `CLEAN` requires both requested reviewers to complete successfully, return complete non-truncated packets, leave no unresolved serious risk, and report no actionable finding at any severity. Note-only observations may remain. A missing/dead reviewer or incomplete packet makes the result `INCONCLUSIVE`, never CLEAN.
+
+Check-in eligibility is a separate aggregate decision. `ELIGIBLE` requires both requested
+reviewers to complete against the exact reviewed target identity and requires the parent identity to remain unchanged.
+There must be no unresolved Critical or High finding from either reviewer.
+Medium and Low findings do not block check-in after they are reconciled into Beads. Any Critical or High finding
+makes the gate `BLOCKED`; any lifecycle failure, incomplete packet, `INCONCLUSIVE` verdict, or
+identity drift makes the gate `INCONCLUSIVE`.
 
 ## Step 6: Reconcile Beads in the parent
 
@@ -183,8 +193,8 @@ After reconciliation, rerun `git --no-optional-locks status --short` and the cha
 
 ## Step 7: Hand off
 
-- `NOT CLEAN`: list blocking Beads ids and tell the implementer to fix, re-run reintroduction verification and quality gates, then request verification from the original Codex and Claude child sessions through the TermAl UI. If those sessions cannot be continued, stop and ask for explicit direction; a fresh `/review-with-delegate` run is additional evidence but does not satisfy literal same-session verification.
-- `INCONCLUSIVE`: report the missing reviewer/tool condition. It does not satisfy the commit discipline.
-- `CLEAN`: state that the review gate passed. Do not commit or push inside this command; return control to the outer workflow.
+- `BLOCKED`: list the Critical/High Beads ids. Any fix changes the target identity, so re-run reintroduction verification, quality gates, and a new complete dual review against the new bytes.
+- `INCONCLUSIVE`: report the missing reviewer/tool/identity condition. It does not satisfy the commit discipline.
+- `ELIGIBLE`: state whether the review verdict is CLEAN or NOT CLEAN with only Medium/Low findings, list the reconciled non-blocking Beads ids, and return control to the outer workflow. Do not commit or push inside this command.
 
-Current TermAl MCP does not expose a follow-up call to an existing child session. Re-running this command creates fresh Codex/Claude reviewer sessions and therefore cannot claim literal same-session verification. Continue with the original child sessions through the TermAl UI or stop and ask for direction; do not silently claim compliance.
+Current TermAl MCP does not expose a follow-up call to an existing child session. When a fix changes the target identity, a fresh complete Codex/Claude pair is acceptable because it reviews the new bytes. Do not describe a fresh pair as same-session verification.
