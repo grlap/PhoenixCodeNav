@@ -160,7 +160,8 @@ internal sealed record Meta(
     string? ConfidenceNote = null,
     string? StatusNote = null,
     string? Build = null,
-    string? IndexSchema = null) // field (asked twice): key on schema per-response, no capabilities call
+    string? IndexSchema = null, // field (asked twice): key on schema per-response, no capabilities call
+    string IndexMode = "writer")
 {
     public static Meta From(IndexHealth h, string confidence, string layer)
     {
@@ -175,16 +176,19 @@ internal sealed record Meta(
             : null;
         // 9z4 (field: couldn't tell whether 'refreshing' meant "results may be wrong" or "background
         // catch-up, results fine"): one line of meaning, only when the status needs it.
-        string? statusNote = status switch
-        {
-            "refreshing" => "background non-blocking refresh — results reflect the index as of lastRefreshUtc/indexedAtUtc",
-            "stale" => $"watcher changes pending ({h.PendingChanges}) — results may lag the working tree slightly",
-            _ => null,
-        };
+        string? statusNote = h.AccessMode == IndexManager.FollowerAccessMode
+            ? "read-only follower — index-backed evidence reflects committed writer state; live source, Git, and semantic evidence may be newer; this process cannot observe the writer's pending queue"
+            : status switch
+            {
+                "refreshing" => "background non-blocking refresh — results reflect the index as of lastRefreshUtc/indexedAtUtc",
+                "stale" => $"watcher changes pending ({h.PendingChanges}) — results may lag the working tree slightly",
+                _ => null,
+            };
         // ddp (field: "I can programmatically check what's deployed — make it inline"): every
         // response self-identifies its build, ~20 bytes. indexSchema likewise (asked twice) —
         // schema bumps force reindexes, and a caller watching for one shouldn't need a second call.
         return new Meta(status, h.IndexVersion, h.IndexedAtUtc, h.LastRefreshUtc, h.PendingChanges,
-            confidence, layer, note, statusNote, BuildInfo.Stamp, BuildInfo.IndexSchema);
+            confidence, layer, note, statusNote, BuildInfo.Stamp, BuildInfo.IndexSchema,
+            h.AccessMode);
     }
 }

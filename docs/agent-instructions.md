@@ -12,7 +12,12 @@ Prefer its tools over shell `rg`/`grep`/`find` for source navigation.
 
 Default flow:
 
-1. Call `repo_overview` once before code work and check `meta.indexStatus`.
+1. Call `repo_overview` once before code work and check `meta.indexStatus` and
+   `meta.indexMode`. On Windows, `follower` is fully queryable; it means another Phoenix
+   process owns refresh/build authority. Do not retry `refresh_index` or `index_worktree`
+   there — run the operation from the `writer` process when those tools return
+   `index_writer_required`.
+   `unavailable` means this process has not attached to an index role.
 2. For anything that is a **code identifier** (type, method, property), use the symbol tools:
    `search_symbol`, `definition`, `references`, `implementations` — not text search.
 3. Use `search_text` only for literals: config keys, route strings, error messages, log

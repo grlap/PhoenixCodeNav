@@ -30,6 +30,7 @@ public sealed class SemanticWorkspace : IDisposable
     private readonly string _workspaceRoot;
     private readonly string _dbPath;
     private readonly Action<string> _log;
+    private readonly bool _poolIndexConnections;
     private readonly AdhocWorkspace _workspace = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, LoadedProject> _loaded = new(StringComparer.OrdinalIgnoreCase);
@@ -46,11 +47,13 @@ public sealed class SemanticWorkspace : IDisposable
     private static readonly CSharpCompilationOptions CompilationOptions =
         new(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true, concurrentBuild: true);
 
-    public SemanticWorkspace(string workspaceRoot, string dbPath, Action<string>? log = null)
+    public SemanticWorkspace(string workspaceRoot, string dbPath, Action<string>? log = null,
+        bool poolIndexConnections = true)
     {
         _workspaceRoot = workspaceRoot;
         _dbPath = dbPath;
         _log = log ?? (_ => { });
+        _poolIndexConnections = poolIndexConnections;
     }
 
     /// <summary>
@@ -66,7 +69,8 @@ public sealed class SemanticWorkspace : IDisposable
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            using var q = new IndexQueries(_dbPath);
+            using var q = new IndexQueries(_dbPath, pinReadSnapshot: false,
+                pooling: _poolIndexConnections);
             var requested = new HashSet<string>(projectNames, StringComparer.OrdinalIgnoreCase);
             var failed = new List<string>();
             var skipped = new List<string>();
@@ -211,7 +215,8 @@ public sealed class SemanticWorkspace : IDisposable
         // direction is deliberately NOT in refNames, so its hint dll below stays — the metadata
         // binding is the correct degraded wiring for the back edge.
         bool WouldCycle(ProjectId target) => ReachesId(solutionNow, target, projectId);
-        using (var q2 = new IndexQueries(_dbPath))
+        using (var q2 = new IndexQueries(_dbPath, pinReadSnapshot: false,
+                   pooling: _poolIndexConnections))
         {
             foreach (var edge in q2.ProjectGraph(name, 1, "downstream"))
             {

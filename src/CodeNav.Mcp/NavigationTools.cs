@@ -134,6 +134,7 @@ public sealed partial class NavigationTools
                 new { id = "worktree-index-destination-isolation", summary = "Sibling SQLite work stays in private staging; an anchored no-follow destination atomically publishes the checkpointed database and refuses linked database, WAL, SHM, and rollback-journal paths without touching their targets" },
                 new { id = "worktree-index-lease", summary = "A cross-process ownership lease guards every writable Phoenix index lifetime; index_worktree returns worktree_index_locked while another Phoenix owns that target" },
                 new { id = "worktree-response-budget", summary = "worktrees may trim every item to zero, and index_worktree UTF-8-bounds reflected paths/details with truncation metadata before enforcing the complete hardBytes envelope" },
+                new { id = "index-read-followers", summary = "Windows: one writer, compatible read-only followers; index-backed evidence is committed while live evidence keeps its own provenance; review readers drain before rebuild. index.mode/meta.indexMode: writer|follower|unavailable; pendingChangesKnown=false; mutations return index_writer_required" },
                 new { id = "related-tests-signal", summary = "related_tests / impact / context_pack test groups carry 'signal' — the strongest usage shape among sampled mention lines: callSite > typeUsage > nameMention. A heuristic lead-strength label, not a compiler fact; omitted on naming-convention / project-reference groups and on an ungraded mention group — absent means UNGRADED, never nameMention. Samples carry the real mention line + text when located" },
             },
             tools = new[]
@@ -162,6 +163,7 @@ public sealed partial class NavigationTools
             index = new
             {
                 state,
+                mode = h.AccessMode,
                 stateTruncated = stateTruncated ? true : (bool?)null,
                 stateBytes,
                 // Live build progress (bead two, field-requested): phase + monotonic counters +
@@ -178,6 +180,9 @@ public sealed partial class NavigationTools
                 lastRefreshUtcTruncated = lastRefreshUtcTruncated ? true : (bool?)null,
                 lastRefreshUtcBytes,
                 h.PendingChanges,
+                pendingChangesKnown = h.AccessMode == IndexManager.WriterAccessMode
+                    ? (bool?)null
+                    : false,
                 // z4c: the pair that turns 'refreshing' from a binary into movement — pending
                 // drains while processed climbs; both flat = a stuck pump, not a busy one.
                 pendingProcessed = h.PendingProcessed,
@@ -1693,7 +1698,7 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- maintenance
 
     [McpServerTool(Name = "refresh_index")]
-    [Description("Queue an index refresh. force='auto'/'incremental': targeted paths or a change-detection sweep — hash-identical files are SKIPPED, so this never rebuilds an intact-looking index. force='full': the 'I know the db is wrong' hatch — delete the index and REBUILD FROM SCRATCH (works even from state 'failed'; watch server_capabilities.index.progress). Normally unnecessary — a file watcher keeps the index fresh.")]
+    [Description("Queue an index refresh from the writer process. Read-only followers return index_writer_required. force='auto'/'incremental': targeted paths or a change-detection sweep — hash-identical files are SKIPPED, so this never rebuilds an intact-looking index. force='full': the 'I know the db is wrong' hatch — delete the index and REBUILD FROM SCRATCH (works even from state 'failed'; watch server_capabilities.index.progress). Normally unnecessary — the writer's file watcher keeps the index fresh.")]
     public string RefreshIndex(
         [Description("Optional comma-separated EXACT workspace-relative paths to refresh — no globs (a glob silently matches nothing). Use '/' on Unix, where backslash is a legal filename character; Windows accepts either separator. Ignored with force='full'.")] string? paths = null,
         [Description("'auto' (default) / 'incremental': delta refresh, unchanged files skipped. 'full': rebuild from scratch — corruption/recovery hatch.")] string force = "auto")
@@ -1709,9 +1714,10 @@ public sealed partial class NavigationTools
                 detail = $"Unknown force value '{force}'. Valid: auto, incremental, full.",
             });
         }
+        if (_manager.IsFollower) return IndexWriterRequired();
         if (force == "full")
         {
-            _manager.RequestFullRebuild();
+            if (!_manager.RequestFullRebuild()) return IndexMutationUnavailable();
             return Json.Serialize(new
             {
                 queued = true,
@@ -1724,7 +1730,8 @@ public sealed partial class NavigationTools
         // On Unix a backslash is a legal filename character and must remain byte-for-byte distinct;
         // on Windows this still accepts either slash style (bug 9h3).
         var list = SplitCsv(paths)?.Select(NormalizePath).ToList();
-        _manager.RequestRefresh(list?.Count > 0 ? list : null);
+        if (!_manager.RequestRefresh(list?.Count > 0 ? list : null))
+            return _manager.IsFollower ? IndexWriterRequired() : IndexMutationUnavailable();
         return Json.Serialize(new
         {
             queued = true,
@@ -1732,6 +1739,20 @@ public sealed partial class NavigationTools
             meta = Meta.From(_manager.Health(), "indexed", "text"),
         });
     }
+
+    private string IndexWriterRequired() => Json.Serialize(new
+    {
+        error = "index_writer_required",
+        detail = "This Phoenix process is a read-only follower; run this operation from the writer process.",
+        meta = Meta.From(_manager.Health(), "indexed", "text"),
+    });
+
+    private string IndexMutationUnavailable() => NotReady() ?? Json.Serialize(new
+    {
+        error = "index_unavailable",
+        detail = "The index writer is not available to accept this operation.",
+        meta = Meta.From(_manager.Health(), "indexed", "text"),
+    });
 
     // ---------------------------------------------------------------- helpers
 

@@ -71,7 +71,18 @@ public static class IndexBuilder
     public const string SchemaVersion = "14";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
-        BuildProgress? liveProgress = null)
+        BuildProgress? liveProgress = null) =>
+        BuildCore(workspaceRoot, dbPath, progress, liveProgress,
+            TimeSpan.FromSeconds(30), waitingForReviewReaders: null);
+
+    internal static BuildResult BuildWithReviewWaitForTest(string workspaceRoot,
+        string? dbPath, TimeSpan reviewWaitTimeout, Action? waitingForReviewReaders = null) =>
+        BuildCore(workspaceRoot, dbPath, progress: null, liveProgress: null,
+            reviewWaitTimeout, waitingForReviewReaders);
+
+    private static BuildResult BuildCore(string workspaceRoot, string? dbPath,
+        Action<string>? progress, BuildProgress? liveProgress, TimeSpan reviewWaitTimeout,
+        Action? waitingForReviewReaders)
     {
         string root = Path.GetFullPath(workspaceRoot);
         string database = Path.GetFullPath(dbPath ?? DefaultDbPath(root));
@@ -92,7 +103,29 @@ public static class IndexBuilder
                 if (!authority.TryGetLeaseIdentity(out IndexLeaseIdentity? afterLease) ||
                     afterLease != leaseIdentity)
                     throw new IOException("index destination changed during ownership acquisition");
-                return BuildOwned(root, authority.DatabasePath, progress, liveProgress);
+                IndexLeaseIdentity ownedIdentity = afterLease!;
+
+                IndexReviewCoordinationLease? rebuildLease = null;
+                if (OperatingSystem.IsWindows() &&
+                    ownedIdentity.DatabaseIdentity is { Length: > 0 })
+                {
+                    IndexReviewCoordinationAcquireResult coordination =
+                        IndexReviewCoordinationLease.TryAcquireExclusive(ownedIdentity,
+                            reviewWaitTimeout, waitingForReviewReaders, out rebuildLease);
+                    if (coordination != IndexReviewCoordinationAcquireResult.Acquired)
+                        throw new IOException(
+                            "index rebuild deferred while another process holds a review snapshot");
+                    if (!authority.TryGetLeaseIdentity(out IndexLeaseIdentity? afterReaders) ||
+                        afterReaders != ownedIdentity)
+                    {
+                        rebuildLease!.Dispose();
+                        throw new IOException(
+                            "index destination changed during review-reader coordination");
+                    }
+                }
+
+                using (rebuildLease)
+                    return BuildOwned(root, authority.DatabasePath, progress, liveProgress);
             }
         }
     }

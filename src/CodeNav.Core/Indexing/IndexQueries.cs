@@ -41,9 +41,18 @@ public sealed record OverviewStats(
     long SdkProjects, long TestProjects, long Solutions, long GeneratedFiles, long OrphanedFiles,
     string TfmBreakdown, string? IndexVersion, string? IndexedAtUtc);
 
+internal sealed record IndexMetadataSnapshot(
+    string? SchemaVersion,
+    string? WorkspaceRoot,
+    string? IndexVersion,
+    string? IndexedAtUtc,
+    string? LastRefreshUtc,
+    string? IndexedCommit,
+    string? IndexedBranch);
+
 /// <summary>
-/// Owns: read-side queries over the persisted index (own pooled connection, safe to
-/// instantiate per operation). Does not own: writes (IndexStore) or result budgeting/
+/// Owns: read-side queries over the persisted index (one read-only connection, pooled for the
+/// writer process and deliberately nonpooled for followers). Does not own: writes (IndexStore) or result budgeting/
 /// shaping for MCP responses (M2 tool layer).
 /// </summary>
 public sealed partial class IndexQueries : IDisposable
@@ -68,7 +77,7 @@ public sealed partial class IndexQueries : IDisposable
     }
 
     internal IndexQueries(string dbPath, bool pinReadSnapshot,
-        Action<string>? afterQueryForTest = null)
+        Action<string>? afterQueryForTest = null, bool pooling = true)
     {
         // Shared-cache table locks would prevent the WAL writer from refreshing tables while a
         // long-lived review read transaction is open. Use a private pager cache for that one
@@ -77,7 +86,13 @@ public sealed partial class IndexQueries : IDisposable
         {
             DataSource = dbPath,
             Mode = SqliteOpenMode.ReadOnly,
-            Cache = pinReadSnapshot ? SqliteCacheMode.Private : SqliteCacheMode.Shared,
+            // A follower lives in a different process from the writer. Its idle pooled native
+            // handle cannot be cleared by the writer before a destructive rebuild on Windows,
+            // so follower reads use private, genuinely short-lived connections.
+            Pooling = pooling,
+            Cache = pinReadSnapshot || !pooling
+                ? SqliteCacheMode.Private
+                : SqliteCacheMode.Shared,
         };
         _conn = new SqliteConnection(connectionString.ToString());
         _afterQueryForTest = afterQueryForTest;
@@ -104,6 +119,32 @@ public sealed partial class IndexQueries : IDisposable
             finally { _conn.Dispose(); }
             throw;
         }
+    }
+
+    /// <summary>Reads the persisted index identity through this connection (and therefore through
+    /// the same pinned transaction when this is a review snapshot). Followers use this instead of
+    /// a writer-process cache, which cannot observe another process's refresh epoch.</summary>
+    internal IndexMetadataSnapshot ReadMetadata()
+    {
+        using var cmd = CreateCommand();
+        cmd.CommandText =
+            "SELECT key, value FROM meta WHERE key IN " +
+            "('schema_version','workspace_root','index_version','indexed_at_utc'," +
+            "'last_refresh_utc','indexed_commit','indexed_branch')";
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read()) values[reader.GetString(0)] = reader.GetString(1);
+        }
+        _afterQueryForTest?.Invoke(cmd.CommandText);
+        return new IndexMetadataSnapshot(
+            values.GetValueOrDefault("schema_version"),
+            values.GetValueOrDefault("workspace_root"),
+            values.GetValueOrDefault("index_version"),
+            values.GetValueOrDefault("indexed_at_utc"),
+            values.GetValueOrDefault("last_refresh_utc"),
+            values.GetValueOrDefault("indexed_commit"),
+            values.GetValueOrDefault("indexed_branch"));
     }
 
     // ---------------------------------------------------------------- find_file

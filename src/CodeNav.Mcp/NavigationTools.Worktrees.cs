@@ -69,16 +69,17 @@ public sealed partial class NavigationTools
             : ("git_unavailable", "git worktree list failed — git absent, or this workspace is not inside a git repository.");
 
     [McpServerTool(Name = "index_worktree")]
-    [Description("Create or refresh a SIBLING worktree index. Windows uses a targeted indexed_commit-to-HEAD plus dirt reconcile; Linux uses an anchored full sweep and reports usedFullSweep=true; macOS returns unsupported_platform. Target must come from worktrees. A target owned by another Phoenix reports worktree_index_locked.")]
+    [Description("Create or refresh a SIBLING worktree index from the writer process. Read-only followers return index_writer_required. Windows uses a targeted indexed_commit-to-HEAD plus dirt reconcile; Linux uses an anchored full sweep and reports usedFullSweep=true; macOS returns unsupported_platform. Target must come from worktrees. A target owned by another writer reports worktree_index_locked.")]
     public string IndexWorktree(
         [Description("Worktree path exactly as the 'worktrees' tool lists it.")] string path,
         [Description("'auto' (default) | 'create' (recreate from a fresh seed) | 'refresh' (existing only).")] string mode = "auto")
     {
-        if (NotReady() is { } notReady) return notReady;
         if (mode is not ("auto" or "create" or "refresh"))
         {
             return Json.Serialize(new { error = "bad_request", detail = "mode must be 'auto', 'create', or 'refresh'." });
         }
+        if (_manager.IsFollower) return IndexWriterRequired();
+        if (NotReady() is { } notReady) return notReady;
         // The RUNNING instance owns its own index — the ownership probe would trip on our own
         // handles and the right tool already exists. Say so instead of a confusing lock error.
         if (!CodeNav.Core.WorkspacePaths.TryNormalizeFullForComparison(path, out _))

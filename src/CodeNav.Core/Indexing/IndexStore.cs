@@ -544,6 +544,11 @@ public sealed class IndexStore : IDisposable
         Exec(_write, "INSERT INTO meta(key, value) VALUES($k, $v) ON CONFLICT(key) DO UPDATE SET value=$v",
             ("$k", key), ("$v", value));
 
+    internal void SetMeta(SqliteTransaction tx, string key, string value) =>
+        ExecTx(tx,
+            "INSERT INTO meta(key, value) VALUES($k, $v) ON CONFLICT(key) DO UPDATE SET value=$v",
+            ("$k", key), ("$v", value));
+
     public void DeleteMeta(string key) =>
         Exec(_write, "DELETE FROM meta WHERE key=$k", ("$k", key));
 

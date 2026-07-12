@@ -107,7 +107,7 @@ public sealed partial class SemanticService : IDisposable
             {
                 string databasePath = _manager.DatabaseIoPath; // validates held authority each use
                 return _workspace ??= new SemanticWorkspace(_manager.WorkspaceRoot,
-                    databasePath, _log);
+                    databasePath, _log, poolIndexConnections: _manager.IsWriter);
             }
         }
     }

@@ -61,9 +61,9 @@ public sealed class VendorFixture : IDisposable
 
     /// <summary>
     /// One live IndexManager per fixture instance, created on first use and disposed with the
-    /// fixture. The index ownership lease is exclusive per database — a manager per TEST would
-    /// leak the lease (xUnit never disposes test-created managers) and starve every subsequent
-    /// open of the same db with "another phoenix process owns this index".
+    /// fixture. Writer ownership is exclusive per database — a manager per TEST would leak the
+    /// writer (xUnit never disposes test-created managers) and force every subsequent manager into
+    /// read-only follower mode, where fixture refreshes cannot run.
     /// </summary>
     public NavigationTools SharedTools
     {
@@ -103,8 +103,8 @@ public class Batch7FilterTests : IClassFixture<VendorFixture>
 
     public Batch7FilterTests(VendorFixture fx) => _fx = fx;
 
-    // One shared manager per class fixture: the ownership lease is exclusive per database, so a
-    // manager per test (never disposed by xUnit) would starve every open after the first.
+    // One shared writer per class fixture: a manager per test (never disposed by xUnit) would
+    // leave later tests as read-only followers, unable to perform fixture refreshes.
     private NavigationTools Tools() => _fx.SharedTools;
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;

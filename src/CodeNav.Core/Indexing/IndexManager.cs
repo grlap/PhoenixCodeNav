@@ -15,11 +15,12 @@ public sealed record IndexHealth(
     string? IndexedCommit = null,   // git commit the index reflects (git-aware refresh)
     string? IndexedBranch = null,
     IndexProgress? Progress = null, // live build progress — non-null ONLY while state == building
-    // z4c: MONOTONIC count of file deltas the pump has APPLIED (added+changed+deleted across
-    // all refreshes since this manager started). Paired with PendingChanges it turns the
-    // refreshing state from a binary into movement: pending drains while processed climbs —
-    // a stuck pump (pending flat, processed flat) is distinguishable from a busy one.
-    long PendingProcessed = 0);
+                                    // z4c: MONOTONIC count of file deltas the pump has APPLIED (added+changed+deleted across
+                                    // all refreshes since this manager started). Paired with PendingChanges it turns the
+                                    // refreshing state from a binary into movement: pending drains while processed climbs —
+                                    // a stuck pump (pending flat, processed flat) is distinguishable from a busy one.
+    long PendingProcessed = 0,
+    string AccessMode = "writer");
 
 public sealed class IndexReadSnapshot : IDisposable
 {
@@ -53,6 +54,23 @@ public sealed class IndexReadSnapshot : IDisposable
 public sealed class IndexManager : IDisposable
 {
     private const int GitDiffCap = 5000; // beyond this, a full sweep beats a giant targeted batch
+    public const string WriterAccessMode = "writer";
+    public const string FollowerAccessMode = "follower";
+    public const string UnavailableAccessMode = "unavailable";
+    private const string FollowerWriterRequired =
+        "This Phoenix process is a read-only follower; run this operation from the writer process.";
+    private const string FollowerIndexUnavailable =
+        "read-only follower requires a compatible index from the writer; wait for the writer to finish building or rebuilding, then retry or restart this process";
+    private const string FollowerWriterUnavailable =
+        "the index writer is no longer running; restart this follower to acquire writer mode, or start another writer process";
+    private const string FullRebuildDeferredForReaders =
+        "full rebuild deferred while another process holds a review snapshot; retry the full rebuild";
+
+    private sealed record FollowerPublication(
+        IndexMetadataSnapshot? Metadata,
+        bool Readable,
+        string State,
+        string? Error);
 
     // A refresh unit: Paths=null is a full detect-all sweep; RecordCommit, when set, is written
     // as the reflected git commit after the batch succeeds (git-aware reconcile). FullRebuild
@@ -66,6 +84,8 @@ public sealed class IndexManager : IDisposable
     private string _databaseIoPath;
     private readonly Action<string> _log;
     private readonly Channel<RefreshRequest> _refreshQueue = Channel.CreateUnbounded<RefreshRequest>();
+    private readonly TaskCompletionSource<bool> _startupComplete =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private IndexStore? _store;
     private WorkspaceWatcher? _watcher;
@@ -84,6 +104,15 @@ public sealed class IndexManager : IDisposable
     private volatile bool _disposed;
     private volatile string _state = "missing";
     private volatile string? _error;
+    private volatile string _accessMode = UnavailableAccessMode;
+    private FollowerPublication _followerPublication =
+        new(null, false, "failed", FollowerIndexUnavailable);
+    private readonly object _followerMetadataGate = new();
+    private long _nextFollowerMetadataRefresh;
+    private int _followerMetadataRefreshActive;
+    private volatile bool _followerWriterPresent;
+    private long _nextFollowerWriterProbe;
+    private int _followerWriterProbeActive;
     private long _pendingProcessed; // z4c: lifetime count of applied file deltas (see IndexHealth)
     // Index metadata is cached here so Health() (called on tool threads) never touches
     // the single write connection, which only the opening thread and the pump may use.
@@ -99,12 +128,19 @@ public sealed class IndexManager : IDisposable
     // value before and after pinning its SQLite WAL read transaction.
     private long _refreshEpoch;
     internal Action<string>? ReviewSnapshotAfterQueryForTest { get; set; }
+    internal Action<IndexMetadataSnapshot>? FollowerMetadataBeforePublishForTest { get; set; }
+    internal Action? FollowerMetadataBeforeGateForTest { get; set; }
     internal Action? FullRebuildWaitingForReviewSnapshotsForTest { get; set; }
     internal Action<int>? FullRebuildDestructiveBoundaryForTest { get; set; }
     internal Action? FullRebuildCompletedForTest { get; set; }
+    internal Action? RefreshRequestDequeuedForTest { get; set; }
+    internal Action? RefreshRequestPassedStartupBarrierForTest { get; set; }
     internal Action? StartupAfterLeaseAcquiredForTest { get; set; }
+    internal Action? StartupAfterLeaseContentionForTest { get; set; }
     internal Action? CleanupBeforePoolClearForTest { get; set; }
     internal TimeSpan DisposeWaitTimeoutForTest { get; set; } = TimeSpan.FromSeconds(5);
+    internal TimeSpan FullRebuildReviewWaitTimeoutForTest { get; set; } =
+        TimeSpan.FromSeconds(30);
     private readonly object _reviewSnapshotGate = new();
     private readonly ManualResetEventSlim _noActiveReviewSnapshots = new(initialState: true);
     private readonly ManualResetEventSlim _stableIndexEpoch = new(initialState: true);
@@ -122,19 +158,31 @@ public sealed class IndexManager : IDisposable
 
     public string WorkspaceRoot => _workspaceRoot;
     public string DbPath => _dbPath;
+    public string AccessMode => _accessMode;
+    public bool IsWriter => string.Equals(_accessMode, WriterAccessMode,
+        StringComparison.Ordinal);
+    public bool IsFollower => string.Equals(_accessMode, FollowerAccessMode,
+        StringComparison.Ordinal);
     internal string DatabaseIoPath
     {
         get
         {
             EnsureDatabaseAuthority();
+            if (IsFollower && !TryRefreshFollowerMetadata(force: true))
+                throw new IOException(FollowerIndexUnavailable);
             return _databaseIoPath;
         }
     }
-    public string State => _state;
+    public string State => IsFollower
+        ? Volatile.Read(ref _followerPublication).State
+        : _state;
 
     public WorktreeIndexResult EnsureWorktreeIndex(string worktreePath, string mode,
         Action<string> log)
     {
+        if (!IsWriter)
+            return new WorktreeIndexResult("index_writer_required",
+                FollowerWriterRequired, 0, 0, 0, 0, null, false);
         if (!HasSafeDatabaseAuthority())
             return new WorktreeIndexResult("snapshot_failed",
                 "the source index destination is no longer safe", 0, 0, 0, 0, null, false);
@@ -164,7 +212,8 @@ public sealed class IndexManager : IDisposable
     {
         lock (_disposeLock)
         {
-            if (_disposed || _pump is not null || _startTask is not null) return;
+            if (_disposed || IsWriter || IsFollower || _pump is not null || _startTask is not null)
+                return;
             if (!IndexDirectoryAuthority.TryOpen(_dbPath, createDirectory: true,
                     out IndexDirectoryAuthority? authority) ||
                 !authority!.TryGetLeaseIdentity(out IndexLeaseIdentity? leaseIdentity))
@@ -174,6 +223,7 @@ public sealed class IndexManager : IDisposable
                 // "safely" not "without following links" — this gate also refuses a missing or
                 // non-directory parent, not only link/reparse traversal; specifics go to the log.
                 _error = "index destination could not be opened safely during index startup (see server log)";
+                _accessMode = UnavailableAccessMode;
                 _state = "failed";
                 _log($"Index startup refused: destination '{_dbPath}' is not a safely openable " +
                      "directory tree (missing or non-directory parent, link/reparse point, or " +
@@ -183,16 +233,61 @@ public sealed class IndexManager : IDisposable
             _directoryAuthority = authority;
             _authorityDirectoryIdentity = leaseIdentity!.DirectoryIdentity;
             _databaseIoPath = authority.DatabasePath;
-            if (!IndexOwnershipLease.TryAcquire(_workspaceRoot, _dbPath, leaseIdentity,
-                    out _ownershipLease))
+            IndexLeaseAcquireResult leaseResult = IndexOwnershipLease.TryAcquireDetailed(
+                _workspaceRoot, _dbPath, leaseIdentity, out _ownershipLease);
+            if (leaseResult == IndexLeaseAcquireResult.Contended && OperatingSystem.IsWindows())
             {
+                // A follower's liveness probe must briefly acquire-and-release the same mutexes
+                // to prove that no writer remains. Do not mistake that millisecond-scale probe for
+                // a durable writer: retry briefly after the first contender has fully unwound.
+                StartupAfterLeaseContentionForTest?.Invoke();
+                for (int retry = 0;
+                     retry < 3 && leaseResult == IndexLeaseAcquireResult.Contended;
+                     retry++)
+                {
+                    Thread.Sleep(25);
+                    leaseResult = IndexOwnershipLease.TryAcquireDetailed(
+                        _workspaceRoot, _dbPath, leaseIdentity, out _ownershipLease);
+                }
+            }
+            if (leaseResult != IndexLeaseAcquireResult.Acquired)
+            {
+                if (leaseResult == IndexLeaseAcquireResult.Contended && OperatingSystem.IsWindows())
+                {
+                    // SQLite WAL supports concurrent committed readers. A contending Phoenix is a
+                    // follower: retain only the no-follow directory authority and open short-lived,
+                    // nonpooled read-only connections. It never starts a store, pump, or watcher.
+                    _accessMode = FollowerAccessMode;
+                    _followerWriterPresent = true; // the contended mutex is direct owner evidence
+                    Volatile.Write(ref _nextFollowerWriterProbe,
+                        Environment.TickCount64 + 1000);
+                    _error = FollowerIndexUnavailable;
+                    _state = "failed";
+                    if (TryRefreshFollowerMetadata(force: true))
+                    {
+                        _log(forceRebuild
+                            ? "Index rebuild requested, but another Phoenix owns the writer lease; attached as a read-only follower instead."
+                            : "Another Phoenix owns the writer lease; attached as a read-only follower.");
+                    }
+                    else
+                    {
+                        _log("Read-only follower is waiting for the writer to publish a safe compatible index.");
+                    }
+                    return;
+                }
+
                 authority.Dispose();
                 _directoryAuthority = null;
                 _authorityDirectoryIdentity = null;
                 _databaseIoPath = _dbPath;
-                _error = "another phoenix process owns this index";
+                _accessMode = UnavailableAccessMode;
+                _error = leaseResult == IndexLeaseAcquireResult.Contended
+                    ? "another phoenix process owns this index"
+                    : "index writer ownership could not be acquired safely (see server log)";
                 _state = "failed";
-                _log("Index startup refused: another phoenix process owns this index.");
+                _log(leaseResult == IndexLeaseAcquireResult.Contended
+                    ? "Index startup refused: another Phoenix process owns this index."
+                    : "Index startup refused: writer ownership coordination failed.");
                 return;
             }
             if (!authority.TryGetLeaseIdentity(out IndexLeaseIdentity? afterLease) ||
@@ -204,91 +299,119 @@ public sealed class IndexManager : IDisposable
                 _directoryAuthority = null;
                 _authorityDirectoryIdentity = null;
                 _databaseIoPath = _dbPath;
+                _accessMode = UnavailableAccessMode;
                 _error = "index destination changed during ownership acquisition";
                 _state = "failed";
                 _log("Index startup refused: index destination changed during ownership acquisition.");
                 return;
             }
+            _accessMode = WriterAccessMode;
             // Publish both tasks while holding the same lock Dispose uses. Dispose can therefore
             // never release the lease between its acquisition and publication of the workers.
             _pump = Task.Run(PumpRefreshesAsync);
 
             _startTask = Task.Run(() =>
             {
-            try
-            {
-                if (_disposed) return;
-                StartupAfterLeaseAcquiredForTest?.Invoke();
-                bool build = forceRebuild || !File.Exists(_databaseIoPath);
-                if (!build)
+                try
                 {
-                    // Rebuild when the on-disk index predates the current schema/indexer format —
-                    // otherwise a freshly deployed binary would query columns the old index lacks,
-                    // or trust field values (accessibility, signatures) the old indexer got wrong.
-                    try
+                    if (_disposed) return;
+                    StartupAfterLeaseAcquiredForTest?.Invoke();
+                    bool build = forceRebuild || !File.Exists(_databaseIoPath);
+                    if (!build)
                     {
-                        using var check = new IndexStore(_databaseIoPath, createNew: false);
-                        string? onDisk = check.GetMeta("schema_version");
-                        if (!string.Equals(onDisk, IndexBuilder.SchemaVersion, StringComparison.Ordinal))
+                        // Rebuild when the on-disk index predates the current schema/indexer format —
+                        // otherwise a freshly deployed binary would query columns the old index lacks,
+                        // or trust field values (accessibility, signatures) the old indexer got wrong.
+                        try
                         {
-                            _log($"Index format stale (have {onDisk ?? "none"}, need {IndexBuilder.SchemaVersion}); rebuilding.");
+                            using var check = new IndexStore(_databaseIoPath, createNew: false);
+                            string? onDisk = check.GetMeta("schema_version");
+                            if (!string.Equals(onDisk, IndexBuilder.SchemaVersion, StringComparison.Ordinal))
+                            {
+                                _log($"Index format stale (have {onDisk ?? "none"}, need {IndexBuilder.SchemaVersion}); rebuilding.");
+                                build = true;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _log($"Index open/version-check failed ({ex.Message}); rebuilding.");
                             build = true;
                         }
                     }
-                    catch (Exception ex)
+                    if (build)
                     {
-                        _log($"Index open/version-check failed ({ex.Message}); rebuilding.");
-                        build = true;
+                        IndexReviewCoordinationAcquireResult coordination =
+                            TryAcquireFullRebuildReviewLease(
+                                out IndexReviewCoordinationLease? startupRebuildLease);
+                        if (coordination != IndexReviewCoordinationAcquireResult.Acquired)
+                        {
+                            _error = FullRebuildDeferredForReaders;
+                            _state = "failed";
+                            _log($"Startup rebuild deferred before database replacement ({coordination}): " +
+                                 "another process may hold a review snapshot; retry the full rebuild.");
+                            return;
+                        }
+
+                        using (startupRebuildLease)
+                        {
+                            _state = "building";
+                            // Live progress for the building window (bead two, field-requested during the
+                            // v5 monolith reindex): published before the build starts, cleared after —
+                            // Health() surfaces it only while state == "building".
+                            _buildProgress = new BuildProgress();
+                            int activeAtBoundary;
+                            lock (_reviewSnapshotGate)
+                                activeAtBoundary = _activeReviewSnapshots;
+                            FullRebuildDestructiveBoundaryForTest?.Invoke(activeAtBoundary);
+                            _log($"Building index for {_workspaceRoot} ...");
+                            var buildResult = IndexBuilder.BuildOwned(_workspaceRoot,
+                                _databaseIoPath, _log, _buildProgress);
+                            _log($"Index built: {buildResult.CsFiles} files, " +
+                                 $"{buildResult.Symbols} symbols in " +
+                                 $"{buildResult.TotalTime.TotalSeconds:F0}s");
+                            _buildProgress = null;
+                        }
                     }
+
+                    var store = new IndexStore(_databaseIoPath, createNew: false);
+                    CacheMeta(store);              // read meta before publishing the store
+
+                    // If Dispose ran while we were building/opening, don't publish or start the
+                    // watcher — clean up the store we just opened and leave the manager stopped.
+                    if (_disposed)
+                    {
+                        store.Dispose();
+                        return;
+                    }
+
+                    _store = store;
+                    _error = null;   // review F2 parity with FullRebuildInPump: recovery via a
+                                     // re-entered Start is a DESIGNED failed->ready transition — a
+                                     // healthy index must not keep reporting the pre-recovery refusal
+                    _state = "ready";
+                    StartWatcher();
+                    _log(build
+                        ? "Fresh index opened; running post-build freshness sweep ..."
+                        : "Existing index opened; running startup freshness sweep ...");
+                    // Always sweep after the watcher is attached. A full build deliberately commits
+                    // its verified structural snapshot before the long C# parse; edits made between
+                    // that commit and watcher attachment would otherwise be permanently missed.
+                    _refreshQueue.Writer.TryWrite(new RefreshRequest(null)); // detect-all
+                    InitGitTracking(); // record/reconcile the git commit, then watch HEAD
                 }
-                if (build)
+                catch (Exception ex)
                 {
-                    _state = "building";
-                    // Live progress for the building window (bead two, field-requested during the
-                    // v5 monolith reindex): published before the build starts, cleared after —
-                    // Health() surfaces it only while state == "building".
-                    _buildProgress = new BuildProgress();
-                    _log($"Building index for {_workspaceRoot} ...");
-                    var buildResult = IndexBuilder.BuildOwned(_workspaceRoot, _databaseIoPath, _log, _buildProgress);
-                    _log($"Index built: {buildResult.CsFiles} files, {buildResult.Symbols} symbols in {buildResult.TotalTime.TotalSeconds:F0}s");
-                    _buildProgress = null;
+                    // Client-visible error carries the exception TYPE only (9vw): ex.Message can embed
+                    // absolute filesystem paths, account names, or SQLite connection details — internals
+                    // that don't belong in a tool response. The full exception goes to the server log.
+                    _error = $"{ex.GetType().Name} during index startup (see server log)";
+                    _state = "failed";
+                    _log($"Index startup failed: {ex}");
                 }
-
-                var store = new IndexStore(_databaseIoPath, createNew: false);
-                CacheMeta(store);              // read meta before publishing the store
-
-                // If Dispose ran while we were building/opening, don't publish or start the
-                // watcher — clean up the store we just opened and leave the manager stopped.
-                if (_disposed)
+                finally
                 {
-                    store.Dispose();
-                    return;
+                    _startupComplete.TrySetResult(true);
                 }
-
-                _store = store;
-                _error = null;   // review F2 parity with FullRebuildInPump: recovery via a
-                                 // re-entered Start is a DESIGNED failed->ready transition — a
-                                 // healthy index must not keep reporting the pre-recovery refusal
-                _state = "ready";
-                StartWatcher();
-                _log(build
-                    ? "Fresh index opened; running post-build freshness sweep ..."
-                    : "Existing index opened; running startup freshness sweep ...");
-                // Always sweep after the watcher is attached. A full build deliberately commits
-                // its verified structural snapshot before the long C# parse; edits made between
-                // that commit and watcher attachment would otherwise be permanently missed.
-                _refreshQueue.Writer.TryWrite(new RefreshRequest(null)); // detect-all
-                InitGitTracking(); // record/reconcile the git commit, then watch HEAD
-            }
-            catch (Exception ex)
-            {
-                // Client-visible error carries the exception TYPE only (9vw): ex.Message can embed
-                // absolute filesystem paths, account names, or SQLite connection details — internals
-                // that don't belong in a tool response. The full exception goes to the server log.
-                _error = $"{ex.GetType().Name} during index startup (see server log)";
-                _state = "failed";
-                _log($"Index startup failed: {ex}");
-            }
             });
         }
     }
@@ -302,6 +425,109 @@ public sealed class IndexManager : IDisposable
         _lastRefreshUtc ??= store.GetMeta("last_refresh_utc");
         _indexedCommit ??= store.GetMeta("indexed_commit");
         _indexedBranch ??= store.GetMeta("indexed_branch");
+    }
+
+    private FollowerPublication CurrentFollowerPublication =>
+        Volatile.Read(ref _followerPublication);
+
+    internal IndexMetadataSnapshot? FollowerMetadataForTest =>
+        CurrentFollowerPublication.Metadata;
+
+    private void PublishFollowerReady(IndexMetadataSnapshot metadata)
+    {
+        // One reference swap publishes the complete SQLite metadata tuple plus its readiness.
+        // Health can therefore observe either the previous committed epoch or this one, never a
+        // mixture assembled from independently written fields.
+        FollowerMetadataBeforePublishForTest?.Invoke(metadata);
+        Volatile.Write(ref _followerPublication,
+            new FollowerPublication(metadata, true, "ready", null));
+    }
+
+    private bool IsCompatibleFollowerMetadata(IndexMetadataSnapshot metadata) =>
+        string.Equals(metadata.SchemaVersion, IndexBuilder.SchemaVersion,
+            StringComparison.Ordinal) &&
+        !string.IsNullOrWhiteSpace(metadata.IndexVersion) &&
+        !string.IsNullOrWhiteSpace(metadata.IndexedAtUtc) &&
+        metadata.WorkspaceRoot is { Length: > 0 } storedRoot &&
+        CodeNav.Core.WorkspacePaths.FullPathsEqual(storedRoot, _workspaceRoot);
+
+    private bool HasActiveFollowerWriter()
+    {
+        long now = Environment.TickCount64;
+        if (now < Volatile.Read(ref _nextFollowerWriterProbe))
+            return _followerWriterPresent;
+        if (Interlocked.CompareExchange(ref _followerWriterProbeActive, 1, 0) != 0)
+            return _followerWriterPresent;
+        try
+        {
+            bool held = IndexOwnershipLease.IsHeld(_workspaceRoot, _dbPath);
+            _followerWriterPresent = held;
+            Volatile.Write(ref _nextFollowerWriterProbe, now + 1000);
+            return held;
+        }
+        finally
+        {
+            Volatile.Write(ref _followerWriterProbeActive, 0);
+        }
+    }
+
+    /// <summary>Refreshes follower health from a read-only, nonpooled connection. This method never
+    /// repairs or creates an index. A transient writer replacement makes the follower unavailable
+    /// for this call; a later call retries and recovers after the writer publishes a compatible DB.</summary>
+    private bool TryRefreshFollowerMetadata(bool force)
+    {
+        if (!IsFollower || _disposed) return false;
+        long now = Environment.TickCount64;
+        if (!force && now < Volatile.Read(ref _nextFollowerMetadataRefresh))
+            return CurrentFollowerPublication.Readable;
+        if (Interlocked.CompareExchange(ref _followerMetadataRefreshActive, 1, 0) != 0)
+            return CurrentFollowerPublication.Readable;
+
+        try
+        {
+            Volatile.Write(ref _nextFollowerMetadataRefresh, now + 250);
+            lock (_followerMetadataGate)
+            {
+                if (!HasActiveFollowerWriter())
+                    return PublishFollowerUnavailable(FollowerWriterUnavailable);
+                if (!TryGetSafeDatabaseStatus(out IndexLeaseIdentity? before, out _) ||
+                    before?.DatabaseIdentity is null)
+                    return PublishFollowerUnavailable();
+
+                using var queries = new IndexQueries(_databaseIoPath, pinReadSnapshot: false,
+                    pooling: false);
+                IndexMetadataSnapshot metadata = queries.ReadMetadata();
+                if (!IsCompatibleFollowerMetadata(metadata))
+                    return PublishFollowerUnavailable();
+
+                if (!TryGetSafeDatabaseStatus(out IndexLeaseIdentity? after, out _) ||
+                    after != before)
+                    return PublishFollowerUnavailable();
+
+                PublishFollowerReady(metadata);
+                if (_gitDir is null && GitInfo.GitAvailable)
+                    _gitDir = GitInfo.ResolveGitDir(_workspaceRoot);
+                return true;
+            }
+        }
+        catch (Exception)
+        {
+            lock (_followerMetadataGate)
+                return PublishFollowerUnavailable();
+        }
+        finally
+        {
+            Volatile.Write(ref _followerMetadataRefreshActive, 0);
+        }
+    }
+
+    private bool PublishFollowerUnavailable(string? error = null)
+    {
+        FollowerPublication previous = CurrentFollowerPublication;
+        Volatile.Write(ref _followerPublication,
+            new FollowerPublication(previous.Metadata, false, "failed",
+                error ?? FollowerIndexUnavailable));
+        return false;
     }
 
     private void StartWatcher()
@@ -393,26 +619,65 @@ public sealed class IndexManager : IDisposable
 
     private static string Short(string commit) => commit.Length >= 8 ? commit[..8] : commit;
 
+    private IndexReviewCoordinationAcquireResult TryAcquireFullRebuildReviewLease(
+        out IndexReviewCoordinationLease? lease)
+    {
+        lease = null;
+        if (!OperatingSystem.IsWindows())
+            return IndexReviewCoordinationAcquireResult.Acquired;
+        if (!TryGetSafeDatabaseStatus(out IndexLeaseIdentity? before, out _))
+            return IndexReviewCoordinationAcquireResult.Failed;
+        if (before?.DatabaseIdentity is null)
+            return IndexReviewCoordinationAcquireResult.Acquired;
+
+        IndexReviewCoordinationAcquireResult result =
+            IndexReviewCoordinationLease.TryAcquireExclusive(before,
+                FullRebuildReviewWaitTimeoutForTest,
+                FullRebuildWaitingForReviewSnapshotsForTest, out lease);
+        if (result != IndexReviewCoordinationAcquireResult.Acquired) return result;
+
+        if (!TryGetSafeDatabaseStatus(out IndexLeaseIdentity? after, out _) ||
+            after != before)
+        {
+            lease!.Dispose();
+            lease = null;
+            return IndexReviewCoordinationAcquireResult.Failed;
+        }
+        return IndexReviewCoordinationAcquireResult.Acquired;
+    }
+
     private async Task PumpRefreshesAsync()
     {
         await foreach (var req in _refreshQueue.Reader.ReadAllAsync())
         {
+            RefreshRequestDequeuedForTest?.Invoke();
+            await _startupComplete.Task.ConfigureAwait(false);
+            RefreshRequestPassedStartupBarrierForTest?.Invoke();
             if (req.FullRebuild)
             {
-                BeginIndexMutation();
-                try
+                IndexReviewCoordinationAcquireResult coordination =
+                    TryAcquireFullRebuildReviewLease(out IndexReviewCoordinationLease? rebuildLease);
+                if (coordination != IndexReviewCoordinationAcquireResult.Acquired)
                 {
-                    bool waiting;
-                    lock (_reviewSnapshotGate) waiting = _activeReviewSnapshots > 0;
-                    if (waiting) FullRebuildWaitingForReviewSnapshotsForTest?.Invoke();
-                    _noActiveReviewSnapshots.Wait();
-                    int activeAtBoundary;
-                    lock (_reviewSnapshotGate) activeAtBoundary = _activeReviewSnapshots;
-                    FullRebuildDestructiveBoundaryForTest?.Invoke(activeAtBoundary);
-                    FullRebuildInPump();
-                    FullRebuildCompletedForTest?.Invoke();
+                    _error = FullRebuildDeferredForReaders;
+                    _log($"Full rebuild deferred before database replacement ({coordination}): " +
+                         "another process may hold a review snapshot; retry the full rebuild.");
+                    continue;
                 }
-                finally { EndIndexMutation(); }
+                using (rebuildLease)
+                {
+                    BeginIndexMutation();
+                    try
+                    {
+                        _noActiveReviewSnapshots.Wait();
+                        int activeAtBoundary;
+                        lock (_reviewSnapshotGate) activeAtBoundary = _activeReviewSnapshots;
+                        FullRebuildDestructiveBoundaryForTest?.Invoke(activeAtBoundary);
+                        FullRebuildInPump();
+                        FullRebuildCompletedForTest?.Invoke();
+                    }
+                    finally { EndIndexMutation(); }
+                }
                 continue;
             }
             if (_store is null) continue;
@@ -421,12 +686,16 @@ public sealed class IndexManager : IDisposable
             try
             {
                 _state = "refreshing";
-                var result = DeltaRefresher.Refresh(_store, _workspaceRoot, req.Paths, _log);
+                string? recordBranch = req.RecordCommit is null
+                    ? null
+                    : GitInfo.HeadBranch(_workspaceRoot);
+                var result = DeltaRefresher.Refresh(_store, _workspaceRoot, req.Paths, _log,
+                    recordCommit: req.RecordCommit, recordBranch: recordBranch);
                 // z4c: count what was ACTUALLY applied (the refresh result), not what was
                 // requested — a sweep request has no path count, and hash-identical paths are
                 // rightly skipped without being "processed".
                 Interlocked.Add(ref _pendingProcessed, result.AddedFiles + result.ChangedFiles + result.DeletedFiles);
-                _lastRefreshUtc = DateTime.UtcNow.ToString("O");
+                _lastRefreshUtc = result.RefreshedAtUtc ?? DateTime.UtcNow.ToString("O");
                 if (result.AddedFiles + result.ChangedFiles + result.DeletedFiles > 0)
                 {
                     _log($"Delta refresh: +{result.AddedFiles} ~{result.ChangedFiles} -{result.DeletedFiles} " +
@@ -436,11 +705,8 @@ public sealed class IndexManager : IDisposable
                 // baseline never advances past what the index actually contains.
                 if (req.RecordCommit is { } commit)
                 {
-                    var branch = GitInfo.HeadBranch(_workspaceRoot);
-                    _store.SetMeta("indexed_commit", commit);
-                    if (branch is not null) _store.SetMeta("indexed_branch", branch);
                     _indexedCommit = commit;
-                    _indexedBranch = branch ?? _indexedBranch;
+                    _indexedBranch = recordBranch ?? _indexedBranch;
                 }
                 _state = "ready";
             }
@@ -573,8 +839,11 @@ public sealed class IndexManager : IDisposable
     }
 
     /// <summary>Queues a manual refresh (targeted paths, or full detection sweep when null).</summary>
-    public void RequestRefresh(IReadOnlyCollection<string>? paths = null) =>
-        _refreshQueue.Writer.TryWrite(new RefreshRequest(paths));
+    public bool RequestRefresh(IReadOnlyCollection<string>? paths = null)
+    {
+        if (!IsWriter || _disposed) return false;
+        return _refreshQueue.Writer.TryWrite(new RefreshRequest(paths));
+    }
 
     /// <summary>Queues a REBUILD-FROM-SCRATCH (tky): delete the db, run a full build, reopen.
     /// Serialized on the refresh pump like every other index mutation, so it can never race a
@@ -584,8 +853,9 @@ public sealed class IndexManager : IDisposable
     /// the queue — the hatch re-runs the full startup acquisition instead, so a transient
     /// blocker (AV lock, stale owner) stays recoverable in-band; a still-broken destination
     /// fails closed with the same sanitized shape.</summary>
-    public void RequestFullRebuild()
+    public bool RequestFullRebuild()
     {
+        if (IsFollower || _disposed) return false;
         lock (_disposeLock)
         {
             if (!_disposed && _pump is null && _startTask is null)
@@ -593,20 +863,64 @@ public sealed class IndexManager : IDisposable
                 // Start returned before publishing the pump (authority/lease refusal): an
                 // enqueued rebuild would never run. Re-enter the sole acquisition site.
                 Start(forceRebuild: true);
-                return;
+                return IsWriter;
             }
         }
-        _refreshQueue.Writer.TryWrite(new RefreshRequest(null, FullRebuild: true));
+        return IsWriter && _refreshQueue.Writer.TryWrite(
+            new RefreshRequest(null, FullRebuild: true));
     }
 
-    public bool IsQueryable => _state is "ready" or "refreshing" &&
-        TryGetSafeDatabaseStatus(out IndexLeaseIdentity? current, out _) &&
-        current?.DatabaseIdentity is not null;
+    public bool IsQueryable
+    {
+        get
+        {
+            if (IsFollower && !TryRefreshFollowerMetadata(force: false)) return false;
+            string state = State;
+            return state is "ready" or "refreshing" &&
+                   TryGetSafeDatabaseStatus(out IndexLeaseIdentity? current, out _) &&
+                   current?.DatabaseIdentity is not null;
+        }
+    }
 
     public IndexQueries OpenQueries()
     {
-        EnsureDatabaseAuthority();
-        return new IndexQueries(_databaseIoPath);
+        if (!IsFollower)
+        {
+            EnsureDatabaseAuthority();
+            return new IndexQueries(_databaseIoPath);
+        }
+
+        FollowerMetadataBeforeGateForTest?.Invoke();
+        lock (_followerMetadataGate)
+        {
+            IndexQueries? queries = null;
+            try
+            {
+                EnsureDatabaseAuthority();
+                if (!HasActiveFollowerWriter())
+                    throw new IOException(FollowerWriterUnavailable);
+                if (!TryGetSafeDatabaseStatus(out IndexLeaseIdentity? before, out _) ||
+                    before?.DatabaseIdentity is null)
+                    throw new IOException(FollowerIndexUnavailable);
+                queries = new IndexQueries(_databaseIoPath, pinReadSnapshot: false,
+                    pooling: false);
+                IndexMetadataSnapshot metadata = queries.ReadMetadata();
+                if (!IsCompatibleFollowerMetadata(metadata) ||
+                    !TryGetSafeDatabaseStatus(out IndexLeaseIdentity? after, out _) ||
+                    after != before)
+                    throw new IOException(FollowerIndexUnavailable);
+                PublishFollowerReady(metadata);
+                return queries;
+            }
+            catch
+            {
+                queries?.Dispose();
+                PublishFollowerUnavailable(HasActiveFollowerWriter()
+                    ? FollowerIndexUnavailable
+                    : FollowerWriterUnavailable);
+                throw;
+            }
+        }
     }
 
     /// <summary>
@@ -620,27 +934,65 @@ public sealed class IndexManager : IDisposable
         // its next committed epoch so review_pack does not fail spuriously just after a caller's
         // own refresh; a long rebuild still returns the bounded retry response.
         if (!_stableIndexEpoch.Wait(TimeSpan.FromSeconds(2))) return null;
-        long before;
-        lock (_reviewSnapshotGate)
-        {
-            before = Volatile.Read(ref _refreshEpoch);
-            if ((before & 1) != 0 || !IsQueryable) return null;
-            _activeReviewSnapshots++;
-            if (_activeReviewSnapshots == 1) _noActiveReviewSnapshots.Reset();
-        }
 
+        if (!TryGetSafeDatabaseStatus(out IndexLeaseIdentity? databaseBefore,
+                out long databaseBytes) || databaseBefore?.DatabaseIdentity is null)
+            return null;
+
+        IndexReviewCoordinationLease? coordinationLease = null;
+        if (OperatingSystem.IsWindows() &&
+            IndexReviewCoordinationLease.TryAcquireReader(databaseBefore,
+                TimeSpan.FromSeconds(2), out coordinationLease) !=
+            IndexReviewCoordinationAcquireResult.Acquired)
+            return null;
+
+        long before = 0;
+        bool registered = false;
         IndexQueries? queries = null;
         bool transferred = false;
         try
         {
+            if (!TryGetSafeDatabaseStatus(out IndexLeaseIdentity? databaseAfterGate, out _) ||
+                databaseAfterGate != databaseBefore)
+                return null;
+
+            lock (_reviewSnapshotGate)
+            {
+                before = Volatile.Read(ref _refreshEpoch);
+                if ((before & 1) != 0 || !IsQueryable) return null;
+                _activeReviewSnapshots++;
+                registered = true;
+                if (_activeReviewSnapshots == 1) _noActiveReviewSnapshots.Reset();
+            }
+
             EnsureDatabaseAuthority();
             queries = new IndexQueries(_databaseIoPath, pinReadSnapshot: true,
-                ReviewSnapshotAfterQueryForTest);
-            IndexHealth health = Health();
-            long after = Volatile.Read(ref _refreshEpoch);
-            if (before == after && (after & 1) == 0 && health.State == "ready")
+                ReviewSnapshotAfterQueryForTest, pooling: IsWriter);
+            IndexHealth health;
+            bool followerStable = true;
+            if (IsFollower)
             {
-                var snapshot = new IndexReadSnapshot(queries, health, ReleaseReviewSnapshot);
+                IndexMetadataSnapshot metadata = queries.ReadMetadata();
+                followerStable = IsCompatibleFollowerMetadata(metadata) &&
+                    TryGetSafeDatabaseStatus(out IndexLeaseIdentity? followerDatabaseAfter, out _) &&
+                    followerDatabaseAfter == databaseBefore;
+                health = FollowerHealth(metadata, databaseBytes);
+            }
+            else
+            {
+                health = Health();
+            }
+            long after = Volatile.Read(ref _refreshEpoch);
+            if (followerStable && before == after && (after & 1) == 0 &&
+                health.State == "ready")
+            {
+                IndexReviewCoordinationLease? transferredLease = coordinationLease;
+                coordinationLease = null;
+                var snapshot = new IndexReadSnapshot(queries, health, () =>
+                {
+                    try { ReleaseReviewSnapshot(); }
+                    finally { transferredLease?.Dispose(); }
+                });
                 transferred = true;
                 return snapshot;
             }
@@ -659,7 +1011,11 @@ public sealed class IndexManager : IDisposable
             if (!transferred)
             {
                 try { queries?.Dispose(); }
-                finally { ReleaseReviewSnapshot(); }
+                finally
+                {
+                    if (registered) ReleaseReviewSnapshot();
+                    coordinationLease?.Dispose();
+                }
             }
         }
         return null;
@@ -673,12 +1029,29 @@ public sealed class IndexManager : IDisposable
         }
     }
 
+    private IndexHealth FollowerHealth(IndexMetadataSnapshot metadata, long dbBytes) => new(
+        "ready", metadata.IndexVersion, metadata.IndexedAtUtc, metadata.LastRefreshUtc,
+        0, null, dbBytes, _workspaceRoot, _dbPath, metadata.IndexedCommit,
+        metadata.IndexedBranch, null, 0, FollowerAccessMode);
+
     public IndexHealth Health()
     {
+        if (IsFollower) _ = TryRefreshFollowerMetadata(force: false);
         // Reads cached fields plus one authority-gated no-follow metadata snapshot. Never inspect
         // the visible database path after its destination authority has changed; macOS reports a
         // conservative zero because it has no retained directory handle for an anchored size read.
         _ = TryGetSafeDatabaseStatus(out _, out long dbBytes);
+
+        if (IsFollower)
+        {
+            FollowerPublication publication = CurrentFollowerPublication;
+            IndexMetadataSnapshot? metadata = publication.Metadata;
+            return new IndexHealth(
+                publication.State, metadata?.IndexVersion, metadata?.IndexedAtUtc,
+                metadata?.LastRefreshUtc, 0, publication.Error, dbBytes, _workspaceRoot,
+                _dbPath, metadata?.IndexedCommit, metadata?.IndexedBranch, null, 0,
+                FollowerAccessMode);
+        }
 
         // Progress only while genuinely building — a background refresh must never show a
         // cold-build progress bar (field design note; refresh honesty is bead z4c).
@@ -688,7 +1061,7 @@ public sealed class IndexManager : IDisposable
             _watcher?.PendingCount ?? 0, _error, dbBytes, _workspaceRoot, _dbPath,
             _indexedCommit, _indexedBranch,
             _state == "building" && bp is not null ? bp.Snapshot() : null,
-            Interlocked.Read(ref _pendingProcessed));
+            Interlocked.Read(ref _pendingProcessed), _accessMode);
     }
 
     /// <summary>Current git HEAD commit for the workspace, or null if not a git repo / git absent.
@@ -742,6 +1115,25 @@ public sealed class IndexManager : IDisposable
         lock (_resourceReleaseLock)
         {
             if (_ownedResourcesReleased) return;
+            if (IsFollower)
+            {
+                try
+                {
+                    // Followers own no write connection, pool, pump, or mutex. Release only their
+                    // retained no-follow directory authority; the writer lease belongs elsewhere.
+                    _directoryAuthority?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _log($"IndexManager follower cleanup failed: {ex.GetType().Name}");
+                    return;
+                }
+                _directoryAuthority = null;
+                _authorityDirectoryIdentity = null;
+                _databaseIoPath = _dbPath;
+                _ownedResourcesReleased = true;
+                return;
+            }
             try
             {
                 _store?.Dispose();

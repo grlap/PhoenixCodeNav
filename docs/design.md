@@ -66,12 +66,17 @@ Every response carries a `confidence`:
 flags, freshness), `file_contents` + an external-content `fts_content` virtual table,
 `projects` / `project_refs` / `package_refs` / `compile_items`, `solutions` /
 `solution_projects`, `symbols` (kind, name facets, spans, parent links), and `meta`
-(index version, timestamps, coverage). WAL mode gives one writer + many readers.
+(index version, timestamps, coverage). On Windows, WAL mode is exposed as one writer process plus
+many read-only follower processes. Follower index-backed evidence uses committed snapshots and
+followers never open a writer connection; explicitly live source/Git and compiler-backed semantic
+evidence may use newer workspace bytes. Other platforms remain writer-only for now.
 
 **Build** (`IndexBuilder`): scan the tree (excluding `.git`, `bin`, `obj`, `packages`,
-`node_modules`, `.vs`, generated files, and symlink/junction targets); parse every
-`.csproj`/`.sln` in parallel; parse every `.cs` with Roslyn syntax on all cores, streaming
-symbol rows through a bounded channel to the single writer. A cold build of a
+`node_modules`, `.vs`, generated files, and symlink/junction targets); parse every `.csproj`
+directly, independent of solution membership; parse every `.cs` with Roslyn syntax on all cores,
+streaming symbol rows through a bounded channel to the single writer. Solution files are optional
+editor inventory only: they never select projects or provide build, dependency, ownership, or
+symbol-resolution authority. A cold build of a
 multi-thousand-project workspace completes in minutes at most; live progress counters
 (phase, files, throughput) report the real numbers for any given machine.
 
@@ -104,17 +109,29 @@ Cold cluster load is ~1s; warm queries ~10ms; working set stays under ~300 MB.
 
 The index is kept live without rebuilding on every keystroke:
 
-- **`IndexManager`** owns the lifecycle: it opens or builds the index in the background
-  (never blocking the MCP handshake), then runs a serialized refresh pump.
+- **`IndexManager`** owns the lifecycle. One process acquires the index writer lease, opens or
+  builds in the background (never blocking the MCP handshake), and runs the serialized refresh
+  pump. On Windows, compatible contenders attach as read-only followers with no writer
+  connection, pump, watcher, build, or automatic promotion.
 - **`WorkspaceWatcher`** (a `FileSystemWatcher`) debounces working-tree changes (600 ms
   quiet window) into batches. `DeltaRefresher` applies them: re-hash, re-parse changed
-  `.cs`, update FTS + symbols, mark deletes, and rebuild the project graph when a
-  `.csproj`/`.sln` changed. Directory-level changes (folder rename/move/delete) escalate to
-  a full detect-all sweep, since the OS emits no per-child events for them.
-- **Startup sweep.** When an existing index is reopened, a detect-all sweep reconciles any
-  edits made while the server was down.
-- Every response reports `indexStatus` (`ready` / `building` / `refreshing` / `stale`) and
-  `pendingChanges`, so an agent can see when results may lag the working tree.
+  `.cs`, update FTS + symbols, mark deletes, and rebuild the authoritative project graph when a
+  `.csproj` changes. Solution changes can update non-authoritative editor inventory only.
+  Directory-level changes (folder rename/move/delete) escalate to a full detect-all sweep, since
+  the OS emits no per-child events for them.
+- **Startup sweep.** When an existing index is reopened by the writer, a detect-all sweep
+  reconciles edits made while the server was down. Followers never sweep or repair.
+- Every response reports `indexStatus`, `indexVersion`, and `meta.indexMode`; capabilities expose
+  the same role as `index.mode`. `writer` owns refresh/build/worktree mutations. `follower` remains
+  fully queryable but returns `index_writer_required` for `refresh_index` and `index_worktree`;
+  `unavailable` means the process has not attached to either database role. Followers report
+  `pendingChangesKnown: false`: their index-backed fields see committed WAL state, not the writer's
+  in-process queue. Live source/Git and compiler-backed semantic fields retain their own provenance.
+  A follower also becomes unavailable when its writer exits and recovers when another writer owns
+  the lease; promotion to writer is deliberately restart-only.
+- Review snapshots retain one of a bounded set of Windows cross-process reader slots. Full rebuild
+  holds a turnstile, drains every slot, and only then replaces the database; new reviews receive a
+  bounded retry response while that destructive boundary is active.
 
 ### `git checkout <branch>` / `git pull` / `merge` / `rebase`
 

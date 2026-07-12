@@ -27,8 +27,10 @@ navigation questions in three layers, each labeled with how trustworthy it is:
 | **Syntax** (Roslyn parse, no compile) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
 | **Semantic** (Roslyn compilations, lazy clusters) | `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy` | `exact` (falls back to `indexed` with `partialReason`) |
 
-Plus structural facts from csproj/sln parsing (`project_graph`, `projects_containing`,
-`dependency_path`, `repo_overview`) and composites (`context_pack`, `impact`, `related_tests`).
+Plus structural facts parsed directly from every `.csproj` (`project_graph`,
+`projects_containing`, `dependency_path`, `repo_overview`) and composites (`context_pack`,
+`impact`, `related_tests`). Solution files may be inventoried for editor context, but they
+never select projects or contribute build, ownership, dependency, or symbol-resolution authority.
 
 The dependency graph also sees what MSBuild's project view hides in large legacy codebases:
 binary `<Reference Include>` + HintPath couplings from **multi-staged builds** (phase one
@@ -45,13 +47,30 @@ and NuGet-cache package dlls, in-cluster project references. It works identicall
 
 ## Keeping the index fresh
 
-Index updates are incremental: a file watcher applies debounced deltas (edit/add/delete,
-FTS-consistent); csproj/sln changes rebuild the project graph. A startup sweep
-catches offline edits, and branch switches / pulls are detected by watching `.git`
-(`repo_overview.git` reports indexed vs HEAD commit). Every response carries
-`indexStatus` / `indexVersion` freshness metadata; `refresh_index` is an in-band hatch
-(`force: 'incremental' | 'full'`) that recovers even a corrupted index without shell access,
-and cold builds expose live progress counters (no fabricated ETAs).
+Index updates are incremental: the writer process's file watcher applies debounced deltas
+(edit/add/delete, FTS-consistent); `.csproj` changes rebuild the authoritative project graph,
+while solution changes update only non-authoritative editor inventory. A startup sweep catches
+offline edits, and branch switches / pulls are detected by watching `.git` (`repo_overview.git`
+reports indexed vs HEAD commit). Every response carries `indexStatus` / `indexVersion`
+freshness metadata; `refresh_index` is an in-band writer hatch (`force: 'incremental' | 'full'`)
+that recovers even a corrupted index without shell access, and cold builds expose live progress
+counters (no fabricated ETAs).
+
+On Windows, Phoenix uses **one writer process and many read-only follower processes per index**.
+The process that acquires the writer lease owns builds, watchers, refreshes, and worktree-index
+mutations. Additional Claude, Codex, or other MCP processes attach to the same compatible SQLite
+WAL index as followers and can use every navigation and semantic query tool concurrently. Check
+`server_capabilities.index.mode` or response `meta.indexMode` for `writer`, `follower`, or
+`unavailable` (the process has not attached to a database role).
+Followers never build or repair an index; `refresh_index` and `index_worktree` return the stable
+`index_writer_required` error and must be run from the writer process. A follower's index-backed
+evidence reads committed writer state, while tools explicitly labeled live and compiler-backed
+semantic operations may read newer workspace bytes. Followers cannot observe the writer process's
+pending watcher queue, so capabilities report `pendingChangesKnown: false` rather than presenting
+a local zero as freshness evidence. Long review snapshots use cross-process reader slots; a full
+rebuild drains those readers before replacing the Windows database. If the writer exits, followers
+stop reporting query-ready until another writer appears; they never silently promote themselves,
+so restart a follower when it should take writer ownership.
 
 ## Install (work machine)
 
@@ -102,9 +121,11 @@ args = ["--workspace-root", "C:\\path\\to\\repo"]
 Then add the agent instructions from `docs/agent-instructions.md` to your repo's
 `CLAUDE.md` / `AGENTS.md` so agents prefer these tools over shell grep.
 
-First run builds the index in the background (a 10M-LOC repo takes a few minutes; the server
-answers `index_building` hints meanwhile and everything works from then on). The index lives
-in `<workspace>/.codenav/index.db` — add `.codenav/` to `.gitignore` — or point `--index-db`
+The first process to acquire the writer lease builds the index in the background (a 10M-LOC repo
+takes a few minutes; the server answers `index_building` hints meanwhile). On Windows, followers
+attach once that writer has produced a compatible index; a missing, corrupt, or schema-stale index
+requires the writer rather than being repaired by a follower. The index lives in
+`<workspace>/.codenav/index.db` — add `.codenav/` to `.gitignore` — or point `--index-db`
 elsewhere.
 
 ## Git worktrees (review flows)
@@ -133,14 +154,18 @@ The review session then starts its own phoenix on the worktree — a **relative*
 `--workspace-root .` in a checked-in `.mcp.json` serves the main enlistment and every
 worktree identically, and the seeded index is queryable immediately. `worktrees` lists all
 worktrees with per-index status (schema, indexed commit, in-sync) — loop it for "refresh
-all". A worktree whose own phoenix instance is running reports `worktree_index_locked`;
-refresh from that session (`refresh_index`) instead.
+all". A worktree whose own Phoenix **writer** is running reports `worktree_index_locked`;
+refresh from that writer (`refresh_index`) instead. A follower may list worktrees, but its
+`index_worktree` call returns `index_writer_required`.
 
 ## Server CLI
 
 ```text
 PhoenixCodeNav.Mcp.exe --workspace-root <dir> [--index-db <path>] [--rebuild]
 ```
+
+`--rebuild` is honored only by the process that acquires the writer lease. A follower remains
+read-only and does not promote itself; restart it after the writer exits if it must become writer.
 
 ## Development
 

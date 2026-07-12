@@ -8,6 +8,13 @@ namespace CodeNav.Core.Indexing;
 internal sealed record IndexLeaseIdentity(
     string DirectoryIdentity, string? DatabaseIdentity);
 
+internal enum IndexLeaseAcquireResult
+{
+    Acquired,
+    Contended,
+    Failed,
+}
+
 /// <summary>
 /// Cross-process ownership for one writable Phoenix index. Two named mutexes protect both the
 /// stable lexical destination and the destination-directory object plus leaf. The pair prevents
@@ -26,10 +33,10 @@ internal sealed class IndexOwnershipLease : IDisposable
     private int _disposed;
 
     private IndexOwnershipLease(Mutex[] mutexes, ManualResetEventSlim ready,
-        Action<bool> publishAcquired)
+        Action<IndexLeaseAcquireResult> publishResult)
     {
         _mutexes = mutexes;
-        _ownerThread = new Thread(() => OwnMutexes(ready, publishAcquired))
+        _ownerThread = new Thread(() => OwnMutexes(ready, publishResult))
         {
             IsBackground = true,
             Name = "PhoenixCodeNav index lease",
@@ -42,6 +49,15 @@ internal sealed class IndexOwnershipLease : IDisposable
 
     internal static bool TryAcquire(string ownershipRoot, string dbPath,
         IndexLeaseIdentity? anchoredIdentity, out IndexOwnershipLease? lease)
+        => TryAcquireDetailed(ownershipRoot, dbPath, anchoredIdentity, out lease) ==
+           IndexLeaseAcquireResult.Acquired;
+
+    /// <summary>Acquires writable ownership while preserving the distinction between a healthy
+    /// competing owner and an inability to construct or coordinate the lease. Only
+    /// <see cref="IndexLeaseAcquireResult.Contended"/> is safe for IndexManager to interpret as
+    /// evidence that another Phoenix can serve as the writer.</summary>
+    internal static IndexLeaseAcquireResult TryAcquireDetailed(string ownershipRoot, string dbPath,
+        IndexLeaseIdentity? anchoredIdentity, out IndexOwnershipLease? lease)
     {
         _ = ownershipRoot; // retained for source compatibility; identity is the actual db target.
         lease = null;
@@ -52,7 +68,7 @@ internal sealed class IndexOwnershipLease : IDisposable
         }
         catch
         {
-            return false;
+            return IndexLeaseAcquireResult.Failed;
         }
 
         var mutexes = new Mutex[names.Length];
@@ -64,12 +80,12 @@ internal sealed class IndexOwnershipLease : IDisposable
         catch
         {
             foreach (Mutex? mutex in mutexes) mutex?.Dispose();
-            return false;
+            return IndexLeaseAcquireResult.Failed;
         }
 
         using var ready = new ManualResetEventSlim(false);
-        bool acquired = false;
-        var candidate = new IndexOwnershipLease(mutexes, ready, value => acquired = value);
+        IndexLeaseAcquireResult result = IndexLeaseAcquireResult.Failed;
+        var candidate = new IndexOwnershipLease(mutexes, ready, value => result = value);
         try
         {
             candidate._ownerThread.Start();
@@ -77,7 +93,7 @@ internal sealed class IndexOwnershipLease : IDisposable
             {
                 candidate._release.Set();
                 candidate.CleanupFailedAcquisition();
-                return false;
+                return IndexLeaseAcquireResult.Failed;
             }
         }
         catch
@@ -89,16 +105,16 @@ internal sealed class IndexOwnershipLease : IDisposable
                 candidate._release.Dispose();
                 candidate._exited.Dispose();
             }
-            return false;
+            return IndexLeaseAcquireResult.Failed;
         }
 
-        if (!acquired)
+        if (result != IndexLeaseAcquireResult.Acquired)
         {
             candidate.CleanupFailedAcquisition();
-            return false;
+            return result;
         }
         lease = candidate;
-        return true;
+        return IndexLeaseAcquireResult.Acquired;
     }
 
     internal static bool IsHeld(string ownershipRoot, string dbPath)
@@ -158,7 +174,8 @@ internal sealed class IndexOwnershipLease : IDisposable
         catch { }
     }
 
-    private void OwnMutexes(ManualResetEventSlim ready, Action<bool> publishAcquired)
+    private void OwnMutexes(ManualResetEventSlim ready,
+        Action<IndexLeaseAcquireResult> publishResult)
     {
         int acquiredCount = 0;
         bool published = false;
@@ -173,7 +190,9 @@ internal sealed class IndexOwnershipLease : IDisposable
             }
 
             bool allAcquired = acquiredCount == _mutexes.Length;
-            publishAcquired(allAcquired);
+            publishResult(allAcquired
+                ? IndexLeaseAcquireResult.Acquired
+                : IndexLeaseAcquireResult.Contended);
             published = true;
             ready.Set();
             if (allAcquired) _release.Wait();
@@ -182,7 +201,7 @@ internal sealed class IndexOwnershipLease : IDisposable
         {
             if (!published)
             {
-                try { publishAcquired(false); } catch { }
+                try { publishResult(IndexLeaseAcquireResult.Failed); } catch { }
                 try { ready.Set(); } catch { }
             }
         }

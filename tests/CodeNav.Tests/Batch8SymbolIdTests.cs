@@ -17,8 +17,8 @@ public class Batch8SymbolIdTests : IClassFixture<IndexFixture>
 
     public Batch8SymbolIdTests(IndexFixture fx) => _fx = fx;
 
-    // One shared manager per class fixture: the ownership lease is exclusive per database, so a
-    // manager per test (never disposed by xUnit) would starve every open after the first.
+    // One shared writer per class fixture: a manager per test (never disposed by xUnit) would
+    // leave later tests as read-only followers, unable to perform fixture refreshes.
     private NavigationTools Tools() => _fx.SharedTools;
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;

@@ -6,7 +6,8 @@ using CodeNav.Core.Discovery;
 namespace CodeNav.Core.Indexing;
 
 public sealed record RefreshResult(
-    int ChangedFiles, int AddedFiles, int DeletedFiles, bool ProjectsRefreshed, TimeSpan Elapsed);
+    int ChangedFiles, int AddedFiles, int DeletedFiles, bool ProjectsRefreshed, TimeSpan Elapsed,
+    string? RefreshedAtUtc = null);
 
 /// <summary>
 /// Owns: incremental index updates — targeted (watcher batches) or detect-all
@@ -19,7 +20,8 @@ public static class DeltaRefresher
 
     public static RefreshResult Refresh(
         IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? changedRelPaths,
-        Action<string>? log = null, bool removeUnavailableKnown = false)
+        Action<string>? log = null, bool removeUnavailableKnown = false,
+        string? recordCommit = null, string? recordBranch = null)
     {
         var sw = Stopwatch.StartNew();
         var stored = store.AllFilesByPath();
@@ -60,6 +62,7 @@ public static class DeltaRefresher
         Dictionary<string, long>? globRoots = null; // lazy: only built when a .cs file is ADDED
         bool? hasLegacy = null;                     // lazy: gates the incremental attribution
 
+        string? refreshedAtUtc = null;
         using (var tx = store.BeginTransaction())
         {
             foreach (var rel in candidates)
@@ -210,15 +213,25 @@ public static class DeltaRefresher
                 log?.Invoke("Project files changed — rebuilding project graph ...");
                 RefreshProjectDataCore(store, workspaceRoot, tx, log);
             }
+            if (added + changed + deleted > 0)
+            {
+                refreshedAtUtc = DateTime.UtcNow.ToString("O");
+                store.SetMeta(tx, "last_refresh_utc", refreshedAtUtc);
+            }
+            // Commit identity belongs to the same SQLite transaction as the rows it describes.
+            // A follower can pin between writer transactions, so writing this afterward would let
+            // it observe new rows with the previous commit metadata.
+            if (recordCommit is not null)
+            {
+                store.SetMeta(tx, "indexed_commit", recordCommit);
+                if (recordBranch is not null)
+                    store.SetMeta(tx, "indexed_branch", recordBranch);
+            }
             tx.Commit();
         }
 
-        if (added + changed + deleted > 0)
-        {
-            store.SetMeta("last_refresh_utc", DateTime.UtcNow.ToString("O"));
-        }
-
-        return new RefreshResult(changed, added, deleted, projectDataDirty, sw.Elapsed);
+        return new RefreshResult(changed, added, deleted, projectDataDirty, sw.Elapsed,
+            refreshedAtUtc);
     }
 
     /// <summary>Same longest-dir-prefix map CompileItemResolver builds: non-legacy (SDK or failed-
