@@ -102,7 +102,9 @@ public sealed partial class NavigationTools
                 new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. 'partial' is DELIBERATELY not in this string: it has its own isPartial field on every symbol node (plus partialFiles cross-links on outline types). Members also carry 'accessors' ({get: 'public', set: 'private'}) — ONLY when an accessor's accessibility differs from the member's own, so a private setter is no longer invisible. Modifiers since schema v4; accessors since v9" },
                 new { id = "rebuild-hatch", summary = "refresh_index accepts force: 'auto'|'incremental' (delta refresh; hash-identical files skipped — never rebuilds an intact-looking index) or 'full' (delete the index and REBUILD FROM SCRATCH, pump-serialized, works even from state 'failed' — recovery re-attaches the file watcher and git tracking and clears the old error; watch index.progress). The in-band corruption-recovery hatch — no shell access needed" },
                 new { id = "deadline-honesty", summary = "Semantic tools return deadlineMs/elapsedMs. Mid-scan expiry keeps partial, totalIsLowerBound, and 'at least N'; cold load uses partialReason cluster_cold_load. references/implementations split clusterLoadMs/queryMs. Reference totals dedupe project+path+line+kind, expose solutionProjects, and retain outOfGraphCandidates" },
-                new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Assembly-name collisions (net-old/net-new csproj pairs) resolve to a name-level edge — the graph and the semantic workspace are name-keyed, so paired declarers keep all their consumer edges (schema v6+; edge recovery itself since v5). meta.indexSchema stamped on every response" },
+                new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE output remains a compatibility project-graph edge for multi-staged builds; schema v15 additionally refines it against physical-project variant outputs and only substitutes a source variant when the producer is unique, preserving ambiguity instead of merging AssemblyName rows. meta.indexSchema is stamped on every response" },
+                new { id = "physical-project-variant-resolution", summary = "schema v15 keys physical projects by normalized csproj path and creates one stable compilation variant per evaluated TFM/configuration/platform; conditioned outputs, Reference/HintPath, package, compile, parse-context, and structural-input facts drive source/binary resolution and warm invalidation without AssemblyName merging" },
+                new { id = "syntax-authoritative-semantic-candidates", summary = "semantic candidate coverage comes from variant reference closure plus arity-aware base-list syntax facts; FTS remains text-search evidence and cannot exclude a semantic project; coverage reports graph, compile-ownership, parse-context, candidate-project, and candidate-variant completeness independently" },
                 new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and index_building error bodies carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal, elapsedMs} — monotonic counters, no fabricated percent; absent when ready, and background refreshes never show a cold-build bar. filesSkipped and projectsFailed appear only when >0 (efa); filesPerSecond + estimatedRemainingMs appear only during indexing_files once >=100 files over >=1s of that phase are measured (0tn); pendingProcessed is the monotonic applied-delta count paired with pendingChanges — both flat means a stuck pump (z4c)" },
                 new { id = "edge-provenance", summary = "Schema v10 edges distinguish projectReference from hintPathReference; project_graph exposes kind, dependency_path per-hop via, context_pack flags hint-path owners, and impact reports directDependentProjects viaHintPathOnly risk. Mixed paths keep one transitive count/note; dual wiring prefers project; orphan references use orphaned:true with no project" },
                 new { id = "review-pack", summary = "review_pack: ONE budget-bounded call from a changed set (validated-base Git diff union working-tree dirt, or explicit paths) to hunk-mapped symbols and per-symbol impact digests: symbolId handle, owner, directDependentProjects (+viaHintPathOnly), transitive count, publicApi, related_tests with signal, indexed reference candidates, and deterministic risks. Deleted .cs files get DELETION honesty from a read-only base blob: each former top-level type reports danglingCandidates. Everything is INDEXED confidence and says so (notes carry stable ids); no semantic resolution runs inside — escalate chosen symbols via references(symbolId, mode:'semantic'). baseRef accepts a sha or strict-charset ref name" },
@@ -1419,8 +1421,7 @@ public sealed partial class NavigationTools
                 int concreteCount = impls.Count(r => !r.Declaration.IsAbstract);
                 bool exhausted = result.DeadlineExhausted;
                 bool bounded = result.SkippedCandidateProjects.Count > 0 ||
-                    result.Coverage.FailedProjects.Count > 0 ||
-                    result.Coverage.LoadedProjects < result.Coverage.RequestedProjects;
+                    CoverageIsPartial(result.Coverage);
                 bool partial = exhausted || bounded;
                 var meta0 = Meta.From(_manager.Health(), "exact", "semantic");
                 long elapsedMs = swSem.ElapsedMilliseconds;
@@ -1454,7 +1455,8 @@ public sealed partial class NavigationTools
                     partialReason = exhausted
                         ? $"semantic_timeout: deadline exhausted after {elapsedMs}ms of {deadlineMs}ms; this list is a lower bound (raise timeoutMs)"
                         : bounded
-                            ? $"candidate_cluster_bounded: skipped {result.SkippedCandidateProjects.Count} candidate projects and {result.Coverage.FailedProjects.Count} failed loads (raise maxProjects)"
+                            ? CoveragePartialReason(result.Coverage,
+                                result.SkippedCandidateProjects.Count)
                             : null,
                     // t2b: where the budget went — cluster load+resolve vs the finder passes.
                     timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
@@ -1465,20 +1467,34 @@ public sealed partial class NavigationTools
                     meta = meta0,
                 });
             }
+            if (result is { Implementations.Count: 0, DeadlineExhausted: false } &&
+                !CoverageIsPartial(result.Coverage))
+            {
+                long elapsedMs = swSem.ElapsedMilliseconds;
+                return Json.Serialize(new
+                {
+                    symbol = SemanticSymbolJson(result.Symbol),
+                    implementations = Array.Empty<object>(),
+                    concreteCount = 0,
+                    coverage = CoverageJson(result.Coverage),
+                    timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs,
+                        queryMs = result.QueryMs },
+                    meta = Meta.From(_manager.Health(), "exact", "semantic"),
+                });
+            }
             // Semantic RESOLVED the symbol but found no implementers, OR it could not resolve. Be
             // honest about which: bounded coverage (raising maxProjects may help) vs genuinely none.
             failReason = result is null ? ExpandReason(reason)
                 : (result.SkippedCandidateProjects.Count > 0 ||
-                   result.Coverage.LoadedProjects < result.Coverage.RequestedProjects ||
-                   result.Coverage.FailedProjects.Count > 0)
-                    ? "candidate_cluster_bounded"
+                   CoverageIsPartial(result.Coverage))
+                    ? CoverageFailureCode(result.Coverage,
+                        result.SkippedCandidateProjects.Count)
                     : "no_semantic_implementers";
         }
 
         bool semanticCoverageBounded = semanticResult is not null &&
             (semanticResult.SkippedCandidateProjects.Count > 0 ||
-             semanticResult.Coverage.FailedProjects.Count > 0 ||
-             semanticResult.Coverage.LoadedProjects < semanticResult.Coverage.RequestedProjects);
+             CoverageIsPartial(semanticResult.Coverage));
 
         // Heuristic fallback: types whose base list textually mentions the name — a naming
         // guess, not a compiler fact, so it is labeled confidence 'heuristic'.
@@ -1559,7 +1575,8 @@ public sealed partial class NavigationTools
                     skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
                     partial = semanticCoverageBounded ? true : (bool?)null,
                     partialReason = semanticCoverageBounded
-                        ? $"candidate_cluster_bounded: skipped {semanticResult!.SkippedCandidateProjects.Count} candidate projects and {semanticResult.Coverage.FailedProjects.Count} failed loads (raise maxProjects)"
+                        ? CoveragePartialReason(semanticResult!.Coverage,
+                            semanticResult.SkippedCandidateProjects.Count)
                         : "member_scoped_syntactic",
                     fallbackReason = "member_scoped_syntactic",
                     note = $"Same-named members of the syntactic implementers of {targetSym!.Container} (confidence heuristic — compiler-exact override resolution found none, likely a type-twin identity mismatch)."
@@ -1590,7 +1607,8 @@ public sealed partial class NavigationTools
                 skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
                 partial = semanticCoverageBounded ? true : (bool?)null,
                 partialReason = semanticCoverageBounded
-                    ? $"candidate_cluster_bounded: skipped {semanticResult!.SkippedCandidateProjects.Count} candidate projects and {semanticResult.Coverage.FailedProjects.Count} failed loads (raise maxProjects)"
+                    ? CoveragePartialReason(semanticResult!.Coverage,
+                        semanticResult.SkippedCandidateProjects.Count)
                     : "member_fallback_type_scoped",
                 fallbackReason = "member_fallback_type_scoped",
                 semanticReason = failReason, // why the exact path returned nothing (context, not actionable)
@@ -1621,9 +1639,11 @@ public sealed partial class NavigationTools
             skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
             partial = semanticCoverageBounded ? true : (bool?)null,
             partialReason = semanticCoverageBounded
-                ? $"candidate_cluster_bounded: skipped {semanticResult!.SkippedCandidateProjects.Count} candidate projects and {semanticResult.Coverage.FailedProjects.Count} failed loads (raise maxProjects)"
+                ? CoveragePartialReason(semanticResult!.Coverage,
+                    semanticResult.SkippedCandidateProjects.Count)
                 : failReason ?? "semantic_unavailable",
-            note = items.Count > 0 && failReason is "no_semantic_implementers" or "candidate_cluster_bounded"
+            note = items.Count > 0 && failReason is "no_semantic_implementers" or
+                "candidate_cluster_bounded" or "semantic_coverage_incomplete"
                 // Field (lhg): the old "declared in more than one assembly / generated twin" wording
                 // went stale once compiled-awareness + assembly-ref edges landed — say what we now
                 // actually know and what to do about it.
@@ -1721,9 +1741,8 @@ public sealed partial class NavigationTools
                     // seeds, an unfiltered zero with namers and full coverage shouldn't occur.
                     string? zeroNote = null;
                     bool zeroUnfiltered = kindSet is null && !publicConsumersOnly && includeTests;
-                    bool coverageBounded = result.SkippedCandidateProjects.Count > 0
-                        || result.Coverage.FailedProjects.Count > 0
-                        || result.Coverage.LoadedProjects < result.Coverage.RequestedProjects;
+                    bool coverageBounded = result.SkippedCandidateProjects.Count > 0 ||
+                        CoverageIsPartial(result.Coverage);
                     if (result.TotalLocations == 0 && zeroUnfiltered && coverageBounded)
                     {
                         using var qz = _manager.OpenQueries();
@@ -1735,16 +1754,13 @@ public sealed partial class NavigationTools
                         }
                     }
                     bool exhausted = result.DeadlineExhausted;
-                    int missingProjectLoads = Math.Max(0,
-                        result.Coverage.RequestedProjects - result.Coverage.LoadedProjects);
                     bool totalIsLowerBound = exhausted || coverageBounded;
                     bool partial = totalIsLowerBound;
                     // Deadline and candidate/load bounds all leave a salvaged lower bound, never a
                     // census. Keep the prose and the machine-readable marker driven by one condition.
                     string atLeast = totalIsLowerBound ? "at least " : "";
-                    string candidateCoverageReason =
-                        $"candidate_cluster_bounded: skipped {result.SkippedCandidateProjects.Count} candidate projects (raise maxProjects), " +
-                        $"{result.Coverage.FailedProjects.Count} failed loads, {missingProjectLoads} requested projects not loaded";
+                    string candidateCoverageReason = CoveragePartialReason(result.Coverage,
+                        result.SkippedCandidateProjects.Count);
                     var meta0 = Meta.From(_manager.Health(), "exact", "semantic");
                     long elapsedMs = swSem.ElapsedMilliseconds;
                     return Json.WithAuxiliaryListBudget(groups0, result.SkippedCandidateProjects,
@@ -2246,6 +2262,14 @@ public sealed partial class NavigationTools
         requestedProjects = c.RequestedProjects,
         candidateProjects = c.CandidateProjects,
         candidateProjectBudget = c.CandidateProjectBudget,
+        loadedVariants = c.LoadedVariants,
+        requestedVariants = c.RequestedVariants,
+        candidateVariants = c.CandidateVariants,
+        graphUniverseComplete = c.GraphUniverseComplete,
+        compileOwnershipComplete = c.CompileOwnershipComplete,
+        parseContextsComplete = c.ParseContextsComplete,
+        candidateDiscoveryComplete = c.CandidateDiscoveryComplete,
+        incompleteReasons = c.IncompleteReasons is { Count: > 0 } ? c.IncompleteReasons : null,
         // Field 0.7.0: SymbolFinder scans the WHOLE solution (including projects loaded by earlier
         // calls), so hits can legitimately exceed the requested set — this makes that legible
         // instead of "coverage 1/1 but 8 hits from 8 projects".
@@ -2261,6 +2285,43 @@ public sealed partial class NavigationTools
             : (bool?)null,
         frameworkRefsAvailable = c.FrameworkRefsAvailable,
     };
+
+    internal static bool CoverageIsPartial(ClusterCoverage c) =>
+        !c.FrameworkRefsAvailable || c.FailedProjects.Count > 0 ||
+        c.LoadedProjects < c.RequestedProjects ||
+        c.LoadedVariants < c.RequestedVariants || !c.GraphUniverseComplete ||
+        !c.CompileOwnershipComplete || !c.ParseContextsComplete ||
+        !c.CandidateDiscoveryComplete;
+
+    internal static string CoverageFailureCode(ClusterCoverage c, int skippedCandidateProjects) =>
+        skippedCandidateProjects > 0 || c.LoadedProjects < c.RequestedProjects ||
+        c.LoadedVariants < c.RequestedVariants
+            ? "candidate_cluster_bounded"
+            : "semantic_coverage_incomplete";
+
+    internal static string CoveragePartialReason(ClusterCoverage c, int skippedCandidateProjects)
+    {
+        string code = CoverageFailureCode(c, skippedCandidateProjects);
+        var details = new List<string>();
+        if (skippedCandidateProjects > 0)
+            details.Add($"{skippedCandidateProjects} candidate projects skipped");
+        if (c.FailedProjects.Count > 0)
+            details.Add($"{c.FailedProjects.Count} project loads failed");
+        int missingProjects = Math.Max(0, c.RequestedProjects - c.LoadedProjects);
+        if (missingProjects > 0) details.Add($"{missingProjects} requested projects not loaded");
+        int missingVariants = Math.Max(0, c.RequestedVariants - c.LoadedVariants);
+        if (missingVariants > 0) details.Add($"{missingVariants} requested variants not loaded");
+        if (!c.FrameworkRefsAvailable) details.Add("exact target-framework references unavailable");
+        if (!c.GraphUniverseComplete) details.Add("variant reference graph incomplete");
+        if (!c.CompileOwnershipComplete) details.Add("compile ownership incomplete");
+        if (!c.ParseContextsComplete) details.Add("parse contexts incomplete");
+        if (!c.CandidateDiscoveryComplete) details.Add("candidate discovery incomplete");
+        if (c.IncompleteReasons is { Count: > 0 })
+            details.Add($"reasons={string.Join(',', c.IncompleteReasons)}");
+        if (details.Count == 0) details.Add("semantic coverage incomplete");
+        string remedy = code == "candidate_cluster_bounded" ? " (raise maxProjects)" : "";
+        return $"{code}: {string.Join("; ", details)}{remedy}";
+    }
 
     /// <summary>Combines an explicit excludePath glob with firstPartyOnly's whole-segment vendor
     /// globs into one exclude list (null when empty, so callers pass null for "no filter").

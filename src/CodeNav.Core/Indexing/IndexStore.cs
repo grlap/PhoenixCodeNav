@@ -148,6 +148,155 @@ public sealed class IndexStore : IDisposable
             ) WITHOUT ROWID;
             CREATE INDEX idx_compile_items_file ON compile_items(file_id);
 
+            -- v15: physical-project / compilation-variant identity. The legacy project-level
+            -- tables remain compatibility projections for nonsemantic tools during migration.
+            CREATE TABLE project_variants(
+              id INTEGER PRIMARY KEY,
+              project_id INTEGER NOT NULL,
+              dimension_key TEXT NOT NULL,
+              stable_variant_key TEXT NOT NULL UNIQUE,
+              target_framework TEXT NOT NULL,
+              configuration TEXT NOT NULL,
+              platform TEXT NOT NULL,
+              assembly_name TEXT NOT NULL,
+              target_name TEXT NOT NULL,
+              target_ext TEXT NOT NULL,
+              evaluation_complete INTEGER NOT NULL,
+              UNIQUE(project_id, dimension_key)
+            );
+            CREATE INDEX idx_project_variants_project ON project_variants(project_id, dimension_key);
+
+            CREATE TABLE parse_contexts(
+              id INTEGER PRIMARY KEY,
+              context_key TEXT NOT NULL UNIQUE,
+              language_version TEXT NOT NULL,
+              preprocessor_symbols TEXT NOT NULL,
+              is_complete INTEGER NOT NULL
+            );
+            CREATE TABLE variant_parse_contexts(
+              variant_id INTEGER NOT NULL PRIMARY KEY,
+              parse_context_id INTEGER NOT NULL
+            ) WITHOUT ROWID;
+            CREATE INDEX idx_variant_parse_contexts_context ON variant_parse_contexts(parse_context_id, variant_id);
+
+            CREATE TABLE project_outputs(
+              id INTEGER PRIMARY KEY,
+              variant_id INTEGER NOT NULL,
+              output_path TEXT NOT NULL,
+              target_path TEXT NOT NULL,
+              condition TEXT,
+              evidence TEXT NOT NULL,
+              UNIQUE(variant_id, target_path, condition)
+            );
+            CREATE INDEX idx_project_outputs_target ON project_outputs(target_path, variant_id);
+
+            CREATE TABLE variant_compile_items(
+              variant_id INTEGER NOT NULL,
+              file_id INTEGER NOT NULL,
+              evaluation_status TEXT NOT NULL,
+              PRIMARY KEY(variant_id, file_id)
+            ) WITHOUT ROWID;
+            CREATE INDEX idx_variant_compile_items_file ON variant_compile_items(file_id, variant_id);
+
+            CREATE TABLE variant_structural_inputs(
+              variant_id INTEGER NOT NULL,
+              file_id INTEGER NOT NULL,
+              input_kind TEXT NOT NULL,
+              evaluation_status TEXT NOT NULL,
+              PRIMARY KEY(variant_id, file_id, input_kind)
+            ) WITHOUT ROWID;
+            CREATE INDEX idx_variant_structural_inputs_file ON variant_structural_inputs(file_id, variant_id);
+
+            CREATE TABLE variant_fact_coverage(
+              variant_id INTEGER PRIMARY KEY,
+              parse_context_complete INTEGER NOT NULL,
+              compile_ownership_complete INTEGER NOT NULL,
+              reference_graph_complete INTEGER NOT NULL,
+              reasons TEXT
+            );
+
+            CREATE TABLE project_reference_facts(
+              id INTEGER PRIMARY KEY,
+              from_variant_id INTEGER NOT NULL,
+              include_path TEXT NOT NULL,
+              requested_framework TEXT,
+              condition TEXT,
+              evaluation_status TEXT NOT NULL
+            );
+            CREATE INDEX idx_project_reference_facts_from ON project_reference_facts(from_variant_id, id);
+
+            CREATE TABLE assembly_reference_facts(
+              id INTEGER PRIMARY KEY,
+              from_variant_id INTEGER NOT NULL,
+              include_name TEXT NOT NULL,
+              hint_path TEXT,
+              condition TEXT,
+              evaluation_status TEXT NOT NULL
+            );
+            CREATE INDEX idx_assembly_reference_facts_from ON assembly_reference_facts(from_variant_id, id);
+
+            CREATE TABLE variant_package_refs(
+              id INTEGER PRIMARY KEY,
+              variant_id INTEGER NOT NULL,
+              package TEXT NOT NULL,
+              version TEXT NOT NULL,
+              condition TEXT,
+              evaluation_status TEXT NOT NULL
+            );
+            CREATE INDEX idx_variant_package_refs_variant ON variant_package_refs(variant_id, id);
+
+            CREATE TABLE reference_resolutions(
+              id INTEGER PRIMARY KEY,
+              reference_fact_kind TEXT NOT NULL,
+              reference_fact_id INTEGER NOT NULL,
+              from_variant_id INTEGER NOT NULL,
+              status TEXT NOT NULL,
+              is_complete INTEGER NOT NULL,
+              selected_candidate_id INTEGER
+            );
+            CREATE INDEX idx_reference_resolutions_from ON reference_resolutions(from_variant_id, id);
+
+            CREATE TABLE reference_resolution_candidates(
+              id INTEGER PRIMARY KEY,
+              resolution_id INTEGER NOT NULL,
+              target_variant_id INTEGER,
+              binary_path TEXT,
+              provenance TEXT NOT NULL,
+              compatibility TEXT NOT NULL,
+              matched_output_path TEXT,
+              rank INTEGER NOT NULL
+            );
+            CREATE INDEX idx_reference_candidates_resolution ON reference_resolution_candidates(resolution_id, id);
+            CREATE INDEX idx_reference_candidates_target ON reference_resolution_candidates(target_variant_id, resolution_id);
+
+            CREATE TABLE resolved_reference_edges(
+              resolution_id INTEGER NOT NULL,
+              from_variant_id INTEGER NOT NULL,
+              target_variant_id INTEGER NOT NULL,
+              provenance TEXT NOT NULL,
+              PRIMARY KEY(from_variant_id, target_variant_id, resolution_id)
+            ) WITHOUT ROWID;
+            CREATE INDEX idx_resolved_reference_edges_to ON resolved_reference_edges(target_variant_id, from_variant_id);
+            CREATE INDEX idx_resolved_reference_edges_from ON resolved_reference_edges(from_variant_id, target_variant_id);
+
+            CREATE TABLE symbol_base_types(
+              id INTEGER PRIMARY KEY,
+              parse_context_id INTEGER NOT NULL,
+              file_id INTEGER NOT NULL,
+              declaration_occurrence TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              raw_type_text TEXT NOT NULL,
+              lookup_name TEXT NOT NULL,
+              syntactic_arity INTEGER NOT NULL,
+              qualifier_text TEXT,
+              resolution_kind TEXT NOT NULL,
+              scope_evidence TEXT,
+              UNIQUE(parse_context_id, file_id, declaration_occurrence, ordinal)
+            );
+            CREATE INDEX idx_symbol_base_lookup ON symbol_base_types(lookup_name COLLATE BINARY, syntactic_arity, parse_context_id, file_id, id);
+            CREATE INDEX idx_symbol_base_unresolved ON symbol_base_types(resolution_kind, parse_context_id, file_id, id);
+            CREATE INDEX idx_symbol_base_file ON symbol_base_types(file_id, parse_context_id, id);
+
             CREATE TABLE solutions(
               id INTEGER PRIMARY KEY,
               path TEXT NOT NULL UNIQUE,
@@ -297,6 +446,182 @@ public sealed class IndexStore : IDisposable
         cmd.Parameters.AddWithValue("$cg",
             p.CompileIncludeGlobs is { Count: > 0 } || p.CompileRemoveGlobs is { Count: > 0 } ||
             (p.Style == "sdk" && !p.DefaultCompileItems) ? 1 : 0);
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    public long UpsertProjectVariant(SqliteTransaction tx, long projectId, string dimensionKey,
+        string stableVariantKey, string targetFramework, string configuration, string platform,
+        string assemblyName, string targetName, string targetExt, bool evaluationComplete)
+    {
+        using var cmd = _write.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO project_variants(project_id, dimension_key, stable_variant_key,
+              target_framework, configuration, platform, assembly_name, target_name, target_ext,
+              evaluation_complete)
+            VALUES($p,$d,$s,$tf,$c,$pl,$a,$tn,$te,$ok)
+            ON CONFLICT(project_id, dimension_key) DO UPDATE SET
+              stable_variant_key=excluded.stable_variant_key,
+              target_framework=excluded.target_framework,
+              configuration=excluded.configuration,
+              platform=excluded.platform,
+              assembly_name=excluded.assembly_name,
+              target_name=excluded.target_name,
+              target_ext=excluded.target_ext,
+              evaluation_complete=excluded.evaluation_complete
+            RETURNING id;
+            """;
+        cmd.Parameters.AddWithValue("$p", projectId);
+        cmd.Parameters.AddWithValue("$d", dimensionKey);
+        cmd.Parameters.AddWithValue("$s", stableVariantKey);
+        cmd.Parameters.AddWithValue("$tf", targetFramework);
+        cmd.Parameters.AddWithValue("$c", configuration);
+        cmd.Parameters.AddWithValue("$pl", platform);
+        cmd.Parameters.AddWithValue("$a", assemblyName);
+        cmd.Parameters.AddWithValue("$tn", targetName);
+        cmd.Parameters.AddWithValue("$te", targetExt);
+        cmd.Parameters.AddWithValue("$ok", evaluationComplete ? 1 : 0);
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    public long UpsertParseContext(SqliteTransaction tx, string contextKey, string languageVersion,
+        IEnumerable<string> preprocessorSymbols, bool isComplete)
+    {
+        using var cmd = _write.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            INSERT INTO parse_contexts(context_key, language_version, preprocessor_symbols, is_complete)
+            VALUES($k,$l,$s,$ok)
+            ON CONFLICT(context_key) DO UPDATE SET
+              language_version=excluded.language_version,
+              preprocessor_symbols=excluded.preprocessor_symbols,
+              is_complete=excluded.is_complete
+            RETURNING id;
+            """;
+        cmd.Parameters.AddWithValue("$k", contextKey);
+        cmd.Parameters.AddWithValue("$l", languageVersion);
+        cmd.Parameters.AddWithValue("$s", string.Join(';', preprocessorSymbols
+            .Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.Ordinal).OrderBy(s => s, StringComparer.Ordinal)));
+        cmd.Parameters.AddWithValue("$ok", isComplete ? 1 : 0);
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    public void SetVariantParseContext(SqliteTransaction tx, long variantId, long parseContextId) =>
+        ExecTx(tx, "INSERT OR REPLACE INTO variant_parse_contexts(variant_id, parse_context_id) VALUES($v,$c)",
+            ("$v", variantId), ("$c", parseContextId));
+
+    public void InsertVariantOutput(SqliteTransaction tx, long variantId, string outputPath,
+        string targetPath, string? condition, string evidence) =>
+        ExecTx(tx, "INSERT OR IGNORE INTO project_outputs(variant_id, output_path, target_path, condition, evidence) VALUES($v,$o,$t,$c,$e)",
+            ("$v", variantId), ("$o", outputPath), ("$t", targetPath),
+            ("$c", (object?)condition ?? DBNull.Value), ("$e", evidence));
+
+    public void InsertVariantCompileItem(SqliteTransaction tx, long variantId, long fileId,
+        string evaluationStatus) =>
+        ExecTx(tx, "INSERT OR REPLACE INTO variant_compile_items(variant_id, file_id, evaluation_status) VALUES($v,$f,$s)",
+            ("$v", variantId), ("$f", fileId), ("$s", evaluationStatus));
+
+    public void CopyProjectCompileItemsToVariant(SqliteTransaction tx, long projectId, long variantId,
+        string evaluationStatus) =>
+        ExecTx(tx, "INSERT OR REPLACE INTO variant_compile_items(variant_id,file_id,evaluation_status) " +
+            "SELECT $v,file_id,$s FROM compile_items WHERE project_id=$p",
+            ("$v", variantId), ("$s", evaluationStatus), ("$p", projectId));
+
+    public void InsertVariantCompileItemsForProject(SqliteTransaction tx, long projectId, long fileId,
+        string evaluationStatus) =>
+        ExecTx(tx, "INSERT OR REPLACE INTO variant_compile_items(variant_id,file_id,evaluation_status) " +
+            "SELECT id,$f,$s FROM project_variants WHERE project_id=$p",
+            ("$f", fileId), ("$s", evaluationStatus), ("$p", projectId));
+
+    public void InsertVariantStructuralInput(SqliteTransaction tx, long variantId, long fileId,
+        string inputKind, string evaluationStatus) =>
+        ExecTx(tx, "INSERT OR REPLACE INTO variant_structural_inputs(variant_id, file_id, input_kind, evaluation_status) VALUES($v,$f,$k,$s)",
+            ("$v", variantId), ("$f", fileId), ("$k", inputKind), ("$s", evaluationStatus));
+
+    public void SetVariantFactCoverage(SqliteTransaction tx, long variantId, bool parseComplete,
+        bool ownershipComplete, bool graphComplete, IEnumerable<string> reasons) =>
+        ExecTx(tx, "INSERT OR REPLACE INTO variant_fact_coverage(variant_id, parse_context_complete, compile_ownership_complete, reference_graph_complete, reasons) VALUES($v,$p,$o,$g,$r)",
+            ("$v", variantId), ("$p", parseComplete ? 1 : 0), ("$o", ownershipComplete ? 1 : 0),
+            ("$g", graphComplete ? 1 : 0), ("$r", string.Join(';', reasons.Distinct(StringComparer.Ordinal))));
+
+    public long InsertProjectReferenceFact(SqliteTransaction tx, long fromVariantId, string includePath,
+        string? requestedFramework, string? condition, string evaluationStatus) =>
+        InsertReturningId(tx,
+            "INSERT INTO project_reference_facts(from_variant_id, include_path, requested_framework, condition, evaluation_status) VALUES($v,$i,$tf,$c,$s) RETURNING id",
+            ("$v", fromVariantId), ("$i", includePath), ("$tf", (object?)requestedFramework ?? DBNull.Value),
+            ("$c", (object?)condition ?? DBNull.Value), ("$s", evaluationStatus));
+
+    public long InsertAssemblyReferenceFact(SqliteTransaction tx, long fromVariantId, string includeName,
+        string? hintPath, string? condition, string evaluationStatus) =>
+        InsertReturningId(tx,
+            "INSERT INTO assembly_reference_facts(from_variant_id, include_name, hint_path, condition, evaluation_status) VALUES($v,$i,$h,$c,$s) RETURNING id",
+            ("$v", fromVariantId), ("$i", includeName), ("$h", (object?)hintPath ?? DBNull.Value),
+            ("$c", (object?)condition ?? DBNull.Value), ("$s", evaluationStatus));
+
+    public void InsertVariantPackageReference(SqliteTransaction tx, long variantId, string package,
+        string version, string? condition, string evaluationStatus) =>
+        ExecTx(tx, "INSERT INTO variant_package_refs(variant_id, package, version, condition, evaluation_status) VALUES($v,$p,$ver,$c,$s)",
+            ("$v", variantId), ("$p", package), ("$ver", version),
+            ("$c", (object?)condition ?? DBNull.Value), ("$s", evaluationStatus));
+
+    public long InsertReferenceResolution(SqliteTransaction tx, string factKind, long factId,
+        long fromVariantId, string status, bool isComplete) =>
+        InsertReturningId(tx,
+            "INSERT INTO reference_resolutions(reference_fact_kind, reference_fact_id, from_variant_id, status, is_complete) VALUES($k,$f,$v,$s,$ok) RETURNING id",
+            ("$k", factKind), ("$f", factId), ("$v", fromVariantId), ("$s", status),
+            ("$ok", isComplete ? 1 : 0));
+
+    public long InsertReferenceResolutionCandidate(SqliteTransaction tx, long resolutionId,
+        long? targetVariantId, string? binaryPath, string provenance, string compatibility,
+        string? matchedOutputPath, int rank) =>
+        InsertReturningId(tx,
+            "INSERT INTO reference_resolution_candidates(resolution_id, target_variant_id, binary_path, provenance, compatibility, matched_output_path, rank) VALUES($r,$t,$b,$p,$c,$m,$rank) RETURNING id",
+            ("$r", resolutionId), ("$t", (object?)targetVariantId ?? DBNull.Value),
+            ("$b", (object?)binaryPath ?? DBNull.Value), ("$p", provenance), ("$c", compatibility),
+            ("$m", (object?)matchedOutputPath ?? DBNull.Value), ("$rank", rank));
+
+    public void SelectReferenceResolutionCandidate(SqliteTransaction tx, long resolutionId,
+        long candidateId, long fromVariantId, long targetVariantId, string provenance)
+    {
+        ExecTx(tx, "UPDATE reference_resolutions SET selected_candidate_id=$c, status='resolved' WHERE id=$r",
+            ("$c", candidateId), ("$r", resolutionId));
+        ExecTx(tx, "INSERT OR IGNORE INTO resolved_reference_edges(resolution_id, from_variant_id, target_variant_id, provenance) VALUES($r,$f,$t,$p)",
+            ("$r", resolutionId), ("$f", fromVariantId), ("$t", targetVariantId), ("$p", provenance));
+    }
+
+    public void InsertBaseTypeFact(SqliteTransaction tx, long parseContextId, long fileId,
+        string declarationOccurrence, int ordinal, string rawTypeText, string lookupName,
+        int syntacticArity, string? qualifierText, string resolutionKind, string? scopeEvidence) =>
+        ExecTx(tx, "INSERT OR REPLACE INTO symbol_base_types(parse_context_id, file_id, declaration_occurrence, ordinal, raw_type_text, lookup_name, syntactic_arity, qualifier_text, resolution_kind, scope_evidence) VALUES($c,$f,$d,$o,$raw,$n,$a,$q,$r,$s)",
+            ("$c", parseContextId), ("$f", fileId), ("$d", declarationOccurrence), ("$o", ordinal),
+            ("$raw", rawTypeText), ("$n", lookupName), ("$a", syntacticArity),
+            ("$q", (object?)qualifierText ?? DBNull.Value), ("$r", resolutionKind),
+            ("$s", (object?)scopeEvidence ?? DBNull.Value));
+
+    public void DeleteBaseTypeFactsForFile(SqliteTransaction tx, long fileId) =>
+        ExecTx(tx, "DELETE FROM symbol_base_types WHERE file_id=$f", ("$f", fileId));
+
+    public void ClearVariantChildren(SqliteTransaction tx, long variantId)
+    {
+        ExecTx(tx, "DELETE FROM resolved_reference_edges WHERE from_variant_id=$v OR target_variant_id=$v", ("$v", variantId));
+        ExecTx(tx, "DELETE FROM reference_resolution_candidates WHERE resolution_id IN (SELECT id FROM reference_resolutions WHERE from_variant_id=$v)", ("$v", variantId));
+        ExecTx(tx, "DELETE FROM reference_resolutions WHERE from_variant_id=$v", ("$v", variantId));
+        ExecTx(tx, "DELETE FROM project_reference_facts WHERE from_variant_id=$v", ("$v", variantId));
+        ExecTx(tx, "DELETE FROM assembly_reference_facts WHERE from_variant_id=$v", ("$v", variantId));
+        ExecTx(tx, "DELETE FROM variant_package_refs WHERE variant_id=$v", ("$v", variantId));
+        ExecTx(tx, "DELETE FROM project_outputs WHERE variant_id=$v", ("$v", variantId));
+        ExecTx(tx, "DELETE FROM variant_compile_items WHERE variant_id=$v", ("$v", variantId));
+        ExecTx(tx, "DELETE FROM variant_structural_inputs WHERE variant_id=$v", ("$v", variantId));
+        ExecTx(tx, "DELETE FROM variant_fact_coverage WHERE variant_id=$v", ("$v", variantId));
+        ExecTx(tx, "DELETE FROM variant_parse_contexts WHERE variant_id=$v", ("$v", variantId));
+    }
+
+    private long InsertReturningId(SqliteTransaction tx, string sql, params (string, object)[] args)
+    {
+        using var cmd = _write.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = sql;
+        foreach (var (name, value) in args) cmd.Parameters.AddWithValue(name, value);
         return (long)cmd.ExecuteScalar()!;
     }
 
@@ -462,6 +787,42 @@ public sealed class IndexStore : IDisposable
         return cmd.ExecuteScalar() as string;
     }
 
+    public List<long> GetVariantCompileItemIdsForWrite(SqliteTransaction tx, long variantId)
+    {
+        using var cmd = _write.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = "SELECT file_id FROM variant_compile_items WHERE variant_id=$v ORDER BY file_id";
+        cmd.Parameters.AddWithValue("$v", variantId);
+        var result = new List<long>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) result.Add(reader.GetInt64(0));
+        return result;
+    }
+
+    public List<(long Id, string LanguageVersion, List<string> Symbols)> ParseContextsForFileForWrite(
+        SqliteTransaction tx, long fileId)
+    {
+        using var cmd = _write.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            SELECT DISTINCT pc.id,pc.language_version,pc.preprocessor_symbols
+            FROM variant_compile_items vci
+            JOIN variant_parse_contexts vpc ON vpc.variant_id=vci.variant_id
+            JOIN parse_contexts pc ON pc.id=vpc.parse_context_id
+            WHERE vci.file_id=$f
+            ORDER BY pc.id
+            """;
+        cmd.Parameters.AddWithValue("$f", fileId);
+        var result = new List<(long, string, List<string>)>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add((reader.GetInt64(0), reader.GetString(1), reader.GetString(2)
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList()));
+        }
+        return result;
+    }
+
     public void UpdateFileRow(SqliteTransaction tx, long fileId, long size, long mtimeTicks, ulong hash,
         int lineCount, bool isGenerated, bool hasTestAttrs) =>
         ExecTx(tx, """
@@ -492,13 +853,24 @@ public sealed class IndexStore : IDisposable
         }
         ExecTx(tx, "DELETE FROM file_contents WHERE file_id=$id", ("$id", fileId));
         ExecTx(tx, "DELETE FROM symbols WHERE file_id=$id", ("$id", fileId));
+        ExecTx(tx, "DELETE FROM symbol_base_types WHERE file_id=$id", ("$id", fileId));
+        ExecTx(tx, "DELETE FROM variant_compile_items WHERE file_id=$id", ("$id", fileId));
+        ExecTx(tx, "DELETE FROM variant_structural_inputs WHERE file_id=$id", ("$id", fileId));
         ExecTx(tx, "DELETE FROM compile_items WHERE file_id=$id", ("$id", fileId));
         ExecTx(tx, "DELETE FROM files WHERE id=$id", ("$id", fileId));
     }
 
     public void ClearProjectData(SqliteTransaction tx)
     {
-        foreach (var table in new[] { "solution_projects", "solutions", "compile_items", "package_refs", "project_refs", "projects" })
+        foreach (var table in new[]
+                 {
+                     "resolved_reference_edges", "reference_resolution_candidates", "reference_resolutions",
+                     "project_reference_facts", "assembly_reference_facts", "variant_package_refs",
+                     "variant_structural_inputs", "variant_fact_coverage", "variant_compile_items",
+                     "project_outputs", "variant_parse_contexts", "project_variants", "parse_contexts",
+                     "symbol_base_types", "solution_projects", "solutions", "compile_items",
+                     "package_refs", "project_refs", "projects"
+                 })
         {
             ExecTx(tx, $"DELETE FROM {table}");
         }

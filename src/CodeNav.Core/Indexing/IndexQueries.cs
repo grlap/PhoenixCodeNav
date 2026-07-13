@@ -58,6 +58,10 @@ internal sealed record IndexMetadataSnapshot(
 public sealed partial class IndexQueries : IDisposable
 {
     private const int CandidateDiscoveryBatchSize = 512;
+    private const string VariantSelect =
+        "SELECT v.id,v.project_id,p.path,p.name,v.dimension_key,v.stable_variant_key," +
+        "v.target_framework,v.configuration,v.platform,v.assembly_name,v.target_name,v.target_ext," +
+        "v.evaluation_complete,p.is_test FROM project_variants v JOIN projects p ON p.id=v.project_id";
     private const int DeclarationOffsetParseLimit = 128;
     private const int DeclarationOffsetPerFileCharLimit = 512 * 1024;
     private const int DeclarationOffsetCumulativeCharLimit = 4 * 1024 * 1024;
@@ -819,11 +823,15 @@ public sealed partial class IndexQueries : IDisposable
 
     public ProjectRow? ProjectByName(string name)
     {
-        var rows = Query(
-            "SELECT id, path, name, style, tfms, is_test, load_status FROM projects WHERE name = $n COLLATE NOCASE ORDER BY path LIMIT 1",
-            ReadProject, ("$n", name));
+        var rows = ProjectsByName(name);
         return rows.Count > 0 ? rows[0] : null;
     }
+
+    /// <summary>Every physical project row producing the requested assembly name. Project paths
+    /// remain distinct even when legacy multi-stage projects intentionally share AssemblyName.</summary>
+    public List<ProjectRow> ProjectsByName(string name) => Query(
+            "SELECT id, path, name, style, tfms, is_test, load_status FROM projects WHERE name = $n COLLATE NOCASE ORDER BY path, id",
+            ReadProject, ("$n", name));
 
     public List<ProjectRow> AllProjects() => Query(
         "SELECT id, path, name, style, tfms, is_test, load_status FROM projects ORDER BY path, name",
@@ -833,6 +841,219 @@ public sealed partial class IndexQueries : IDisposable
         "SELECT id, path, name, style, tfms, is_test, load_status FROM projects " +
         "ORDER BY path, name LIMIT $lim",
         ReadProject, ("$lim", Math.Max(0, limit)));
+
+    public List<ProjectVariantRow> AllProjectVariants(CancellationToken cancellationToken = default) =>
+        QueryCancellable(VariantSelect + " ORDER BY p.path, v.dimension_key", ReadProjectVariant,
+            cancellationToken);
+
+    public List<ProjectVariantRow> VariantsForProjectPath(string projectPath) => Query(
+        VariantSelect + " WHERE p.path = $p COLLATE BINARY ORDER BY v.dimension_key",
+        ReadProjectVariant, ("$p", WorkspacePaths.Normalize(projectPath)));
+
+    public ProjectVariantRow? VariantByStableKey(string stableVariantKey) => Query(
+        VariantSelect + " WHERE v.stable_variant_key = $k COLLATE BINARY LIMIT 1",
+        ReadProjectVariant, ("$k", stableVariantKey)).FirstOrDefault();
+
+    public List<ProjectVariantRow> VariantsContaining(string filePath) => Query(
+        VariantSelect + " JOIN variant_compile_items vci ON vci.variant_id = v.id " +
+        "JOIN files f ON f.id = vci.file_id WHERE f.path = $p COLLATE BINARY " +
+        "ORDER BY p.path, v.dimension_key",
+        ReadProjectVariant, ("$p", WorkspacePaths.Normalize(filePath)));
+
+    public List<string> VariantFiles(long variantId) => Query(
+        "SELECT f.path FROM variant_compile_items vci JOIN files f ON f.id=vci.file_id " +
+        "WHERE vci.variant_id=$v AND f.lang='cs' ORDER BY f.path",
+        r => r.GetString(0), ("$v", variantId));
+
+    public ParseContextRow? VariantParseContext(long variantId) => Query(
+        "SELECT pc.id,pc.context_key,pc.language_version,pc.preprocessor_symbols,pc.is_complete " +
+        "FROM variant_parse_contexts vpc JOIN parse_contexts pc ON pc.id=vpc.parse_context_id " +
+        "WHERE vpc.variant_id=$v LIMIT 1",
+        r => new ParseContextRow(r.GetInt64(0), r.GetString(1), r.GetString(2),
+            SplitSemicolon(r.GetString(3)), r.GetBoolean(4)), ("$v", variantId)).FirstOrDefault();
+
+    public VariantFactCoverageRow VariantFactCoverage(long variantId) => Query(
+        "SELECT variant_id,parse_context_complete,compile_ownership_complete,reference_graph_complete,reasons " +
+        "FROM variant_fact_coverage WHERE variant_id=$v",
+        r => new VariantFactCoverageRow(r.GetInt64(0), r.GetBoolean(1), r.GetBoolean(2),
+            r.GetBoolean(3), r.IsDBNull(4) ? [] : SplitSemicolon(r.GetString(4))),
+        ("$v", variantId)).FirstOrDefault()
+        ?? new VariantFactCoverageRow(variantId, false, false, false, ["missing_variant_coverage"]);
+
+    public List<VariantOutputRow> VariantOutputs(long variantId) => Query(
+        "SELECT id,variant_id,output_path,target_path,condition,evidence FROM project_outputs " +
+        "WHERE variant_id=$v ORDER BY target_path,id",
+        r => new VariantOutputRow(r.GetInt64(0), r.GetInt64(1), r.GetString(2), r.GetString(3),
+            r.IsDBNull(4) ? null : r.GetString(4), r.GetString(5)), ("$v", variantId));
+
+    public List<VariantReferenceEdgeRow> VariantReferenceEdges(
+        CancellationToken cancellationToken = default) => QueryCancellable(
+        "SELECT resolution_id,from_variant_id,target_variant_id,provenance FROM resolved_reference_edges " +
+        "ORDER BY from_variant_id,target_variant_id,resolution_id",
+        r => new VariantReferenceEdgeRow(r.GetInt64(0), r.GetInt64(1), r.GetInt64(2), r.GetString(3)),
+        cancellationToken);
+
+    public Dictionary<long, VariantFactCoverageRow> AllVariantFactCoverage(
+        CancellationToken cancellationToken = default) => QueryCancellable(
+            "SELECT variant_id,parse_context_complete,compile_ownership_complete," +
+            "reference_graph_complete,reasons FROM variant_fact_coverage ORDER BY variant_id",
+            r => new VariantFactCoverageRow(r.GetInt64(0), r.GetBoolean(1), r.GetBoolean(2),
+                r.GetBoolean(3), r.IsDBNull(4) ? [] : SplitSemicolon(r.GetString(4))),
+            cancellationToken).ToDictionary(coverage => coverage.VariantId);
+
+    public List<VariantAssemblyReferenceInput> VariantAssemblyReferenceInputs(long variantId) => Query(
+        "SELECT arf.include_name,arf.hint_path,arf.evaluation_status," +
+        "EXISTS(SELECT 1 FROM reference_resolutions rr JOIN reference_resolution_candidates rrc " +
+        "ON rrc.id=rr.selected_candidate_id WHERE rr.reference_fact_kind='assembly' " +
+        "AND rr.reference_fact_id=arf.id AND rrc.target_variant_id IS NOT NULL) " +
+        "FROM assembly_reference_facts arf WHERE arf.from_variant_id=$v ORDER BY arf.id",
+        r => new VariantAssemblyReferenceInput(r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1),
+            r.GetString(2), r.GetBoolean(3)),
+        ("$v", variantId));
+
+    public List<VariantPackageReferenceInput> VariantPackageReferenceInputs(long variantId) => Query(
+        "SELECT package,version,evaluation_status FROM variant_package_refs " +
+        "WHERE variant_id=$v ORDER BY id",
+        r => new VariantPackageReferenceInput(r.GetString(0), r.GetString(1), r.GetString(2)),
+        ("$v", variantId));
+
+    public List<ProjectVariantRow> VariantDependencies(long variantId) => Query(
+        VariantSelect + " JOIN resolved_reference_edges rre ON rre.target_variant_id=v.id " +
+        "WHERE rre.from_variant_id=$v ORDER BY p.path,v.dimension_key",
+        ReadProjectVariant, ("$v", variantId));
+
+    public List<ProjectVariantRow> VariantDependencyClosure(
+        IReadOnlyCollection<long> ownerVariantIds, CancellationToken cancellationToken = default)
+    {
+        List<ProjectVariantRow> all = AllProjectVariants(cancellationToken);
+        var byId = all.ToDictionary(variant => variant.Id);
+        var forward = VariantReferenceEdges(cancellationToken).GroupBy(edge => edge.FromVariantId).ToDictionary(
+            group => group.Key, group => group.Select(edge => edge.TargetVariantId).Distinct().ToList());
+        return TraverseVariants(ownerVariantIds, forward, cancellationToken)
+            .Where(byId.ContainsKey).Select(id => byId[id])
+            .OrderBy(variant => variant.ProjectPath, StringComparer.Ordinal)
+            .ThenBy(variant => variant.DimensionKey, StringComparer.Ordinal).ToList();
+    }
+
+    public (long FileCount, long HashSum) VariantFingerprint(long variantId) => Query(
+        "WITH inputs(file_id) AS (" +
+        "SELECT file_id FROM variant_compile_items WHERE variant_id=$v UNION " +
+        "SELECT file_id FROM variant_structural_inputs WHERE variant_id=$v) " +
+        "SELECT COUNT(*),TOTAL(f.hash) FROM inputs i JOIN files f ON f.id=i.file_id",
+        r => (r.GetInt64(0), (long)r.GetDouble(1)), ("$v", variantId)).FirstOrDefault();
+
+    public VariantCandidateUniverse VariantCandidateUniverseForOwners(
+        IReadOnlyCollection<long> ownerVariantIds, string targetName, int targetArity,
+        CancellationToken cancellationToken = default)
+    {
+        var all = AllProjectVariants(cancellationToken);
+        var byId = all.ToDictionary(v => v.Id);
+        var edges = VariantReferenceEdges(cancellationToken);
+        Dictionary<long, VariantFactCoverageRow> coverageByVariant =
+            AllVariantFactCoverage(cancellationToken);
+        var forward = edges.GroupBy(e => e.FromVariantId).ToDictionary(g => g.Key,
+            g => g.Select(e => e.TargetVariantId).Distinct().ToList());
+        var reverse = edges.GroupBy(e => e.TargetVariantId).ToDictionary(g => g.Key,
+            g => g.Select(e => e.FromVariantId).Distinct().ToList());
+        HashSet<long> mandatoryIds = TraverseVariants(ownerVariantIds, forward, cancellationToken);
+        HashSet<long> reverseIds = TraverseVariants(ownerVariantIds, reverse, cancellationToken);
+        HashSet<long> seedIds = BaseTypeCandidateVariantIds(targetName, targetArity, cancellationToken);
+        var graphGapIds = new HashSet<long>(seedIds.Where(id => !reverseIds.Contains(id)));
+        foreach (long gap in graphGapIds)
+            reverseIds.UnionWith(TraverseVariants([gap], reverse, cancellationToken));
+
+        var reasons = new HashSet<string>(StringComparer.Ordinal);
+        bool parseComplete = true, ownershipComplete = true, graphComplete = true;
+        foreach (ProjectVariantRow variant in all)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            VariantFactCoverageRow coverage = coverageByVariant.TryGetValue(variant.Id,
+                out VariantFactCoverageRow? persistedCoverage)
+                ? persistedCoverage
+                : new VariantFactCoverageRow(variant.Id, false, false, false,
+                    ["missing_variant_coverage"]);
+            if (!coverage.ParseContextComplete)
+            {
+                parseComplete = false;
+                reverseIds.UnionWith(TraverseVariants([variant.Id], reverse, cancellationToken));
+            }
+            if (!coverage.CompileOwnershipComplete)
+            {
+                ownershipComplete = false;
+                reverseIds.UnionWith(TraverseVariants([variant.Id], reverse, cancellationToken));
+            }
+            if (!coverage.ReferenceGraphComplete)
+            {
+                graphComplete = false;
+                reverseIds.UnionWith(TraverseVariants([variant.Id], reverse, cancellationToken));
+            }
+            foreach (string reason in coverage.Reasons) reasons.Add(reason);
+        }
+        if (graphGapIds.Count > 0) { graphComplete = false; reasons.Add("base_list_graph_gap"); }
+
+        var mandatory = mandatoryIds.Where(byId.ContainsKey).Select(id => byId[id])
+            .OrderBy(v => v.ProjectPath, StringComparer.Ordinal).ThenBy(v => v.DimensionKey, StringComparer.Ordinal).ToList();
+        var optional = reverseIds.Where(id => !mandatoryIds.Contains(id) && byId.ContainsKey(id))
+            .Select(id => byId[id]).OrderByDescending(v => seedIds.Contains(v.Id))
+            .ThenBy(v => v.ProjectPath, StringComparer.Ordinal).ThenBy(v => v.DimensionKey, StringComparer.Ordinal).ToList();
+        return new VariantCandidateUniverse(mandatory, optional, seedIds, graphGapIds,
+            graphComplete, ownershipComplete, parseComplete, reasons.OrderBy(r => r, StringComparer.Ordinal).ToList());
+    }
+
+    public HashSet<long> BaseTypeCandidateVariantIds(string name, int arity,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(name)) return [];
+        using var ownedSnapshot = _readSnapshot is null ? _conn.BeginTransaction(deferred: true) : null;
+        SqliteTransaction snapshot = ownedSnapshot ?? _readSnapshot!;
+        var pairs = new HashSet<(long ContextId, long FileId)>();
+        CollectBasePairs("lookup_name = $name COLLATE BINARY AND syntactic_arity = $arity",
+            [("$name", name), ("$arity", arity)]);
+        CollectBasePairs("resolution_kind = 'unresolved'", []);
+
+        var variants = new HashSet<long>();
+        foreach (var chunk in pairs.Chunk(150))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var values = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                values.Add($"($c{i},$f{i})");
+                args.Add(($"$c{i}", chunk[i].ContextId));
+                args.Add(($"$f{i}", chunk[i].FileId));
+            }
+            foreach (long variantId in QueryCoreCancellable(snapshot,
+                         $"WITH wanted(context_id,file_id) AS (VALUES {string.Join(',', values)}) " +
+                         "SELECT DISTINCT vpc.variant_id FROM wanted w " +
+                         "JOIN variant_parse_contexts vpc ON vpc.parse_context_id=w.context_id " +
+                         "JOIN variant_compile_items vci ON vci.variant_id=vpc.variant_id AND vci.file_id=w.file_id " +
+                         "ORDER BY vpc.variant_id",
+                         r => r.GetInt64(0), cancellationToken, args.ToArray()))
+                variants.Add(variantId);
+        }
+        return variants;
+
+        void CollectBasePairs(string predicate, IReadOnlyList<(string, object)> predicateArgs)
+        {
+            long after = 0;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var args = predicateArgs.ToList();
+                args.Add(("$after", after));
+                args.Add(("$batch", CandidateDiscoveryBatchSize));
+                var rows = QueryCoreCancellable(snapshot,
+                    $"SELECT id,parse_context_id,file_id FROM symbol_base_types WHERE {predicate} AND id>$after ORDER BY id LIMIT $batch",
+                    r => (Id: r.GetInt64(0), ContextId: r.GetInt64(1), FileId: r.GetInt64(2)),
+                    cancellationToken, args.ToArray());
+                if (rows.Count == 0) break;
+                after = rows[^1].Id;
+                foreach (var row in rows) pairs.Add((row.ContextId, row.FileId));
+                if (rows.Count < CandidateDiscoveryBatchSize) break;
+            }
+        }
+    }
 
     /// <summary>Current declarations matching source identity while deliberately ignoring the
     /// signature. Type base-list/signature edits do not change declaration identity, and generated
@@ -1161,7 +1382,8 @@ public sealed partial class IndexQueries : IDisposable
             r => r.GetString(0), ("$n", projectName));
     }
 
-    /// <summary>Fingerprints for MANY projects in one grouped query. The warm-cache check in
+    /// <summary>Fingerprints for MANY projects in one grouped query, covering compiled sources and
+    /// every contributing physical csproj/packages.config. The warm-cache check in
     /// EnsureLoadedAsync ran ProjectFingerprint once per already-loaded project on EVERY semantic
     /// call — dozens to hundreds of point queries per references/implementations invocation (dz3).</summary>
     public Dictionary<string, (long FileCount, long HashSum)> ProjectFingerprints(IReadOnlyCollection<string> projectNames)
@@ -1177,37 +1399,52 @@ public sealed partial class IndexQueries : IDisposable
                 ph.Add($"$n{i}");
                 args.Add(($"$n{i}", chunk[i]));
             }
+            string requestedValues = string.Join(",", ph.Select(name => $"({name})"));
             foreach (var row in Query(
                 $"""
-                SELECT p.name, COUNT(*), TOTAL(f.hash) FROM compile_items ci
-                JOIN projects p ON p.id = ci.project_id
-                JOIN files f ON f.id = ci.file_id
-                WHERE p.name COLLATE NOCASE IN ({string.Join(",", ph)}) AND f.lang = 'cs'
-                GROUP BY p.name COLLATE NOCASE -- must union case-variant names exactly like the single
-                                               -- query's '= $n COLLATE NOCASE', or the warm check and
-                                               -- the load-time fingerprint permanently disagree and the
-                                               -- project reloads on EVERY semantic call (review repro)
+                WITH requested(requested_name) AS (VALUES {requestedValues}),
+                matched(requested_name, project_id, project_path, project_dir) AS (
+                  SELECT r.requested_name, p.id, p.path, p.dir
+                  FROM requested r
+                  JOIN projects p ON p.name = r.requested_name COLLATE NOCASE
+                ),
+                inputs(requested_name, file_id, hash) AS (
+                  SELECT m.requested_name, f.id, f.hash
+                  FROM matched m
+                  JOIN compile_items ci ON ci.project_id = m.project_id
+                  JOIN files f ON f.id = ci.file_id
+                  WHERE f.lang = 'cs'
+                  UNION
+                  SELECT m.requested_name, f.id, f.hash
+                  FROM matched m
+                  JOIN files f ON f.path = m.project_path
+                  UNION
+                  SELECT m.requested_name, f.id, f.hash
+                  FROM matched m
+                  JOIN files f ON f.path = CASE
+                    WHEN m.project_dir = '' THEN 'packages.config'
+                    ELSE m.project_dir || '/packages.config'
+                  END
+                )
+                SELECT requested_name, COUNT(*), TOTAL(hash)
+                FROM inputs
+                GROUP BY requested_name COLLATE NOCASE
                 """,
                 r => (Name: r.GetString(0), Count: r.GetInt64(1), Sum: (long)r.GetDouble(2)), args.ToArray()))
             {
                 result[row.Name] = (row.Count, row.Sum);
             }
         }
-        return result; // names with no compiled files are simply absent => caller defaults to (0, 0)
+        return result; // names with no available inputs are simply absent => caller defaults to (0, 0)
     }
 
-    /// <summary>Cheap change fingerprint for a project's compiled files.</summary>
+    /// <summary>Cheap change fingerprint for compiled and project/package resolution inputs.</summary>
     public (long FileCount, long HashSum) ProjectFingerprint(string projectName)
     {
-        var rows = Query(
-            """
-            SELECT COUNT(*), TOTAL(f.hash) FROM compile_items ci
-            JOIN projects p ON p.id = ci.project_id
-            JOIN files f ON f.id = ci.file_id
-            WHERE p.name = $n COLLATE NOCASE AND f.lang = 'cs'
-            """,
-            r => (Count: r.GetInt64(0), Sum: (long)r.GetDouble(1)), ("$n", projectName));
-        return rows.Count > 0 ? (rows[0].Count, rows[0].Sum) : (0, 0);
+        var fingerprints = ProjectFingerprints([projectName]);
+        return fingerprints.TryGetValue(projectName, out var fingerprint)
+            ? fingerprint
+            : (0, 0);
     }
 
     /// <summary>
@@ -1695,8 +1932,39 @@ public sealed partial class IndexQueries : IDisposable
         r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3),
         r.GetString(4), r.GetBoolean(5), r.GetString(6));
 
+    private static ProjectVariantRow ReadProjectVariant(SqliteDataReader r) => new(
+        r.GetInt64(0), r.GetInt64(1), r.GetString(2), r.GetString(3), r.GetString(4),
+        r.GetString(5), r.GetString(6), r.GetString(7), r.GetString(8), r.GetString(9),
+        r.GetString(10), r.GetString(11), r.GetBoolean(12), r.GetBoolean(13));
+
+    private static List<string> SplitSemicolon(string value) => value
+        .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .ToList();
+
+    private static HashSet<long> TraverseVariants(IEnumerable<long> starts,
+        IReadOnlyDictionary<long, List<long>> adjacency, CancellationToken cancellationToken)
+    {
+        var visited = new HashSet<long>();
+        var queue = new Queue<long>();
+        foreach (long start in starts)
+            if (visited.Add(start)) queue.Enqueue(start);
+        while (queue.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            long current = queue.Dequeue();
+            if (!adjacency.TryGetValue(current, out List<long>? next)) continue;
+            foreach (long candidate in next)
+                if (visited.Add(candidate)) queue.Enqueue(candidate);
+        }
+        return visited;
+    }
+
     private List<T> Query<T>(string sql, Func<SqliteDataReader, T> map, params (string, object)[] args) =>
         QueryCore(_readSnapshot, sql, map, args);
+
+    private List<T> QueryCancellable<T>(string sql, Func<SqliteDataReader, T> map,
+        CancellationToken cancellationToken, params (string, object)[] args) =>
+        QueryCoreCancellable(_readSnapshot, sql, map, cancellationToken, args);
 
     private List<T> QueryCore<T>(SqliteTransaction? transaction, string sql,
         Func<SqliteDataReader, T> map, params (string, object)[] args)

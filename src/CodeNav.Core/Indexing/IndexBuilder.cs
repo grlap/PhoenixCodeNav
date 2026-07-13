@@ -68,7 +68,7 @@ public static class IndexBuilder
     /// tuple element types and nesting remain identity-bearing.
     /// v14: checked operators and explicit-interface operator implementations have distinct
     /// persisted names/declaration keys.</summary>
-    public const string SchemaVersion = "14";
+    public const string SchemaVersion = "15";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null) =>
@@ -154,7 +154,8 @@ public static class IndexBuilder
         sw.Restart();
         (ParsedProject[] parsedProjects, List<ParsedSolution> parsedSolutions,
             Dictionary<string, string> requiredStructuralHashes,
-            Dictionary<string, string> optionalSolutionHashes) =
+            Dictionary<string, string> optionalSolutionHashes,
+            Dictionary<string, ProjectVariantEvaluation> variantEvaluations) =
             CaptureAndParseStructuralInputs(workspaceRoot, scan, progress);
         // efa: failed csproj parses were invisible — their compile sets and graph edges are
         // guesses at best, and a watcher of the build deserves the count, not a clean-looking bar.
@@ -206,6 +207,7 @@ public static class IndexBuilder
         // its structural file rows therefore commit as one coherent snapshot without retaining an
         // aggregate XML buffer. A post-build detect-all sweep closes the later watcher gap.
         var projectIds = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
+        VariantWriteState? variantWriteState = null;
         int unresolvedRefs = 0;
         var persistedStructuralPaths = new HashSet<string>(
             WorkspacePaths.FileSystemPathComparer);
@@ -227,8 +229,11 @@ public static class IndexBuilder
                     PersistVerifiedStructuralFile(tx, configFilesByPath[packagesPath], "config",
                         packagesHash, required: true);
                 }
-                projectIds[p.RelPath] = store.InsertProject(tx, p);
+                long projectId = store.InsertProject(tx, p);
+                projectIds[p.RelPath] = projectId;
             }
+            variantWriteState = VariantIndexWriter.WriteProjectFacts(store, tx,
+                variantEvaluations, projectIds, fileIds);
             foreach (var p in parsedProjects)
             {
                 long fromId = projectIds[p.RelPath];
@@ -403,6 +408,9 @@ public static class IndexBuilder
                 if (fileIds.TryGetValue(f.RelPath, out long fid)) csFileIds[f.RelPath] = fid;
             }
             CompileItemResolver.Write(store, tx, parsedProjects, projectIds, csFileIds);
+            VariantIndexWriter.WriteCompileAndBaseFacts(store, tx,
+                variantWriteState ?? throw new InvalidOperationException("variant facts were not initialized"),
+                projectIds);
             // isTest R3 (custom-resolve-proof): compiled test attributes + graph-leaf promotion —
             // must run after BOTH compile attribution and ref insertion (leaf check).
             int promoted = store.PromoteTestProjectsByCompiledAttributes(tx);
@@ -435,7 +443,8 @@ public static class IndexBuilder
 
     private static (ParsedProject[] Projects, List<ParsedSolution> Solutions,
         Dictionary<string, string> RequiredHashes,
-        Dictionary<string, string> OptionalSolutionHashes) CaptureAndParseStructuralInputs(
+        Dictionary<string, string> OptionalSolutionHashes,
+        Dictionary<string, ProjectVariantEvaluation> VariantEvaluations) CaptureAndParseStructuralInputs(
         string workspaceRoot, ScanResult scan, Action<string>? progress)
     {
         var requiredHashes = new Dictionary<string, string>(
@@ -445,6 +454,8 @@ public static class IndexBuilder
         var configByPath = scan.ConfigFiles.ToDictionary(file => file.RelPath,
             WorkspacePaths.FileSystemPathComparer);
         var parsedProjects = new List<ParsedProject>(projects.Count);
+        var variantEvaluations = new Dictionary<string, ProjectVariantEvaluation>(
+            WorkspacePaths.FileSystemPathComparer);
         foreach (ScannedFile file in projects)
         {
             GitInfo.WorkspaceFileReadResult projectRead =
@@ -485,6 +496,8 @@ public static class IndexBuilder
             }
             parsedProjects.Add(ProjectFileParser.ParseSnapshot(file.RelPath, projectBytes,
                 packagesBytes));
+            variantEvaluations[file.RelPath] = ProjectVariantEvaluator.Evaluate(file.RelPath,
+                projectBytes, packagesBytes);
         }
 
         var parsedSolutions = new List<ParsedSolution>();
@@ -507,7 +520,7 @@ public static class IndexBuilder
             optionalBytes += bytes.LongLength;
         }
         return (parsedProjects.ToArray(), parsedSolutions, requiredHashes,
-            optionalSolutionHashes);
+            optionalSolutionHashes, variantEvaluations);
     }
 
     private static string StructuralFingerprint(byte[] bytes) =>

@@ -108,6 +108,16 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
         try
         {
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Acme.Platform.Common", dependent };
+            using (var variantQueries = _manager.OpenQueries())
+            {
+                List<ProjectVariantRow> dependentVariants = variantQueries.AllProjectVariants()
+                    .Where(variant => string.Equals(variant.ProjectName, dependent,
+                        StringComparison.OrdinalIgnoreCase)).ToList();
+                Assert.NotEmpty(dependentVariants);
+                Assert.All(dependentVariants, dependentVariant =>
+                    Assert.Contains(variantQueries.VariantDependencies(dependentVariant.Id),
+                        variant => variant.ProjectName == "Acme.Platform.Common"));
+            }
             var (sol1, _) = await workspace.EnsureLoadedAsync(set, CancellationToken.None);
             Assert.True(await DependentSeesGuard(sol1, dependent), "dependent should see Guard before reload");
 

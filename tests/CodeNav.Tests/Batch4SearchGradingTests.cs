@@ -234,6 +234,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("semantic-candidate-budget-coverage", ids);
         Assert.Contains("semantic-rebuild-coordination", ids);
         Assert.Contains("implementations-symbol-identity", ids);
+        Assert.Contains("physical-project-variant-resolution", ids);
+        Assert.Contains("syntax-authoritative-semantic-candidates", ids);
         string semanticBudget = Assert.Single(json.GetProperty("features").EnumerateArray(),
             feature => feature.GetProperty("id").GetString() == "semantic-large-repo-budget")
             .GetProperty("summary").GetString()!;
@@ -255,6 +257,16 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .GetProperty("summary").GetString()!;
         Assert.Contains("rejects ambiguous bare type names", implementationIdentity);
         Assert.Contains("symbolId or path+line", implementationIdentity);
+        string variantResolution = Assert.Single(json.GetProperty("features").EnumerateArray(),
+            feature => feature.GetProperty("id").GetString() == "physical-project-variant-resolution")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("stable compilation variant", variantResolution);
+        Assert.Contains("Reference/HintPath", variantResolution);
+        string semanticCandidates = Assert.Single(json.GetProperty("features").EnumerateArray(),
+            feature => feature.GetProperty("id").GetString() == "syntax-authoritative-semantic-candidates")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("arity-aware base-list", semanticCandidates);
+        Assert.Contains("FTS remains text-search evidence", semanticCandidates);
     }
 
     [Fact]

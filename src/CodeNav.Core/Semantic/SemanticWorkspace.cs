@@ -1,4 +1,3 @@
-using CodeNav.Core.Discovery;
 using CodeNav.Core.Indexing;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -12,25 +11,28 @@ public sealed record ClusterCoverage(
     List<string> SkippedProjects,
     List<string> FailedProjects,
     bool FrameworkRefsAvailable,
-    // Field 0.7.0 ("coverage 1/1 but 8 hits from 8 projects"): SymbolFinder scans the WHOLE
-    // solution, including projects resident from earlier calls — this makes that visible.
     int SolutionProjects = 0,
-    // Complete OPTIONAL semantic candidate set before maxProjects selection, excluding the owning
-    // project's mandatory dependency closure, plus the normalized budget applied to that set.
-    // Null for operations without candidate loading; skippedCandidateProjects remains authoritative.
     int? CandidateProjects = null,
-    int? CandidateProjectBudget = null);
+    int? CandidateProjectBudget = null,
+    int LoadedVariants = 0,
+    int RequestedVariants = 0,
+    int? CandidateVariants = null,
+    bool GraphUniverseComplete = true,
+    bool CompileOwnershipComplete = true,
+    bool ParseContextsComplete = true,
+    bool CandidateDiscoveryComplete = true,
+    List<string>? IncompleteReasons = null);
 
 /// <summary>
-/// Owns: an AdhocWorkspace populated lazily with per-project compilations built from
-/// parsed csproj facts (no MSBuild evaluation): documents from live files, framework
-/// reference assemblies, hint-path/NuGet package dlls, in-cluster project references.
-/// LRU-evicts beyond a project cap; reloads projects whose files changed (index fingerprint).
-/// Does not own: which projects to load (SemanticService decides) or result shaping.
+/// Owns an AdhocWorkspace populated lazily with one Roslyn project per persisted compilation
+/// variant. Stable variant keys, rather than assembly display names or database-local ids, are the
+/// cache identity. The index owns variant/reference/compile evaluation; this class materializes the
+/// selected facts against live source bytes and reloads a variant whenever one of its compiled or
+/// structural inputs changes.
 /// </summary>
 public sealed class SemanticWorkspace : IDisposable
 {
-    private const int MaxLoadedProjects = 160;
+    private const int MaxLoadedVariants = 512;
 
     private readonly string _workspaceRoot;
     private readonly string _dbPath;
@@ -38,17 +40,21 @@ public sealed class SemanticWorkspace : IDisposable
     private readonly bool _poolIndexConnections;
     private readonly AdhocWorkspace _workspace = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly Dictionary<string, LoadedProject> _loaded = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, LoadedProject> _loaded = new(StringComparer.Ordinal);
     private long _useCounter;
+
+    internal Action<string>? PhysicalProjectParsedForTest { get; set; }
+    internal Action<string>? MetadataReferenceAddedForTest { get; set; }
 
     private sealed class LoadedProject
     {
         public required ProjectId Id { get; init; }
+        public required long VariantId { get; set; }
+        public required string ProjectPath { get; init; }
         public required (long Count, long Sum) Fingerprint { get; set; }
         public long LastUse { get; set; }
     }
 
-    private static readonly CSharpParseOptions ParseOptions = new(LanguageVersion.Latest);
     private static readonly CSharpCompilationOptions CompilationOptions =
         new(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true, concurrentBuild: true);
 
@@ -61,14 +67,28 @@ public sealed class SemanticWorkspace : IDisposable
         _poolIndexConnections = poolIndexConnections;
     }
 
-    /// <summary>
-    /// Ensures the given projects (dependency closures must already be included by the
-    /// caller for full-fidelity targets) are loaded; returns a solution snapshot.
-    /// Load order is topological (dependencies first); references to projects outside
-    /// the requested set are skipped (navigation-grade holes).
-    /// </summary>
-    public async Task<(Solution Solution, ClusterCoverage Coverage)> EnsureLoadedAsync(
+    /// <summary>Compatibility entry point for callers that still select physical projects by
+    /// assembly name. Every matching physical project expands to every persisted variant; no rows
+    /// are merged by name.</summary>
+    public Task<(Solution Solution, ClusterCoverage Coverage)> EnsureLoadedAsync(
         IReadOnlyCollection<string> projectNames, CancellationToken ct,
+        IReadOnlyCollection<string>? ensureReferenceTo = null)
+    {
+        using var q = new IndexQueries(_dbPath, pinReadSnapshot: false,
+            pooling: _poolIndexConnections);
+        var requestedNames = new HashSet<string>(projectNames, StringComparer.OrdinalIgnoreCase);
+        List<string> variants = q.AllProjectVariants()
+            .Where(variant => requestedNames.Contains(variant.ProjectName))
+            .Select(variant => variant.StableVariantKey).ToList();
+        List<string>? referencedVariants = ensureReferenceTo is null ? null : q.AllProjectVariants()
+            .Where(variant => ensureReferenceTo.Contains(variant.ProjectName,
+                StringComparer.OrdinalIgnoreCase))
+            .Select(variant => variant.StableVariantKey).ToList();
+        return EnsureLoadedVariantsAsync(variants, ct, referencedVariants);
+    }
+
+    public async Task<(Solution Solution, ClusterCoverage Coverage)> EnsureLoadedVariantsAsync(
+        IReadOnlyCollection<string> stableVariantKeys, CancellationToken ct,
         IReadOnlyCollection<string>? ensureReferenceTo = null)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
@@ -76,76 +96,77 @@ public sealed class SemanticWorkspace : IDisposable
         {
             using var q = new IndexQueries(_dbPath, pinReadSnapshot: false,
                 pooling: _poolIndexConnections);
-            var requested = new HashSet<string>(projectNames, StringComparer.OrdinalIgnoreCase);
-            var failed = new List<string>();
-            var skipped = new List<string>();
+            var requested = new HashSet<string>(stableVariantKeys, StringComparer.Ordinal);
+            var failedVariants = new List<string>();
+            var reuseIds = new Dictionary<string, ProjectId>(StringComparer.Ordinal);
 
-            // Reload any requested project whose files changed since load. Reuse its
-            // existing ProjectId so already-loaded dependents keep valid references — a
-            // fresh id would silently orphan them (Roslyn drops references to absent ids).
-            var reuseIds = new Dictionary<string, ProjectId>(StringComparer.OrdinalIgnoreCase);
-            var loadedRequested = requested.Where(_loaded.ContainsKey).ToList();
-            // ONE grouped fingerprint query for the whole warm set — this loop ran a point query per
-            // already-loaded project on every semantic call (dz3: the dominant warm-path SQL cost).
-            var fingerprints = loadedRequested.Count > 0
-                ? q.ProjectFingerprints(loadedRequested)
-                : new Dictionary<string, (long, long)>(StringComparer.OrdinalIgnoreCase);
-            foreach (var name in loadedRequested)
+            foreach (string key in requested.Where(_loaded.ContainsKey).ToList())
             {
-                var current = fingerprints.TryGetValue(name, out var fp) ? fp : (0L, 0L);
-                if (_loaded[name].Fingerprint != current)
+                LoadedProject loaded = _loaded[key];
+                ProjectVariantRow? currentVariant = q.VariantByStableKey(key);
+                (long, long) current = currentVariant is null
+                    ? (0L, 0L)
+                    : q.VariantFingerprint(currentVariant.Id);
+                if (currentVariant is not null && loaded.Fingerprint == current)
                 {
-                    _log($"Semantic reload (files changed): {name}");
-                    reuseIds[name] = _loaded[name].Id;
-                    _workspace.TryApplyChanges(_workspace.CurrentSolution.RemoveProject(_loaded[name].Id));
-                    _loaded.Remove(name);
+                    loaded.VariantId = currentVariant.Id;
+                    continue;
                 }
+                _log($"Semantic reload (variant inputs changed): {key}");
+                reuseIds[key] = loaded.Id;
+                _workspace.TryApplyChanges(_workspace.CurrentSolution.RemoveProject(loaded.Id));
+                _loaded.Remove(key);
             }
 
-            var toLoad = TopoOrder(q, requested.Where(n => !_loaded.ContainsKey(n)).ToList());
-            var frameworkRefs = ReferenceAssemblyLocator.Net472References(out string? refDir);
-            if (refDir is null)
-            {
-                _log("WARNING: no .NET Framework reference assemblies found — semantic fidelity degraded.");
-            }
+            List<ProjectVariantRow> requestedRows = requested
+                .Select(q.VariantByStableKey).Where(row => row is not null).Cast<ProjectVariantRow>()
+                .ToList();
+            foreach (string missing in requested.Where(key => requestedRows.All(row =>
+                         !string.Equals(row.StableVariantKey, key, StringComparison.Ordinal))))
+                failedVariants.Add(missing);
 
-            foreach (var name in toLoad)
+            bool frameworkRefsAvailable = true;
+            foreach (ProjectVariantRow variant in TopoOrder(q, requestedRows.Where(row =>
+                         !_loaded.ContainsKey(row.StableVariantKey)).ToList(), ct))
             {
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    var reuseId = reuseIds.TryGetValue(name, out var rid) ? rid : null;
-                    if (LoadProject(q, name, frameworkRefs, reuseId, ensureReferenceTo) is { } lp)
-                    {
-                        _loaded[name] = lp;
-                    }
-                    else
-                    {
-                        failed.Add(name);
-                    }
+                    IReadOnlyList<MetadataReference> frameworkRefs =
+                        ReferenceAssemblyLocator.ReferencesForTargetFramework(
+                            variant.TargetFramework, out string? refSource);
+                    frameworkRefsAvailable &= refSource is not null;
+                    ProjectId? reuseId = reuseIds.TryGetValue(variant.StableVariantKey,
+                        out ProjectId? existing) ? existing : null;
+                    LoadedProject? loaded = LoadVariant(q, variant, frameworkRefs, reuseId,
+                        ensureReferenceTo, ct);
+                    if (loaded is null) failedVariants.Add(variant.StableVariantKey);
+                    else _loaded[variant.StableVariantKey] = loaded;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _log($"Semantic load failed for {name}: {ex.Message}");
-                    failed.Add(name);
+                    _log($"Semantic variant load failed for {variant.StableVariantKey}: {ex.Message}");
+                    failedVariants.Add(variant.StableVariantKey);
                 }
             }
 
-            foreach (var name in requested)
-            {
-                if (_loaded.TryGetValue(name, out var lp)) lp.LastUse = ++_useCounter;
-            }
+            foreach (string key in requested)
+                if (_loaded.TryGetValue(key, out LoadedProject? loaded)) loaded.LastUse = ++_useCounter;
 
             EvictBeyondCap(requested);
-
-            var coverage = new ClusterCoverage(
-                LoadedProjects: requested.Count(n => _loaded.ContainsKey(n)),
-                RequestedProjects: requested.Count,
-                SkippedProjects: skipped,
-                FailedProjects: failed,
-                FrameworkRefsAvailable: refDir is not null,
-                SolutionProjects: _workspace.CurrentSolution.ProjectIds.Count);
-            return (_workspace.CurrentSolution, coverage);
+            var requestedProjects = requestedRows.Select(row => row.ProjectPath)
+                .Distinct(WorkspacePaths.FileSystemPathComparer).ToList();
+            var failedProjects = requestedRows.Where(row => failedVariants.Contains(
+                    row.StableVariantKey, StringComparer.Ordinal))
+                .Select(row => row.ProjectPath).Distinct(WorkspacePaths.FileSystemPathComparer).ToList();
+            int loadedVariantCount = requested.Count(_loaded.ContainsKey);
+            int loadedProjectCount = requestedRows.Where(row => _loaded.ContainsKey(row.StableVariantKey))
+                .Select(row => row.ProjectPath).Distinct(WorkspacePaths.FileSystemPathComparer).Count();
+            Solution solution = _workspace.CurrentSolution;
+            return (solution, new ClusterCoverage(
+                loadedProjectCount, requestedProjects.Count, [], failedProjects,
+                frameworkRefsAvailable, solution.ProjectIds.Count,
+                LoadedVariants: loadedVariantCount, RequestedVariants: requested.Count));
         }
         finally
         {
@@ -153,39 +174,25 @@ public sealed class SemanticWorkspace : IDisposable
         }
     }
 
-    // ---------------------------------------------------------------- loading
-
-    private LoadedProject? LoadProject(
-        IndexQueries q, string name, IReadOnlyList<MetadataReference> frameworkRefs,
-        ProjectId? reuseId, IReadOnlyCollection<string>? ensureReferenceTo)
+    private LoadedProject? LoadVariant(IndexQueries q, ProjectVariantRow variant,
+        IReadOnlyList<MetadataReference> frameworkRefs, ProjectId? reuseId,
+        IReadOnlyCollection<string>? ensureReferenceTo, CancellationToken ct)
     {
-        var row = q.ProjectByName(name);
-        if (row is null) return null;
+        ct.ThrowIfCancellationRequested();
+        PhysicalProjectParsedForTest?.Invoke(variant.ProjectPath);
+        ct.ThrowIfCancellationRequested();
 
-        // Preserve live load-time fidelity (assembly refs, hint paths), but capture through the
-        // bounded no-follow reader so a project or packages.config FIFO/socket/link cannot block
-        // semantic loading. The byte parser remains BOM/encoding aware.
-        byte[] projectBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, row.Path,
-            IndexBuilder.MaxStructuralFileBytes) ?? [];
-        string packagesPath = PackagesConfigPath(row.Path);
-        byte[]? packagesBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, packagesPath,
-            IndexBuilder.MaxStructuralFileBytes);
-        var parsed = ProjectFileParser.ParseSnapshot(row.Path, projectBytes, packagesBytes);
-
-        var files = q.ProjectFiles(name);
+        List<string> files = q.VariantFiles(variant.Id);
         if (files.Count == 0) return null;
-
-        var docs = new List<DocumentInfo>();
-        // Reuse the prior id on reload (keeps dependents' references valid); mint a new
-        // one only for a genuinely new project.
-        var projectId = reuseId ?? ProjectId.CreateNewId(debugName: name);
-        foreach (var rel in files)
+        ProjectId projectId = reuseId ?? ProjectId.CreateNewId(debugName: variant.StableVariantKey);
+        var documents = new List<DocumentInfo>();
+        foreach (string rel in files)
         {
-            string full = Path.Combine(_workspaceRoot,
-                rel.Replace('/', Path.DirectorySeparatorChar));
-            SourceText text;
+            ct.ThrowIfCancellationRequested();
+            string full = Path.Combine(_workspaceRoot, rel.Replace('/', Path.DirectorySeparatorChar));
             byte[]? liveBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, rel,
                 DeltaRefresher.MaxIndexedFileBytes);
+            SourceText text;
             if (liveBytes is not null)
             {
                 using var stream = new MemoryStream(liveBytes, writable: false);
@@ -197,128 +204,134 @@ public sealed class SemanticWorkspace : IDisposable
                 if (indexed is null) continue;
                 text = SourceText.From(indexed);
             }
-            docs.Add(DocumentInfo.Create(
-                DocumentId.CreateNewId(projectId, debugName: rel),
-                name: Path.GetFileName(rel),
-                loader: TextLoader.From(TextAndVersion.Create(text, VersionStamp.Create(), full)),
-                filePath: full));
+            documents.Add(DocumentInfo.Create(DocumentId.CreateNewId(projectId, debugName: rel),
+                name: Path.GetFileName(rel), loader: TextLoader.From(TextAndVersion.Create(text,
+                    VersionStamp.Create(), full)), filePath: full));
         }
 
-        // Project references FIRST (order matters for the dll-substitution below): in-cluster
-        // only; unloaded refs become navigation-grade holes.
-        var projectRefs = new List<ProjectReference>();
-        var refIds = new HashSet<ProjectId>();
-        var refNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // names actually wired
-        var solutionNow = _workspace.CurrentSolution;
-        // Cycle guard (review, HIGH): mutual assembly refs (A <Reference> B.dll, B <Reference> A.dll —
-        // a legal multi-stage shape) put BOTH edges in project_refs. Within one load pass only
-        // backward edges wire, but a fingerprint RELOAD re-adds a project while its dependents are
-        // already loaded — wiring the forward edge then completes a ProjectReference CYCLE, which
-        // AdhocWorkspace ACCEPTS (TryApplyChanges true) and which deadlocks GetCompilationAsync
-        // forever after (review-reproduced; eviction can never break it — both sides stay
-        // 'referenced'). Skip any edge whose target already REACHES this project id; the skipped
-        // direction is deliberately NOT in refNames, so its hint dll below stays — the metadata
-        // binding is the correct degraded wiring for the back edge.
+        Solution solutionNow = _workspace.CurrentSolution;
+        var projectReferences = new List<ProjectReference>();
+        var referenceIds = new HashSet<ProjectId>();
         bool WouldCycle(ProjectId target) => ReachesId(solutionNow, target, projectId);
-        using (var q2 = new IndexQueries(_dbPath, pinReadSnapshot: false,
-                   pooling: _poolIndexConnections))
+        foreach (ProjectVariantRow dependency in q.VariantDependencies(variant.Id))
         {
-            foreach (var edge in q2.ProjectGraph(name, 1, "downstream"))
+            ct.ThrowIfCancellationRequested();
+            if (_loaded.TryGetValue(dependency.StableVariantKey, out LoadedProject? loaded) &&
+                referenceIds.Add(loaded.Id) && !WouldCycle(loaded.Id))
             {
-                if (_loaded.TryGetValue(edge.ToProject, out var dep) && !refIds.Contains(dep.Id) &&
-                    !WouldCycle(dep.Id) && refIds.Add(dep.Id))
-                {
-                    projectRefs.Add(new ProjectReference(dep.Id));
-                    refNames.Add(edge.ToProject);
-                }
+                projectReferences.Add(new ProjectReference(loaded.Id));
             }
         }
-        // Guarantee visibility of the symbol-declaring project even when the dependency
-        // path is transitive (SDK-style transitivity) — harmless when redundant.
         if (ensureReferenceTo is not null)
         {
-            foreach (var target in ensureReferenceTo)
+            foreach (string targetKey in ensureReferenceTo)
             {
-                if (!target.Equals(name, StringComparison.OrdinalIgnoreCase) &&
-                    _loaded.TryGetValue(target, out var dep) && !refIds.Contains(dep.Id) &&
-                    !WouldCycle(dep.Id) && refIds.Add(dep.Id))
+                ct.ThrowIfCancellationRequested();
+                if (string.Equals(targetKey, variant.StableVariantKey, StringComparison.Ordinal)) continue;
+                if (_loaded.TryGetValue(targetKey, out LoadedProject? loaded) &&
+                    referenceIds.Add(loaded.Id) && !WouldCycle(loaded.Id))
                 {
-                    projectRefs.Add(new ProjectReference(dep.Id));
-                    refNames.Add(target);
+                    projectReferences.Add(new ProjectReference(loaded.Id));
                 }
             }
         }
 
-        var metadataRefs = new List<MetadataReference>(frameworkRefs);
-        foreach (var (assembly, hint) in parsed.AssemblyRefs)
+        var metadataReferences = new List<MetadataReference>(frameworkRefs);
+        var metadataPaths = new HashSet<string>(WorkspacePaths.FileSystemPathComparer);
+        var metadataNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (PortableExecutableReference reference in frameworkRefs.OfType<PortableExecutableReference>())
         {
-            if (hint is null) continue; // plain framework refs covered by reference assemblies
-            // Source-over-binary substitution (lhg): when the referenced assembly IS a project we
-            // just wired a ProjectReference to (multi-staged builds reference the built dll from a
-            // common folder, not the project — the recovered assembly-ref edge supplies the wire),
-            // SKIP the metadata dll: the name binds to the SOURCE symbol. The dll ALONE binds
-            // consumers to a METADATA symbol that never matches the queried source declaration —
-            // the field's 8-implementers-found-0 trap. Keyed on refNames, NOT on _loaded: only a
-            // WIRED ProjectReference justifies dropping the dll — a same-named project that is
-            // merely loaded but not wired (edge missing, load-order miss, cycle-guard skip) must
-            // keep its dll or the consumer is left with NEITHER binding. (Collided names DO
-            // produce edges since Batch 29 — the wired-only keying is what stays load-bearing.)
-            // Defense-in-depth note: with BOTH references present Roslyn empirically prefers the
-            // source project in every shape we reproduced (equal and differing versions), so this
-            // skip is not independently test-pinnable — it exists so we never depend on that
-            // conflict resolution (e.g. strong-named field dlls whose distinct identities tests
-            // cannot reproduce). TopoOrder loads dependencies first, so the edge target is already
-            // in _loaded — and thus in refNames — when its consumers load.
-            if (refNames.Contains(assembly) ||
-                refNames.Contains(Path.GetFileNameWithoutExtension(hint)))
-            {
-                continue;
-            }
-            string full = Path.Combine(_workspaceRoot, hint.Replace('/', Path.DirectorySeparatorChar));
-            if (File.Exists(full))
-            {
-                try { metadataRefs.Add(MetadataReference.CreateFromFile(full)); } catch { /* skip */ }
-            }
+            if (reference.FilePath is not { Length: > 0 } path) continue;
+            metadataPaths.Add(Path.GetFullPath(path));
+            metadataNames.Add(Path.GetFileNameWithoutExtension(path));
         }
-        foreach (var (pkg, version) in parsed.PackageRefs)
+        foreach (VariantAssemblyReferenceInput input in q.VariantAssemblyReferenceInputs(variant.Id))
         {
-            if (ReferenceAssemblyLocator.ResolvePackageDll(pkg, version) is { } dll)
-            {
-                try { metadataRefs.Add(MetadataReference.CreateFromFile(dll)); } catch { /* skip */ }
-            }
+            ct.ThrowIfCancellationRequested();
+            if (input.HasSelectedSourceVariant || input.HintPath is not { Length: > 0 } hint) continue;
+            string full = Path.IsPathRooted(hint) ? hint : Path.Combine(_workspaceRoot,
+                hint.Replace('/', Path.DirectorySeparatorChar));
+            AddMetadataReference(full, input.IncludeName);
+        }
+        foreach (VariantPackageReferenceInput package in q.VariantPackageReferenceInputs(variant.Id))
+        {
+            ct.ThrowIfCancellationRequested();
+            string? dll = ReferenceAssemblyLocator.ResolvePackageDll(package.Package,
+                package.Version, variant.TargetFramework);
+            if (dll is not null) AddMetadataReference(dll, Path.GetFileNameWithoutExtension(dll));
         }
 
-        var info = ProjectInfo.Create(
-                projectId,
-                VersionStamp.Create(),
-                name: name,
-                assemblyName: name,
-                language: LanguageNames.CSharp,
-                filePath: Path.Combine(_workspaceRoot, row.Path.Replace('/', Path.DirectorySeparatorChar)),
-                compilationOptions: CompilationOptions,
-                parseOptions: ParseOptions,
-                documents: docs,
-                projectReferences: projectRefs,
-                metadataReferences: metadataRefs);
-
-        if (!_workspace.TryApplyChanges(_workspace.CurrentSolution.AddProject(info)))
-        {
-            return null;
-        }
+        ParseContextRow? context = q.VariantParseContext(variant.Id);
+        LanguageVersion languageVersion = LanguageVersion.Latest;
+        if (context is not null && LanguageVersionFacts.TryParse(context.LanguageVersion,
+                out LanguageVersion parsedLanguageVersion))
+            languageVersion = parsedLanguageVersion;
+        var parseOptions = new CSharpParseOptions(languageVersion,
+            preprocessorSymbols: context?.PreprocessorSymbols ?? []);
+        string assemblyName = NormalizeAssemblySimpleName(variant.AssemblyName);
+        if (string.IsNullOrWhiteSpace(assemblyName)) assemblyName = variant.ProjectName;
+        var info = ProjectInfo.Create(projectId, VersionStamp.Create(), variant.ProjectName,
+            assemblyName, LanguageNames.CSharp,
+            filePath: Path.Combine(_workspaceRoot,
+                variant.ProjectPath.Replace('/', Path.DirectorySeparatorChar)),
+            compilationOptions: CompilationOptions, parseOptions: parseOptions,
+            documents: documents, projectReferences: projectReferences,
+            metadataReferences: metadataReferences);
+        ct.ThrowIfCancellationRequested();
+        if (!_workspace.TryApplyChanges(_workspace.CurrentSolution.AddProject(info))) return null;
         return new LoadedProject
         {
             Id = projectId,
-            Fingerprint = q.ProjectFingerprint(name),
+            VariantId = variant.Id,
+            ProjectPath = variant.ProjectPath,
+            Fingerprint = q.VariantFingerprint(variant.Id),
             LastUse = ++_useCounter,
         };
+
+        void AddMetadataReference(string path, string assemblySimpleName)
+        {
+            try
+            {
+                string normalized = Path.GetFullPath(path);
+                string simple = NormalizeAssemblySimpleName(assemblySimpleName);
+                if (!File.Exists(normalized)) return;
+                if (metadataPaths.Contains(normalized) || metadataNames.Contains(simple)) return;
+                metadataReferences.Add(MetadataReference.CreateFromFile(normalized));
+                metadataPaths.Add(normalized);
+                metadataNames.Add(simple);
+                MetadataReferenceAddedForTest?.Invoke(normalized);
+            }
+            catch (Exception) { }
+        }
     }
 
-    /// <summary>True when <paramref name="from"/> reaches <paramref name="target"/> over the
-    /// solution's recorded ProjectReferences. A dangling id (a project removed for reload) has no
-    /// Project node to walk THROUGH, but references pointing AT it are still recorded on its
-    /// dependents — which is exactly what makes the reload case detectable: while B is removed,
-    /// A's reference to B's reused id keeps A→B visible, so B's reload sees that wiring B→A
-    /// would complete A→B→A and skips it.</summary>
+    public ProjectId? ProjectIdForVariant(string stableVariantKey) =>
+        _loaded.TryGetValue(stableVariantKey, out LoadedProject? loaded) ? loaded.Id : null;
+
+    private static string NormalizeAssemblySimpleName(string name) =>
+        name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
+
+    private static List<ProjectVariantRow> TopoOrder(IndexQueries q,
+        List<ProjectVariantRow> variants, CancellationToken ct)
+    {
+        var byId = variants.ToDictionary(variant => variant.Id);
+        var depth = new Dictionary<long, int>();
+        int Depth(long id, int guard)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (guard > 64 || !byId.ContainsKey(id)) return 0;
+            if (depth.TryGetValue(id, out int cached)) return cached;
+            depth[id] = 0;
+            int result = 0;
+            foreach (ProjectVariantRow dependency in q.VariantDependencies(id))
+                if (byId.ContainsKey(dependency.Id))
+                    result = Math.Max(result, Depth(dependency.Id, guard + 1) + 1);
+            return depth[id] = result;
+        }
+        return variants.OrderBy(variant => Depth(variant.Id, 0))
+            .ThenBy(variant => variant.StableVariantKey, StringComparer.Ordinal).ToList();
+    }
+
     private static bool ReachesId(Solution solution, ProjectId from, ProjectId target)
     {
         if (from == target) return true;
@@ -327,98 +340,29 @@ public sealed class SemanticWorkspace : IDisposable
         stack.Push(from);
         while (stack.Count > 0)
         {
-            var cur = stack.Pop();
-            if (cur == target) return true;
-            if (!seen.Add(cur)) continue;
-            var p = solution.GetProject(cur);
-            if (p is null) continue; // dangling (removed-for-reload) — no outgoing edges to walk
-            // AllProjectReferences, NOT ProjectReferences: the latter is FILTERED to projects
-            // currently present in the solution, so during a reload's removal window a dependent's
-            // recorded reference to the removed id is invisible — which is precisely the moment
-            // this walk must see it (diagnosed via wiring telemetry: the filtered walk let the
-            // reload wire the back edge and complete the cycle the guard exists to prevent).
-            foreach (var r in p.AllProjectReferences) stack.Push(r.ProjectId);
+            ProjectId current = stack.Pop();
+            if (current == target) return true;
+            if (!seen.Add(current)) continue;
+            Project? project = solution.GetProject(current);
+            if (project is null) continue;
+            foreach (ProjectReference reference in project.AllProjectReferences)
+                stack.Push(reference.ProjectId);
         }
         return false;
     }
 
-    private List<string> TopoOrder(IndexQueries q, List<string> names)
-    {
-        // Order by dependency depth so referenced projects load before referencing ones.
-        var set = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
-        var depth = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-
-        int Depth(string n, int guard)
-        {
-            if (guard > 64) return 0;
-            if (depth.TryGetValue(n, out int d)) return d;
-            depth[n] = 0; // cycle guard
-            int max = 0;
-            foreach (var e in q.ProjectGraph(n, 1, "downstream"))
-            {
-                if (set.Contains(e.ToProject))
-                {
-                    max = Math.Max(max, Depth(e.ToProject, guard + 1) + 1);
-                }
-            }
-            depth[n] = max;
-            return max;
-        }
-
-        return names.OrderBy(n => Depth(n, 0)).ThenBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
-    }
-
-    // Memory backstop (njw): the project-count cap is SOFT — referenced projects are never evicted —
-    // so heavy clusters can hold compilations well past it with no byte accounting. Past this managed-
-    // heap threshold the effective cap halves, so subsequent passes drain harder while preserving the
-    // no-dangling-reference invariant. A pressure signal, not a hard ceiling.
-    private const long ManagedHeapBackstopBytes = 3L * 1024 * 1024 * 1024;
-
     private void EvictBeyondCap(HashSet<string> keep)
     {
-        int cap = MaxLoadedProjects;
-        if (_loaded.Count > 0 && GC.GetTotalMemory(false) > ManagedHeapBackstopBytes)
+        if (_loaded.Count <= MaxLoadedVariants) return;
+        var referenced = _workspace.CurrentSolution.Projects.SelectMany(project =>
+            project.ProjectReferences).Select(reference => reference.ProjectId).ToHashSet();
+        foreach ((string key, LoadedProject loaded) in _loaded
+                     .Where(pair => !keep.Contains(pair.Key) && !referenced.Contains(pair.Value.Id))
+                     .OrderBy(pair => pair.Value.LastUse).Take(_loaded.Count - MaxLoadedVariants).ToList())
         {
-            cap = Math.Max(8, MaxLoadedProjects / 2);
+            _workspace.TryApplyChanges(_workspace.CurrentSolution.RemoveProject(loaded.Id));
+            _loaded.Remove(key);
         }
-        if (_loaded.Count <= cap) return;
-        if (cap != MaxLoadedProjects)
-        {
-            // Logged only when the tightened cap actually drives an eviction pass — under sustained
-            // heap pressure with nothing over cap this would otherwise spam every semantic call.
-            _log($"Semantic cache memory backstop: managed heap over {ManagedHeapBackstopBytes / (1024 * 1024)} MB — tightening cap {MaxLoadedProjects} -> {cap}.");
-        }
-
-        // Evict only projects that no currently-loaded project references, so eviction
-        // never leaves a dangling ProjectReference (Roslyn would silently drop it and
-        // corrupt the dependent's symbol visibility). This drains the graph from the top;
-        // if nothing is safely evictable we stay over the soft cap until it is.
-        var referenced = new HashSet<ProjectId>();
-        foreach (var p in _workspace.CurrentSolution.Projects)
-        {
-            foreach (var pr in p.ProjectReferences) referenced.Add(pr.ProjectId);
-        }
-
-        var evictable = _loaded
-            .Where(kv => !keep.Contains(kv.Key) && !referenced.Contains(kv.Value.Id))
-            .OrderBy(kv => kv.Value.LastUse)
-            .Take(_loaded.Count - cap)
-            .ToList();
-        foreach (var (name, lp) in evictable)
-        {
-            _workspace.TryApplyChanges(_workspace.CurrentSolution.RemoveProject(lp.Id));
-            _loaded.Remove(name);
-        }
-        if (evictable.Count > 0)
-        {
-            _log($"Semantic cache evicted {evictable.Count} projects (cap {cap}).");
-        }
-    }
-
-    private static string PackagesConfigPath(string projectPath)
-    {
-        int slash = projectPath.LastIndexOf('/');
-        return slash < 0 ? "packages.config" : projectPath[..(slash + 1)] + "packages.config";
     }
 
     public void Dispose()

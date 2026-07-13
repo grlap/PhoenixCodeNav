@@ -23,9 +23,12 @@ navigation questions in three layers, each labeled with how trustworthy it is:
 
 | Layer | Tools | Confidence |
 |---|---|---|
-| **Indexed text** (SQLite FTS5) | `find_file`, `search_text`, `config_lookup`, `references` (candidates) | `indexed` |
+| **Indexed text** (SQLite FTS5) | `find_file`, `search_text`, `config_lookup`, `references` (occurrence/fallback candidates only) | `indexed` |
 | **Syntax** (Roslyn parse, no compile) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
 | **Semantic** (Roslyn compilations, lazy clusters) | `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy` | `exact` (falls back to `indexed` with `partialReason`) |
+
+FTS-backed reference candidates are indexed occurrence leads, not semantic project/variant coverage
+or selection authority.
 
 Plus structural facts parsed directly from every `.csproj` (`project_graph`,
 `projects_containing`, `dependency_path`, `repo_overview`) and composites (`context_pack`,
@@ -39,6 +42,14 @@ graph edges, so cross-project `references`/`implementations` resolve exactly acr
 Every edge carries its provenance — `projectReference` vs `hintPathReference` — and `impact`
 flags dependents wired only via HintPath: they bind to the last-*built* dll, and
 ProjectReference-aware refactor tooling won't follow that edge.
+
+Project resolution is designed around physical `.csproj` paths and compilation/output variants.
+Even when every physical project's `AssemblyName` is unique, one multi-target project can emit
+several framework-specific outputs. Existing `Reference Include` / `HintPath` assembly-edge recovery
+remains authoritative for graph discovery; exact `ProjectReference` paths and normalized output
+facts refine physical-project and variant binding without collapsing them by display name. The
+persisted target model and ambiguity rules are specified in
+[`docs/design.md`](docs/design.md#project-identity-output-variants-and-reference-resolution).
 
 **No MSBuild required.** The semantic layer builds Roslyn compilations directly from parsed
 project files (AdhocWorkspace): documents from disk, framework reference assemblies, hint-path
@@ -185,10 +196,9 @@ Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.Mcp` (serv
 
 ## Known limitations (v1)
 
-- SDK-style compile items are approximated by `<Compile Include>` glob expansion plus
-  longest-dir-prefix heuristics (no MSBuild evaluation); explicit legacy `<Compile Include>`
-  items — including linked files — are exact. Residual gaps: shared `.projitems`, props-level
-  globs, and MSBuild `Condition`s are not evaluated.
+- SDK-style compile items use the compatibility glob projection plus bounded per-variant project
+  conditions (no MSBuild execution); unsupported imports, shared `.projitems`, props-level globs,
+  or conditions remain conservative and make compile ownership explicitly incomplete.
 - `search_text` regex mode (`regex:true`) is line-based .NET regex narrowed by FTS tokens —
   no multi-line patterns.
 - Indexed `references` are whole-identifier text candidates; use `mode="semantic"` (or the
@@ -198,6 +208,9 @@ Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.Mcp` (serv
   completes before selection. Coverage reports the optional candidate count and active bound
   (omitted for unbounded `maxProjects:0`); bounded reference totals are marked as lower bounds,
   and bounded responses report the authoritative skipped count and a size-bounded sample.
-- Multi-TFM projects index a single symbol row per declaration (net472-first design).
+- The general declaration index retains one physical syntax row per source declaration, while
+  semantic base-list facts are parse-context/arity aware and semantic loading creates one Roslyn
+  project per stable compilation variant. Unknown variant facts force partial coverage rather than
+  an AssemblyName-based guess.
 - Git awareness covers freshness (indexed vs HEAD commit/branch), not navigation — a
   `recent_changes` tool, `xml_doc`, and `diagnostics` from the brief are not yet implemented.

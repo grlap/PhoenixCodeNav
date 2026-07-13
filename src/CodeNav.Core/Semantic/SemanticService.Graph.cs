@@ -38,7 +38,8 @@ public sealed partial class SemanticService
 
             clusterLoadInProgress = true;
             var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
-                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
+                symbolA.Name, (symbolA as INamedTypeSymbol)?.Arity ?? 0, owningProject,
+                path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token).ConfigureAwait(false);
             clusterLoadInProgress = false;
             if (symbol is null) return (null, null, null, "symbol_not_resolved_in_scope");
@@ -150,14 +151,11 @@ public sealed partial class SemanticService
             // call's loads, not this call's own discovery; unseeded, a cold type_hierarchy on a
             // cross-project interface finds nothing). Seeding makes it self-sufficient AND makes
             // coverage describe the projects this answer actually needed.
-            List<string> implementerSeeds;
-            implementerSeeds = indexSnapshot.Queries
-                .ImplementationCandidateProjects(symbolA.Name, cts.Token);
-
             clusterLoadInProgress = true;
             var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
-                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
-                indexSnapshot.Queries, cts.Token, implementerSeeds).ConfigureAwait(false);
+                symbolA.Name, (symbolA as INamedTypeSymbol)?.Arity ?? 0, owningProject,
+                path, line, column, nameHint, maxProjects,
+                indexSnapshot.Queries, cts.Token).ConfigureAwait(false);
             clusterLoadInProgress = false;
             if (symbol is not INamedTypeSymbol type)
             {

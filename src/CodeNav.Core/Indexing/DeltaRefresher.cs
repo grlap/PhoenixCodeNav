@@ -81,7 +81,10 @@ public static class DeltaRefresher
                 bool known = stored.TryGetValue(rel, out var old);
                 string lang = LangOf(rel);
                 if (lang == "other") continue;
-                bool authoritativeProjectInput = lang == "csproj" || IsPackagesConfig(rel);
+                bool authoritativeProjectInput = lang == "csproj" || IsPackagesConfig(rel) ||
+                    Path.GetExtension(rel).Equals(".props", StringComparison.OrdinalIgnoreCase) ||
+                    Path.GetExtension(rel).Equals(".targets", StringComparison.OrdinalIgnoreCase) ||
+                    Path.GetExtension(rel).Equals(".projitems", StringComparison.OrdinalIgnoreCase);
                 bool projectShapePath = authoritativeProjectInput || lang == "sln";
 
                 GitInfo.WorkspaceFileReadResult read =
@@ -147,6 +150,7 @@ public static class DeltaRefresher
                         store.ReplaceContent(tx, old.Id, oldContent, content);
                         store.DeleteSymbolsForFile(tx, old.Id);
                         store.InsertSymbols(tx, old.Id, parsed.Symbols);
+                        RefreshBaseFactsForFile(store, tx, old.Id, content);
                         changed++;
                     }
                     else
@@ -183,6 +187,8 @@ public static class DeltaRefresher
                                 if (globRoots.TryGetValue(fdir, out long pid))
                                 {
                                     store.InsertCompileItem(tx, pid, id);
+                                    store.InsertVariantCompileItemsForProject(tx, pid, id, "evaluated");
+                                    RefreshBaseFactsForFile(store, tx, id, content);
                                     break;
                                 }
                             }
@@ -269,6 +275,8 @@ public static class DeltaRefresher
         List<string> solutionPaths = rows.Where(row => row.Lang == "sln")
             .Select(row => row.Path).OrderBy(path => path, StringComparer.Ordinal).ToList();
         var parsedProjects = new List<ParsedProject>(projectPaths.Count);
+        var variantEvaluations = new Dictionary<string, ProjectVariantEvaluation>(
+            WorkspacePaths.FileSystemPathComparer);
         foreach (string path in projectPaths)
         {
             byte[]? projectBytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot, path,
@@ -289,6 +297,8 @@ public static class DeltaRefresher
             }
             parsedProjects.Add(ProjectFileParser.ParseSnapshot(path, projectBytes,
                 packagesBytes));
+            variantEvaluations[path] = ProjectVariantEvaluator.Evaluate(path, projectBytes,
+                packagesBytes);
         }
 
         var parsedSolutions = new List<ParsedSolution>();
@@ -322,6 +332,10 @@ public static class DeltaRefresher
         {
             projectIds[p.RelPath] = store.InsertProject(tx, p);
         }
+        Dictionary<string, long> fileIds = stored.ToDictionary(pair => pair.Key,
+            pair => pair.Value.Id, WorkspacePaths.FileSystemPathComparer);
+        VariantWriteState variantState = VariantIndexWriter.WriteProjectFacts(store, tx,
+            variantEvaluations, projectIds, fileIds);
         foreach (var p in parsedProjects)
         {
             long fromId = projectIds[p.RelPath];
@@ -347,9 +361,24 @@ public static class DeltaRefresher
         // cross-project implementations/references until the next full rebuild.
         AssemblyRefEdges.Write(store, tx, parsedProjects, projectIds);
         CompileItemResolver.Write(store, tx, parsedProjects, projectIds, csFileIds);
+        VariantIndexWriter.WriteCompileAndBaseFacts(store, tx, variantState, projectIds);
         // isTest R3 parity with the full build (a .cs file GAINING [TestFixture] converges on the
         // next graph rebuild — csproj-touch or full — an accepted staleness, same as ownership).
         store.PromoteTestProjectsByCompiledAttributes(tx);
+    }
+
+    private static void RefreshBaseFactsForFile(IndexStore store,
+        Microsoft.Data.Sqlite.SqliteTransaction tx, long fileId, string content)
+    {
+        store.DeleteBaseTypeFactsForFile(tx, fileId);
+        foreach (var context in store.ParseContextsForFileForWrite(tx, fileId))
+        {
+            var parseContext = new BaseTypeParseContext(context.LanguageVersion, context.Symbols);
+            foreach (BaseTypeFact fact in BaseTypeIndexer.Parse(content, parseContext))
+                store.InsertBaseTypeFact(tx, context.Id, fileId, fact.DeclarationOccurrence,
+                    fact.Ordinal, fact.RawTypeText, fact.LookupName, fact.SyntacticArity,
+                    fact.QualifierText, fact.ResolutionKind, fact.ScopeEvidence);
+        }
     }
 
     private static string LangOf(string relPath)
@@ -361,7 +390,7 @@ public static class DeltaRefresher
             ".cs" => "cs",
             ".csproj" => "csproj",
             ".sln" or ".slnx" or ".slnf" => "sln",
-            ".config" or ".props" or ".targets" => "config",
+            ".config" or ".props" or ".targets" or ".projitems" => "config",
             ".json" when name.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase)
                         || name.Equals("global.json", StringComparison.OrdinalIgnoreCase) => "config",
             _ => name.Equals("packages.config", StringComparison.OrdinalIgnoreCase) ? "config" : "other",

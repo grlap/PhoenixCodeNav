@@ -150,7 +150,7 @@ public class Batch33Tests
     // ------------------------------------------------------------------ kbn
 
     [Fact]
-    public void TextualCandidatesOutsideTheGraphAreReported()
+    public void TextualCandidatesOutsideTheGraphDoNotBecomeSemanticCandidates()
     {
         string root = Directory.CreateTempSubdirectory("codenav-kbn").FullName;
         try
@@ -178,8 +178,8 @@ public class Batch33Tests
             File.WriteAllText(Path.Combine(impl, "HandlerD.cs"),
                 "namespace I { public class HandlerD : D.IContractD { public void Go() { } } }");
 
-            // The plugin shape: mentions the name TEXTUALLY (a config string) but has NO
-            // reference and no graph path to the declarer — previously vanished silently.
+            // The plugin shape mentions the name only in a string and has no graph path. FTS may
+            // find the text, but it must not become semantic coverage or an out-of-graph candidate.
             string plugin = Path.Combine(root, "PluginD");
             Directory.CreateDirectory(plugin);
             File.WriteAllText(Path.Combine(plugin, "PluginD.csproj"),
@@ -204,9 +204,9 @@ public class Batch33Tests
 
                 var refs = Parse(tools.References(name: "IContractD", timeoutMs: 90000));
                 Assert.Equal("exact", refs.GetProperty("meta").GetProperty("confidence").GetString());
-                var outOfGraph = refs.GetProperty("outOfGraphCandidates").EnumerateArray()
-                    .Select(e => e.GetString()).ToList();
-                Assert.Contains("PluginD", outOfGraph);
+                Assert.False(refs.TryGetProperty("outOfGraphCandidates", out _));
+                Assert.DoesNotContain(refs.GetProperty("groups").EnumerateArray(), group =>
+                    group.GetProperty("project").GetString() == "PluginD");
             }
             finally { semantic.Dispose(); m.Dispose(); }
         }

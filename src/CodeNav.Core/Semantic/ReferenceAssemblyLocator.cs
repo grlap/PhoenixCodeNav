@@ -12,6 +12,88 @@ public static class ReferenceAssemblyLocator
     private static readonly object Gate = new();
     private static IReadOnlyList<MetadataReference>? _net472Cache;
     private static string? _net472Dir;
+    private static IReadOnlyList<MetadataReference>? _runtimeCache;
+    private static readonly Dictionary<string, (IReadOnlyList<MetadataReference> References,
+        string Directory)> TargetFrameworkCaches = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Best available target-framework reference set without invoking MSBuild. Classic
+    /// .NET Framework variants use the targeting pack; modern variants use the current runtime's
+    /// trusted platform assemblies as an explicitly navigation-grade fallback.</summary>
+    public static IReadOnlyList<MetadataReference> ReferencesForTargetFramework(
+        string targetFramework, out string? sourceDir)
+    {
+        if (targetFramework.StartsWith("net4", StringComparison.OrdinalIgnoreCase))
+            return Net472References(out sourceDir);
+        lock (Gate)
+        {
+            if (TargetFrameworkCaches.TryGetValue(targetFramework, out var cached))
+            {
+                sourceDir = cached.Directory;
+                return cached.References;
+            }
+            string? targetingDirectory = ProbeTargetingPack(targetFramework);
+            if (targetingDirectory is not null)
+            {
+                IReadOnlyList<MetadataReference> references = EnumerateRefDlls(targetingDirectory)
+                    .Select(path =>
+                    {
+                        try { return MetadataReference.CreateFromFile(path); }
+                        catch (Exception) { return null; }
+                    })
+                    .Where(reference => reference is not null).Cast<MetadataReference>().ToList();
+                TargetFrameworkCaches[targetFramework] = (references, targetingDirectory);
+                sourceDir = targetingDirectory;
+                return references;
+            }
+            if (_runtimeCache is null)
+            {
+                var references = new List<MetadataReference>();
+                string? trusted = AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string;
+                foreach (string path in (trusted ?? "").Split(Path.PathSeparator,
+                             StringSplitOptions.RemoveEmptyEntries))
+                {
+                    try { references.Add(MetadataReference.CreateFromFile(path)); }
+                    catch (Exception) { /* skip unreadable runtime assembly */ }
+                }
+                _runtimeCache = references;
+            }
+            // Runtime implementation assemblies are a navigation-grade fallback, not the requested
+            // target framework's reference contract. Keep the references useful but report the
+            // missing source directory so coverage does not claim full framework fidelity.
+            sourceDir = null;
+            return _runtimeCache;
+        }
+    }
+
+    private static string? ProbeTargetingPack(string targetFramework)
+    {
+        string packName = targetFramework.StartsWith("netstandard", StringComparison.OrdinalIgnoreCase)
+            ? "NETStandard.Library.Ref" : "Microsoft.NETCore.App.Ref";
+        var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (Environment.GetEnvironmentVariable("DOTNET_ROOT") is { Length: > 0 } dotnetRoot)
+            roots.Add(dotnetRoot);
+        roots.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet"));
+        string runtimeDirectory = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
+        DirectoryInfo? cursor = Directory.GetParent(runtimeDirectory);
+        while (cursor is not null && !cursor.Name.Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            cursor = cursor.Parent;
+        if (cursor is not null) roots.Add(cursor.FullName);
+        foreach (string root in roots)
+        {
+            string versions = Path.Combine(root, "packs", packName);
+            if (!Directory.Exists(versions)) continue;
+            foreach (string version in Directory.EnumerateDirectories(versions)
+                         .OrderByDescending(path => ParseVersion(Path.GetFileName(path))))
+            {
+                string candidate = Path.Combine(version, "ref", targetFramework);
+                if (Directory.Exists(candidate)) return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static Version ParseVersion(string value) =>
+        Version.TryParse(value.Split('-')[0], out Version? version) ? version : new Version(0, 0);
 
     /// <summary>Framework reference assemblies for net472 (+ facades). Cached process-wide.</summary>
     public static IReadOnlyList<MetadataReference> Net472References(out string? sourceDir)
@@ -101,7 +183,10 @@ public static class ReferenceAssemblyLocator
     }
 
     /// <summary>Resolves a NuGet package assembly for net472-ish targets from the global cache.</summary>
-    public static string? ResolvePackageDll(string packageId, string version)
+    public static string? ResolvePackageDll(string packageId, string version) =>
+        ResolvePackageDll(packageId, version, "net472");
+
+    public static string? ResolvePackageDll(string packageId, string version, string targetFramework)
     {
         string root = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -116,7 +201,7 @@ public static class ReferenceAssemblyLocator
         string lib = Path.Combine(versionDir, "lib");
         if (!Directory.Exists(lib)) return null;
 
-        foreach (var tfm in new[] { "net472", "net471", "net47", "net462", "net461", "net46", "net45", "netstandard2.0", "net40", "net35", "net20" })
+        foreach (string tfm in PackageFrameworkPreference(targetFramework))
         {
             string dir = Path.Combine(lib, tfm);
             if (!Directory.Exists(dir)) continue;
@@ -124,5 +209,29 @@ public static class ReferenceAssemblyLocator
             if (dll is not null) return dll;
         }
         return null;
+    }
+
+    private static IEnumerable<string> PackageFrameworkPreference(string targetFramework)
+    {
+        if (!string.IsNullOrWhiteSpace(targetFramework)) yield return targetFramework;
+        if (targetFramework.StartsWith("net4", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (string tfm in new[] { "net472", "net471", "net47", "net462", "net461", "net46", "net45" })
+                if (!string.Equals(tfm, targetFramework, StringComparison.OrdinalIgnoreCase)) yield return tfm;
+        }
+        else
+        {
+            System.Text.RegularExpressions.Match modern = System.Text.RegularExpressions.Regex.Match(targetFramework,
+                "^net(?<major>[5-9]|[1-9][0-9])(?:\\.(?<minor>[0-9]+))?$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            int major = modern.Success ? int.Parse(modern.Groups["major"].Value) : 9;
+            for (int candidate = major - 1; candidate >= 5; candidate--)
+                yield return $"net{candidate}.0";
+        }
+        yield return "netstandard2.1";
+        yield return "netstandard2.0";
+        yield return "net40";
+        yield return "net35";
+        yield return "net20";
     }
 }

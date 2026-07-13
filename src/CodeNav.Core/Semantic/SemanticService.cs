@@ -69,8 +69,8 @@ public sealed record SemanticImplementations(
 
 /// <summary>
 /// Owns: exact (compiler-backed) navigation operations with deadlines — symbol
-/// resolution, definitions incl. partials, FindReferences scoped to FTS-candidate
-/// dependent projects, implementations. Every operation returns null on timeout or
+/// resolution, definitions incl. partials, FindReferences scoped to the authoritative
+/// variant-reference candidate universe, implementations. Every operation returns null on timeout or
 /// resolution failure with a reason, so callers can fall back to the indexed layer.
 /// Does not own: cluster loading mechanics (SemanticWorkspace) or MCP shaping.
 /// </summary>
@@ -195,20 +195,14 @@ public sealed partial class SemanticService : IDisposable
             // on graph edges for candidate discovery, so any edge gap (e.g. the paired-declarer
             // collision) made it load 1/1 and return an "exact" zero while the seeded tools found
             // all 8. Base-list implementer projects carry usages BY DEFINITION; seed them first.
-            List<string>? implementerSeeds = null;
-            if (symbolA is INamedTypeSymbol)
-            {
-                implementerSeeds = indexSnapshot.Queries
-                    .ImplementationCandidateProjects(symbolA.Name, cts.Token);
-            }
-
             // Phase 2: load the dependent scan set and re-resolve IN that snapshot, then
             // resolve + search against the SAME solution (no snapshot drift).
             clusterLoadInProgress = true;
             TestOnlyPhaseHook?.Invoke("beforeScanSetLoad");
             var (solution, symbol, coverage, skipped, outOfGraph) = await LoadScanSetAndResolveAsync(
-                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
-                indexSnapshot.Queries, cts.Token, implementerSeeds).ConfigureAwait(false);
+                symbolA.Name, (symbolA as INamedTypeSymbol)?.Arity ?? 0, owningProject,
+                path, line, column, nameHint, maxProjects, indexSnapshot.Queries, cts.Token)
+                .ConfigureAwait(false);
             clusterLoadInProgress = false;
             clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find+count
             TestOnlyPhaseHook?.Invoke("afterScanSetLoad");
@@ -365,14 +359,11 @@ public sealed partial class SemanticService : IDisposable
             // match in the index). Without this a cross-project interface — declared in a core project,
             // implemented in leaf projects — resolves to an empty list because the implementer projects
             // never entered the semantic cluster (they name the interface too rarely to rank in).
-            List<string> implementerSeeds;
-            implementerSeeds = indexSnapshot.Queries
-                .ImplementationCandidateProjects(symbolA.Name, cts.Token);
-
             clusterLoadInProgress = true;
             var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
-                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
-                indexSnapshot.Queries, cts.Token, implementerSeeds, targetIdentity)
+                symbolA.Name, (symbolA as INamedTypeSymbol)?.Arity ?? 0, owningProject,
+                path, line, column, nameHint, maxProjects, indexSnapshot.Queries, cts.Token,
+                targetIdentity)
                 .ConfigureAwait(false);
             clusterLoadInProgress = false;
             clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find
@@ -446,45 +437,45 @@ public sealed partial class SemanticService : IDisposable
         IndexQueries? snapshotQueries = null, SemanticTargetIdentity? targetIdentity = null)
     {
         string relPath = WorkspacePaths.Normalize(path);
-        string owningProject;
-        HashSet<string> closure;
+        ProjectVariantRow? selectedOwner;
+        List<ProjectVariantRow> closure;
         if (snapshotQueries is not null)
         {
-            var owners = snapshotQueries.ProjectsContaining(relPath);
+            var owners = snapshotQueries.VariantsContaining(relPath);
             if (owners.Count == 0) return (null, null, null);
-            ProjectRow? selectedOwner = targetIdentity is null
-                ? owners.FirstOrDefault(o => !o.IsTest) ?? owners[0]
-                : owners.SingleOrDefault(o =>
-                    string.Equals(o.Name, targetIdentity.AssemblyName,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(o.Path, targetIdentity.ProjectPath,
-                        StringComparison.Ordinal));
+            selectedOwner = SelectOwner(owners, targetIdentity);
             if (selectedOwner is null) return (null, null, null);
-            owningProject = selectedOwner.Name;
-            closure = snapshotQueries.DependencyClosure(new[] { owningProject });
+            closure = snapshotQueries.VariantDependencyClosure([selectedOwner.Id], ct);
         }
         else
         {
             using var queries = _manager.OpenQueries();
-            var owners = queries.ProjectsContaining(relPath);
+            var owners = queries.VariantsContaining(relPath);
             if (owners.Count == 0) return (null, null, null);
-            ProjectRow? selectedOwner = targetIdentity is null
-                ? owners.FirstOrDefault(o => !o.IsTest) ?? owners[0]
-                : owners.SingleOrDefault(o =>
-                    string.Equals(o.Name, targetIdentity.AssemblyName,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(o.Path, targetIdentity.ProjectPath,
-                        StringComparison.Ordinal));
+            selectedOwner = SelectOwner(owners, targetIdentity);
             if (selectedOwner is null) return (null, null, null);
-            owningProject = selectedOwner.Name;
-            closure = queries.DependencyClosure(new[] { owningProject });
+            closure = queries.VariantDependencyClosure([selectedOwner.Id], ct);
         }
 
-        var (solution, _) = await Workspace.EnsureLoadedAsync(closure, ct).ConfigureAwait(false);
-        var symbol = await ResolveInSolutionAsync(solution, owningProject, relPath, line, column,
+        var (solution, _) = await Workspace.EnsureLoadedVariantsAsync(
+            closure.Select(variant => variant.StableVariantKey).ToList(), ct).ConfigureAwait(false);
+        var symbol = await ResolveInSolutionAsync(solution, selectedOwner.StableVariantKey,
+                relPath, line, column,
                 nameHint, ct, targetIdentity)
             .ConfigureAwait(false);
-        return (solution, symbol, owningProject);
+        return (solution, symbol, selectedOwner.StableVariantKey);
+
+        static ProjectVariantRow? SelectOwner(IReadOnlyList<ProjectVariantRow> owners,
+            SemanticTargetIdentity? identity)
+        {
+            if (identity is null) return owners.FirstOrDefault(owner => !owner.IsTest) ?? owners[0];
+            return owners.FirstOrDefault(owner =>
+                string.Equals(owner.ProjectPath, identity.ProjectPath, StringComparison.Ordinal) &&
+                (string.Equals(owner.AssemblyName, identity.AssemblyName,
+                     StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(owner.ProjectName, identity.AssemblyName,
+                     StringComparison.OrdinalIgnoreCase)));
+        }
     }
 
     /// <summary>
@@ -496,11 +487,8 @@ public sealed partial class SemanticService : IDisposable
         Solution solution, string owningProject, string relPath, int line, int? column,
         string? nameHint, CancellationToken ct, SemanticTargetIdentity? targetIdentity = null)
     {
-        var project = solution.Projects.FirstOrDefault(p =>
-            string.Equals(p.Name, owningProject, StringComparison.OrdinalIgnoreCase) &&
-            (targetIdentity is null ||
-             string.Equals(ToRelPath(p.FilePath ?? ""), targetIdentity.ProjectPath,
-                 StringComparison.Ordinal)));
+        ProjectId? projectId = Workspace.ProjectIdForVariant(owningProject);
+        var project = projectId is null ? null : solution.GetProject(projectId);
         if (project is null) return null;
 
         string fullPath = Path.GetFullPath(Path.Combine(_manager.WorkspaceRoot, relPath.Replace('/', Path.DirectorySeparatorChar)));
@@ -617,100 +605,78 @@ public sealed partial class SemanticService : IDisposable
 
     /// <summary>
     /// Shared phase-2 for dependent-scanning ops (references/implementations/callers/
-    /// hierarchy): given the symbol name and owning project, loads the FTS-candidate
-    /// dependent scan set and re-resolves the symbol IN the loaded snapshot. The returned
+    /// hierarchy): given the symbol identity and owning variant, loads the reverse-reference and
+    /// base-list candidate universe and re-resolves the symbol IN the loaded snapshot. The returned
     /// symbol and solution are one consistent snapshot for SymbolFinder.
     /// </summary>
-    private async Task<(Solution Solution, ISymbol? Symbol, ClusterCoverage Coverage, List<string> Skipped, List<string> OutOfGraph)> LoadScanSetAndResolveAsync(
-        string symbolName, string owningProject, string path, int line, int? column, string? nameHint,
-        int maxProjects, IndexQueries q, CancellationToken ct,
-        IReadOnlyList<string>? prioritySeeds = null,
+    private async Task<(Solution Solution, ISymbol? Symbol, ClusterCoverage Coverage,
+        List<string> Skipped, List<string> OutOfGraph)> LoadScanSetAndResolveAsync(
+        string symbolName, int symbolArity, string owningVariantKey, string path, int line,
+        int? column, string? nameHint, int maxProjects, IndexQueries q, CancellationToken ct,
         SemanticTargetIdentity? targetIdentity = null)
     {
-        List<string> skipped;
-        var outOfGraph = new List<string>();
-        HashSet<string> scanSet;
-        int candidateProjectCount;
-        {
-            var dependents = q.DependentClosure(owningProject);
-            dependents.Add(owningProject);
-            int budget = NormalizeCandidateProjectBudget(maxProjects);
-            // The declaration project and its dependencies are correctness-mandatory and load
-            // regardless of maxProjects. Do not charge them against the optional candidate budget.
-            HashSet<string> mandatoryScanSet = q.DependencyClosure(new[] { owningProject });
-
-            var chosen = new List<string>();
-            var chosenSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var relevant = new List<string>();
-            var relevantSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            // Priority seeds (e.g. the projects that syntactically IMPLEMENT the type) load first —
-            // they carry the answer even though they rank low on raw name-mention frequency (a class
-            // names the interface once, while heavy consumers name it dozens of times and would
-            // otherwise exhaust the budget first, leaving the implementers unloaded).
-            var orderedSeeds = (prioritySeeds ?? [])
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(project => project, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            void Consider(string project)
+        ProjectVariantRow primaryOwner = q.VariantByStableKey(owningVariantKey)
+            ?? throw new InvalidOperationException("Owner variant disappeared from the pinned index snapshot.");
+        List<ProjectVariantRow> ownerVariants = q.VariantsContaining(WorkspacePaths.Normalize(path))
+            .Where(owner => string.Equals(owner.ProjectPath, primaryOwner.ProjectPath,
+                WorkspacePaths.FileSystemPathComparison))
+            .ToList();
+        if (ownerVariants.Count == 0) ownerVariants.Add(primaryOwner);
+        VariantCandidateUniverse universe = q.VariantCandidateUniverseForOwners(
+            [primaryOwner.Id], symbolName, symbolArity, ct);
+        List<ProjectVariantRow> allVariants = q.AllProjectVariants(ct);
+        int budget = NormalizeCandidateProjectBudget(maxProjects);
+        var optionalProjects = universe.OptionalVariants
+            .GroupBy(variant => variant.ProjectPath, WorkspacePaths.FileSystemPathComparer)
+            .Select(group => new
             {
-                if (relevantSet.Add(project)) relevant.Add(project);
-                if (mandatoryScanSet.Contains(project)) return;
-                if (chosen.Count < budget && chosenSet.Add(project)) chosen.Add(project);
-            }
+                Path = group.Key,
+                Name = group.First().ProjectName,
+                DirectSeed = group.Any(variant => universe.DirectSeedVariantIds.Contains(variant.Id)),
+                GraphGap = group.Any(variant => universe.GraphGapVariantIds.Contains(variant.Id)),
+            })
+            .OrderByDescending(project => project.DirectSeed)
+            .ThenByDescending(project => project.GraphGap)
+            .ThenBy(project => project.Path, StringComparer.Ordinal).ToList();
+        List<string> selectedProjectPaths = optionalProjects.Take(budget)
+            .Select(project => project.Path).ToList();
+        var scanKeys = universe.MandatoryVariants.Select(variant => variant.StableVariantKey)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (string projectPath in selectedProjectPaths)
+            foreach (ProjectVariantRow variant in allVariants.Where(candidate =>
+                         string.Equals(candidate.ProjectPath, projectPath,
+                             WorkspacePaths.FileSystemPathComparison)))
+                scanKeys.Add(variant.StableVariantKey);
 
-            // Graph-valid implementer seeds are strongest: they both name the type in a base list
-            // and can legally reach its declaring project. Same-simple-name seeds outside the graph
-            // are recovery candidates, but must not starve graph-valid textual consumers.
-            foreach (string project in orderedSeeds.Where(dependents.Contains)) Consider(project);
-
-            // kbn: textual candidates OUTSIDE the dependency closure (and not seed-chosen) were
-            // dropped SILENTLY — not even in `skipped`. Post-lhg the closure covers assembly-ref
-            // consumers, so this residue is reflection-loaded plugins / config-wired consumers:
-            // projects that mention the name but have no graph path to the declarer. Report them
-            // (capped) so a caller can see there was textual smoke beyond the graph.
-            var candidates = new List<(string Project, int FileCount)>();
-            foreach (var c in q.CandidateProjectsForName(symbolName, ct))
-            {
-                if (dependents.Contains(c.Project)) candidates.Add(c);
-                else if (!chosenSet.Contains(c.Project) && outOfGraph.Count < 20) outOfGraph.Add(c.Project);
-            }
-            foreach (var c in candidates)
-                Consider(c.Project);
-            foreach (string project in orderedSeeds.Where(project => !dependents.Contains(project)))
-            {
-                Consider(project);
-                if (outOfGraph.Count < 20 &&
-                    !outOfGraph.Contains(project, StringComparer.OrdinalIgnoreCase))
-                    outOfGraph.Add(project);
-            }
-            scanSet = new HashSet<string>(mandatoryScanSet, StringComparer.OrdinalIgnoreCase);
-            foreach (var p in chosen) scanSet.Add(p);
-            // The owning project's mandatory dependency closure is loaded regardless of the
-            // optional candidate budget. Report only relevant projects absent from the FINAL scan
-            // set, otherwise a budget filled by seeds can falsely mark a project that was loaded.
-            skipped = relevant.Where(project => !scanSet.Contains(project)).ToList();
-            candidateProjectCount = relevant.Count(project => !mandatoryScanSet.Contains(project));
-        }
-
-        var (solution, coverage) = await Workspace
-            .EnsureLoadedAsync(scanSet, ct, ensureReferenceTo: new[] { owningProject })
+        List<string> skipped = optionalProjects.Skip(selectedProjectPaths.Count)
+            .Select(project => project.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        List<string> outOfGraph = universe.OptionalVariants
+            .Where(variant => universe.GraphGapVariantIds.Contains(variant.Id))
+            .Select(variant => variant.ProjectName).Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20).ToList();
+        var (solution, coverage) = await Workspace.EnsureLoadedVariantsAsync(
+            scanKeys, ct, ownerVariants.Select(owner => owner.StableVariantKey).ToList())
             .ConfigureAwait(false);
         coverage = coverage with
         {
-            CandidateProjects = candidateProjectCount,
-            // maxProjects:0 is the public unbounded sentinel. Keep the normalized int.MaxValue
-            // implementation detail out of the response contract; null serializes as omission.
-            CandidateProjectBudget = maxProjects == 0
-                ? null
-                : NormalizeCandidateProjectBudget(maxProjects),
+            CandidateProjects = optionalProjects.Count,
+            CandidateProjectBudget = maxProjects == 0 ? null : budget,
+            CandidateVariants = universe.OptionalVariants.Count,
+            GraphUniverseComplete = universe.GraphComplete,
+            CompileOwnershipComplete = universe.CompileOwnershipComplete,
+            ParseContextsComplete = universe.ParseContextsComplete,
+            CandidateDiscoveryComplete = universe.Complete && skipped.Count == 0 &&
+                                         coverage.FailedProjects.Count == 0,
+            IncompleteReasons = universe.IncompleteReasons.Concat(
+                    skipped.Count == 0 ? [] : ["project_budget"])
+                .Distinct(StringComparer.Ordinal).ToList(),
         };
-        var symbol = await ResolveInSolutionAsync(
-            solution, owningProject, WorkspacePaths.Normalize(path), line, column, nameHint, ct,
-            targetIdentity)
+        ISymbol? symbol = await ResolveInSolutionAsync(solution, owningVariantKey,
+            WorkspacePaths.Normalize(path), line, column, nameHint, ct, targetIdentity)
             .ConfigureAwait(false);
         return (solution, symbol, coverage, skipped, outOfGraph);
     }
+
 
     // ---------------------------------------------------------------- shaping
 

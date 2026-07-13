@@ -40,8 +40,7 @@ public sealed partial class NavigationTools
             if (result is not null)
             {
                 bool bounded = (skippedCandidateProjects?.Count ?? 0) > 0 ||
-                    (coverage?.FailedProjects.Count ?? 0) > 0 ||
-                    (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects);
+                    (coverage is not null && CoverageIsPartial(coverage));
                 var meta = Meta.From(_manager.Health(), "exact", "semantic");
                 var skippedProjects = skippedCandidateProjects ?? new List<string>();
                 return Json.WithAuxiliaryListBudget(result, skippedProjects,
@@ -59,7 +58,9 @@ public sealed partial class NavigationTools
                         : (int?)null,
                     skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
                     partial = bounded ? true : (bool?)null,
-                    partialReason = bounded ? "candidate_cluster_bounded" : null,
+                    partialReason = bounded && coverage is not null
+                        ? CoveragePartialReason(coverage, skippedProjects.Count)
+                        : null,
                     truncated,
                     meta,
                 });
@@ -188,8 +189,7 @@ public sealed partial class NavigationTools
         var meta1 = Meta.From(_manager.Health(), "exact", "semantic");
         var skippedProjects = skippedCandidateProjects ?? new List<string>();
         bool coverageBounded = (skippedCandidateProjects?.Count ?? 0) > 0 ||
-            (coverage?.FailedProjects.Count ?? 0) > 0 ||
-            (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects);
+            (coverage is not null && CoverageIsPartial(coverage));
 
         // Parity with implementations: when compiler-exact finds no derived/implementing types — often
         // a type-twin identity mismatch across assemblies, or bounded coverage — surface the index
@@ -227,7 +227,9 @@ public sealed partial class NavigationTools
                         : (int?)null,
                     skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
                     partial = coverageBounded ? true : (bool?)null,
-                    partialReason = coverageBounded ? "candidate_cluster_bounded" : "no_semantic_derived",
+                    partialReason = coverageBounded && coverage is not null
+                        ? CoveragePartialReason(coverage, skippedProjects.Count)
+                        : "no_semantic_derived",
                     // Field (lhg): stale "generated twin" wording replaced — key on the causes we
                     // can actually still hit post-edge-recovery, with the remediation inline.
                     note = "Compiler-exact resolution found no derived/implementing types, but these name it in their base list (derivedOrImplementing is heuristic here). Implementer projects were likely not loaded into the semantic cluster (raise maxProjects, or scope with pathGlob), or the implementers bind the name to a declaration outside the workspace. baseTypes/interfaces remain exact. Verify with source_context.",
@@ -253,7 +255,9 @@ public sealed partial class NavigationTools
                 : (int?)null,
             skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
             partial = coverageBounded ? true : (bool?)null,
-            partialReason = coverageBounded ? "candidate_cluster_bounded" : null,
+            partialReason = coverageBounded && coverage is not null
+                ? CoveragePartialReason(coverage, skippedProjects.Count)
+                : null,
             timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
             truncated,
             meta = meta1,

@@ -43,10 +43,9 @@ public class Batch26AssemblyRefEdgeTests
             Assert.Contains("SoapA", dependents);
             Assert.Contains("SoapB", dependents);
 
-            // Name collisions resolve to the FIRST row, not to no-edge (field 0.7.2 regression:
-            // no-edge silently severed every consumer of a PAIRED declarer). The edge is a
-            // name-level fact — the semantic workspace loads and merges same-named rows by name
-            // anyway, so RefsDup -> Dup.Common is correct whichever row carries it.
+            // The legacy project_graph projection retains its field-0.7.2 compatibility behavior:
+            // name collisions produce a deterministic name-level edge instead of no edge. Exact
+            // semantic resolution uses the separately asserted variant facts below, not this row.
             Assert.Contains(q.ProjectGraph("RefsDup", 1, "downstream"),
                 e => e.ToProject.Equals("Dup.Common", StringComparison.OrdinalIgnoreCase));
 
@@ -54,6 +53,10 @@ public class Batch26AssemblyRefEdgeTests
             // no edge even though the simple name matches workspace project 'ET.Api.Generated'.
             Assert.DoesNotContain(q.ProjectGraph("RefsNuGet", 1, "downstream"),
                 e => e.ToProject.Equals("ET.Api.Generated", StringComparison.OrdinalIgnoreCase));
+            ProjectVariantRow refsNuGet = Assert.Single(q.AllProjectVariants(), variant =>
+                variant.ProjectName == "RefsNuGet");
+            Assert.DoesNotContain(q.VariantDependencies(refsNuGet.Id), variant =>
+                variant.AssemblyName == "ET.Api.Generated");
         }
         finally { Cleanup(root); }
     }
@@ -175,7 +178,7 @@ public class Batch26AssemblyRefEdgeTests
             // The dll REALLY exists in the common folder (multi-stage build output) — the
             // strongest failure shape: pre-fix, implementer compilations bind the interface to
             // the dll's metadata symbol and FindImplementations on the source symbol finds zero.
-            WriteFieldShapedWorkspace(root, emitDll: true);
+            WriteFieldShapedUniqueWorkspace(root, emitDll: true);
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var m = new IndexManager(root, dbPath);
@@ -259,6 +262,145 @@ public class Batch26AssemblyRefEdgeTests
         finally { Cleanup(root); }
     }
 
+    // Same-AssemblyName compatibility rows remain separate physical projects/variants. Each one
+    // retains its own Reference, HintPath, and package inputs; no hybrid compilation merges them.
+    [Fact]
+    public async Task SameAssemblyNameProjectsRetainEveryHintPathCompilationInput()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-assembly-collision-inputs").FullName;
+        try
+        {
+            WriteSameAssemblyNameInputWorkspace(root);
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath);
+            var (solution, coverage) = await workspace.EnsureLoadedAsync(
+                ["Field.SharedImplementations"], CancellationToken.None);
+
+            Assert.Equal(3, coverage.LoadedProjects);
+            List<Project> loadedProjects = solution.Projects
+                .Where(candidate => candidate.Name == "Field.SharedImplementations").ToList();
+            Assert.Equal(3, loadedProjects.Count);
+            string[] referencePaths = loadedProjects.SelectMany(project => project.MetadataReferences)
+                .OfType<PortableExecutableReference>().Select(reference => reference.FilePath)
+                .Where(path => path is not null).Select(path => path!).ToArray();
+            foreach (string suffix in new[] { "A", "B", "C" })
+            {
+                Assert.Contains(referencePaths, path => path.EndsWith(
+                    $"Field.Base.{suffix}.dll", StringComparison.OrdinalIgnoreCase));
+            }
+
+            Assert.Equal(3, referencePaths.Count(path => Path.GetFileName(path).Equals(
+                "Field.SharedDependency.dll", StringComparison.OrdinalIgnoreCase)));
+            Assert.Contains(referencePaths, path => Path.GetFileName(path).Equals(
+                "System.IO.Hashing.dll", StringComparison.OrdinalIgnoreCase));
+
+            foreach (string suffix in new[] { "A", "B", "C" })
+            {
+                Assert.Contains(loadedProjects, project => project.GetCompilationAsync().Result?
+                    .GetTypeByMetadataName($"Field.Base.{suffix}.Marker{suffix}") is not null);
+            }
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public async Task SameAssemblyNameProjectReferenceEditInvalidatesWarmCompilation()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-assembly-collision-warm").FullName;
+        try
+        {
+            WriteSameAssemblyNameInputWorkspace(root);
+            string warmDll = Path.Combine(root, "Common", "Field.Warm.dll");
+            EmitAssembly(warmDll, "Field.Warm",
+                "namespace Field.Warm { public sealed class AddedAfterWarmLoad { } }");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath);
+            var (firstSolution, _) = await workspace.EnsureLoadedAsync(
+                ["Field.SharedImplementations"], CancellationToken.None);
+            Project first = Assert.Single(firstSolution.Projects,
+                candidate => candidate.FilePath?.EndsWith("BImplementation.csproj",
+                    StringComparison.OrdinalIgnoreCase) == true);
+            Assert.DoesNotContain(first.MetadataReferences.OfType<PortableExecutableReference>(),
+                reference => reference.FilePath?.EndsWith("Field.Warm.dll",
+                    StringComparison.OrdinalIgnoreCase) == true);
+            int reparsedVariants = 0;
+            var addedMetadata = new List<string>();
+            workspace.PhysicalProjectParsedForTest = _ => reparsedVariants++;
+            workspace.MetadataReferenceAddedForTest = addedMetadata.Add;
+
+            string projectPath = Path.Combine(root, "BImplementation", "BImplementation.csproj");
+            string projectXml = File.ReadAllText(projectPath).Replace(
+                "</ItemGroup>",
+                """
+                    <Reference Include="Field.Warm">
+                      <HintPath>../Common/Field.Warm.dll</HintPath>
+                    </Reference>
+                  </ItemGroup>
+                """, StringComparison.Ordinal);
+            File.WriteAllText(projectPath, projectXml);
+            using (var store = new IndexStore(dbPath, createNew: false))
+            {
+                RefreshResult refresh = DeltaRefresher.Refresh(store, root,
+                    ["BImplementation/BImplementation.csproj"]);
+                Assert.True(refresh.ProjectsRefreshed);
+            }
+            using (var refreshed = new IndexQueries(dbPath))
+            {
+                ProjectVariantRow bVariant = Assert.Single(refreshed.VariantsForProjectPath(
+                    "BImplementation/BImplementation.csproj"));
+                VariantAssemblyReferenceInput warm = Assert.Single(
+                    refreshed.VariantAssemblyReferenceInputs(bVariant.Id),
+                    input => input.IncludeName == "Field.Warm");
+                Assert.Equal("Common/Field.Warm.dll", warm.HintPath);
+                Assert.False(warm.HasSelectedSourceVariant);
+            }
+
+            var (secondSolution, _) = await workspace.EnsureLoadedAsync(
+                ["Field.SharedImplementations"], CancellationToken.None);
+            Project second = Assert.Single(secondSolution.Projects,
+                candidate => candidate.FilePath?.EndsWith("BImplementation.csproj",
+                    StringComparison.OrdinalIgnoreCase) == true);
+            Assert.True(reparsedVariants > 0, "the changed project did not invalidate its warm variant");
+            Assert.Contains(addedMetadata, path => path.EndsWith("Field.Warm.dll",
+                StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(first.Id, second.Id);
+            Assert.True(second.MetadataReferences.OfType<PortableExecutableReference>().Any(
+                    reference => reference.FilePath?.EndsWith("Field.Warm.dll",
+                        StringComparison.OrdinalIgnoreCase) == true),
+                string.Join("\n", second.MetadataReferences.OfType<PortableExecutableReference>()
+                    .Select(reference => reference.FilePath)));
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public async Task SameAssemblyNamePhysicalRowLoadingObservesCancellation()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-assembly-collision-cancel").FullName;
+        try
+        {
+            WriteSameAssemblyNameInputWorkspace(root);
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath);
+            using var cts = new CancellationTokenSource();
+            int parsedRows = 0;
+            workspace.PhysicalProjectParsedForTest = _ =>
+            {
+                if (Interlocked.Increment(ref parsedRows) == 1) cts.Cancel();
+            };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                workspace.EnsureLoadedAsync(["Field.SharedImplementations"], cts.Token));
+            Assert.Equal(1, parsedRows);
+        }
+        finally { Cleanup(root); }
+    }
+
     // Review (HIGH): MUTUAL assembly refs (A <Reference> B.dll, B <Reference> A.dll — legal in
     // multi-stage builds) put both edges in the graph. Within one load pass only backward edges
     // wire, but a fingerprint RELOAD re-adds a project while its dependent is already loaded —
@@ -335,6 +477,123 @@ public class Batch26AssemblyRefEdgeTests
     }
 
     // ---------------------------------------------------------------- fixture
+
+    private static void WriteSameAssemblyNameInputWorkspace(string root)
+    {
+        string contracts = Path.Combine(root, "Contracts");
+        string common = Path.Combine(root, "Common");
+        Directory.CreateDirectory(contracts);
+        Directory.CreateDirectory(common);
+        File.WriteAllText(Path.Combine(contracts, "Contracts.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net9.0</TargetFramework>
+                <AssemblyName>Field.Contracts</AssemblyName>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(contracts, "IFieldContract.cs"),
+            "namespace Field.Contracts { public interface IFieldContract<T> { } }");
+        EmitAssembly(Path.Combine(common, "Field.Contracts.dll"), "Field.Contracts",
+            "namespace Field.Contracts { public interface IFieldContract<T> { } }");
+
+        foreach (string suffix in new[] { "A", "B", "C" })
+        {
+            string baseAssembly = $"Field.Base.{suffix}";
+            EmitAssembly(Path.Combine(common, $"{baseAssembly}.dll"), baseAssembly,
+                $"namespace Field.Base.{suffix} {{ public class Marker{suffix} {{ }} }}");
+
+            string duplicateDir = Path.Combine(common, suffix);
+            Directory.CreateDirectory(duplicateDir);
+            EmitAssembly(Path.Combine(duplicateDir, "Field.SharedDependency.dll"),
+                "Field.SharedDependency",
+                $"namespace Field.SharedDependency {{ public sealed class From{suffix} {{ }} }}");
+
+            string project = Path.Combine(root, $"{suffix}Implementation");
+            Directory.CreateDirectory(project);
+            string packageReference = suffix == "C"
+                ? "<PackageReference Include=\"System.IO.Hashing\" Version=\"10.0.9\" />"
+                : "";
+            File.WriteAllText(Path.Combine(project, $"{suffix}Implementation.csproj"),
+                $$"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net9.0</TargetFramework>
+                    <AssemblyName>Field.SharedImplementations</AssemblyName>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Reference Include="Field.Contracts">
+                      <HintPath>../Common/Field.Contracts.dll</HintPath>
+                    </Reference>
+                    <Reference Include="{{baseAssembly}}">
+                      <HintPath>../Common/{{baseAssembly}}.dll</HintPath>
+                    </Reference>
+                    <Reference Include="Field.SharedDependency">
+                      <HintPath>../Common/{{suffix}}/Field.SharedDependency.dll</HintPath>
+                    </Reference>
+                    {{packageReference}}
+                  </ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(project, $"Implementation{suffix}.cs"),
+                $$"""
+                namespace Field.Implementation{{suffix}}
+                {
+                    public abstract class Seed{{suffix}} : Field.Contracts.IFieldContract<object> { }
+                    public sealed class Implementation{{suffix}} :
+                        Field.Contracts.IFieldContract<Field.Base.{{suffix}}.Marker{{suffix}}> { }
+                }
+                """);
+        }
+    }
+
+    private static void WriteFieldShapedUniqueWorkspace(string root, bool emitDll)
+    {
+        string api = Path.Combine(root, "ApiGen");
+        Directory.CreateDirectory(api);
+        File.WriteAllText(Path.Combine(api, "ApiGen.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net9.0</TargetFramework><AssemblyName>ET.Api.Generated</AssemblyName></PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(api, "IPartnerContract.cs"),
+            "namespace ET.Api { public interface IPartnerContract { void Execute(); } }");
+        foreach ((string project, string implementation) in new[] { ("SoapA", "ImplA"), ("SoapB", "ImplB") })
+        {
+            string directory = Path.Combine(root, project);
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, $"{project}.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                  <ItemGroup><Reference Include="ET.Api.Generated"><HintPath>../Common/ET.Api.Generated.dll</HintPath></Reference></ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(directory, $"{implementation}.cs"),
+                $"namespace {project} {{ public class {implementation} : ET.Api.IPartnerContract {{ public void Execute() {{ }} }} }}");
+        }
+        File.WriteAllText(Path.Combine(root, "SoapB", "UseContract.cs"),
+            "namespace SoapB { public class UseContract { public void Run(ET.Api.IPartnerContract c) => c.Execute(); } }");
+        if (!emitDll) return;
+        string common = Path.Combine(root, "Common");
+        Directory.CreateDirectory(common);
+        var compilation = CSharpCompilation.Create("ET.Api.Generated",
+            [CSharpSyntaxTree.ParseText("namespace ET.Api { public interface IPartnerContract { void Execute(); } }")],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        Assert.True(compilation.Emit(Path.Combine(common, "ET.Api.Generated.dll")).Success);
+    }
+
+    private static void EmitAssembly(string path, string assemblyName, string source)
+    {
+        var compilation = CSharpCompilation.Create(
+            assemblyName,
+            [CSharpSyntaxTree.ParseText(source)],
+            [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var emit = compilation.Emit(path);
+        Assert.True(emit.Success, string.Join("; ", emit.Diagnostics.Take(3)));
+    }
 
     private static void WriteFieldShapedWorkspace(string root, bool emitDll)
     {

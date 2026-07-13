@@ -383,7 +383,7 @@ public class Batch46SemanticBudgetTests
 
             Assert.Equal("exact", response.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.Single(response.GetProperty("implementations").EnumerateArray());
-            Assert.False(response.TryGetProperty("partial", out _));
+            Assert.False(response.TryGetProperty("partial", out _), response.ToString());
             Assert.False(response.TryGetProperty("skippedCandidateProjects", out _));
             Assert.EndsWith("Impl000", response.GetProperty("likelyImplementation").GetString(),
                 StringComparison.Ordinal);
