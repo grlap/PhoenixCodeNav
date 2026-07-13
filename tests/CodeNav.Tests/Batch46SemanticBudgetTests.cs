@@ -194,8 +194,10 @@ public class Batch46SemanticBudgetTests
             {
                 using var semantic = new SemanticService(manager);
                 var tools = new NavigationTools(manager, semantic);
-                using JsonDocument document = JsonDocument.Parse(invoke(tools));
-                return document.RootElement.Clone();
+                // n7ly: the deliberate budget-partial answers at EXACT confidence; transient
+                // degrades do not — retry rides them out (a fresh cold cluster per Invoke made
+                // this the suite's most cold-load-exposed site, red at 1.17s under load).
+                return SemanticRetry.ParseExactWithRetry(() => invoke(tools));
             }
 
             static void AssertPartial(JsonElement response)

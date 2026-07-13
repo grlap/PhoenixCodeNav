@@ -39,6 +39,7 @@ public sealed class IndexStore : IDisposable
         {
             if (createNew) AfterOpenBeforeCreateSchemaForTest?.Invoke(_dbPath);
             if (createNew) CreateSchema();
+            InitializeSymbolIdCounter();
         }
         catch
         {
@@ -50,6 +51,25 @@ public sealed class IndexStore : IDisposable
     }
 
     public string DbPath => _dbPath;
+
+    // ---------------------------------------------------------------- lf4p writer timing
+    // Plain (unsynchronized) tick counters: every mutation happens on the single writer
+    // thread that owns _write — the same invariant the store itself already relies on.
+    // Read via WriterTimingsMs after the build completes.
+    private long _tFileRows, _tContentRows, _tFtsRows, _tSymbolRows,
+                 _tFtsOptimize, _tAnalyze, _tCheckpoint;
+
+    /// <summary>lf4p: where the single writer's time went, in milliseconds — the measurement
+    /// that decides whether FTS tokenization (the second-writer split candidate) or plain
+    /// b-tree work dominates the build's critical path. Statement-scoped stopwatches cost
+    /// tens of nanoseconds against millisecond-scale SQLite work.</summary>
+    public (double FileRows, double ContentRows, double FtsRows, double SymbolRows,
+            double FtsOptimize, double Analyze, double Checkpoint) WriterTimingsMs =>
+        (ToMs(_tFileRows), ToMs(_tContentRows), ToMs(_tFtsRows), ToMs(_tSymbolRows),
+         ToMs(_tFtsOptimize), ToMs(_tAnalyze), ToMs(_tCheckpoint));
+
+    private static double ToMs(long ticks) =>
+        ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
     /// <summary>lf4p (owner-directed config pass): cold builds keep WAL semantics (mid-build
     /// followers may probe/read concurrently — MEMORY journal would turn those reads into BUSY
@@ -200,89 +220,205 @@ public sealed class IndexStore : IDisposable
 
     public SqliteTransaction BeginTransaction() => _write.BeginTransaction();
 
+    private SqliteCommand? _fileInsertCmd; // lf4p: cached like the symbol inserts
+
     public long InsertFile(SqliteTransaction tx, string path, long size, long mtimeTicks, ulong hash,
         string lang, int lineCount, bool isGenerated, bool hasTestAttrs)
     {
-        using var cmd = _write.CreateCommand();
-        cmd.Transaction = tx;
-        cmd.CommandText = """
-            INSERT INTO files(path, size, mtime_ticks, hash, lang, line_count, is_generated, has_test_attrs)
-            VALUES($p, $s, $m, $h, $l, $lc, $g, $t)
-            RETURNING id;
-            """;
-        cmd.Parameters.AddWithValue("$p", path);
-        cmd.Parameters.AddWithValue("$s", size);
-        cmd.Parameters.AddWithValue("$m", mtimeTicks);
-        cmd.Parameters.AddWithValue("$h", unchecked((long)hash));
-        cmd.Parameters.AddWithValue("$l", lang);
-        cmd.Parameters.AddWithValue("$lc", lineCount);
-        cmd.Parameters.AddWithValue("$g", isGenerated ? 1 : 0);
-        cmd.Parameters.AddWithValue("$t", hasTestAttrs ? 1 : 0);
-        return (long)cmd.ExecuteScalar()!;
+        // lf4p: one store-cached prepared command instead of CreateCommand + 8 AddWithValue +
+        // re-prepare per file (17k executions per roslyn-scale build). RETURNING stays: unlike
+        // symbols, the caller consumes the id immediately and file rows are one-per-call.
+        // Timer covers the WHOLE method now — the execute-only scope it had first under-
+        // reported this bucket relative to the others.
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (_fileInsertCmd is null)
+        {
+            _fileInsertCmd = _write.CreateCommand();
+            _fileInsertCmd.CommandText = """
+                INSERT INTO files(path, size, mtime_ticks, hash, lang, line_count, is_generated, has_test_attrs)
+                VALUES($p, $s, $m, $h, $l, $lc, $g, $t)
+                RETURNING id;
+                """;
+            _fileInsertCmd.Parameters.Add("$p", SqliteType.Text);
+            _fileInsertCmd.Parameters.Add("$s", SqliteType.Integer);
+            _fileInsertCmd.Parameters.Add("$m", SqliteType.Integer);
+            _fileInsertCmd.Parameters.Add("$h", SqliteType.Integer);
+            _fileInsertCmd.Parameters.Add("$l", SqliteType.Text);
+            _fileInsertCmd.Parameters.Add("$lc", SqliteType.Integer);
+            _fileInsertCmd.Parameters.Add("$g", SqliteType.Integer);
+            _fileInsertCmd.Parameters.Add("$t", SqliteType.Integer);
+        }
+        _fileInsertCmd.Transaction = tx;
+        _fileInsertCmd.Parameters[0].Value = path;
+        _fileInsertCmd.Parameters[1].Value = size;
+        _fileInsertCmd.Parameters[2].Value = mtimeTicks;
+        _fileInsertCmd.Parameters[3].Value = unchecked((long)hash);
+        _fileInsertCmd.Parameters[4].Value = lang;
+        _fileInsertCmd.Parameters[5].Value = lineCount;
+        _fileInsertCmd.Parameters[6].Value = isGenerated ? 1 : 0;
+        _fileInsertCmd.Parameters[7].Value = hasTestAttrs ? 1 : 0;
+        long id = (long)_fileInsertCmd.ExecuteScalar()!;
+        _tFileRows += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+        return id;
     }
 
     public void InsertContent(SqliteTransaction tx, long fileId, string content)
     {
-        using var cmd = _write.CreateCommand();
-        cmd.Transaction = tx;
-        cmd.CommandText = "INSERT INTO file_contents(file_id, content) VALUES($id, $c);" +
-                          "INSERT INTO fts_content(rowid, content) VALUES($id, $c);";
-        cmd.Parameters.AddWithValue("$id", fileId);
-        cmd.Parameters.AddWithValue("$c", content);
-        cmd.ExecuteNonQuery();
+        // lf4p: the raw row and the FTS row were one batched command; they are executed (and
+        // timed) SEPARATELY now because "is the writer FTS-tokenization-bound?" is exactly the
+        // second-writer-split question. The extra command round-trip is µs-scale against the
+        // ms-scale tokenization it isolates.
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        using (var raw = _write.CreateCommand())
+        {
+            raw.Transaction = tx;
+            raw.CommandText = "INSERT INTO file_contents(file_id, content) VALUES($id, $c);";
+            raw.Parameters.AddWithValue("$id", fileId);
+            raw.Parameters.AddWithValue("$c", content);
+            raw.ExecuteNonQuery();
+        }
+        long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
+        _tContentRows += t1 - t0;
+        using (var fts = _write.CreateCommand())
+        {
+            fts.Transaction = tx;
+            fts.CommandText = "INSERT INTO fts_content(rowid, content) VALUES($id, $c);";
+            fts.Parameters.AddWithValue("$id", fileId);
+            fts.Parameters.AddWithValue("$c", content);
+            fts.ExecuteNonQuery();
+        }
+        _tFtsRows += System.Diagnostics.Stopwatch.GetTimestamp() - t1;
+    }
+
+    // ---------------------------------------------------------------- lf4p symbol batching
+    // The RETURNING-per-row predecessor cost ~43µs/symbol in per-execute round-trips
+    // (measured: 15.2s of a 26.9s roslyn cold build for 354k symbols — 61% of the writer).
+    // Two changes remove it:
+    //   1. ids are CLIENT-ASSIGNED — the single-writer invariant makes "read committed MAX(id)
+    //      once AT STORE OPEN, hand out monotonically" safe: rollbacks and deletes leave gaps,
+    //      never collisions (see InitializeSymbolIdCounter for why open-time/committed-state
+    //      matters). Parent wiring is resolved BEFORE binding from the assigned ids, so
+    //      RETURNING has nothing left to do.
+    //   2. rows go through TWO store-cached prepared commands — a 32-row chunk and a 1-row
+    //      remainder — because the average file carries ~20 symbols and a per-call variable-
+    //      size statement would pay a fresh prepare per FILE, eating the win.
+    // lf4p A/B (roslyn, 354k symbols): 32 → 9.0-9.4s; 128 → 11.0s. 128 lost because this
+    // constant is ALSO the eligibility threshold — files with 32..127 symbols fell back to
+    // the single-row path entirely. 32 chunks the fat generated files AND keeps the band
+    // eligible; a size cascade could recover a little more, parked until numbers demand it.
+    private const int SymbolChunkRows = 32;
+    private const int SymbolColumns = 17;
+    private long _nextSymbolId = -1;
+    private SqliteCommand? _symbolChunkCmd;
+    private SqliteCommand? _symbolSingleCmd;
+
+    /// <summary>Review (lf4p): runs at store OPEN, outside any transaction — the first version
+    /// read MAX(id) lazily UNDER the caller's tx, which observes that tx's own uncommitted
+    /// DELETEs (delta refresh deletes a file's symbols then reinserts in one tx). A rollback
+    /// then restored the deleted rows while the counter stayed BELOW the committed max — the
+    /// next refresh collided on UNIQUE symbols.id and its whole batch was dropped. Reading
+    /// committed state at open makes rollbacks strictly gap-producing, never colliding.</summary>
+    private void InitializeSymbolIdCounter()
+    {
+        using var q = _write.CreateCommand();
+        q.CommandText = "SELECT COALESCE(MAX(id), 0) + 1 FROM symbols;";
+        _nextSymbolId = (long)q.ExecuteScalar()!;
+    }
+
+    private long ReserveSymbolIds(int count)
+    {
+        long first = _nextSymbolId;
+        _nextSymbolId += count;
+        return first;
+    }
+
+    private static readonly string[] SymbolCols =
+        { "i", "f", "p", "k", "n", "ns", "c", "sig", "acc", "sl", "el", "part", "ar", "attr", "mods", "accs", "decl" };
+
+    private SqliteCommand BuildSymbolInsert(int rowsPerStatement)
+    {
+        var sb = new System.Text.StringBuilder(
+            "INSERT INTO symbols(id, file_id, parent_id, kind, name, ns, container, signature, " +
+            "accessibility, start_line, end_line, is_partial, arity, attr_markers, modifiers, accessors, declaration_key) VALUES ");
+        var cmd = _write.CreateCommand();
+        for (int r = 0; r < rowsPerStatement; r++)
+        {
+            sb.Append(r > 0 ? ",(" : "(");
+            for (int c = 0; c < SymbolColumns; c++)
+            {
+                if (c > 0) sb.Append(',');
+                sb.Append('$').Append(SymbolCols[c]).Append(r);
+                cmd.Parameters.Add($"${SymbolCols[c]}{r}",
+                    c is 0 or 1 or 2 or 9 or 10 or 11 or 12 ? SqliteType.Integer : SqliteType.Text);
+            }
+            sb.Append(')');
+        }
+        cmd.CommandText = sb.ToString();
+        return cmd;
+    }
+
+    private static void BindSymbolRow(SqliteCommand cmd, int slot, long id, long fileId,
+        SymbolRow row, long[] ordinalToId)
+    {
+        int b = slot * SymbolColumns;
+        cmd.Parameters[b + 0].Value = id;
+        cmd.Parameters[b + 1].Value = fileId;
+        cmd.Parameters[b + 2].Value = row.ParentOrdinal >= 0 ? ordinalToId[row.ParentOrdinal] : DBNull.Value;
+        cmd.Parameters[b + 3].Value = row.Kind;
+        cmd.Parameters[b + 4].Value = row.Name;
+        cmd.Parameters[b + 5].Value = (object?)row.Namespace ?? DBNull.Value;
+        cmd.Parameters[b + 6].Value = (object?)row.Container ?? DBNull.Value;
+        cmd.Parameters[b + 7].Value = row.Signature;
+        cmd.Parameters[b + 8].Value = row.Accessibility;
+        cmd.Parameters[b + 9].Value = row.StartLine;
+        cmd.Parameters[b + 10].Value = row.EndLine;
+        cmd.Parameters[b + 11].Value = row.IsPartial ? 1 : 0;
+        cmd.Parameters[b + 12].Value = row.Arity;
+        cmd.Parameters[b + 13].Value = (object?)row.AttrMarkers ?? DBNull.Value;
+        cmd.Parameters[b + 14].Value = (object?)row.Modifiers ?? DBNull.Value;
+        cmd.Parameters[b + 15].Value = (object?)row.Accessors ?? DBNull.Value;
+        cmd.Parameters[b + 16].Value = row.DeclarationKey ?? "";
     }
 
     public void InsertSymbols(SqliteTransaction tx, long fileId, List<SymbolRow> rows)
     {
         if (rows.Count == 0) return;
-        using var cmd = _write.CreateCommand();
-        cmd.Transaction = tx;
-        // RETURNING makes this ONE statement per row (was INSERT + SELECT last_insert_rowid() —
-        // two prepared-statement steps per symbol, ~1.14M steps on a 570k-symbol build).
-        cmd.CommandText = """
-            INSERT INTO symbols(file_id, parent_id, kind, name, ns, container, signature,
-                                accessibility, start_line, end_line, is_partial, arity, attr_markers, modifiers, accessors, declaration_key)
-            VALUES($f, $p, $k, $n, $ns, $c, $sig, $acc, $sl, $el, $part, $ar, $attr, $mods, $accs, $decl)
-            RETURNING id;
-            """;
-        var pF = cmd.Parameters.Add("$f", SqliteType.Integer);
-        var pP = cmd.Parameters.Add("$p", SqliteType.Integer);
-        var pK = cmd.Parameters.Add("$k", SqliteType.Text);
-        var pN = cmd.Parameters.Add("$n", SqliteType.Text);
-        var pNs = cmd.Parameters.Add("$ns", SqliteType.Text);
-        var pC = cmd.Parameters.Add("$c", SqliteType.Text);
-        var pSig = cmd.Parameters.Add("$sig", SqliteType.Text);
-        var pAcc = cmd.Parameters.Add("$acc", SqliteType.Text);
-        var pSl = cmd.Parameters.Add("$sl", SqliteType.Integer);
-        var pEl = cmd.Parameters.Add("$el", SqliteType.Integer);
-        var pPart = cmd.Parameters.Add("$part", SqliteType.Integer);
-        var pAr = cmd.Parameters.Add("$ar", SqliteType.Integer);
-        var pAttr = cmd.Parameters.Add("$attr", SqliteType.Text);
-        var pMods = cmd.Parameters.Add("$mods", SqliteType.Text);
-        var pAccs = cmd.Parameters.Add("$accs", SqliteType.Text);
-        var pDecl = cmd.Parameters.Add("$decl", SqliteType.Text);
+        long tSym0 = System.Diagnostics.Stopwatch.GetTimestamp(); // lf4p
+        long firstId = ReserveSymbolIds(rows.Count);
 
+        // Ordinals are dense 0..N-1 (the array below is exactly the old code's shape); the
+        // identity mapping id = firstId + ordinal resolves every parent before any insert.
         var ordinalToId = new long[rows.Count];
-        foreach (var row in rows)
+        for (int o = 0; o < ordinalToId.Length; o++) ordinalToId[o] = firstId + o;
+
+        int done = 0;
+        if (rows.Count >= SymbolChunkRows)
         {
-            pF.Value = fileId;
-            pP.Value = row.ParentOrdinal >= 0 ? ordinalToId[row.ParentOrdinal] : DBNull.Value;
-            pK.Value = row.Kind;
-            pN.Value = row.Name;
-            pNs.Value = (object?)row.Namespace ?? DBNull.Value;
-            pC.Value = (object?)row.Container ?? DBNull.Value;
-            pSig.Value = row.Signature;
-            pAcc.Value = row.Accessibility;
-            pSl.Value = row.StartLine;
-            pEl.Value = row.EndLine;
-            pPart.Value = row.IsPartial ? 1 : 0;
-            pAr.Value = row.Arity;
-            pAttr.Value = (object?)row.AttrMarkers ?? DBNull.Value;
-            pMods.Value = (object?)row.Modifiers ?? DBNull.Value;
-            pAccs.Value = (object?)row.Accessors ?? DBNull.Value;
-            pDecl.Value = row.DeclarationKey ?? "";
-            ordinalToId[row.OrdinalInFile] = (long)cmd.ExecuteScalar()!;
+            _symbolChunkCmd ??= BuildSymbolInsert(SymbolChunkRows);
+            _symbolChunkCmd.Transaction = tx;
+            while (rows.Count - done >= SymbolChunkRows)
+            {
+                for (int r = 0; r < SymbolChunkRows; r++)
+                {
+                    var row = rows[done + r];
+                    BindSymbolRow(_symbolChunkCmd, r, ordinalToId[row.OrdinalInFile], fileId, row, ordinalToId);
+                }
+                _symbolChunkCmd.ExecuteNonQuery();
+                done += SymbolChunkRows;
+            }
         }
+        if (done < rows.Count)
+        {
+            _symbolSingleCmd ??= BuildSymbolInsert(1);
+            _symbolSingleCmd.Transaction = tx;
+            for (; done < rows.Count; done++)
+            {
+                var row = rows[done];
+                BindSymbolRow(_symbolSingleCmd, 0, ordinalToId[row.OrdinalInFile], fileId, row, ordinalToId);
+                _symbolSingleCmd.ExecuteNonQuery();
+            }
+        }
+        _tSymbolRows += System.Diagnostics.Stopwatch.GetTimestamp() - tSym0; // lf4p
     }
 
     public long InsertProject(SqliteTransaction tx, Discovery.ParsedProject p)
@@ -574,8 +710,13 @@ public sealed class IndexStore : IDisposable
 
     public void Optimize()
     {
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp(); // lf4p
         Exec(_write, "INSERT INTO fts_content(fts_content) VALUES('optimize');");
+        long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
+        _tFtsOptimize += t1 - t0;
         Exec(_write, "ANALYZE; PRAGMA optimize;");
+        long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
+        _tAnalyze += t2 - t1;
         // lf4p: cold builds run with wal_autocheckpoint=0 (no mid-build checkpoint stalls) —
         // flush the accumulated WAL into the main file here so (a) the dbBytes measured after
         // the build describe the REAL database, and (b) the live open that follows is not
@@ -584,6 +725,7 @@ public sealed class IndexStore : IDisposable
         // but the pragma must not be relied on to die with it. Harmless no-op for MEMORY-
         // journal staging databases and for live connections already at the default.
         Exec(_write, "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA wal_autocheckpoint=1000;");
+        _tCheckpoint += System.Diagnostics.Stopwatch.GetTimestamp() - t2; // lf4p
     }
 
     /// <summary>Flushes committed WAL content into the main database before an anchored atomic
@@ -612,6 +754,9 @@ public sealed class IndexStore : IDisposable
 
     public void Dispose()
     {
+        _symbolChunkCmd?.Dispose();  // lf4p: cached prepared inserts die with their connection
+        _symbolSingleCmd?.Dispose();
+        _fileInsertCmd?.Dispose();
         _write.Dispose();
     }
 }

@@ -310,6 +310,7 @@ public static class IndexBuilder
         });
 
         long symbolCount = 0, lineCount = 0;
+        long commitTicks = 0; // lf4p: the writer's commit share, reported with the store's split
         int csCount = 0;
         {
             var reader = channel.Reader;
@@ -330,9 +331,11 @@ public static class IndexBuilder
                     csCount++;
 
                     liveProgress?.AddFileIndexed();
-                    if (++inTx >= 400)
+                    if (++inTx >= 2000) // lf4p A/B: 400 → commits cost 2.9s/roslyn; WAL commit amortizes with width
                     {
+                        long tc0 = System.Diagnostics.Stopwatch.GetTimestamp(); // lf4p
                         tx.Commit();
+                        commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tc0;
                         tx.Dispose();
                         tx = store.BeginTransaction();
                         inTx = 0;
@@ -349,7 +352,9 @@ public static class IndexBuilder
                     }
                 }
             }
+            long tcF = System.Diagnostics.Stopwatch.GetTimestamp(); // lf4p
             tx.Commit();
+            commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tcF;
             tx.Dispose();
         }
         producer.GetAwaiter().GetResult();
@@ -417,6 +422,20 @@ public static class IndexBuilder
         store.SetMeta("unresolved_project_refs", unresolvedRefs.ToString());
         progress?.Invoke("Optimizing index ...");
         store.Optimize();
+
+        // lf4p: the per-statement split of the single writer's time — the measurement that
+        // decides whether FTS tokenization (second-writer-split candidate) or b-tree work
+        // dominates. Log-only surface: no API change, Bench and server logs both capture it.
+        var wt = store.WriterTimingsMs;
+        double commitMs = commitTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        double writerTotal = wt.FileRows + wt.ContentRows + wt.FtsRows + wt.SymbolRows
+                             + wt.FtsOptimize + wt.Analyze + wt.Checkpoint + commitMs;
+        progress?.Invoke(
+            $"Writer split (lf4p): fts {wt.FtsRows / 1000:F1}s, content {wt.ContentRows / 1000:F1}s, " +
+            $"symbols {wt.SymbolRows / 1000:F1}s, files {wt.FileRows / 1000:F1}s, " +
+            $"commits {commitMs / 1000:F1}s, fts-optimize {wt.FtsOptimize / 1000:F1}s, " +
+            $"analyze {wt.Analyze / 1000:F1}s, checkpoint {wt.Checkpoint / 1000:F1}s " +
+            $"— writer statements total {writerTotal / 1000:F1}s");
 
         var parseTime = sw.Elapsed;
         long dbBytes = new FileInfo(dbPath).Length;
