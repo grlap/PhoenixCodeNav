@@ -24,7 +24,8 @@ public sealed class IndexStore : IDisposable
             // Sidecars cleaned UNCONDITIONALLY (review F3): a crash between a main-db delete and
             // its sidecar deletes leaves an orphaned -wal that a fresh build would otherwise
             // replay stale content from. Main-file check stays only for the main delete.
-            SqliteConnection.ClearAllPools();
+            // kae: scoped — only THIS database's pooled reader handles can block these deletes.
+            IndexQueries.ClearPoolsFor(dbPath);
             foreach (var sidecar in new[]
                      { dbPath + "-wal", dbPath + "-shm", dbPath + "-journal" })
             {
@@ -33,7 +34,7 @@ public sealed class IndexStore : IDisposable
             if (File.Exists(dbPath)) File.Delete(dbPath);
         }
 
-        _write = Open();
+        _write = Open(coldBuild: createNew);
         try
         {
             if (createNew) AfterOpenBeforeCreateSchemaForTest?.Invoke(_dbPath);
@@ -50,7 +51,15 @@ public sealed class IndexStore : IDisposable
 
     public string DbPath => _dbPath;
 
-    private SqliteConnection Open()
+    /// <summary>lf4p (owner-directed config pass): cold builds keep WAL semantics (mid-build
+    /// followers may probe/read concurrently — MEMORY journal would turn those reads into BUSY
+    /// failures) but get a GB-class page-cache cap and wal_autocheckpoint=0, so b-tree/FTS pages
+    /// churn in RAM and no mid-build checkpoint stalls the single writer; Optimize() flushes the
+    /// WAL and restores the steady-state autocheckpoint before the index is published. Staging
+    /// databases are private by construction and stay on MEMORY/OFF (now with the same big
+    /// cache). Live (createNew:false) connections are unchanged. cache_size is a lazily-filled
+    /// per-connection LIMIT, not an allocation.</summary>
+    private SqliteConnection Open(bool coldBuild)
     {
         var connectionString = new SqliteConnectionStringBuilder
         {
@@ -65,11 +74,14 @@ public sealed class IndexStore : IDisposable
         {
             conn.Open();
             // First op that touches the header — throws on a corrupt/non-SQLite file. Dispose the
-            // connection on failure so its OS handle is released (ClearAllPools can then free it,
-            // letting a stale/corrupt-index rebuild delete the file rather than fail on a lock).
+            // connection on failure so its OS handle is released (this connection is unpooled, so
+            // disposal alone frees the handle, letting a stale/corrupt-index rebuild delete the
+            // file rather than fail on a lock; kae: pool clearing is scoped and reader-only now).
             Exec(conn, _privateStaging
-                ? "PRAGMA journal_mode=MEMORY; PRAGMA synchronous=OFF; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-65536;"
-                : "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-65536;");
+                ? "PRAGMA journal_mode=MEMORY; PRAGMA synchronous=OFF; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-1048576;"
+                : coldBuild
+                    ? "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-1048576; PRAGMA wal_autocheckpoint=0;"
+                    : "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-65536;");
             return conn;
         }
         catch
@@ -80,7 +92,7 @@ public sealed class IndexStore : IDisposable
     }
 
     /// <summary>Opens a read connection (SQLite WAL supports many readers alongside the writer).</summary>
-    public SqliteConnection OpenReader() => Open();
+    public SqliteConnection OpenReader() => Open(coldBuild: false);
 
     private void CreateSchema()
     {
@@ -564,6 +576,14 @@ public sealed class IndexStore : IDisposable
     {
         Exec(_write, "INSERT INTO fts_content(fts_content) VALUES('optimize');");
         Exec(_write, "ANALYZE; PRAGMA optimize;");
+        // lf4p: cold builds run with wal_autocheckpoint=0 (no mid-build checkpoint stalls) —
+        // flush the accumulated WAL into the main file here so (a) the dbBytes measured after
+        // the build describe the REAL database, and (b) the live open that follows is not
+        // handed a build-sized -wal to replay. The autocheckpoint restore is belt-and-braces:
+        // this cold-build connection does not outlive the build (the manager reopens fresh),
+        // but the pragma must not be relied on to die with it. Harmless no-op for MEMORY-
+        // journal staging databases and for live connections already at the default.
+        Exec(_write, "PRAGMA wal_checkpoint(TRUNCATE); PRAGMA wal_autocheckpoint=1000;");
     }
 
     /// <summary>Flushes committed WAL content into the main database before an anchored atomic

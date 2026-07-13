@@ -994,7 +994,7 @@ public sealed class Batch45IndexFollowerTests
 
     private static void Cleanup(string root)
     {
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(root);
         for (int attempt = 0; attempt < 20; attempt++)
         {
             if (!Directory.Exists(root)) return;

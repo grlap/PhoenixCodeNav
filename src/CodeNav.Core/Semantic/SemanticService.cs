@@ -328,7 +328,8 @@ public sealed partial class SemanticService : IDisposable
     // ---------------------------------------------------------------- implementations
 
     public async Task<(SemanticImplementations? Result, string? FailReason)> ImplementationsAsync(
-        string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs)
+        string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs,
+        int? arityHint = null)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         bool clusterLoadInProgress = true;
@@ -340,7 +341,8 @@ public sealed partial class SemanticService : IDisposable
             if (indexSnapshot is null) return (null, "index_snapshot_unavailable");
 
             var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
-                path, line, column, nameHint, cts.Token, indexSnapshot.Queries).ConfigureAwait(false);
+                path, line, column, nameHint, cts.Token, indexSnapshot.Queries, arityHint)
+                .ConfigureAwait(false);
             clusterLoadInProgress = false;
             if (symbolA is null || owningProject is null) return (null, "symbol_not_resolved");
 
@@ -355,7 +357,7 @@ public sealed partial class SemanticService : IDisposable
             clusterLoadInProgress = true;
             var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
-                indexSnapshot.Queries, cts.Token, implementerSeeds).ConfigureAwait(false);
+                indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint).ConfigureAwait(false);
             clusterLoadInProgress = false;
             clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find
             if (symbol is null) return (null, "symbol_not_resolved_in_scope");
@@ -425,7 +427,7 @@ public sealed partial class SemanticService : IDisposable
     /// </summary>
     private async Task<(Solution? Solution, ISymbol? Symbol, string? OwningProject)> LoadOwnerAndResolveAsync(
         string path, int line, int? column, string? nameHint, CancellationToken ct,
-        IndexQueries? snapshotQueries = null)
+        IndexQueries? snapshotQueries = null, int? arityHint = null)
     {
         string relPath = WorkspacePaths.Normalize(path);
         string owningProject;
@@ -447,7 +449,8 @@ public sealed partial class SemanticService : IDisposable
         }
 
         var (solution, _) = await Workspace.EnsureLoadedAsync(closure, ct).ConfigureAwait(false);
-        var symbol = await ResolveInSolutionAsync(solution, owningProject, relPath, line, column, nameHint, ct)
+        var symbol = await ResolveInSolutionAsync(
+                solution, owningProject, relPath, line, column, nameHint, ct, arityHint)
             .ConfigureAwait(false);
         return (solution, symbol, owningProject);
     }
@@ -458,7 +461,8 @@ public sealed partial class SemanticService : IDisposable
     /// the workspace, so the returned symbol is valid for SymbolFinder on the same snapshot.
     /// </summary>
     private async Task<ISymbol?> ResolveInSolutionAsync(
-        Solution solution, string owningProject, string relPath, int line, int? column, string? nameHint, CancellationToken ct)
+        Solution solution, string owningProject, string relPath, int line, int? column,
+        string? nameHint, CancellationToken ct, int? arityHint = null)
     {
         var project = solution.Projects.FirstOrDefault(p =>
             string.Equals(p.Name, owningProject, StringComparison.OrdinalIgnoreCase));
@@ -473,18 +477,36 @@ public sealed partial class SemanticService : IDisposable
 
         var text = await document.GetTextAsync(ct).ConfigureAwait(false);
         if (line < 1 || line > text.Lines.Count) return null;
-        int position = ComputePosition(text.Lines[line - 1], column, nameHint);
-
         var root = await document.GetSyntaxRootAsync(ct).ConfigureAwait(false);
         var model = await document.GetSemanticModelAsync(ct).ConfigureAwait(false);
         if (root is null || model is null) return null;
+
+        TextLine targetLine = text.Lines[line - 1];
+        if (nameHint is { Length: > 0 } && arityHint is { } exactArity)
+        {
+            ISymbol? declaration = root.DescendantNodes(targetLine.Span)
+                .Select(node => model.GetDeclaredSymbol(node, ct))
+                .Where(symbol => symbol is not null &&
+                    symbol.Name.Equals(nameHint, StringComparison.Ordinal) &&
+                    ArityOf(symbol) == exactArity)
+                .OrderBy(symbol => symbol!.Locations
+                    .Where(location => location.IsInSource)
+                    .Select(location => location.SourceSpan.Start)
+                    .DefaultIfEmpty(int.MaxValue)
+                    .Min())
+                .FirstOrDefault();
+            if (declaration is not null) return declaration;
+        }
+
+        int position = ComputePosition(targetLine, column, nameHint);
 
         var token = root.FindToken(position);
         for (SyntaxNode? node = token.Parent; node is not null; node = node.Parent)
         {
             var declared = model.GetDeclaredSymbol(node, ct);
             if (declared is not null &&
-                (nameHint is null || declared.Name.Equals(nameHint, StringComparison.Ordinal)))
+                (nameHint is null || declared.Name.Equals(nameHint, StringComparison.Ordinal)) &&
+                (arityHint is null || ArityOf(declared) == arityHint.Value))
             {
                 // With a name hint we require an exact name match: the old `token.ValueText ==
                 // declared.Name` fallback accepted a sibling declarator on a multi-variable line
@@ -497,8 +519,21 @@ public sealed partial class SemanticService : IDisposable
             }
         }
 
-        return await SymbolFinder.FindSymbolAtPositionAsync(document, position, ct).ConfigureAwait(false);
+        ISymbol? positioned = await SymbolFinder.FindSymbolAtPositionAsync(document, position, ct)
+            .ConfigureAwait(false);
+        return positioned is not null &&
+               (nameHint is null || positioned.Name.Equals(nameHint, StringComparison.Ordinal)) &&
+               (arityHint is null || ArityOf(positioned) == arityHint.Value)
+            ? positioned
+            : null;
     }
+
+    private static int ArityOf(ISymbol symbol) => symbol switch
+    {
+        INamedTypeSymbol type => type.Arity,
+        IMethodSymbol method => method.Arity,
+        _ => 0,
+    };
 
     private static int ComputePosition(TextLine textLine, int? column, string? nameHint)
     {
@@ -548,7 +583,7 @@ public sealed partial class SemanticService : IDisposable
     private async Task<(Solution Solution, ISymbol? Symbol, ClusterCoverage Coverage, List<string> Skipped, List<string> OutOfGraph)> LoadScanSetAndResolveAsync(
         string symbolName, string owningProject, string path, int line, int? column, string? nameHint,
         int maxProjects, IndexQueries q, CancellationToken ct,
-        IReadOnlyList<string>? prioritySeeds = null)
+        IReadOnlyList<string>? prioritySeeds = null, int? arityHint = null)
     {
         List<string> skipped;
         var outOfGraph = new List<string>();
@@ -613,7 +648,8 @@ public sealed partial class SemanticService : IDisposable
             .EnsureLoadedAsync(scanSet, ct, ensureReferenceTo: new[] { owningProject })
             .ConfigureAwait(false);
         var symbol = await ResolveInSolutionAsync(
-            solution, owningProject, WorkspacePaths.Normalize(path), line, column, nameHint, ct)
+            solution, owningProject, WorkspacePaths.Normalize(path), line, column, nameHint, ct,
+            arityHint)
             .ConfigureAwait(false);
         return (solution, symbol, coverage, skipped, outOfGraph);
     }

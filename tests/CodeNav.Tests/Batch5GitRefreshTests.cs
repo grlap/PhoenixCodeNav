@@ -201,7 +201,7 @@ public class Batch5GitRefreshTests
 
     private static void Cleanup(string root)
     {
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(root);
         try { Directory.Delete(root, recursive: true); } catch { /* git handles / windows locks */ }
     }
 }

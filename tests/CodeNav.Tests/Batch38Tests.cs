@@ -2,7 +2,6 @@ using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -218,7 +217,10 @@ public class Batch38Tests
             if (!sem.FrameworkRefsAvailable) return; // env guard: needs the semantic path to answer
             var tools = new NavigationTools(m, sem);
 
-            var th = Parse(tools.TypeHierarchy(name: "Widget", path: "LibW/Svc.cs", line: 5, timeoutMs: 90000));
+            var th = SemanticRetry.ParseWithRetry( // n7ly: transient cluster degrades also say semantic_unavailable — wait for the DELIBERATE not_a_type verdict
+                () => tools.TypeHierarchy(name: "Widget", path: "LibW/Svc.cs", line: 5, timeoutMs: 90000),
+                j => j.TryGetProperty("partialReason", out var p) && p.GetString() == "not_a_type",
+                "the deliberate not_a_type verdict");
             Assert.Equal("semantic_unavailable", th.GetProperty("error").GetString());
             Assert.Equal("not_a_type", th.GetProperty("partialReason").GetString());
             Assert.False(th.TryGetProperty("derivedOrImplementing", out _),
@@ -243,7 +245,10 @@ public class Batch38Tests
             // implements ZzOther's OWN IFoo — compiler-exact implementers of AaCore.IFoo is
             // zero while the base-list index names Impl. The fallback must keep the exact
             // identity beside the heuristic list.
-            var impls = Parse(tools.Implementations(name: "IFoo", timeoutMs: 90000));
+            var impls = SemanticRetry.ParseWithRetry( // n7ly: transient degrades drop symbolConfidence entirely — wait for the mixed shape
+                () => tools.Implementations(name: "IFoo", timeoutMs: 90000),
+                j => j.TryGetProperty("symbolConfidence", out var sc) && sc.GetString() == "exact",
+                "the mixed shape (symbolConfidence == exact beside the heuristic list)");
             Assert.Equal("exact", impls.GetProperty("symbolConfidence").GetString());
             Assert.Contains("IFoo", impls.GetProperty("symbol").GetProperty("display").GetString());
             Assert.Equal("heuristic", impls.GetProperty("implementationsConfidence").GetString());
@@ -319,7 +324,7 @@ public class Batch38Tests
 
     private static void Cleanup(string root)
     {
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(root);
         try { Directory.Delete(root, recursive: true); } catch { /* windows locks */ }
     }
 }

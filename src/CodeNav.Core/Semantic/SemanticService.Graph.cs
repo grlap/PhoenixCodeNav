@@ -130,7 +130,8 @@ public sealed partial class SemanticService
 
     public async Task<(SemanticTypeHierarchy? Result, ClusterCoverage? Coverage,
         List<string>? SkippedCandidateProjects, string? FailReason)> TypeHierarchyAsync(
-        string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs)
+        string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs,
+        int? arityHint = null)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         bool clusterLoadInProgress = true;
@@ -140,7 +141,8 @@ public sealed partial class SemanticService
             if (indexSnapshot is null) return (null, null, null, "index_snapshot_unavailable");
 
             var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
-                path, line, column, nameHint, cts.Token, indexSnapshot.Queries).ConfigureAwait(false);
+                path, line, column, nameHint, cts.Token, indexSnapshot.Queries, arityHint)
+                .ConfigureAwait(false);
             clusterLoadInProgress = false;
             if (symbolA is null || owningProject is null) return (null, null, null, "symbol_not_resolved");
             if (symbolA is not INamedTypeSymbol) return (null, null, null, "not_a_type");
@@ -157,7 +159,7 @@ public sealed partial class SemanticService
             clusterLoadInProgress = true;
             var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
-                indexSnapshot.Queries, cts.Token, implementerSeeds).ConfigureAwait(false);
+                indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint).ConfigureAwait(false);
             clusterLoadInProgress = false;
             if (symbol is not INamedTypeSymbol type)
             {

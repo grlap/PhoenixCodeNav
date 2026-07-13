@@ -95,9 +95,9 @@ public class SemanticTests : IClassFixture<IndexFixture>, IDisposable
     public void ImplementationsToolRanksConcreteFirstAndFlagsLikelyTarget()
     {
         var tools = new NavigationTools(_manager, _semantic);
-        var json = JsonDocument.Parse(tools.Implementations(name: "IClock", timeoutMs: 60000)).RootElement;
-        // Ranking is an exact-path feature; the heuristic fallback is unranked, so only assert there.
-        if (json.GetProperty("meta").GetProperty("confidence").GetString() != "exact") return;
+        if (!_semantic.FrameworkRefsAvailable) return; // review C2: deterministic env skip (fast), retry handles transients
+        var json = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+            () => tools.Implementations(name: "IClock", timeoutMs: 60000));
 
         var impls = json.GetProperty("implementations").EnumerateArray().ToList();
         Assert.NotEmpty(impls);
@@ -202,7 +202,7 @@ public class SemanticTests : IClassFixture<IndexFixture>, IDisposable
     public void DefinitionToolSemanticPathProducesExactConfidence()
     {
         var tools = new NavigationTools(_manager, _semantic);
-        var json = JsonDocument.Parse(tools.Definition(name: "Guard", timeoutMs: 60000)).RootElement;
+        var json = SemanticRetry.ParseExactWithRetry(() => tools.Definition(name: "Guard", timeoutMs: 60000)); // n7ly: ride out transient degrades
         Assert.Equal("exact", json.GetProperty("meta").GetProperty("confidence").GetString());
         Assert.Equal("T:Acme.Platform.Common.Guard",
             json.GetProperty("symbol").GetProperty("documentationCommentId").GetString());

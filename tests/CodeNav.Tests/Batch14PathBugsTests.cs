@@ -4,7 +4,6 @@ using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
 using CodeNav.WorkspaceGen;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -40,7 +39,7 @@ public class Batch14PathBugsTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
         }
     }
@@ -73,7 +72,7 @@ public class Batch14PathBugsTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
         }
     }
@@ -119,7 +118,7 @@ public class Batch14PathBugsTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
         }
     }
@@ -174,7 +173,10 @@ public class Batch14PathBugsTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            // kae review: the pooled readers live on dbPath and copyPath UNDER ROOT — clear
+            // root before deleting it. The redirected paths are asserted to never exist, so
+            // they own no pools; their file deletes below stay as just-in-case cleanup.
+            TestWorkspaceCleanup.ClearIndexPools(root);
             foreach (string path in new[] { redirectedBuild, redirectedCopy })
             {
                 try { File.Delete(path); } catch { }

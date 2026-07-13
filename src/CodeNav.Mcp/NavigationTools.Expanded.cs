@@ -116,31 +116,39 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "type_hierarchy")]
-    [Description("Base types, implemented interfaces, and derived/implementing types for a type (compiler-exact within the loaded cluster).")]
+    [Description("Base types, implemented interfaces, and derived/implementing types for a type (compiler-exact within the loaded cluster). Generic declarations may be selected by arity or symbolId; a bare name spanning multiple arities returns symbol_ambiguous.")]
     public string TypeHierarchy(
         [Description("Type name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration or a usage.")] string? path = null,
         [Description("1-based line.")] int line = 0,
         [Description("1-based column (optional).")] int column = 0,
         [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
-        [Description("Deadline in ms (default 15000).")] int timeoutMs = 15000)
+        [Description("Deadline in ms (default 15000).")] int timeoutMs = 15000,
+        [Description("Optional generic type-parameter count. Use 0 for a non-generic declaration, 1 for Foo<T>, etc. A bare name with multiple available arities is refused.")] int? arity = null,
+        [Description("Resolve by a search_symbol candidate's current idx: handle. Takes precedence over name, path+line, and arity.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;
-        if (name is null && (path is null || line <= 0))
-        {
-            return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
-        }
+        var (selection, selectionError) = ResolveArityTarget(
+            name, path, line, column, arity, symbolId, typeOnly: true);
+        if (selectionError is not null) return selectionError;
+        name = selection!.Name;
+        path = selection.Path;
+        line = selection.Line;
+        column = selection.Column;
+        arity = selection.Arity;
+        bool allowHeuristicFallback = selection.AllowHeuristicFallback;
 
         // Deadline visibility (field 0.7.0: type_hierarchy was the one exact tool without timing).
         int deadlineMs = Math.Clamp(timeoutMs, 500, 120000); // mirrors TypeHierarchyAsync's clamp
         var swSem = System.Diagnostics.Stopwatch.StartNew();
-        var (target, hint) = ResolveSemanticTarget(name, null, "class,interface,struct,record,enum", path, line, column);
+        var (target, hint) = ResolveSemanticTarget(
+            name, null, "class,interface,struct,record,enum", path, line, column, arity);
         if (target is not { } t)
         {
             return Json.Serialize(new { error = "target_not_found_in_index", name });
         }
         var (result, coverage, skippedCandidateProjects, reason) = _semantic
-            .TypeHierarchyAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
+            .TypeHierarchyAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs, arity)
             .GetAwaiter().GetResult();
         reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
         if (result is null)
@@ -156,10 +164,10 @@ public sealed partial class NavigationTools
             // is never overridden by a heuristic sweep.
             string fallbackName = reason is "not_a_type" ? "" : name ?? hint ?? "";
             List<SymbolHit> candidates = new();
-            if (fallbackName.Length > 0)
+            if (fallbackName.Length > 0 && allowHeuristicFallback)
             {
                 using var qf = _manager.OpenQueries();
-                candidates = qf.ImplementationCandidates(fallbackName, 50);
+                candidates = qf.ImplementationCandidates(fallbackName, 50, arity);
             }
             if (candidates.Count > 0)
             {
@@ -204,14 +212,32 @@ public sealed partial class NavigationTools
             string? targetKind = null;
             if (path is not null)
             {
-                var chain = q0.SymbolAt(NormalizePath(path), line);
-                if (chain.Count > 0) { targetKind = chain[0].Kind; if (lookupName.Length == 0) lookupName = chain[0].Name; }
+                string normalizedPath = NormalizePath(path);
+                var lineSymbols = q0.SymbolsStartingAt(normalizedPath, line);
+                SymbolHit? lineTarget = lineSymbols.FirstOrDefault(hit =>
+                    (lookupName.Length == 0 || string.Equals(hit.Name, lookupName, StringComparison.OrdinalIgnoreCase)) &&
+                    (arity is null || hit.Arity == arity.Value));
+                if (lineTarget is not null)
+                {
+                    targetKind = lineTarget.Kind;
+                    if (lookupName.Length == 0) lookupName = lineTarget.Name;
+                }
+                var chain = q0.SymbolAt(normalizedPath, line);
+                if (chain.Count > 0)
+                {
+                    targetKind ??= chain[0].Kind;
+                    if (lookupName.Length == 0) lookupName = chain[0].Name;
+                }
             }
-            targetKind ??= lookupName.Length > 0 ? q0.SearchSymbols(lookupName, "exact", null, 1).FirstOrDefault()?.Kind : null;
+            targetKind ??= lookupName.Length > 0
+                ? q0.SearchSymbols(lookupName, "exact", null, 1, arity: arity).FirstOrDefault()?.Kind
+                : null;
             // Only a TYPE has a meaningful base-list implementer set — guard the member-position edge
             // so we don't sweep in every type whose base list contains a member name.
             bool isType = targetKind is null or "interface" or "class" or "struct" or "record" or "record_struct";
-            var heuristic = isType && lookupName.Length > 0 ? q0.ImplementationCandidates(lookupName, 50) : new List<SymbolHit>();
+            var heuristic = allowHeuristicFallback && isType && lookupName.Length > 0
+                ? q0.ImplementationCandidates(lookupName, 50, arity)
+                : new List<SymbolHit>();
             if (heuristic.Count > 0)
             {
                 return Json.WithAuxiliaryListBudget(heuristic, skippedProjects,

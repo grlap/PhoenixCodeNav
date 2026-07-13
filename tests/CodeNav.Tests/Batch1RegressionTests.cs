@@ -65,9 +65,10 @@ public class WorkspacePathsTests
 [CollectionDefinition("Batch1 SQLite pool isolation", DisableParallelization = true)]
 public sealed class Batch1SqlitePoolIsolationCollection { }
 
-// IndexFixture and many independent integration-test fixtures still use the provider's
-// process-global ClearAllPools during teardown. This class deliberately pounds live readers;
-// isolate its collection so another fixture cannot invalidate a connection between Open/Read.
+// HISTORY: fixtures once used the provider's process-global ClearAllPools during teardown,
+// which could invalidate a connection between Open/Read in this class's live-reader pounding.
+// kae replaced every clear with per-database scoping, making that interference structurally
+// impossible; this isolation collection is retained as conservative belt-and-braces.
 [Collection("Batch1 SQLite pool isolation")]
 public class Batch1ToolTests : IClassFixture<IndexFixture>, IDisposable
 {
@@ -219,7 +220,7 @@ public class Batch1ToolTests : IClassFixture<IndexFixture>, IDisposable
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* Windows handles */ }
         }
     }

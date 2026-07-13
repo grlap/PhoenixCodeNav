@@ -1,6 +1,5 @@
 using CodeNav.Core.Indexing;
 using CodeNav.WorkspaceGen;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -70,7 +69,7 @@ public class Batch10ModifiersTests
 
             using (var store = new IndexStore(dbPath, createNew: false))
                 store.SetMeta("schema_version", "0"); // pretend an older binary built this
-            SqliteConnection.ClearAllPools();
+            IndexQueries.ClearPoolsFor(dbPath); // kae: scoped — release this db's parked readers
 
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
@@ -82,7 +81,7 @@ public class Batch10ModifiersTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
         }
     }
@@ -111,7 +110,7 @@ public class Batch10ModifiersTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
         }
     }

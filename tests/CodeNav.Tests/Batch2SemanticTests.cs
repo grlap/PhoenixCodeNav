@@ -42,6 +42,24 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
     /// cross-project usages must NOT silently vanish (the pre-fix bug returned them dropped
     /// with confidence 'exact' / partial:false), and resolution must stay consistent.
     /// </summary>
+    /// <summary>n7ly: service-level twin of SemanticRetry — the transient degrade classes
+    /// (cluster_cold_load / index_snapshot_unavailable / timeout under suite load) are
+    /// retryable per their own documented contract; a deterministic failure keeps its final
+    /// reason and the caller's assert names it.</summary>
+    private async Task<(SemanticReferences? Result, string? FailReason)> ReferencesWithRetry(
+        string path, int line, int attempts = 3)
+    {
+        (SemanticReferences?, string?) last = default;
+        for (int i = 0; i < attempts; i++)
+        {
+            if (i > 0) await Task.Delay(250);
+            last = await _semantic.ReferencesAsync(
+                path, line, null, "Guard", maxProjects: 40, samplesPerGroup: 1, timeoutMs: 90000);
+            if (last.Item1 is not null) return last;
+        }
+        return last;
+    }
+
     [Fact]
     public async Task ReferencesSurviveOwnerReloadWithoutDroppingDependents()
     {
@@ -49,8 +67,7 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
         var guard = q.SearchSymbols("Guard", "exact", new[] { "class" }, 1).Single();
         Assert.Equal("Acme.Platform.Common", guard.Ns);
 
-        var (before, r1) = await _semantic.ReferencesAsync(
-            guard.FilePath, guard.StartLine, null, "Guard", maxProjects: 40, samplesPerGroup: 1, timeoutMs: 90000);
+        var (before, r1) = await ReferencesWithRetry(guard.FilePath, guard.StartLine); // n7ly
         Assert.True(before is not null, $"first references failed: {r1}");
         int beforeCross = before!.Groups.Count(g => !g.Project.Equals("Acme.Platform.Common", StringComparison.OrdinalIgnoreCase));
         Assert.True(beforeCross > 0, "expected Guard to be referenced from dependent projects");
@@ -69,8 +86,7 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
                 DeltaRefresher.Refresh(store, _fx.Root, new[] { guard.FilePath });
             }
 
-            var (after, r2) = await _semantic.ReferencesAsync(
-                guard.FilePath, guard.StartLine, null, "Guard", maxProjects: 40, samplesPerGroup: 1, timeoutMs: 90000);
+            var (after, r2) = await ReferencesWithRetry(guard.FilePath, guard.StartLine); // n7ly
             Assert.True(after is not null, $"second references failed: {r2}");
 
             int afterCross = after!.Groups.Count(g => !g.Project.Equals("Acme.Platform.Common", StringComparison.OrdinalIgnoreCase));

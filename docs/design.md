@@ -83,6 +83,26 @@ multi-thousand-project workspace completes in minutes at most; live progress cou
 **Compile-item ownership**: legacy projects list `<Compile Include>` explicitly (exact,
 including linked files); SDK-style projects are approximated by longest-dir-prefix globbing.
 
+### Project and symbol-resolution authority
+
+Each discovered `.csproj` is a physical project whose compile items and references are read
+from that project file. A side-by-side legacy project and SDK-style `.Net.csproj` remain
+separate physical projects under the established 0.11.7 model; their filename pairing alone
+is not evidence that they should be merged or expanded into a new variant model.
+
+Project resolution uses directly parsed `ProjectReference`, `Reference`, `HintPath`, package,
+and recovered assembly-edge facts. Solution membership is editor inventory only, and FTS is
+never project-identity authority. The current architecture does not create duplicate Roslyn
+projects per target framework, select projects by output directory, or merge physical projects
+solely because they share an assembly name. Any such change requires a separately justified
+design backed by a concrete reproducer.
+
+For symbol search, FTS generates and ranks candidates; syntax or compiler evidence decides
+identity. `implementations` and `type_hierarchy` select generic declarations by the stored
+syntax arity (explicit `arity`, or a `search_symbol` `symbolId`). A bare exact name spanning
+multiple arities is refused rather than merging generic and non-generic symbols. FTS text
+matches remain candidate evidence only and cannot accept, reject, or merge symbol identities.
+
 ## The semantic layer — MSBuild-free, lazy, snapshot-pinned
 
 This is the part designed specifically for net472 enterprise scale.

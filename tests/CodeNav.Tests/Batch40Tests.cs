@@ -2,7 +2,6 @@ using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -186,7 +185,7 @@ public class Batch40Tests
 
     private static void Cleanup(string root)
     {
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(root);
         try { Directory.Delete(root, recursive: true); } catch { /* windows locks */ }
     }
 }

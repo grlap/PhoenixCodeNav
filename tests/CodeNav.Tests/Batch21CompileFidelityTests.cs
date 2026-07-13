@@ -3,7 +3,6 @@ using CodeNav.Core.Discovery;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -97,7 +96,7 @@ public class Batch21CompileFidelityTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
         }
     }
@@ -129,7 +128,7 @@ public class Batch21CompileFidelityTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
         }
     }
@@ -184,7 +183,7 @@ public class Batch21CompileFidelityTests
                 if (!semantic.FrameworkRefsAvailable) return; // env guard: no net472 reference assemblies
                 var tools = new NavigationTools(manager, semantic);
 
-                var r = JsonDocument.Parse(tools.Implementations(name: "IPartnerThing", timeoutMs: 90000)).RootElement;
+                var r = SemanticRetry.ParseExactWithRetry(() => tools.Implementations(name: "IPartnerThing", timeoutMs: 90000)); // n7ly: retries only ride out TRANSIENT degrades — the dead-twin regression is deterministic-heuristic and fails every attempt
                 // MUST be exact: resolving the dead twin degrades to heuristic — the pre-fix failure.
                 // (A confidence-based skip here would silently mask the regression it exists to pin.)
                 Assert.Equal("exact", r.GetProperty("meta").GetProperty("confidence").GetString());
@@ -201,7 +200,7 @@ public class Batch21CompileFidelityTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
         }
     }

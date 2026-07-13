@@ -164,7 +164,7 @@ public class Batch30ClassifierTests
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
@@ -224,7 +224,7 @@ public class Batch30ClassifierTests
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }

@@ -2,7 +2,6 @@ using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -202,7 +201,8 @@ public class Batch33Tests
                 if (!semantic.FrameworkRefsAvailable) return;
                 var tools = new NavigationTools(m, semantic);
 
-                var refs = Parse(tools.References(name: "IContractD", timeoutMs: 90000));
+                var refs = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+                    () => tools.References(name: "IContractD", timeoutMs: 90000));
                 Assert.Equal("exact", refs.GetProperty("meta").GetProperty("confidence").GetString());
                 var outOfGraph = refs.GetProperty("outOfGraphCandidates").EnumerateArray()
                     .Select(e => e.GetString()).ToList();
@@ -228,7 +228,7 @@ public class Batch33Tests
 
     private static void Cleanup(string root)
     {
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(root);
         try { Directory.Delete(root, recursive: true); } catch { /* windows locks */ }
     }
 }

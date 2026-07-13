@@ -3,7 +3,6 @@ using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
 using CodeNav.WorkspaceGen;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -52,7 +51,7 @@ public class Batch17SearchTextHintsTests : IDisposable
     {
         _semantic.Dispose();
         _manager.Dispose();
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(_root);
         try { Directory.Delete(_root, recursive: true); } catch { /* leave temp on Windows lock */ }
     }
 

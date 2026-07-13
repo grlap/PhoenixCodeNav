@@ -5,7 +5,6 @@ using CodeNav.Core.Discovery;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -108,7 +107,7 @@ public class Batch46SemanticBudgetTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* Windows may retain a handle briefly. */ }
         }
     }
@@ -154,7 +153,7 @@ public class Batch46SemanticBudgetTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* Windows may retain a handle briefly. */ }
         }
     }
@@ -210,7 +209,7 @@ public class Batch46SemanticBudgetTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* Windows may retain a handle briefly. */ }
         }
     }
@@ -231,8 +230,8 @@ public class Batch46SemanticBudgetTests
             using var semantic = new SemanticService(manager);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
-            using JsonDocument document = JsonDocument.Parse(tools.Implementations(
-                name: "IBudgetProbe", maxProjects: 1, timeoutMs: 120_000));
+            using JsonDocument document = JsonDocument.Parse(SemanticRetry.ParseExactWithRetry( // n7ly sweep
+                () => tools.Implementations(name: "IBudgetProbe", maxProjects: 1, timeoutMs: 120_000)).GetRawText());
             JsonElement response = document.RootElement;
 
             Assert.Equal("exact", response.GetProperty("meta").GetProperty("confidence").GetString());
@@ -244,7 +243,7 @@ public class Batch46SemanticBudgetTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
@@ -374,7 +373,7 @@ public class Batch46SemanticBudgetTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
@@ -421,8 +420,8 @@ public class Batch46SemanticBudgetTests
             {
                 using var semantic = new SemanticService(manager);
                 var tools = new NavigationTools(manager, semantic);
-                using JsonDocument response = JsonDocument.Parse(tools.Implementations(
-                    name: "IBudgetProbe", maxProjects: 4, timeoutMs: 120_000));
+                using JsonDocument response = JsonDocument.Parse(SemanticRetry.ParseExactWithRetry( // n7ly sweep
+                    () => tools.Implementations(name: "IBudgetProbe", maxProjects: 4, timeoutMs: 120_000)).GetRawText());
                 JsonElement result = response.RootElement;
                 Assert.Equal("exact", result.GetProperty("meta").GetProperty("confidence").GetString());
             }
@@ -440,7 +439,7 @@ public class Batch46SemanticBudgetTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* Windows may retain a handle briefly. */ }
         }
     }

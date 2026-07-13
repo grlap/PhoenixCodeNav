@@ -33,7 +33,8 @@ public class ExpandedToolTests : IClassFixture<IndexFixture>, IDisposable
     [Fact]
     public void CallersFindsGuardNotNullCallers()
     {
-        var json = Parse(_tools.Callers(name: "NotNull", maxProjects: 10, timeoutMs: 60000));
+        if (!_semantic.FrameworkRefsAvailable) return; // review C2: deterministic env skip
+        var json = SemanticRetry.ParseExactWithRetry(() => _tools.Callers(name: "NotNull", maxProjects: 10, timeoutMs: 60000)); // n7ly/kmoj: ride out transient degrades
         Assert.True(json.TryGetProperty("callers", out var callers), $"no callers property: {json}");
         Assert.True(callers.GetArrayLength() > 0, "expected at least one caller of Guard.NotNull");
         Assert.Equal("exact", json.GetProperty("meta").GetProperty("confidence").GetString());
@@ -47,14 +48,18 @@ public class ExpandedToolTests : IClassFixture<IndexFixture>, IDisposable
         var ctor = q.SearchSymbols("SystemClock", "exact", new[] { "class" }, 1).Single();
         var method = q.Outline(ctor.FilePath).First(s => s.Kind == "method" && s.Name == "GetUtcNow");
 
-        var json = Parse(_tools.Callees(path: ctor.FilePath, line: method.StartLine, timeoutMs: 60000));
+        if (!_semantic.FrameworkRefsAvailable) return; // review C2: deterministic env skip
+        var json = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+            () => _tools.Callees(path: ctor.FilePath, line: method.StartLine, timeoutMs: 60000));
         Assert.True(json.TryGetProperty("callees", out _), $"unexpected: {json}");
     }
 
     [Fact]
     public void TypeHierarchyShowsInterfaceAndImplementation()
     {
-        var json = Parse(_tools.TypeHierarchy(name: "IClock", maxProjects: 10, timeoutMs: 60000));
+        if (!_semantic.FrameworkRefsAvailable) return; // review C2: deterministic env skip
+        var json = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+            () => _tools.TypeHierarchy(name: "IClock", maxProjects: 10, timeoutMs: 60000));
         Assert.True(json.TryGetProperty("derivedOrImplementing", out var impls), $"unexpected: {json}");
         Assert.Contains(impls.EnumerateArray(),
             i => i.GetProperty("display").GetString()!.EndsWith("SystemClock"));

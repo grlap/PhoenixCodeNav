@@ -160,6 +160,7 @@ using var sampler = new SqliteConnection(new SqliteConnectionStringBuilder
 {
     DataSource = dbPath,
     Mode = SqliteOpenMode.ReadOnly,
+    Pooling = false, // kae: keep IndexQueries the ONLY pooled connection source product-wide
 }.ToString());
 sampler.Open();
 

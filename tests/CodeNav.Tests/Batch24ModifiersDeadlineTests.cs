@@ -2,7 +2,6 @@ using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -145,7 +144,9 @@ public class Batch24ModifiersDeadlineTests
                 Assert.Equal(500, clamped.GetProperty("timing").GetProperty("deadlineMs").GetInt32());
 
                 // Exact-path timing (env-guarded like every semantic test): present on success too.
-                var exact = Parse(tools.References(name: "Go", timeoutMs: 90000));
+                if (!semantic.FrameworkRefsAvailable) return; // review C2: deterministic env skip
+                var exact = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+                    () => tools.References(name: "Go", timeoutMs: 90000));
                 if (exact.TryGetProperty("meta", out var meta) &&
                     meta.GetProperty("confidence").GetString() == "exact")
                 {
@@ -178,7 +179,7 @@ public class Batch24ModifiersDeadlineTests
 
     private static void Cleanup(string root)
     {
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(root);
         try { Directory.Delete(root, recursive: true); } catch { /* windows file locks */ }
     }
 }

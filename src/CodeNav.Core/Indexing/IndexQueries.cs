@@ -1,4 +1,6 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 
@@ -77,15 +79,26 @@ public sealed partial class IndexQueries : IDisposable
     {
     }
 
-    internal IndexQueries(string dbPath, bool pinReadSnapshot,
-        Action<string>? afterQueryForTest = null, bool pooling = true)
+    /// <summary>Single source of truth for the read connection string (kae). The pooled-variant
+    /// enumeration in <see cref="ClearPoolsFor"/> derives from this same builder, so a new
+    /// variant cannot silently escape scoped pool clearing.
+    /// DataSource is canonicalized with Path.GetFullPath because pools are keyed by the EXACT
+    /// connection string: a reader opened via one spelling of a path (test-composed backslashes)
+    /// and a clear issued via another (git-reported forward slashes for the same worktree db)
+    /// would otherwise address DIFFERENT pools — the parked handle survives and the next atomic
+    /// install fails with 'the staged index could not be atomically installed' (caught by
+    /// Batch41's worktree seed/reconcile test when kae first scoped the clears). Same-file paths
+    /// that differ only by character CASE, 8.3 short names, or directory-link aliases are NOT
+    /// unified — no current caller produces those (every spelling derives from one composed
+    /// string, and the product refuses reparse-point index destinations).</summary>
+    internal static string ReadConnectionString(string dbPath, bool pinReadSnapshot, bool pooling)
     {
         // Shared-cache table locks would prevent the WAL writer from refreshing tables while a
         // long-lived review read transaction is open. Use a private pager cache for that one
         // snapshot; ordinary short queries retain the pooled shared-cache behavior.
-        var connectionString = new SqliteConnectionStringBuilder
+        return new SqliteConnectionStringBuilder
         {
-            DataSource = dbPath,
+            DataSource = Path.GetFullPath(dbPath),
             Mode = SqliteOpenMode.ReadOnly,
             // A follower lives in a different process from the writer. Its idle pooled native
             // handle cannot be cleared by the writer before a destructive rebuild on Windows,
@@ -94,8 +107,30 @@ public sealed partial class IndexQueries : IDisposable
             Cache = pinReadSnapshot || !pooling
                 ? SqliteCacheMode.Private
                 : SqliteCacheMode.Shared,
-        };
-        _conn = new SqliteConnection(connectionString.ToString());
+        }.ToString();
+    }
+
+    /// <summary>Releases THIS database's idle pooled reader handles without touching any other
+    /// database's pool (kae). The process-global SqliteConnection.ClearAllPools() it replaces
+    /// could invalidate a SIBLING database's pooled connection at the rent boundary — observed
+    /// as ObjectDisposedException on the SQLitePCL handle mid-query under parallel tests (rqek).
+    /// Pools are keyed by connection string, so clearing both pooled read variants of this path
+    /// is complete: the writer, meta probes, snapshot copies, and follower reads are
+    /// Pooling=false by design and own no pool entries.</summary>
+    public static void ClearPoolsFor(string dbPath)
+    {
+        foreach (bool pinReadSnapshot in new[] { false, true })
+        {
+            using var poolKeyCarrier = new SqliteConnection(
+                ReadConnectionString(dbPath, pinReadSnapshot, pooling: true));
+            SqliteConnection.ClearPool(poolKeyCarrier);
+        }
+    }
+
+    internal IndexQueries(string dbPath, bool pinReadSnapshot,
+        Action<string>? afterQueryForTest = null, bool pooling = true)
+    {
+        _conn = new SqliteConnection(ReadConnectionString(dbPath, pinReadSnapshot, pooling));
         _afterQueryForTest = afterQueryForTest;
         try
         {
@@ -376,7 +411,8 @@ public sealed partial class IndexQueries : IDisposable
 
     public List<SymbolHit> SearchSymbols(string query, string mode, IReadOnlyList<string>? kinds, int limit,
         bool includeGenerated = false, int offset = 0,
-        string? pathGlob = null, IReadOnlyList<string>? excludePaths = null, string? ns = null)
+        string? pathGlob = null, IReadOnlyList<string>? excludePaths = null, string? ns = null,
+        int? arity = null)
     {
         string esc = EscapeLike(query);
         string pattern = mode switch
@@ -394,6 +430,11 @@ public sealed partial class IndexQueries : IDisposable
         string kindFilter = KindFilter(kinds);
         if (kindFilter.Length > 0) where.Append(' ').Append(kindFilter);
         if (!includeGenerated) where.Append(" AND f.is_generated = 0");
+        if (arity is { } requestedArity)
+        {
+            where.Append(" AND s.arity = $arity");
+            args.Add(("$arity", requestedArity));
+        }
         AppendPathFilter(where, args, pathGlob, excludePaths);
         if (ns is { Length: > 0 } nsFilter)
         {
@@ -417,6 +458,41 @@ public sealed partial class IndexQueries : IDisposable
             """,
             ReadSymbol,
             args.ToArray());
+    }
+
+    /// <summary>Distinct generic arities for exact-name declarations. This is syntax-index
+    /// authority, not FTS evidence; callers use it to refuse a bare name that would merge
+    /// <c>Foo</c>, <c>Foo&lt;T&gt;</c>, and <c>Foo&lt;T1,T2&gt;</c>.</summary>
+    public List<int> SymbolArities(string name, IReadOnlyList<string>? kinds = null)
+    {
+        if (string.IsNullOrEmpty(name)) return new();
+        string kindFilter = KindFilter(kinds);
+        return Query(
+            $"""
+            SELECT DISTINCT s.arity
+            FROM symbols s
+            WHERE s.name = $n COLLATE NOCASE {kindFilter}
+            ORDER BY s.arity
+            """,
+            r => r.GetInt32(0),
+            ("$n", name));
+    }
+
+    /// <summary>Declarations whose indexed start line exactly matches a source position.
+    /// Unlike <see cref="SymbolAt"/>, this returns sibling declarations on the same line so
+    /// callers can distinguish same-simple-name generic arities without guessing.</summary>
+    public List<SymbolHit> SymbolsStartingAt(string filePath, int line)
+    {
+        return Query(
+            """
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE f.path = $p AND s.start_line = $l
+            ORDER BY s.id
+            """,
+            ReadSymbol,
+            ("$p", filePath), ("$l", line));
     }
 
     public List<SymbolHit> Outline(string filePath)
@@ -998,28 +1074,97 @@ public sealed partial class IndexQueries : IDisposable
     }
 
     /// <summary>Types whose base list textually mentions the given name (heuristic implementations).</summary>
-    public List<SymbolHit> ImplementationCandidates(string name, int limit)
+    public List<SymbolHit> ImplementationCandidates(string name, int limit, int? targetArity = null)
     {
         // An empty name would make the LIKE pattern collapse to '%: %' and match every type that has
         // any base list — never run that catch-all.
-        if (string.IsNullOrEmpty(name)) return new();
+        if (string.IsNullOrEmpty(name) || limit <= 0) return new();
         string esc = EscapeLike(name);
         // The LIKE is a SUBSTRING filter, so over-fetch and refine to types whose base list names the
         // interface as a WHOLE identifier token — otherwise 'IFoo' would also match 'IFooBar'.
-        var candidates = Query(
-            $"""
+        List<SymbolHit> QueryPage(int pageLimit, int offset) => Query(
+            """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
                    s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.kind IN ('class','struct','record','record_struct')
               AND s.name <> $n
               AND s.signature LIKE $pat ESCAPE '\'
-            ORDER BY f.is_generated, s.name
-            LIMIT $lim
+            ORDER BY f.is_generated, s.name, f.path, s.id
+            LIMIT $lim OFFSET $off
             """,
             ReadSymbol,
-            ("$n", name), ("$pat", $"%: %{esc}%"), ("$lim", Math.Min(limit * 4, 2000)));
-        return candidates.Where(h => ContainsWholeToken(h.Signature, name)).Take(limit).ToList();
+            ("$n", name), ("$pat", $"%: %{esc}%"), ("$lim", pageLimit), ("$off", offset));
+
+        if (targetArity is null)
+        {
+            return QueryPage(Math.Min(limit * 4, 2000), 0)
+                .Where(h => BaseListContainsIdentity(h.Signature, name, targetArity))
+                .Take(limit)
+                .ToList();
+        }
+
+        // Arity filtering happens after the broad SQL text prefilter. Page until enough exact
+        // syntax matches are found (or the candidate set is exhausted), so earlier rows for IFoo
+        // cannot hide every IFoo<T> row behind the prefilter cap.
+        int batchSize = Math.Clamp(limit * 4, 64, 512);
+        int offset = 0;
+        var matches = new List<SymbolHit>(limit);
+        while (matches.Count < limit)
+        {
+            List<SymbolHit> page = QueryPage(batchSize, offset);
+            foreach (SymbolHit hit in page)
+            {
+                if (BaseListContainsIdentity(hit.Signature, name, targetArity))
+                {
+                    matches.Add(hit);
+                    if (matches.Count == limit) break;
+                }
+            }
+            if (page.Count < batchSize) break;
+            offset += page.Count;
+        }
+        return matches;
+    }
+
+    /// <summary>Checks the right-most type name in each syntax-derived base-list entry.
+    /// The SQL LIKE above remains a broad candidate prefilter; generic arity is decided from
+    /// parsed C# syntax so <c>ICache</c> and <c>ICache&lt;T&gt;</c> never merge in a fallback.</summary>
+    private static bool BaseListContainsIdentity(string signature, string name, int? targetArity)
+    {
+        if (!ContainsWholeToken(signature, name)) return false;
+        if (targetArity is null) return true;
+
+        int marker = signature.IndexOf(" : ", StringComparison.Ordinal);
+        if (marker < 0 || marker + 3 >= signature.Length) return false;
+
+        CompilationUnitSyntax unit = SyntaxFactory.ParseCompilationUnit(
+            $"class __PhoenixArityProbe : {signature[(marker + 3)..]} {{ }}");
+        BaseListSyntax? baseList = unit.Members.OfType<ClassDeclarationSyntax>()
+            .FirstOrDefault()?.BaseList;
+        if (baseList is null) return false;
+
+        foreach (BaseTypeSyntax baseType in baseList.Types)
+        {
+            SimpleNameSyntax? simpleName = baseType.Type switch
+            {
+                QualifiedNameSyntax qualified => qualified.Right,
+                AliasQualifiedNameSyntax aliased => aliased.Name,
+                SimpleNameSyntax simple => simple,
+                _ => baseType.Type.DescendantNodesAndSelf().OfType<SimpleNameSyntax>().LastOrDefault(),
+            };
+            if (simpleName is null ||
+                !string.Equals(simpleName.Identifier.ValueText, name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            int arity = simpleName is GenericNameSyntax generic
+                ? generic.TypeArgumentList.Arguments.Count
+                : 0;
+            if (arity == targetArity.Value) return true;
+        }
+        return false;
     }
 
     /// <summary>

@@ -222,6 +222,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .Select(f => f.GetProperty("id").GetString()).ToHashSet();
         Assert.Contains("compiled-awareness", ids);
         Assert.Contains("implementer-completeness", ids);
+        Assert.Contains("generic-arity-resolution", ids);
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
         Assert.Contains("semantic-large-repo-budget", ids);
@@ -231,6 +232,13 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .GetProperty("summary").GetString()!;
         Assert.Contains("default all candidates", semanticBudget);
         Assert.Contains("positive maxProjects bounds", semanticBudget);
+
+        string arityResolution = Assert.Single(json.GetProperty("features").EnumerateArray(),
+            feature => feature.GetProperty("id").GetString() == "generic-arity-resolution")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("implementations/type_hierarchy select by arity or symbolId", arityResolution);
+        Assert.Contains("mixed-arity names refuse", arityResolution);
+        Assert.Contains("syntax fallback is arity-exact", arityResolution);
     }
 
     [Fact]

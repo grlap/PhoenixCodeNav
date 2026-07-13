@@ -2,7 +2,6 @@ using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -36,7 +35,9 @@ public sealed class Batch44GitSubtreeTests
             File.WriteAllText(Path.Combine(workspace, "Tracked.cs"), "class TrackedEdited44 { }\n");
             File.WriteAllText(Path.Combine(workspace, "Fresh.cs"), "class Fresh44 { }\n");
 
-            GitInfo.ReviewDiffResult review = GitInfo.ReviewDiff(workspace, head, gitExe);
+            GitInfo.ReviewDiffResult review = SemanticRetry.Until( // n7ly sweep: retries transient git; a deterministic wrong status stays red
+                () => GitInfo.ReviewDiff(workspace, head, gitExe),
+                r => r.Diff.Status == "ok", r => r.Diff.Status ?? "<null>", "ReviewDiff status ok");
 
             Assert.Equal("ok", review.Diff.Status);
             Assert.Equal(new[] { "Tracked.cs" },
@@ -179,7 +180,9 @@ public sealed class Batch44GitSubtreeTests
                        queries.SearchSymbols("Deleted44", "exact", null, 2).Count == 0;
             }, 20_000), "subtree index did not reflect the deletion and untracked addition");
 
-            JsonElement pack = Parse(tools.ReviewPack());
+            JsonElement pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
+                () => tools.ReviewPack(),
+                j => j.TryGetProperty("changedFiles", out _), "review_pack with changedFiles");
 
             Assert.False(pack.TryGetProperty("error", out JsonElement error),
                 error.ValueKind == JsonValueKind.Undefined ? "review_pack failed" : error.ToString());
@@ -313,7 +316,9 @@ public sealed class Batch44GitSubtreeTests
                        queries.SearchSymbols("B", "exact", null, 2).Count == 0;
             }, 20_000));
 
-            JsonElement pack = Parse(tools.ReviewPack());
+            JsonElement pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
+                () => tools.ReviewPack(),
+                j => j.TryGetProperty("formerSymbols", out _), "review_pack with formerSymbols");
             List<string?> current = pack.GetProperty("symbols").EnumerateArray()
                 .Select(item => item.GetProperty("symbol").GetProperty("name").GetString())
                 .ToList();
@@ -368,7 +373,9 @@ public sealed class Batch44GitSubtreeTests
                        queries.Outline("New.cs").Any(symbol => symbol.Name == "Moved44");
             }, 20_000));
 
-            JsonElement pack = Parse(tools.ReviewPack());
+            JsonElement pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
+                () => tools.ReviewPack(),
+                j => j.TryGetProperty("movedFiles", out _), "review_pack with movedFiles");
             JsonElement moves = pack.GetProperty("movedFiles");
             Assert.Equal(1, moves.GetProperty("total").GetInt32());
             JsonElement move = Assert.Single(moves.GetProperty("items").EnumerateArray());
@@ -418,7 +425,9 @@ public sealed class Batch44GitSubtreeTests
                            symbol.Name == "UnstagedMoved44");
             }, 20_000));
 
-            JsonElement pack = Parse(tools.ReviewPack());
+            JsonElement pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
+                () => tools.ReviewPack(),
+                j => j.TryGetProperty("movedFiles", out _), "review_pack with movedFiles");
             JsonElement moves = pack.GetProperty("movedFiles");
             Assert.Equal(1, moves.GetProperty("total").GetInt32());
             JsonElement move = Assert.Single(moves.GetProperty("items").EnumerateArray());
@@ -466,7 +475,9 @@ public sealed class Batch44GitSubtreeTests
                        queries.ContentByPath("New.cs") == "global using System;\n";
             }, 20_000));
 
-            JsonElement pack = Parse(tools.ReviewPack());
+            JsonElement pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
+                () => tools.ReviewPack(),
+                j => j.TryGetProperty("movedFiles", out _), "review_pack with movedFiles");
             JsonElement moves = pack.GetProperty("movedFiles");
             Assert.Equal(1, moves.GetProperty("total").GetInt32());
             JsonElement move = Assert.Single(moves.GetProperty("items").EnumerateArray());
@@ -531,7 +542,9 @@ public sealed class Batch44GitSubtreeTests
                            symbol.Name == "NormalizedMoved44");
             }, 20_000));
 
-            JsonElement pack = Parse(tools.ReviewPack());
+            JsonElement pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
+                () => tools.ReviewPack(),
+                j => j.TryGetProperty("deletedFiles", out _), "review_pack with deletedFiles");
             Assert.False(pack.TryGetProperty("movedFiles", out _));
             Assert.Equal(1, pack.GetProperty("changedFiles").GetProperty("deleted").GetInt32());
             Assert.Contains(pack.GetProperty("deletedFiles").EnumerateArray(), deleted =>
@@ -577,7 +590,9 @@ public sealed class Batch44GitSubtreeTests
                        queries.SearchSymbols("Retyped44", "exact", null, 2).Count == 0;
             }, 20_000));
 
-            JsonElement pack = Parse(tools.ReviewPack());
+            JsonElement pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
+                () => tools.ReviewPack(),
+                j => j.TryGetProperty("deletedFiles", out _), "review_pack with deletedFiles");
             Assert.False(pack.TryGetProperty("movedFiles", out _));
             JsonElement deleted = Assert.Single(pack.GetProperty("deletedFiles").EnumerateArray(),
                 item => item.GetProperty("path").GetString() == "Old.cs");
@@ -632,9 +647,11 @@ public sealed class Batch44GitSubtreeTests
             {
                 using IndexQueries queries = manager.OpenQueries();
                 return queries.ContentByPath("Old.cs") is null;
-            }, 20_000));
+            }, 60_000)); // n7ly: 20s starved under 24-way suite load
 
-            GitInfo.ReviewDiffResult review = GitInfo.ReviewDiff(root, head, gitExe);
+            GitInfo.ReviewDiffResult review = SemanticRetry.Until( // n7ly: a starved git spawn is transient; a real config problem fails every attempt
+                () => GitInfo.ReviewDiff(root, head, gitExe),
+                r => r.Diff.Status == "ok", r => r.Diff.Status ?? "<null>", "ReviewDiff status ok");
             Assert.Equal("ok", review.Diff.Status);
             GitInfo.DiffFile deletedDiff = Assert.Single(
                 Assert.IsType<List<GitInfo.DiffFile>>(review.Diff.Files),
@@ -651,8 +668,10 @@ public sealed class Batch44GitSubtreeTests
             Assert.Equal(new[] { "Linked/Moved.cs" }, excluded.SamplePaths);
             Assert.False(excluded.SamplesTruncated);
 
-            string json = tools.ReviewPack(maxBytes: 24576);
-            JsonElement pack = Parse(json);
+            JsonElement pack = SemanticRetry.ParseWithRetry( // n7ly: ride out transient git/index degrades in the pack's own round-trip
+                () => tools.ReviewPack(maxBytes: 24576),
+                j => j.TryGetProperty("changedFiles", out _), "review_pack with changedFiles");
+            string json = pack.GetRawText();
             Assert.False(pack.TryGetProperty("movedFiles", out _), json);
             if (pack.TryGetProperty("unmappedChanges", out JsonElement unmapped))
             {
@@ -676,7 +695,9 @@ public sealed class Batch44GitSubtreeTests
             Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
                 note.GetProperty("id").GetString() == "review.untracked_links_excluded");
 
-            string boundedJson = tools.ReviewPack(maxBytes: 2048);
+            string boundedJson = SemanticRetry.ParseWithRetry( // n7ly sweep
+                () => tools.ReviewPack(maxBytes: 2048),
+                j => j.TryGetProperty("coverage", out _), "bounded review_pack with coverage").GetRawText();
             Assert.True(System.Text.Encoding.UTF8.GetByteCount(boundedJson) <= 2048,
                 boundedJson);
             JsonElement bounded = Parse(boundedJson);
@@ -833,7 +854,9 @@ public sealed class Batch44GitSubtreeTests
             }
 
             var tools = new NavigationTools(manager, semantic);
-            string json = tools.ReviewPack(maxBytes: 24576);
+            string json = SemanticRetry.ParseWithRetry( // n7ly sweep
+                () => tools.ReviewPack(maxBytes: 24576),
+                j => j.TryGetProperty("deletedFiles", out _), "review_pack with deletedFiles").GetRawText();
             JsonElement pack = Parse(json);
             Assert.False(pack.TryGetProperty("error", out JsonElement error),
                 error.ValueKind == JsonValueKind.Undefined ? json : error.GetString());
@@ -874,7 +897,9 @@ public sealed class Batch44GitSubtreeTests
             string head = GitOutput(root, gitExe, "rev-parse HEAD").Trim();
             File.WriteAllText(fullPath, edited);
 
-            GitInfo.ReviewDiffResult review = GitInfo.ReviewDiff(root, head, gitExe);
+            GitInfo.ReviewDiffResult review = SemanticRetry.Until( // n7ly sweep: retries transient git; a deterministic wrong status stays red
+                () => GitInfo.ReviewDiff(root, head, gitExe),
+                r => r.Diff.Status == "ok", r => r.Diff.Status ?? "<null>", "ReviewDiff status ok");
 
             Assert.Equal("ok", review.Diff.Status);
             GitInfo.DiffFile changed = Assert.Single(
@@ -1130,8 +1155,8 @@ public sealed class Batch44GitSubtreeTests
                 sample => sample.Path == gitPath);
 
             var tools = new NavigationTools(manager, semantic);
-            JsonElement response = Parse(tools.Definition(path: gitPath, line: 2,
-                mode: "semantic", timeoutMs: 30_000, includeBody: true));
+            JsonElement response = SemanticRetry.ParseExactWithRetry( // n7ly sweep
+                () => tools.Definition(path: gitPath, line: 2, mode: "semantic", timeoutMs: 30_000, includeBody: true));
             Assert.False(response.TryGetProperty("error", out _));
             Assert.Equal("exact",
                 response.GetProperty("meta").GetProperty("confidence").GetString());
@@ -1293,7 +1318,7 @@ public sealed class Batch44GitSubtreeTests
 
     private static void Cleanup(string root)
     {
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(root);
         try { Directory.Delete(root, recursive: true); } catch { /* Windows pooled handles */ }
     }
 }

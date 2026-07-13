@@ -3,7 +3,6 @@ using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
 using CodeNav.WorkspaceGen;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -170,17 +169,15 @@ public class Batch23QuartetTests
                     "the probe's test-project line should make the unfiltered count larger");
 
                 // Semantic (exact) path — same discipline, guarded on env like Batch19.
-                var all = Parse(tools.References(name: "NotNull", timeoutMs: 90000));
-                if (!all.TryGetProperty("meta", out var meta0) ||
-                    meta0.GetProperty("confidence").GetString() != "exact")
-                {
-                    return; // no framework reference assemblies — semantic path unavailable here
-                }
+                if (!semantic.FrameworkRefsAvailable) return; // review C2: deterministic env skip (fast), retry handles transients
+                var all = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+                    () => tools.References(name: "NotNull", timeoutMs: 90000));
                 int allTotal = all.GetProperty("totalReferences").GetInt32();
                 Assert.Contains(all.GetProperty("groups").EnumerateArray(),
                     g => g.GetProperty("isTest").GetBoolean()); // the probe's project
 
-                var noTests = Parse(tools.References(name: "NotNull", includeTests: false, timeoutMs: 90000));
+                var noTests = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+                    () => tools.References(name: "NotNull", includeTests: false, timeoutMs: 90000));
                 int filteredTotal = noTests.GetProperty("totalReferences").GetInt32();
                 Assert.True(filteredTotal < allTotal,
                     $"includeTests:false total ({filteredTotal}) should drop below the unfiltered total ({allTotal})");
@@ -357,7 +354,7 @@ public class Batch23QuartetTests
 
     private static void Cleanup(string root)
     {
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(root);
         try { Directory.Delete(root, recursive: true); } catch { /* windows file locks */ }
     }
 }

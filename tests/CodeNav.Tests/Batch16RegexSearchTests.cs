@@ -3,7 +3,6 @@ using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
 using CodeNav.WorkspaceGen;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -127,7 +126,7 @@ public class Batch16RegexSearchTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
         }
     }
@@ -168,7 +167,7 @@ public class Batch16RegexSearchTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
         }
     }

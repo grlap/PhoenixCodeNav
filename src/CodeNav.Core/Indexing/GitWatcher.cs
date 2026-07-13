@@ -60,6 +60,10 @@ public sealed class GitWatcher : IDisposable
             fsw.Created += OnEvent;
             fsw.Deleted += OnEvent;
             fsw.Renamed += OnEvent;
+            // 17zd: an FSW error (internal buffer overflow under load) silently DROPS events —
+            // for this watcher a dropped event can be the only signal a git operation produces.
+            // Treat the gap as "HEAD maybe changed": one debounced re-check is cheap and honest.
+            fsw.Error += OnError;
             fsw.EnableRaisingEvents = true;
             _watchers.Add(fsw);
             return true;
@@ -99,6 +103,22 @@ public sealed class GitWatcher : IDisposable
         {
             if (_disposed) return;
             // Coalesce multi-step operations (rebase, fetch-then-merge) into one signal.
+            _debounce.Change(TimeSpan.FromMilliseconds(400), Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void OnError(object? sender, ErrorEventArgs e)
+    {
+        lock (_sync)
+        {
+            if (_disposed) return;
+            // Review (17zd): an overflow can also swallow the logs/ BIRTH event — without this
+            // re-attach attempt, every later plain commit (visible only via logs/HEAD, which the
+            // top-level watch cannot see) would go unsignaled until an unrelated top-level event.
+            if (!_logsWatchAttached)
+            {
+                _logsWatchAttached = TryWatch(Path.Combine(_gitDir, "logs"));
+            }
             _debounce.Change(TimeSpan.FromMilliseconds(400), Timeout.InfiniteTimeSpan);
         }
     }

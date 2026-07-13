@@ -239,7 +239,10 @@ public class ReparsePointTests
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            // kae review: the pooled reader was parked on ROOT's db — clear root before its
+            // delete ('outside' holds no db; its clear is a harmless no-op kept for symmetry).
+            TestWorkspaceCleanup.ClearIndexPools(root);
+            TestWorkspaceCleanup.ClearIndexPools(outside);
             try { Directory.Delete(root, recursive: true); } catch { }
             try { Directory.Delete(outside, recursive: true); } catch { }
         }

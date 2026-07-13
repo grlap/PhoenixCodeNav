@@ -55,7 +55,7 @@ public sealed class IndexFixture : IDisposable
     public void Dispose()
     {
         _manager?.Dispose(); // releases the store, pooled connections, and the ownership lease
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(Root);
         try { Directory.Delete(Root, recursive: true); } catch { /* leave temp on Windows lock */ }
     }
 }

@@ -181,7 +181,8 @@ public class Batch25GitRobustnessTests
             Git(root, "config user.name CodeNavTest");
             Git(root, "config commit.gpgsign false");
 
-            using var m = new IndexManager(root, db);
+            var managerLog = new List<string>(); // 17zd-b: the failure message must tell the story
+            using var m = new IndexManager(root, db, msg => { lock (managerLog) managerLog.Add(msg); });
             m.Start();
             Assert.True(WaitUntil(() => m.IsQueryable, 20000), "index did not become queryable");
             Assert.Null(m.Health().IndexedCommit); // commit-less: nothing to record yet
@@ -190,15 +191,25 @@ public class Batch25GitRobustnessTests
             Git(root, "add -A");
             Git(root, "commit -q -m first");
 
-            Assert.True(
-                WaitUntil(() => string.Equals(
+            bool firstCommitRecorded = WaitUntil(() => string.Equals(
                     m.Health().IndexedCommit, GitInfo.HeadCommit(root), StringComparison.OrdinalIgnoreCase)
-                    && m.Health().IndexedCommit is not null, 20000),
-                "indexed_commit did not pick up the repo's FIRST commit (wll)");
+                    && m.Health().IndexedCommit is not null, 60000); // n7ly: 20s starved under suite load
+            if (!firstCommitRecorded)
+            {
+                // Review (n7ly): message built LAZILY and the log snapshotted UNDER ITS LOCK — the
+                // eager interpolated variant enumerated managerLog while pump/watcher threads were
+                // appending, able to fail a PASSING test with collection-modified (and spawned a
+                // git.exe per run for a message nobody reads on green).
+                string logSnapshot;
+                lock (managerLog) logSnapshot = string.Join(" | ", managerLog);
+                Assert.Fail("indexed_commit did not pick up the repo's FIRST commit (wll) — " +
+                    $"head={GitInfo.HeadCommit(root) ?? "<null>"} indexed={m.Health().IndexedCommit ?? "<null>"} " +
+                    $"state={m.State} managerLog: {logSnapshot}");
+            }
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* git/windows locks */ }
         }
     }
@@ -230,9 +241,7 @@ public class Batch25GitRobustnessTests
 
     // ------------------------------------------------------------------ helpers
 
-    private static void Git(string dir, string args) =>
-        GitInfo.RunProcess("git", dir,
-            "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args, waitMs: 20000);
+    private static void Git(string dir, string args) => TestGit.Run(dir, args); // n7ly: loud + retried
 
     private static bool WaitUntil(Func<bool> cond, int timeoutMs)
     {

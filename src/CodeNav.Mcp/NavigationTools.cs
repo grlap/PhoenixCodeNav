@@ -78,16 +78,17 @@ public sealed partial class NavigationTools
                 new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic; confidenceNote only when heuristic (tier meanings live in confidenceModel here); meta.statusNote explains refreshing/stale; meta.build stamps every result meta with version+commit" },
                 new { id = "hierarchy-ranking", summary = "implementations ranks concrete hits first; conditional likelyImplementation names the sole concrete hit and via identifies indirect base derivation. implementations wraps hit metadata; type_hierarchy returns flat symbols" },
                 new { id = "implementer-completeness", summary = "Member fallback exposes implementerCount/omittedImplementers. When identity is compiler-resolved but implementers are indexed, symbolConfidence exact and implementationsConfidence heuristic remain separate; type_hierarchy fallback returns heuristic base-list candidates without compiler-only bases/interfaces" },
+                new { id = "generic-arity-resolution", summary = "v0.11.8 implementations/type_hierarchy select by arity or symbolId; mixed-arity names refuse; syntax fallback is arity-exact" },
                 new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (silent when compiled; Include globs expanded, Remove honored — residual gaps: .projitems/props globs/Conditions); repo_overview.orphanedFiles; semantic resolution never targets an uncompiled declaration; impact and context_pack likewise prefer COMPILED declarations for ownership (an orphaned copy sorting first no longer zeroes transitiveDependentProjects)" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is LOGGED, never silent" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
                 new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + didYouMean (variantKind 'tokenForm': Mode4 <-> 'Mode 4'; variantKind 'spelling': single-token Damerau edit-distance-1 against indexed SYMBOL names, first-char-anchored — first-character typos and sub-4-char tokens are deliberately not covered — every suggestion PROBED before surfacing, never substituted) + contextual notes; elsewhere/didYouMean precise probes carry structured samples {path, line, containingSymbol} beside samplePaths (the redirect no longer drops the owner context main hits carry; the cross-line co-occur branch stays paths-only — its evidence is file-level)" },
                 new { id = "reference-kinds", summary = "references (exact path): per-location usage kinds — call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/other — with a kinds breakdown, usageKinds filter (validated), and publicConsumersOnly (usages outside the symbol's declaring project); indexed fallback stays unclassified and says so" },
-                new { id = "symbol-handles", summary = "idx:N~fp symbol handles (index-local, reindex-detecting) accepted by source_context / definition / references / impact — impact PINS the primary declaration to the handle's row (no name-ambiguity re-disambiguation; container is ignored under a handle)" },
+                new { id = "symbol-handles", summary = "Reindex-detecting idx handles pin source_context, definition, references, impact, implementations, and type_hierarchy" },
                 new { id = "filter-honest-counts", summary = "references: totalReferences/totalCandidates, kinds, groups, and summary all honor includeTests (filtered BEFORE counting on both exact and indexed paths); linked multi-project files counted once; filtered summaries say 'test projects excluded' instead of a misleading '0 test'" },
                 new { id = "test-classification", summary = "isTest is REFERENCE-driven: test frameworks via packages OR binary <Reference> (nunit/xunit/MSTest, incl. non-standard names containing nunit.framework), plus compiled-[TestFixture]-attributes-on-graph-leaf promotion for custom-resolve builds where the framework never appears in the csproj. Name shapes are a narrow dotted-suffix fallback only — TestRoute-style names never classify. Classification broadened in schema v7 (reference signals can reclassify a large share of legacy test projects, so isTest cached from earlier schemas may differ); NAME-uniform across same-AssemblyName csproj pairs since v8" },
                 new { id = "bounded-source-reads", summary = "source_context streams only the requested spans from disk (never whole-file reads); contextLines clamped; zero/negative span starts clamp to line 1" },
-                new { id = "arity-exact-partials", summary = "outline partialFiles match generic arity — partial Foo and partial Foo<T> cross-link only their own halves" },
+                new { id = "arity-exact-partials", summary = "partialFiles separate Foo and Foo<T> by syntax arity" },
                 new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. 'partial' is DELIBERATELY not in this string: it has its own isPartial field on every symbol node (plus partialFiles cross-links on outline types). Members also carry 'accessors' ({get: 'public', set: 'private'}) — ONLY when an accessor's accessibility differs from the member's own, so a private setter is no longer invisible. Modifiers since schema v4; accessors since v9" },
                 new { id = "rebuild-hatch", summary = "refresh_index accepts force: 'auto'|'incremental' (delta refresh; hash-identical files skipped — never rebuilds an intact-looking index) or 'full' (delete the index and REBUILD FROM SCRATCH, pump-serialized, works even from state 'failed' — recovery re-attaches the file watcher and git tracking and clears the old error; watch index.progress). The in-band corruption-recovery hatch — no shell access needed" },
                 new { id = "deadline-honesty", summary = "Semantic tools return deadlineMs/elapsedMs. Mid-scan expiry keeps partial, totalIsLowerBound, and 'at least N'; cold load uses partialReason cluster_cold_load. references/implementations split clusterLoadMs/queryMs. Reference totals dedupe project+path+line+kind, expose solutionProjects, and retain outOfGraphCandidates" },
@@ -1240,20 +1241,27 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "implementations")]
-    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to base-list name matching (confidence 'heuristic', unranked). For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead.")]
+    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). Generic declarations may be selected by arity or symbolId; a bare name spanning multiple arities returns symbol_ambiguous. A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to arity-aware base-list syntax matching (confidence 'heuristic', unranked). For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead.")]
     public string Implementations(
         [Description("Interface/type/member name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration or a usage (position mode).")] string? path = null,
         [Description("1-based line for position mode.")] int line = 0,
         [Description("1-based column for position mode (optional).")] int column = 0,
         [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
-        [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000)
+        [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000,
+        [Description("Optional generic type-parameter count. Use 0 for a non-generic declaration, 1 for Foo<T>, etc. A bare name with multiple available arities is refused.")] int? arity = null,
+        [Description("Resolve by a search_symbol candidate's current idx: handle. Takes precedence over name, path+line, and arity.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;
-        if (name is null && (path is null || line <= 0))
-        {
-            return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
-        }
+        var (selection, selectionError) = ResolveArityTarget(
+            name, path, line, column, arity, symbolId, typeOnly: false);
+        if (selectionError is not null) return selectionError;
+        name = selection!.Name;
+        path = selection.Path;
+        line = selection.Line;
+        column = selection.Column;
+        arity = selection.Arity;
+        bool allowHeuristicFallback = selection.AllowHeuristicFallback;
 
         string? failReason = null;
         // dve (b): when the compiler RESOLVED the symbol but found no implementers, the fallback
@@ -1263,11 +1271,11 @@ public sealed partial class NavigationTools
         SemanticDeclaration? resolvedSymbol = null;
         int deadlineMs = Math.Clamp(timeoutMs, 500, 120000); // mirror the service clamp (24n)
         var swSem = System.Diagnostics.Stopwatch.StartNew();
-        var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column);
+        var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column, arity);
         if (target is { } t)
         {
             var (result, reason) = _semantic
-                .ImplementationsAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
+                .ImplementationsAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs, arity)
                 .GetAwaiter().GetResult();
             resolvedSymbol = result?.Symbol;
             if (result is { Implementations.Count: > 0 })
@@ -1341,11 +1349,16 @@ public sealed partial class NavigationTools
         // kind + declaring type — the base-list heuristic only makes sense for a TYPE target.
         if (path is not null)
         {
-            var chain = q.SymbolAt(NormalizePath(path), line);
+            string normalizedPath = NormalizePath(path);
+            var lineSymbols = q.SymbolsStartingAt(normalizedPath, line);
+            targetSym = lineSymbols.FirstOrDefault(hit =>
+                (lookupName.Length == 0 || string.Equals(hit.Name, lookupName, StringComparison.OrdinalIgnoreCase)) &&
+                (arity is null || hit.Arity == arity.Value));
+            var chain = q.SymbolAt(normalizedPath, line);
             if (chain.Count > 0)
             {
-                targetSym = chain[0];
-                if (lookupName.Length == 0) lookupName = chain[0].Name;
+                targetSym ??= chain[0];
+                if (lookupName.Length == 0) lookupName = targetSym.Name;
             }
         }
         if (lookupName.Length == 0)
@@ -1357,7 +1370,9 @@ public sealed partial class NavigationTools
                 meta = Meta.From(_manager.Health(), "heuristic", "syntax"),
             });
         }
-        targetSym ??= q.SearchSymbols(lookupName, "exact", null, 1).FirstOrDefault();
+        targetSym ??= q.SearchSymbols(
+            lookupName, "exact", null, 1, arity: arity).FirstOrDefault();
+        int? fallbackArity = targetSym?.Arity ?? arity;
         string? targetKind = targetSym?.Kind;
         var meta = Meta.From(_manager.Health(), "heuristic", "syntax");
 
@@ -1421,7 +1436,9 @@ public sealed partial class NavigationTools
             });
         }
 
-        var heuristic = q.ImplementationCandidates(lookupName, 50);
+        var heuristic = allowHeuristicFallback
+            ? q.ImplementationCandidates(lookupName, 50, fallbackArity)
+            : new List<SymbolHit>();
         return Json.WithListBudget(heuristic, (items, truncated) => new
         {
             name = lookupName,
@@ -1784,7 +1801,8 @@ public sealed partial class NavigationTools
     /// semantic layer, using the index to locate the best declaration for name targets.
     /// </summary>
     private ((string Path, int Line, int? Column)? Target, string? NameHint) ResolveSemanticTarget(
-        string? name, string? container, string? kinds, string? path, int line, int column)
+        string? name, string? container, string? kinds, string? path, int line, int column,
+        int? arity = null)
     {
         if (path is not null && line > 0)
         {
@@ -1798,7 +1816,8 @@ public sealed partial class NavigationTools
         // here made the live twin invisible and the orphan gate below useless for the exact
         // production case. The ORDER BY still ranks non-generated first, so picks only change when
         // the non-generated candidates are dead.
-        var hits = q.SearchSymbols(name, "exact", SplitCsv(kinds), 20, includeGenerated: true);
+        var hits = q.SearchSymbols(
+            name, "exact", SplitCsv(kinds), 20, includeGenerated: true, arity: arity);
         if (container is { } c)
         {
             hits = hits.Where(h =>
@@ -1964,11 +1983,11 @@ public sealed partial class NavigationTools
         project == IndexQueries.NoProjectGroup ? true : null;
 
     /// <summary>Short, stable (cross-process) identity hash of a symbol row — FNV-1a over
-    /// name/kind/line/path. Embedded in the idx: handle so a rowid the index later reuses for a
+    /// name/kind/arity/line/path. Embedded in the idx: handle so a rowid the index later reuses for a
     /// different symbol fails the check instead of resolving silently.</summary>
     private static string Fingerprint(SymbolHit s)
     {
-        string identity = $"{s.Name}{s.Kind}{s.StartLine}{s.FilePath}";
+        string identity = $"{s.Name}{s.Kind}{s.Arity}{s.StartLine}{s.FilePath}";
         uint h = 2166136261u;
         foreach (char c in identity) h = (h ^ c) * 16777619u;
         return h.ToString("x8");
@@ -1982,6 +2001,7 @@ public sealed partial class NavigationTools
         symbolId = $"idx:{s.Id}~{Fingerprint(s)}",
         s.Name,
         s.Kind,
+        s.Arity,
         ns = s.Ns,
         containingType = s.Container,
         s.Signature,

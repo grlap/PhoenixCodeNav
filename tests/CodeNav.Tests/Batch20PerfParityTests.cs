@@ -1,5 +1,4 @@
 using CodeNav.Core.Indexing;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -50,7 +49,7 @@ public class Batch20PerfParityTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
         }
     }
@@ -91,7 +90,7 @@ public class Batch20PerfParityTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
         }
     }
@@ -114,7 +113,7 @@ public class Batch20PerfParityTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
         }
     }
@@ -141,7 +140,7 @@ public class Batch20PerfParityTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
         }
     }

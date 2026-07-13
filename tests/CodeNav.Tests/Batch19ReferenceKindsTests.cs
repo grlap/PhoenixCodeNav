@@ -3,7 +3,6 @@ using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
 using CodeNav.WorkspaceGen;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -81,9 +80,9 @@ public class Batch19ReferenceKindsTests
                 Assert.True(manager.IsQueryable);
                 var tools = new NavigationTools(manager, semantic);
 
-                var all = Parse(tools.References(name: "NotNull", timeoutMs: 90000));
-                if (all.TryGetProperty("meta", out var m) && m.GetProperty("confidence").GetString() != "exact")
-                    return; // no framework reference assemblies on this machine — semantic path unavailable
+                if (!semantic.FrameworkRefsAvailable) return; // review C2: deterministic env skip (fast), retry handles transients
+                var all = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+                    () => tools.References(name: "NotNull", timeoutMs: 90000));
 
                 // Kinds breakdown covers the probe's three usage forms; samples carry per-hit kinds.
                 var kinds = all.GetProperty("kinds");
@@ -97,14 +96,16 @@ public class Batch19ReferenceKindsTests
                     "every exact sample carries its usage kind");
 
                 // usageKinds filters COUNTS, not just samples (same discipline as includeGenerated).
-                var onlyNameof = Parse(tools.References(name: "NotNull", usageKinds: "nameof", timeoutMs: 90000));
+                var onlyNameof = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+                    () => tools.References(name: "NotNull", usageKinds: "nameof", timeoutMs: 90000));
                 Assert.True(onlyNameof.GetProperty("totalReferences").GetInt32() >= 1);
                 Assert.True(onlyNameof.GetProperty("totalReferences").GetInt32() < unfilteredTotal,
                     "nameof-only total should be smaller than the unfiltered total");
                 Assert.Single(onlyNameof.GetProperty("kinds").EnumerateObject()); // nameof is the only bucket
 
                 // publicConsumersOnly: the declaring project's own usages (incl. the probe file) drop out.
-                var external = Parse(tools.References(name: "NotNull", publicConsumersOnly: true, timeoutMs: 90000));
+                var external = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+                    () => tools.References(name: "NotNull", publicConsumersOnly: true, timeoutMs: 90000));
                 int externalTotal = external.GetProperty("totalReferences").GetInt32();
                 Assert.True(externalTotal < unfilteredTotal, "declaring-project usages were not excluded");
                 Assert.DoesNotContain(external.GetProperty("groups").EnumerateArray(),
@@ -119,7 +120,8 @@ public class Batch19ReferenceKindsTests
                         .FirstOrDefault(h => !h.FilePath.Contains("Common", StringComparison.OrdinalIgnoreCase));
                     if (use is not null)
                     {
-                        var posExt = Parse(tools.References(path: use.FilePath, line: use.Line, publicConsumersOnly: true, timeoutMs: 90000));
+                        var posExt = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+                            () => tools.References(path: use.FilePath, line: use.Line, publicConsumersOnly: true, timeoutMs: 90000));
                         if (posExt.TryGetProperty("meta", out var pm) && pm.GetProperty("confidence").GetString() == "exact")
                             Assert.DoesNotContain(posExt.GetProperty("groups").EnumerateArray(),
                                 g => g.GetProperty("project").GetString() == "Acme.Platform.Common");
@@ -144,7 +146,7 @@ public class Batch19ReferenceKindsTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
+            TestWorkspaceCleanup.ClearIndexPools(root);
             try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
         }
     }

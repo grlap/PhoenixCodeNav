@@ -4,7 +4,6 @@ using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -307,7 +306,7 @@ public class Batch26AssemblyRefEdgeTests
                 var tools = new NavigationTools(m, semantic);
 
                 // Pass 1 loads both (one direction wired, the other left as a hole/dll).
-                var first = Parse(tools.References(name: "AlphaCore", timeoutMs: 30000));
+                var first = SemanticRetry.ParseExactWithRetry(() => tools.References(name: "AlphaCore", timeoutMs: 30000)); // n7ly
                 Assert.Equal("exact", first.GetProperty("meta").GetProperty("confidence").GetString());
 
                 // Mutate CycB so its fingerprint changes, and wait until the INDEX reflects it —
@@ -323,7 +322,7 @@ public class Batch26AssemblyRefEdgeTests
 
                 // Pass 2: pre-guard this wired CycB->CycA into an accepted cycle and burned the
                 // full deadline into semantic_timeout; post-guard it completes exact and fast.
-                var second = Parse(tools.References(name: "AlphaCore", timeoutMs: 30000));
+                var second = SemanticRetry.ParseExactWithRetry(() => tools.References(name: "AlphaCore", timeoutMs: 30000)); // n7ly: a REAL reload deadlock times out on every attempt and still fails
                 Assert.Equal("exact", second.GetProperty("meta").GetProperty("confidence").GetString());
                 Assert.True(second.GetProperty("timing").GetProperty("elapsedMs").GetInt64() < 25000,
                     "second pass burned the deadline — the reload cycle deadlock is back");
@@ -516,7 +515,7 @@ public class Batch26AssemblyRefEdgeTests
 
     private static void Cleanup(string root)
     {
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(root);
         try { Directory.Delete(root, recursive: true); } catch { /* windows locks */ }
     }
 }

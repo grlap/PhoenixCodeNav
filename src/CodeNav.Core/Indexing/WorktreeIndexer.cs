@@ -318,7 +318,9 @@ public static class WorktreeIndexer
                     $"{ex.GetType().Name} during reconcile (see server log)", sw);
             }
 
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            // kae: scoped — release THIS worktree database's pooled reader handles so the atomic
+            // install can replace the file; a global clear could hit unrelated databases (rqek).
+            IndexQueries.ClearPoolsFor(dbPath);
             BeforeAnchoredInstallForTest?.Invoke(dbPath);
             if (!destination.InstallStage())
             {
@@ -340,7 +342,8 @@ public static class WorktreeIndexer
         }
         finally
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            // kae: scoped teardown for the same reason as the pre-install clear above.
+            IndexQueries.ClearPoolsFor(dbPath);
         }
     }
 

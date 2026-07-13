@@ -107,7 +107,9 @@ public class Batch41Tests
         finally
         {
             Cleanup(root);
-            SqliteConnection.ClearAllPools();
+            // kae review: co holds coDb (bare holds nothing) — clear each root it deletes.
+            TestWorkspaceCleanup.ClearIndexPools(co);
+            TestWorkspaceCleanup.ClearIndexPools(bare);
             try { Directory.Delete(co, recursive: true); } catch { }
             try { Directory.Delete(bare, recursive: true); } catch { }
         }
@@ -538,7 +540,7 @@ public class Batch41Tests
             Assert.Equal("worktree_not_indexable", recoveryRequired.Action);
             using (var recover = new IndexStore(wtDb, createNew: false))
                 recover.CheckpointForAtomicInstall();
-            SqliteConnection.ClearAllPools();
+            IndexQueries.ClearPoolsFor(wtDb); // kae: scoped — mirror the product's install-path clear
             Assert.Equal("refreshed", WorktreeIndexer.Ensure(
                 root, mainDb, wt, "refresh", _ => { }).Action);
             GC.KeepAlive(stdout);
@@ -1619,9 +1621,7 @@ public class Batch41Tests
         Git(root, "commit -q -m init");
     }
 
-    private static void Git(string dir, string args) =>
-        GitInfo.RunProcess("git", dir,
-            "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args, waitMs: 20000);
+    private static void Git(string dir, string args) => TestGit.Run(dir, args); // n7ly: loud + retried
 
     /// <summary>BeforeAnchoredInstallForTest is process-global and test classes run in
     /// parallel — a closure must act only on ITS OWN worktree's install, or a foreign Ensure
@@ -1684,13 +1684,13 @@ public class Batch41Tests
 
     private static void Cleanup(string root)
     {
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(root);
         try { Directory.Delete(root, recursive: true); } catch { /* windows locks */ }
     }
 
     private static void CleanupWorktree(string mainRoot, string wt)
     {
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(wt);
         try { Git(mainRoot, $"worktree remove --force \"{wt}\""); } catch { }
         try { Directory.Delete(wt, recursive: true); } catch { /* already removed / locks */ }
     }

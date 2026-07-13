@@ -624,19 +624,66 @@ public sealed class IndexManager : IDisposable
         lock (_disposeLock)
         {
             if (_disposed) return; // Dispose already ran — don't publish a watcher it can't reach
-            _gitWatcher = new GitWatcher(_gitDir, OnGitHeadMaybeChanged);
+            _gitWatcher = new GitWatcher(_gitDir, () => OnGitHeadMaybeChanged());
         }
     }
 
-    /// <summary>Debounced GitWatcher callback: if HEAD actually moved, reconcile the diff.</summary>
-    private void OnGitHeadMaybeChanged()
+    // 17zd: bounded retry for a git signal whose HEAD is transiently unresolvable — the
+    // logs/-created event of a repo's FIRST commit fires while `git commit` is still finalizing
+    // (refs/heads/* not yet written), and under heavy load the 400ms debounce elapses inside
+    // that window (or a starved git.exe spawn fails). Swallowing that signal loses the first
+    // commit PERMANENTLY: it is the only top-level event the commit produces, and the reflog
+    // append lands before the late-attached logs watcher is live.
+    private const int GitHeadRetryAttempts = 5;
+    private int _gitHeadRetriesLeft = GitHeadRetryAttempts;
+    private System.Threading.Timer? _gitHeadRetry;
+
+    private void ScheduleGitHeadRetry()
     {
         if (_disposed) return;
+        if (Interlocked.Decrement(ref _gitHeadRetriesLeft) < 0)
+        {
+            _log("Git HEAD unresolvable after retries — waiting for the next git signal.");
+            return;
+        }
+        try
+        {
+            (_gitHeadRetry ??= new System.Threading.Timer(
+                    _ => OnGitHeadMaybeChanged(fromRetry: true),
+                    null, Timeout.Infinite, Timeout.Infinite))
+                .Change(TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Review (17zd): Dispose can win the race between the _disposed check above and this
+            // Change — the retry chain simply ends with the manager instead of crashing the
+            // timer thread.
+        }
+    }
+
+    /// <summary>Debounced GitWatcher callback: if HEAD actually moved, reconcile the diff.
+    /// Review (17zd): every WATCHER-originated signal grants a fresh retry budget; only the
+    /// retry timer's own re-checks spend it. The old refill-on-resolvable-HEAD variant was
+    /// self-defeating in the commit-less repo this exists for — HEAD is null by definition
+    /// there, so any pre-first-commit signal (fetch, branch creation) burned the budget
+    /// permanently and the eventual first commit was lost exactly as before the fix.</summary>
+    private void OnGitHeadMaybeChanged(bool fromRetry = false)
+    {
+        if (_disposed) return;
+        if (!fromRetry) _gitHeadRetriesLeft = GitHeadRetryAttempts;
         string? head = GitInfo.HeadCommit(_workspaceRoot);
-        if (head is null) return;
+        if (head is null)
+        {
+            ScheduleGitHeadRetry(); // 17zd: transient — do not swallow the only first-commit signal
+            return;
+        }
         string? current = _indexedCommit;
         if (current is null)
         {
+            // 17zd-b: this branch was SILENT — a first-commit signal that subsequently died in
+            // the pump (store-null skip, or the catch-all discarding RecordCommit) left no trace
+            // to diagnose. Log the handoff; the pump logs the completed record.
+            _log($"Git baseline signal: queueing first-commit record {Short(head)}.");
             _refreshQueue.Writer.TryWrite(new RefreshRequest(Array.Empty<string>(), head));
             return;
         }
@@ -764,6 +811,7 @@ public sealed class IndexManager : IDisposable
                 {
                     _indexedCommit = commit;
                     _indexedBranch = recordBranch ?? _indexedBranch;
+                    _log($"Git baseline recorded: {Short(commit)}."); // 17zd-b: close the loop visibly
                 }
                 _state = "ready";
             }
@@ -797,6 +845,20 @@ public sealed class IndexManager : IDisposable
         _stableIndexEpoch.Set();
     }
 
+    /// <summary>kae: scoped pool release for every path this manager's readers may have pooled —
+    /// the live IO path and, when the directory authority redirected it, the original logical
+    /// path. Replaces process-global ClearAllPools, which could invalidate an unrelated
+    /// database's pooled reader at the rent boundary (rqek). The OrdinalIgnoreCase guard only
+    /// DEDUPES the common identical-path case; a genuinely case-variant pair would clear one
+    /// spelling — acceptable because pool keys are GetFullPath-canonical and no caller opens
+    /// with a case-variant of either field (see IndexQueries.ReadConnectionString).</summary>
+    private void ClearOwnedDatabasePools()
+    {
+        IndexQueries.ClearPoolsFor(_databaseIoPath);
+        if (!string.Equals(_databaseIoPath, _dbPath, StringComparison.OrdinalIgnoreCase))
+            IndexQueries.ClearPoolsFor(_dbPath);
+    }
+
     /// <summary>The pump-side rebuild-from-scratch (tky): runs ON the pump thread so no delta
     /// batch can interleave with the teardown. Discards the store, deletes the db, rebuilds with
     /// live progress (the same building-state surface as a first run), reopens, and re-records
@@ -812,7 +874,7 @@ public sealed class IndexManager : IDisposable
         {
             _store?.Dispose();
             _store = null;
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            ClearOwnedDatabasePools();
             EnsureDatabaseAuthority();
             // Delete with a bounded retry: in-flight tool calls hold short-lived READ connections
             // (an open handle blocks Windows File.Delete); pooled ones are cleared, live ones
@@ -825,7 +887,7 @@ public sealed class IndexManager : IDisposable
             {
                 try
                 {
-                    Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+                    ClearOwnedDatabasePools();
                     foreach (var sidecar in new[]
                              { _databaseIoPath + "-wal", _databaseIoPath + "-shm",
                                _databaseIoPath + "-journal" })
@@ -1135,6 +1197,7 @@ public sealed class IndexManager : IDisposable
     {
         lock (_disposeLock) { _disposed = true; } // block any in-flight watcher publication
         _gitWatcher?.Dispose();              // stop git HEAD signals
+        _gitHeadRetry?.Dispose();            // 17zd: stop the null-HEAD retry (callback checks _disposed)
         _watcher?.Dispose();                 // stop new events reaching the queue
         _refreshQueue.Writer.TryComplete();  // let the pump drain and exit its loop
 
@@ -1195,10 +1258,12 @@ public sealed class IndexManager : IDisposable
             {
                 _store?.Dispose();
                 CleanupBeforePoolClearForTest?.Invoke();
-                // Release every idle native SQLite handle before releasing the cross-process
-                // lease. Otherwise a second Phoenix could legitimately acquire the lease while
-                // this process still retained pooled WAL state for the same database.
-                Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+                // Release this database's idle native SQLite handles before releasing the
+                // cross-process lease. Otherwise a second Phoenix could legitimately acquire the
+                // lease while this process still retained pooled WAL state for the same database.
+                // kae: scoped — a global clear here could invalidate an unrelated database's
+                // pooled reader mid-rent elsewhere in the process (rqek).
+                ClearOwnedDatabasePools();
             }
             catch (Exception ex)
             {

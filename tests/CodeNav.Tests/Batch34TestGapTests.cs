@@ -2,7 +2,6 @@ using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -90,7 +89,7 @@ public class Batch34TestGapTests
                 if (!semantic.FrameworkRefsAvailable) return;
                 var tools = new NavigationTools(m, semantic);
 
-                var def = Parse(tools.Definition(name: "Wide", timeoutMs: 60000));
+                var def = SemanticRetry.ParseExactWithRetry(() => tools.Definition(name: "Wide", timeoutMs: 60000));
                 Assert.Equal("exact", def.GetProperty("meta").GetProperty("confidence").GetString());
                 Assert.Equal(20, def.GetProperty("declarations").GetArrayLength());
                 Assert.True(def.GetProperty("declarationsTruncated").GetBoolean(),
@@ -189,7 +188,7 @@ public class Batch34TestGapTests
                 {
                     if (total >= 2) throw new OperationCanceledException();
                 };
-                var refs = Parse(tools.References(name: "Ping", timeoutMs: 60000));
+                var refs = SemanticRetry.ParseExactWithRetry(() => tools.References(name: "Ping", timeoutMs: 60000));
                 Assert.Equal("exact", refs.GetProperty("meta").GetProperty("confidence").GetString());
                 Assert.Equal(2, refs.GetProperty("totalReferences").GetInt32()); // counted-so-far survives
                 Assert.True(refs.GetProperty("totalIsLowerBound").GetBoolean());
@@ -199,7 +198,7 @@ public class Batch34TestGapTests
 
                 // Seam off: the same query is a full census again — no hedge, all 3 counted.
                 semantic.TestOnlyPerLocationCounted = null;
-                var full = Parse(tools.References(name: "Ping", timeoutMs: 60000));
+                var full = SemanticRetry.ParseExactWithRetry(() => tools.References(name: "Ping", timeoutMs: 60000));
                 Assert.Equal(3, full.GetProperty("totalReferences").GetInt32());
                 Assert.False(full.TryGetProperty("totalIsLowerBound", out _));
             }
@@ -223,7 +222,7 @@ public class Batch34TestGapTests
 
     private static void Cleanup(string root)
     {
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(root);
         try { Directory.Delete(root, recursive: true); } catch { /* windows locks */ }
     }
 }

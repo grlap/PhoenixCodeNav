@@ -2,7 +2,6 @@ using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
-using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -136,7 +135,8 @@ public class Batch37Tests
             if (!sem.FrameworkRefsAvailable) return; // env guard: no reference assemblies
             var tools = new NavigationTools(m, sem);
 
-            var refs = Parse(tools.References(name: "Zeta", timeoutMs: 90000));
+            var refs = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+                () => tools.References(name: "Zeta", timeoutMs: 90000));
             Assert.Equal("exact", refs.GetProperty("meta").GetProperty("confidence").GetString());
             var timing = refs.GetProperty("timing");
             long load = timing.GetProperty("clusterLoadMs").GetInt64();
@@ -147,7 +147,8 @@ public class Batch37Tests
             Assert.True(load + query <= timing.GetProperty("elapsedMs").GetInt64() + 250,
                 $"split {load}+{query} exceeds elapsed {timing.GetProperty("elapsedMs").GetInt64()}");
 
-            var impls = Parse(tools.Implementations(name: "IZetaLike", timeoutMs: 90000));
+            var impls = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+                () => tools.Implementations(name: "IZetaLike", timeoutMs: 90000));
             Assert.Equal("exact", impls.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.True(impls.GetProperty("timing").GetProperty("clusterLoadMs").GetInt64() >= 0);
         }
@@ -177,7 +178,9 @@ public class Batch37Tests
             {
                 if (phase == "beforeScanSetLoad") throw new OperationCanceledException("test: deadline died during load");
             };
-            var cold = Parse(tools.References(name: "IZetaLike", mode: "semantic", timeoutMs: 5000));
+            var cold = SemanticRetry.ParseWithRetry( // n7ly sweep: wait for the DELIBERATE degrade, not a transient one
+                () => tools.References(name: "IZetaLike", mode: "semantic", timeoutMs: 5000),
+                j => j.TryGetProperty("partialReason", out var pv) && (pv.GetString() ?? "").Contains("cluster_cold_load"), "partialReason==cluster_cold_load");
             Assert.Equal("semantic_unavailable", cold.GetProperty("error").GetString());
             string coldReason = cold.GetProperty("partialReason").GetString()!;
             Assert.StartsWith("cluster_cold_load", coldReason);
@@ -188,12 +191,15 @@ public class Batch37Tests
             {
                 if (phase == "afterScanSetLoad") throw new OperationCanceledException("test: deadline died during scan");
             };
-            var timeout = Parse(tools.References(name: "IZetaLike", mode: "semantic", timeoutMs: 5000));
+            var timeout = SemanticRetry.ParseWithRetry( // n7ly sweep: wait for the DELIBERATE degrade, not a transient one
+                () => tools.References(name: "IZetaLike", mode: "semantic", timeoutMs: 5000),
+                j => j.TryGetProperty("partialReason", out var pv) && (pv.GetString() ?? "").Contains("semantic_timeout"), "partialReason==semantic_timeout");
             Assert.Equal("semantic_timeout", timeout.GetProperty("partialReason").GetString());
 
             // The advice the cold token gives is TRUE: an unhooked retry returns exact.
             sem.TestOnlyPhaseHook = null;
-            var warm = Parse(tools.References(name: "IZetaLike", timeoutMs: 90000));
+            var warm = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+                () => tools.References(name: "IZetaLike", timeoutMs: 90000));
             Assert.Equal("exact", warm.GetProperty("meta").GetProperty("confidence").GetString());
         }
         finally { Cleanup(root); }
@@ -343,7 +349,7 @@ public class Batch37Tests
 
     private static void Cleanup(string root)
     {
-        SqliteConnection.ClearAllPools();
+        TestWorkspaceCleanup.ClearIndexPools(root);
         try { Directory.Delete(root, recursive: true); } catch { /* windows locks */ }
     }
 }
