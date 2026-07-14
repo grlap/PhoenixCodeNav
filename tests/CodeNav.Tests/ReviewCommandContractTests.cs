@@ -47,28 +47,11 @@ public class ReviewCommandContractTests
         Assert.Contains("Attempt exactly two reviewer session spawns", text);
         Assert.Contains("Call `termal_spawn_session` exactly twice", text);
         Assert.Contains("Never retry either slot", text);
-        Assert.Contains("Normalize every repository-relative target path to `/` separators", text);
-        Assert.Contains("case-insensitive Windows matching semantics", text);
-        Assert.Contains("this self-hosted gate cannot certify the change: return INCONCLUSIVE and do not spawn reviewers", text);
-        Assert.Contains("At any depth, treat a basename of `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `CLAUDE.local.md`, or `.mcp.json`", text);
-        Assert.Contains("any path containing an `.agents`, `.claude`, or `.codex` directory segment", text);
-        Assert.Contains("A dirty self-review may be supplemental evidence only, never the required CLEAN gate", text);
+        Assert.Contains("Review-policy and instruction files are ordinary review targets", text);
+        Assert.DoesNotContain("this self-hosted gate cannot certify", text);
         Assert.Contains("git --no-optional-locks status --short", text);
-        Assert.Contains("git ls-files --others --ignored --exclude-standard", text);
+        Assert.DoesNotContain("git ls-files --others --ignored --exclude-standard", text);
         Assert.Contains("If any inventory command fails or its path output is truncated or malformed, return INCONCLUSIVE", text);
-        Assert.Contains("':(icase,glob)**/AGENTS.md'", text);
-        Assert.Contains("':(icase,glob)**/AGENTS.override.md'", text);
-        Assert.Contains("':(icase,glob)**/CLAUDE.md'", text);
-        Assert.Contains("':(icase,glob)**/CLAUDE.local.md'", text);
-        Assert.Contains("':(icase,glob)**/.mcp.json'", text);
-        Assert.Contains("':(icase,glob)**/.agents'", text);
-        Assert.Contains("':(icase,glob)**/.agents/**'", text);
-        Assert.Contains("':(icase,glob)**/.claude'", text);
-        Assert.Contains("':(icase,glob)**/.claude/**'", text);
-        Assert.Contains("':(icase,glob)**/.codex'", text);
-        Assert.Contains("':(icase,glob)**/.codex/**'", text);
-        Assert.Contains("':(icase,literal)tests/CodeNav.Tests/ReviewCommandContractTests.cs'", text);
-        Assert.DoesNotContain("':(glob)", text);
         Assert.Contains("inspect changed-entry metadata without following links or reparse points", text);
         Assert.Contains("Treat tracked symlinks as Git link metadata and never dereference them", text);
         Assert.Contains("if an untracked symlink/junction/reparse point or any resolved path can escape the root, return INCONCLUSIVE without reading it", text);
@@ -82,25 +65,24 @@ public class ReviewCommandContractTests
         Assert.Contains("stop this turn immediately", text, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Do not poll with `termal_wait_delegations`", text);
         Assert.Contains("complete non-truncated packets", text);
-        Assert.Contains("Confirm reintroduction-test evidence for behavior changes or bug fixes", text);
+        Assert.DoesNotContain("Confirm reintroduction-test evidence", text);
+        Assert.Contains("Run `dotnet build PhoenixCodeNav.sln -c Release --no-restore`", text);
         Assert.Contains("target identity", text, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("git --no-pager diff --binary --no-ext-diff --no-textconv --no-color", text);
         Assert.Contains("git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --check", text);
-        Assert.Contains("After validation, restart all of Step 1 from its path-only ordinary and ignored inventories", text);
-        Assert.Contains("Reapply bootstrap trust matching and no-follow containment before any diff check, content hash, or spawn", text);
+        Assert.Contains("After validation, restart all of Step 1 from its path-only inventories", text);
+        Assert.Contains("Reapply no-follow containment before any diff check, content hash, or spawn", text);
         Assert.Contains("If validation changed the identity, repeat Step 2 against the new identity and then restart all of Step 1 again", text);
         Assert.Contains("recompute the current parent identity", text);
         Assert.DoesNotContain("then invoke `/review-with-delegate` again", text, StringComparison.OrdinalIgnoreCase);
 
-        int ignoredTrustInventory = text.IndexOf("git ls-files --others --ignored --exclude-standard", StringComparison.Ordinal);
-        int bootstrapCheck = text.IndexOf("If any target matches, this self-hosted gate cannot certify", StringComparison.Ordinal);
+        int pathInventory = text.IndexOf("git ls-files --others --exclude-standard", StringComparison.Ordinal);
         int containmentCheck = text.IndexOf("Before hashing, diffing, or opening target content", StringComparison.Ordinal);
         int diffCheck = text.IndexOf("git --no-pager diff --no-ext-diff --no-textconv --no-color --check", StringComparison.Ordinal);
         int contentHash = text.IndexOf("a hash of `git --no-pager diff --binary --no-ext-diff --no-textconv --no-color`", StringComparison.Ordinal);
-        Assert.True(ignoredTrustInventory >= 0 && ignoredTrustInventory < bootstrapCheck &&
-            bootstrapCheck < containmentCheck &&
+        Assert.True(pathInventory >= 0 && pathInventory < containmentCheck &&
             containmentCheck < diffCheck && containmentCheck < contentHash,
-            "The parent bootstrap and containment boundaries must run before content-bearing diff checks or hashing.");
+            "The parent inventory and containment boundaries must run before content-bearing diff checks or hashing.");
     }
 
     [Fact]
@@ -109,32 +91,13 @@ public class ReviewCommandContractTests
         string text = Read(".claude", "commands", "review-local.md");
 
         Assert.Contains("You are a delegated child session for TermAl delegation", text);
-        Assert.Contains("Normalize repository-relative target paths to `/` separators", text);
-        Assert.Contains("use case-insensitive matching on Windows", text);
-        Assert.Contains("this dirty command/lens set is reviewing its own trust policy", text);
-        Assert.Contains("At any depth, a basename of `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `CLAUDE.local.md`, or `.mcp.json`", text);
-        Assert.Contains("any `.agents`, `.claude`, or `.codex` directory segment", text);
-        Assert.Contains("emit a lifecycle `Status: completed` packet with `Review verdict: INCONCLUSIVE`", text);
-        Assert.Contains("Do not open target-file content until the bootstrap check below is complete", text);
-        Assert.Contains("stop before the broad scan or loading any reviewer lens or changed trust-surface content", text);
-        Assert.Contains("Do not attempt advisory inspection with dirty instructions", text);
+        Assert.Contains("Review-policy and instruction files are ordinary review targets", text);
+        Assert.Contains("inspect their exact dirty bytes instead of refusing the review", text);
+        Assert.DoesNotContain("this dirty command/lens set is reviewing its own trust policy", text);
         Assert.Contains("git --no-optional-locks status --short", text);
-        Assert.Contains("git ls-files --others --ignored --exclude-standard", text);
+        Assert.DoesNotContain("git ls-files --others --ignored --exclude-standard", text);
         Assert.Contains("If any inventory command fails or its path output is truncated or malformed", text);
         Assert.Contains("`Review verdict: INCONCLUSIVE` and stop before reading target content", text);
-        Assert.Contains("':(icase,glob)**/AGENTS.md'", text);
-        Assert.Contains("':(icase,glob)**/AGENTS.override.md'", text);
-        Assert.Contains("':(icase,glob)**/CLAUDE.md'", text);
-        Assert.Contains("':(icase,glob)**/CLAUDE.local.md'", text);
-        Assert.Contains("':(icase,glob)**/.mcp.json'", text);
-        Assert.Contains("':(icase,glob)**/.agents'", text);
-        Assert.Contains("':(icase,glob)**/.agents/**'", text);
-        Assert.Contains("':(icase,glob)**/.claude'", text);
-        Assert.Contains("':(icase,glob)**/.claude/**'", text);
-        Assert.Contains("':(icase,glob)**/.codex'", text);
-        Assert.Contains("':(icase,glob)**/.codex/**'", text);
-        Assert.Contains("':(icase,literal)tests/CodeNav.Tests/ReviewCommandContractTests.cs'", text);
-        Assert.DoesNotContain("':(glob)", text);
         Assert.Contains("inspect changed-entry metadata without following links or reparse points", text);
         Assert.Contains("apply the same lstat/containment check to the instruction files about to be read", text);
         Assert.Contains("Treat tracked symlinks as Git link metadata and never dereference them", text);
@@ -151,19 +114,18 @@ public class ReviewCommandContractTests
         Assert.DoesNotContain("\n  - Reproduction:", text);
         Assert.Contains("Commands Run:", text);
         Assert.Contains("Files Inspected:", text);
-        Assert.Contains("Historical red-run/reintroduction evidence is owned and reported by the parent validation gate", text);
+        Assert.DoesNotContain("Historical red-run/reintroduction evidence is owned and reported by the parent validation gate", text);
+        Assert.Contains("Regression and contract tests structurally exercise the changed behavior", text);
         Assert.Contains("git --no-pager diff --binary --no-ext-diff --no-textconv --no-color", text);
         Assert.Contains("git --no-pager diff --cached --binary --no-ext-diff --no-textconv --no-color", text);
 
-        int ignoredTrustInventory = text.IndexOf("git ls-files --others --ignored --exclude-standard", StringComparison.Ordinal);
-        int bootstrapCheck = text.IndexOf("If any target matches, this dirty command/lens set", StringComparison.Ordinal);
+        int pathInventory = text.IndexOf("git ls-files --others --exclude-standard", StringComparison.Ordinal);
         int containmentCheck = text.IndexOf("Before hashing, diffing, or opening target content", StringComparison.Ordinal);
         int contentDiff = text.IndexOf("git --no-pager diff --binary --no-ext-diff --no-textconv --no-color", StringComparison.Ordinal);
-        int instructionRead = text.IndexOf("Read the now-unchanged `CLAUDE.md` and `AGENTS.md`", StringComparison.Ordinal);
-        Assert.True(ignoredTrustInventory >= 0 && ignoredTrustInventory < bootstrapCheck &&
-            bootstrapCheck < containmentCheck &&
+        int instructionRead = text.IndexOf("Read the current `CLAUDE.md` and `AGENTS.md`", StringComparison.Ordinal);
+        Assert.True(pathInventory >= 0 && pathInventory < containmentCheck &&
             containmentCheck < instructionRead && instructionRead < contentDiff,
-            "Trusted instructions and containment checks must precede patch-content reads.");
+            "Current instructions and containment checks must precede patch-content reads.");
     }
 
     [Fact]

@@ -139,7 +139,10 @@ public sealed partial class SemanticService : IDisposable
         _manager.Telemetry.Emit(new
         {
             e = "semanticOp",
-            ts = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"),
+            // InvariantCulture: `:` in a custom format is the CULTURE time separator — on
+            // locales like fi-FI it renders `.`, breaking ISO-8601 (x5ls.1 review F6).
+            ts = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ",
+                System.Globalization.CultureInfo.InvariantCulture),
             corr = Guid.NewGuid().ToString("N")[..8],
             tool,
             result,
@@ -188,8 +191,11 @@ public sealed partial class SemanticService : IDisposable
                 EmitOpTelemetry("definition", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
                 return (null, "symbol_not_resolved");
             }
+            // Review r2: materialize BEFORE the emit — a Describe throw after an "exact"
+            // record would add a second ("error") record for the same op via the catch.
+            var described = Describe(symbol);
             EmitOpTelemetry("definition", "exact", null, ownerBox.Stats); // epuc.1
-            return (Describe(symbol), null);
+            return (described, null);
         }
         catch (OperationCanceledException)
         {
@@ -495,9 +501,12 @@ public sealed partial class SemanticService : IDisposable
                 .ThenBy(r => r.Declaration.SymbolDisplay, StringComparer.Ordinal)
                 .ToList();
 
+            // Review r2: materialize BEFORE the emit — see DefinitionAsync.
+            var payload = new SemanticImplementations(Describe(symbol), results, coverage, skipped,
+                deadlineExhausted,
+                ClusterLoadMs: clusterLoadMs, QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs);
             EmitOpTelemetry("implementations", "exact", null, ownerBox.Stats, scanBox.Stats); // epuc.1
-            return (new SemanticImplementations(Describe(symbol), results, coverage, skipped, deadlineExhausted,
-                ClusterLoadMs: clusterLoadMs, QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs), null);
+            return (payload, null);
         }
         catch (OperationCanceledException)
         {

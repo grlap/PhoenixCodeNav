@@ -70,8 +70,8 @@ discipline works precisely because it does not trust the author's risk assessmen
 The loop, in order — no step skipped or reordered:
 
 1. Implement.
-2. Tests, **reintroduction-verified**: temporarily re-break the code and prove the test goes
-   red, then restore. A test that never failed proves nothing.
+2. Add focused regression or contract tests for changed behavior. Tests must exercise the
+   decisive behavior and assertions, not merely prove that the code does not throw.
 3. `dotnet build` at **0 warnings**; `dotnet test` green. Known flake:
    `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` (watcher timing) — if it fires
    in a full run, verify it passes isolated and note it.
@@ -119,10 +119,8 @@ a durable fan-in.
 - Both commands are review-only. They never edit source, mutate Git, commit, push, or run
   Dolt remote sync. The parent may reconcile local Beads findings after fan-in.
 - A failed, missing, or dead reviewer makes the review INCONCLUSIVE, never CLEAN.
-- Changes at any depth to `AGENTS.md`/`AGENTS.override.md`, `CLAUDE.md`/`CLAUDE.local.md`,
-  `.mcp.json`, an `.agents`/`.claude`/`.codex` directory, or the review-command contract test
-  cannot be certified by the dirty self-hosted gate. They require an independent external/manual
-  adversarial review or the last committed trusted command/lens versions.
+- Changes to review commands, reviewer lenses, repository instructions, and their contract tests
+  are reviewed as ordinary exact-byte targets; they do not disable the review gate.
 - If the TermAl MCP bridge is unavailable, stop and report it; a self-review does not
   substitute for the required independent review round.
 - The current TermAl MCP surface cannot send a follow-up turn to an existing child. When

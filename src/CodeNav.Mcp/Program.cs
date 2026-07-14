@@ -4,6 +4,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
+// x5ls.1: the telemetry producer's hello.mcpVersion — Core cannot reference Mcp's BuildInfo.
+CodeNav.Core.Telemetry.TelemetryProducer.ProductVersion = BuildInfo.Version;
+
 string? workspaceRoot = null;
 string? indexDb = null;
 bool rebuild = false;

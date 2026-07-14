@@ -6,7 +6,7 @@ namespace CodeNav.Core.Diagnostics;
 /// <summary>
 /// Owns: the bounded, non-blocking, privacy-safe telemetry stream (epuc.1) — one JSONL record
 /// per semantic operation, appended by a background drainer to
-/// {workspace}/.codenav/telemetry/phoenix-{pid}-{start}.jsonl and mirrored into a bounded
+/// {workspace}/.codenav/telemetry/phoenix-{pid}-{start}-{seq}.jsonl and mirrored into a bounded
 /// in-memory ring (the future portal's snapshot source; see
 /// docs/internal-operations-portal.md — the portal consumes files/ring and can never block
 /// the MCP server).

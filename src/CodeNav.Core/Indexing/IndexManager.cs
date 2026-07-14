@@ -76,8 +76,11 @@ public sealed class IndexManager : IDisposable
     // as the reflected git commit after the batch succeeds (git-aware reconcile). FullRebuild
     // (tky) throws the whole index away and rebuilds from scratch — the in-band recovery hatch
     // (field: parked at state 'failed' with no remedy but shell rm -rf .codenav).
+    // Reason (x5ls.1.2 review B2): explicit provenance for the refresh telemetry frame —
+    // shape-derivation mislabeled tool-requested batches as watcher_batch and git fallback
+    // sweeps as full_sweep. Producers label at the source; the pump falls back to shape.
     private sealed record RefreshRequest(IReadOnlyCollection<string>? Paths, string? RecordCommit = null,
-        bool FullRebuild = false);
+        bool FullRebuild = false, string? Reason = null);
 
     private readonly string _workspaceRoot;
     private readonly string _dbPath;
@@ -148,7 +151,8 @@ public sealed class IndexManager : IDisposable
     private readonly object _resourceReleaseLock = new();
     private bool _ownedResourcesReleased;
 
-    public IndexManager(string workspaceRoot, string? dbPath = null, Action<string>? log = null)
+    public IndexManager(string workspaceRoot, string? dbPath = null, Action<string>? log = null,
+        string? telemetryPipeName = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _dbPath = Path.GetFullPath(dbPath ?? IndexBuilder.DefaultDbPath(_workspaceRoot));
@@ -157,6 +161,188 @@ public sealed class IndexManager : IDisposable
         // epuc.1: one bounded telemetry stream per manager (== per workspace per process).
         // Lazy-free by design: the writer task parks on an empty channel until first Emit.
         Telemetry = new Diagnostics.TelemetryLog(_workspaceRoot, _log);
+        // x5ls.1: the telemetry API v1 IPC producer. Portal absent = cheap periodic connect
+        // attempts with capped backoff; disabled entirely via PHOENIX_TELEMETRY_IPC=0.
+        // telemetryPipeName overrides the normative endpoint (contract tests only).
+        TelemetryIpc = new CodeNav.Core.Telemetry.TelemetryProducer(
+            _workspaceRoot, _dbPath, BuildTelemetrySnapshot, _log,
+            pipeName: telemetryPipeName);
+    }
+
+    /// <summary>x5ls.1: the telemetry API v1 producer (docs/telemetry-api.md). Instrumentation
+    /// call sites Emit through it; the portal connects out-of-process.</summary>
+    internal CodeNav.Core.Telemetry.TelemetryProducer TelemetryIpc { get; }
+
+    /// <summary>Shapes the v1 instance.snapshot data payload from state this manager can
+    /// report HONESTLY today (x5ls.1 Batch A). Unknown gauges are omitted, never zeroed:
+    /// cpuPercent/threadCount need sampling (Batch C), semantic/operations blocks need their
+    /// instrumentation (Batch C); followers omit writer-only pending counters they cannot
+    /// know, and a writer without a live watcher reports pendingChanges as unknown rather
+    /// than a fabricated 0 (review F5). Contract fields only — no paths, no raw error text.</summary>
+    private object BuildTelemetrySnapshot(CodeNav.Core.Telemetry.TelemetryIds ids)
+    {
+        var h = Health();
+        bool follower = string.Equals(h.AccessMode, FollowerAccessMode, StringComparison.Ordinal);
+        return new
+        {
+            workspace = new
+            {
+                id = ids.WorkspaceId,
+                label = CodeNav.Core.Telemetry.TelemetryBounds.BoundedLabel(Path.GetFileName(_workspaceRoot)),
+            },
+            index = new
+            {
+                id = ids.IndexId,
+                accessMode = h.AccessMode,
+                // Raw pass-through (review F16): the contract's consumers render unknown enum
+                // values as "unknown (<value>)" — suppressing the field would hide more.
+                state = h.State,
+                indexVersion = h.IndexVersion,
+                indexedAtUtc = h.IndexedAtUtc,
+                lastRefreshUtc = h.LastRefreshUtc,
+                databaseBytes = h.DbBytes > 0 ? h.DbBytes : (long?)null,
+                pendingChanges = follower || _watcher is null ? null : (int?)h.PendingChanges,
+                pendingProcessed = follower ? null : (long?)h.PendingProcessed,
+                // h.Error may carry text; the contract allows stable codes only.
+                errorCode = h.Error is null ? null : "index_error",
+            },
+            process = new
+            {
+                uptimeMs = (long)(DateTime.UtcNow
+                    - CodeNav.Core.Telemetry.TelemetryProducer.ProcessStartUtcValue).TotalMilliseconds,
+                workingSetBytes = Environment.WorkingSet,
+                managedHeapBytes = GC.GetTotalMemory(forceFullCollection: false),
+                gen0Collections = GC.CollectionCount(0),
+                gen1Collections = GC.CollectionCount(1),
+                gen2Collections = GC.CollectionCount(2),
+            },
+            // Review F13: the producer's background task can invoke this factory before the
+            // ctor finishes assigning TelemetryIpc — omit the block instead of NRE-ing the
+            // connection's first snapshot into a silent factory_failed drop.
+            telemetry = TelemetryIpc is not { } ipc ? (object?)null : new
+            {
+                queuedRecords = ipc.QueuedRecords,
+                droppedRecords = ipc.DroppedRecords,
+                lastPublishedSequence = ipc.LastPublishedSequence,
+                // Additive within v1 (consumers ignore unknown counters): frames the
+                // privacy/bounds gate refused — a nonzero value is a producer-side bug signal.
+                validationRejected = ipc.ValidationRejected,
+            },
+        };
+    }
+
+    // ------------------------------------------------------------ x5ls.1.2 build/refresh frames
+
+    /// <summary>Starts the v1 build-lifecycle telemetry for one build run: emits
+    /// index.build.started and returns a 250ms sampling timer (the contract's 4 Hz progress
+    /// ceiling) that snapshots the SAME BuildProgress the tool surface reads — no second
+    /// bookkeeping, no builder hot-path hooks. Every factory closes over primitives captured
+    /// at tick time, never over the progress object (frames materialize at send).</summary>
+    private (string BuildId, System.Threading.Timer Timer) BeginBuildTelemetry(
+        string reason, BuildProgress progress)
+    {
+        string buildId = Guid.NewGuid().ToString();
+        TelemetryIpc.Emit("index.build.started",
+            ids => new { buildId, indexId = ids.IndexId, reason, phase = "scanning" },
+            lifecycle: true);
+        var timer = new System.Threading.Timer(timerState =>
+        {
+            try
+            {
+                // Atomic pair (review B-r2): label and in-phase elapsed from ONE lock scope,
+                // so a phase transition can't pair the old label with the new phase's clock.
+                // Captured BEFORE Snapshot (review B-r3 note): keeps phaseElapsedMs ≤ elapsedMs.
+                var (phase, phaseElapsedMs) = progress.CurrentPhase();
+                var s = progress.Snapshot();
+                _ = TryGetSafeDatabaseStatus(out _, out long dbBytes);
+                TelemetryIpc.Emit("index.build.progress", ids => new
+                {
+                    buildId,
+                    indexId = ids.IndexId,
+                    phase,
+                    phaseElapsedMs,                          // review B4: contract field
+                    elapsedMs = s.ElapsedMs,
+                    filesIndexed = s.FilesIndexed,
+                    filesTotal = s.FilesTotal,               // null until honestly known (0tn)
+                    filesSkipped = s.FilesSkipped,
+                    projectsFailed = s.ProjectsFailed,
+                    filesPerSecond = s.FilesPerSecond,       // null until the gate opens (0tn)
+                    estimatedRemainingMs = s.EstimatedRemainingMs,
+                    databaseBytes = dbBytes > 0 ? dbBytes : (long?)null, // review B4
+                });
+            }
+            catch { /* a progress tick must never hurt the build */ }
+        }, null, 250, 250);
+        return (buildId, timer);
+    }
+
+    /// <summary>Review B1: stops the progress timer AND waits out any in-flight tick before
+    /// the terminal frame is emitted — otherwise progress frames with the same buildId land
+    /// at higher sequences than completed/failed and a portal's latest-frame state regresses
+    /// completed → "building". Task-signaled (review B-r2: the WaitHandle pattern crashed the
+    /// PROCESS on a timed-out drain — the disposed MRE got Set by the straggler tick on a
+    /// threadpool thread; DisposeAsync leaves nothing to corrupt when the bounded wait gives
+    /// up). Idempotent — double-disposal returns a completed task.</summary>
+    private static void DrainDisposeBuildTimer(System.Threading.Timer timer)
+    {
+        try
+        {
+            timer.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(2));
+        }
+        catch { /* drain is best-effort; a stuck tick must never hurt the build path */ }
+    }
+
+    private void EmitBuildCompleted(string buildId, BuildProgress progress, long durationMs)
+    {
+        var s = progress.Snapshot();
+        var phases = progress.PhaseDurations()
+            .Select(p => new { phase = p.Phase, durationMs = p.DurationMs }).ToArray();
+        _ = TryGetSafeDatabaseStatus(out _, out long dbBytes);
+        TelemetryIpc.Emit("index.build.completed", ids => new
+        {
+            buildId,
+            indexId = ids.IndexId,
+            durationMs,
+            filesIndexed = s.FilesIndexed,
+            filesSkipped = s.FilesSkipped,
+            projectsFailed = s.ProjectsFailed,
+            databaseBytes = dbBytes > 0 ? dbBytes : (long?)null,
+            phaseDurations = phases,
+        }, lifecycle: true);
+    }
+
+    private void EmitBuildFailed(string buildId, BuildProgress progress)
+    {
+        string failedPhase = progress.Snapshot().Phase;
+        TelemetryIpc.Emit("index.build.failed", ids => new
+        {
+            buildId,
+            indexId = ids.IndexId,
+            failedPhase,
+            errorCode = "index_build_failed", // stable code; raw exception text never crosses IPC
+            retryable = true,                 // refresh_index force:'full' remains the remedy
+        }, lifecycle: true);
+    }
+
+    /// <summary>One v1 refresh outcome frame (completed/failed). Refresh batches are debounced
+    /// upstream, so per-outcome emission stays far under the gauge cadence ceiling.</summary>
+    private void EmitRefreshSnapshot(string refreshId, string reason, string state,
+        int batchProcessed, long elapsedMs, string? errorCode)
+    {
+        int? pendingChanges = _watcher?.PendingCount;
+        long pendingProcessed = Interlocked.Read(ref _pendingProcessed);
+        TelemetryIpc.Emit("index.refresh.snapshot", ids => new
+        {
+            refreshId,
+            indexId = ids.IndexId,
+            state,
+            reason,
+            pendingChanges,          // null before a watcher exists — unknown, never fabricated
+            pendingProcessed,
+            batchProcessed,
+            elapsedMs,
+            errorCode,
+        });
     }
 
     /// <summary>epuc.1: the workspace's bounded telemetry stream (JSONL file + in-memory
@@ -351,6 +537,8 @@ public sealed class IndexManager : IDisposable
                     if (_disposed) return;
                     StartupAfterLeaseAcquiredForTest?.Invoke();
                     bool build = forceRebuild || !File.Exists(_databaseIoPath);
+                    // x5ls.1.2: honest v1 build reason — which gate actually forced the build.
+                    string buildReason = forceRebuild ? "explicit_full" : "startup_missing";
                     if (!build)
                     {
                         // Rebuild when the on-disk index predates the current schema/indexer format —
@@ -364,12 +552,14 @@ public sealed class IndexManager : IDisposable
                             {
                                 _log($"Index format stale (have {onDisk ?? "none"}, need {IndexBuilder.SchemaVersion}); rebuilding.");
                                 build = true;
+                                buildReason = "startup_incompatible";
                             }
                         }
                         catch (Exception ex)
                         {
                             _log($"Index open/version-check failed ({ex.Message}); rebuilding.");
                             build = true;
+                            buildReason = "recovery";
                         }
                     }
                     if (build)
@@ -414,12 +604,33 @@ public sealed class IndexManager : IDisposable
                                 activeAtBoundary = _activeReviewSnapshots;
                             FullRebuildDestructiveBoundaryForTest?.Invoke(activeAtBoundary);
                             _log($"Building index for {_workspaceRoot} ...");
-                            var buildResult = IndexBuilder.BuildOwned(_workspaceRoot,
-                                _databaseIoPath, _log, _buildProgress);
-                            _log($"Index built: {buildResult.CsFiles} files, " +
-                                 $"{buildResult.Symbols} symbols in " +
-                                 $"{buildResult.TotalTime.TotalSeconds:F0}s");
-                            _buildProgress = null;
+                            var startupBuildProgress = _buildProgress; // review B6: finally-safe local
+                            var (buildId, progressTimer) = // x5ls.1.2
+                                BeginBuildTelemetry(buildReason, startupBuildProgress);
+                            try
+                            {
+                                var buildResult = IndexBuilder.BuildOwned(_workspaceRoot,
+                                    _databaseIoPath, _log, startupBuildProgress);
+                                _log($"Index built: {buildResult.CsFiles} files, " +
+                                     $"{buildResult.Symbols} symbols in " +
+                                     $"{buildResult.TotalTime.TotalSeconds:F0}s");
+                                // Review B1: drain the ticker BEFORE the terminal frame — a
+                                // progress frame sequenced after completed regresses portals.
+                                DrainDisposeBuildTimer(progressTimer);
+                                EmitBuildCompleted(buildId, startupBuildProgress,
+                                    (long)buildResult.TotalTime.TotalMilliseconds);
+                            }
+                            catch
+                            {
+                                DrainDisposeBuildTimer(progressTimer);
+                                EmitBuildFailed(buildId, startupBuildProgress);
+                                throw; // the startup catch owns state/error, unchanged
+                            }
+                            finally
+                            {
+                                DrainDisposeBuildTimer(progressTimer); // idempotent
+                                _buildProgress = null;
+                            }
                             FullRebuildCompletedForTest?.Invoke();
                         }
                     }
@@ -447,7 +658,7 @@ public sealed class IndexManager : IDisposable
                     // Always sweep after the watcher is attached. A full build deliberately commits
                     // its verified structural snapshot before the long C# parse; edits made between
                     // that commit and watcher attachment would otherwise be permanently missed.
-                    _refreshQueue.Writer.TryWrite(new RefreshRequest(null)); // detect-all
+                    _refreshQueue.Writer.TryWrite(new RefreshRequest(null, Reason: "full_sweep")); // detect-all
                     InitGitTracking(); // record/reconcile the git commit, then watch HEAD
                 }
                 catch (Exception ex)
@@ -588,8 +799,8 @@ public sealed class IndexManager : IDisposable
             if (_disposed) return; // Dispose already ran — don't publish a watcher it can't reach
             _watcher = new WorkspaceWatcher(
                 _workspaceRoot,
-                batch => _refreshQueue.Writer.TryWrite(new RefreshRequest(batch)),
-                () => _refreshQueue.Writer.TryWrite(new RefreshRequest(null))); // overflow → detect-all sweep
+                batch => _refreshQueue.Writer.TryWrite(new RefreshRequest(batch, Reason: "watcher_batch")),
+                () => _refreshQueue.Writer.TryWrite(new RefreshRequest(null, Reason: "full_sweep"))); // overflow → detect-all sweep
         }
     }
 
@@ -620,7 +831,7 @@ public sealed class IndexManager : IDisposable
             {
                 // First git-aware run (or a pre-git index): the build/startup-sweep already
                 // reflects the current tree, so just record the commit as the diff baseline.
-                _refreshQueue.Writer.TryWrite(new RefreshRequest(Array.Empty<string>(), head));
+                _refreshQueue.Writer.TryWrite(new RefreshRequest(Array.Empty<string>(), head, Reason: "git_head"));
             }
             else if (!string.Equals(stored, head, StringComparison.OrdinalIgnoreCase))
             {
@@ -692,7 +903,7 @@ public sealed class IndexManager : IDisposable
             // the pump (store-null skip, or the catch-all discarding RecordCommit) left no trace
             // to diagnose. Log the handoff; the pump logs the completed record.
             _log($"Git baseline signal: queueing first-commit record {Short(head)}.");
-            _refreshQueue.Writer.TryWrite(new RefreshRequest(Array.Empty<string>(), head));
+            _refreshQueue.Writer.TryWrite(new RefreshRequest(Array.Empty<string>(), head, Reason: "git_head"));
             return;
         }
         if (string.Equals(current, head, StringComparison.OrdinalIgnoreCase)) return; // spurious ref churn
@@ -707,11 +918,11 @@ public sealed class IndexManager : IDisposable
         var changed = GitInfo.ChangedFiles(_workspaceRoot, from, to);
         if (changed is null || changed.Count > GitDiffCap)
         {
-            _refreshQueue.Writer.TryWrite(new RefreshRequest(null, to)); // full sweep, then record `to`
+            _refreshQueue.Writer.TryWrite(new RefreshRequest(null, to, Reason: "git_head")); // full sweep, then record `to`
         }
         else
         {
-            _refreshQueue.Writer.TryWrite(new RefreshRequest(changed, to));
+            _refreshQueue.Writer.TryWrite(new RefreshRequest(changed, to, Reason: "git_head"));
         }
     }
 
@@ -794,6 +1005,14 @@ public sealed class IndexManager : IDisposable
             }
             if (_store is null) continue;
             string previous = _state;
+            // x5ls.1.2: one outcome frame per refresh batch. The reason comes from the
+            // PRODUCER's explicit label (review B2: shape-derivation mislabeled tool requests
+            // as watcher batches and git fallback sweeps as plain sweeps) — the shape mapping
+            // below is only a fallback for unlabeled future sites, not sanctioned semantics.
+            string refreshId = Guid.NewGuid().ToString();
+            string refreshReason = req.Reason ?? (req.Paths is null ? "full_sweep"
+                : req.RecordCommit is not null ? "git_head" : "watcher_batch");
+            var refreshWall = System.Diagnostics.Stopwatch.StartNew(); // review B3: failures report MEASURED elapsed
             BeginIndexMutation();
             try
             {
@@ -822,6 +1041,9 @@ public sealed class IndexManager : IDisposable
                     _log($"Git baseline recorded: {Short(commit)}."); // 17zd-b: close the loop visibly
                 }
                 _state = "ready";
+                EmitRefreshSnapshot(refreshId, refreshReason, "completed", // x5ls.1.2
+                    result.AddedFiles + result.ChangedFiles + result.DeletedFiles,
+                    (long)result.Elapsed.TotalMilliseconds, errorCode: null);
             }
             catch (Exception ex)
             {
@@ -829,6 +1051,11 @@ public sealed class IndexManager : IDisposable
                 _error = $"{ex.GetType().Name} during delta refresh (see server log)";
                 _state = previous == "ready" ? "ready" : previous;
                 _log($"Delta refresh failed: {ex}");
+                // batchProcessed 0 is TRUE, not fabricated: DeltaRefresher runs one
+                // transaction, so a throw rolls back to zero applied (review B3).
+                EmitRefreshSnapshot(refreshId, refreshReason, "failed", // x5ls.1.2
+                    batchProcessed: 0, elapsedMs: refreshWall.ElapsedMilliseconds,
+                    errorCode: "refresh_failed");
             }
             finally
             {
@@ -877,7 +1104,16 @@ public sealed class IndexManager : IDisposable
     {
         _log("Full rebuild requested (refresh_index force:'full') — rebuilding the index from scratch.");
         _state = "building";
-        _buildProgress = new BuildProgress();
+        // x5ls.1.2 review B5: the pre-build teardown (store dispose, pool clears, bounded
+        // db-delete retries) is NOT building — the build lifecycle (and the phase clock that
+        // feeds phaseDurations) starts at BuildOwned. During teardown, state is 'building'
+        // with no progress object: Health() honestly shows no progress rather than a
+        // "scanning" phase silently absorbing teardown time.
+        _buildProgress = null;
+        BuildProgress? rebuildProgress = null;
+        string? buildId = null;
+        System.Threading.Timer? progressTimer = null;
+        bool buildCompleted = false;
         try
         {
             _store?.Dispose();
@@ -911,8 +1147,15 @@ public sealed class IndexManager : IDisposable
                 }
             }
 
-            var result = IndexBuilder.BuildOwned(_workspaceRoot, _databaseIoPath, _log, _buildProgress);
+            rebuildProgress = new BuildProgress();
+            _buildProgress = rebuildProgress;
+            (buildId, progressTimer) = BeginBuildTelemetry("explicit_full", rebuildProgress); // x5ls.1.2
+            var result = IndexBuilder.BuildOwned(_workspaceRoot, _databaseIoPath, _log, rebuildProgress);
             _log($"Full rebuild done: {result.CsFiles} files, {result.Symbols} symbols in {result.TotalTime.TotalSeconds:F0}s");
+            // Review B1: drain the ticker BEFORE the terminal frame (no progress after completed).
+            DrainDisposeBuildTimer(progressTimer);
+            EmitBuildCompleted(buildId, rebuildProgress, (long)result.TotalTime.TotalMilliseconds);
+            buildCompleted = true;
 
             var store = new IndexStore(_databaseIoPath, createNew: false);
             // Reset cached meta BEFORE CacheMeta: its ??= semantics would otherwise resurrect
@@ -933,7 +1176,7 @@ public sealed class IndexManager : IDisposable
             if (_watcher is null) StartWatcher();
             // Recovery can start from a failed state with no watcher. Queue a detect-all pass
             // after attachment so edits during BuildOwned's pre-watcher interval converge too.
-            _refreshQueue.Writer.TryWrite(new RefreshRequest(null));
+            _refreshQueue.Writer.TryWrite(new RefreshRequest(null, Reason: "full_sweep"));
             if (_gitWatcher is null)
             {
                 // Resolves _gitDir, queues the baseline commit record, attaches the GitWatcher —
@@ -961,6 +1204,12 @@ public sealed class IndexManager : IDisposable
         }
         finally
         {
+            if (progressTimer is not null) DrainDisposeBuildTimer(progressTimer); // idempotent
+            // Post-build steps (reopen/watcher/git) can fail AFTER a successful BuildOwned —
+            // only a build that never emitted completed reports failed. A TEARDOWN failure
+            // (buildId null) emits nothing: the build lifecycle never started (review B5);
+            // state 'failed' surfaces via instance.snapshot.
+            if (buildId is not null && !buildCompleted) EmitBuildFailed(buildId, rebuildProgress!);
             _buildProgress = null;
         }
     }
@@ -969,7 +1218,7 @@ public sealed class IndexManager : IDisposable
     public bool RequestRefresh(IReadOnlyCollection<string>? paths = null)
     {
         if (!IsWriter || _disposed) return false;
-        return _refreshQueue.Writer.TryWrite(new RefreshRequest(paths));
+        return _refreshQueue.Writer.TryWrite(new RefreshRequest(paths, Reason: "explicit"));
     }
 
     /// <summary>Queues a REBUILD-FROM-SCRATCH (tky): delete the db, run a full build, reopen.
@@ -1205,6 +1454,7 @@ public sealed class IndexManager : IDisposable
     {
         lock (_disposeLock) { _disposed = true; } // block any in-flight watcher publication
         Telemetry.Dispose();                 // epuc.1: flush the bounded stream (2s cap)
+        TelemetryIpc.Dispose();              // x5ls.1: stop the IPC producer (2s cap)
         _gitWatcher?.Dispose();              // stop git HEAD signals
         _gitHeadRetry?.Dispose();            // 17zd: stop the null-HEAD retry (callback checks _disposed)
         _watcher?.Dispose();                 // stop new events reaching the queue

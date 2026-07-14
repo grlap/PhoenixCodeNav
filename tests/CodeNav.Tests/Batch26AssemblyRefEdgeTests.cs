@@ -193,7 +193,12 @@ public class Batch26AssemblyRefEdgeTests
                 {
                     if (!semRefs.FrameworkRefsAvailable) return; // env guard: no reference assemblies
                     var toolsRefs = new NavigationTools(m, semRefs);
-                    var refs = Parse(toolsRefs.References(name: "IPartnerContract", timeoutMs: 90000));
+                    // n7ly (late sweep): this call was the one References assertion in this file
+                    // NOT retry-wrapped — a suite-load transient degrade (fast indexed fallback)
+                    // failed it once under full parallel load. Retry rides transients; the
+                    // edges-gutted reintroduction still fails EVERY attempt and stays red.
+                    var refs = SemanticRetry.ParseExactWithRetry(
+                        () => toolsRefs.References(name: "IPartnerContract", timeoutMs: 90000));
                     Assert.Equal("exact", refs.GetProperty("meta").GetProperty("confidence").GetString());
                     var projects = refs.GetProperty("groups").EnumerateArray()
                         .Select(g => g.GetProperty("project").GetString())

@@ -237,8 +237,10 @@ public sealed partial class SemanticService
                 down.AddRange(derived.OfType<ISymbol>().Select(Describe));
             }
 
+            // Review r2: materialize BEFORE the emit — see DefinitionAsync.
+            var payload = new SemanticTypeHierarchy(Describe(type), baseTypes, interfaces, down);
             EmitOpTelemetry("type_hierarchy", "exact", null, ownerBox.Stats, scanBox.Stats); // epuc.1
-            return (new SemanticTypeHierarchy(Describe(type), baseTypes, interfaces, down), coverage, skipped, null);
+            return (payload, coverage, skipped, null);
         }
         catch (OperationCanceledException)
         {

@@ -1,6 +1,6 @@
-# Testing / Reintroduction Review
+# Testing Review
 
-Focus: Contract-level regression coverage, deterministic reproductions, reintroduction proof, and full quality-gate discipline.
+Focus: Contract-level regression coverage, deterministic reproductions, decisive assertions, and full quality-gate discipline.
 
 ## What to check
 
@@ -9,11 +9,10 @@ Focus: Contract-level regression coverage, deterministic reproductions, reintrod
    - Prefer exercising the public tool JSON as well as lower-level helpers.
    - Assert confidence, coverage, counts, notes, truncation, and conditional-field absence, not merely "does not throw."
 
-2. **Reintroduction verification**
-   - The parent review gate owns the temporary restore/disable, red run, restoration, and green run because delegated children are read-only.
-   - Review whether the test structurally distinguishes fixed behavior from the old bug and identify the decisive assertion/condition.
-   - When parent evidence is available in Beads or the handoff, verify it is for the intended failure.
-   - A test that could remain green after the old bug is restored does not satisfy repository commit discipline.
+2. **Test discrimination**
+   - Review whether the test structurally distinguishes the intended behavior from obvious broken implementations and identify the decisive assertion or condition.
+   - Reject vacuous assertions, tautological expected values, and tests that only prove the code does not throw.
+   - Historical red-run or temporary defect-restoration evidence is not required.
 
 3. **Cold/delta/worktree parity**
    - Test initial build, targeted refresh, detect-all sweep, failed-to-ready full rebuild, and seeded worktree reconciliation where relevant.

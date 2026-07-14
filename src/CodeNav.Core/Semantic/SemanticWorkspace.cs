@@ -56,8 +56,10 @@ public sealed class SemanticWorkspace : IDisposable
         _poolIndexConnections = poolIndexConnections;
     }
 
+    /// <summary>LoadedBefore is null when the load died QUEUED for the gate — the warm-set
+    /// size is guarded by the gate and cannot be read honestly from outside it (review r2).</summary>
     public sealed record LoadStats(double GateWaitMs, double FingerprintMs, double TopoMs,
-        double ProjectLoadMs, int LoadedBefore, int Requested, int Reloaded, int Loaded,
+        double ProjectLoadMs, int? LoadedBefore, int Requested, int Reloaded, int Loaded,
         int Failed);
 
     /// <summary>epuc.1 (review F2): per-CALL stats vehicle. The first cut published stats via
@@ -89,7 +91,24 @@ public sealed class SemanticWorkspace : IDisposable
         long tFinger = 0, tTopo = 0; // 0 = the phase never completed (died mid-phase)
         int reloadedCount = 0;
         long tEnter = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
-        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await _gate.WaitAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Review r2: a deadline dying while QUEUED behind another caller's load is the
+            // primary gate-contention signal (cold workspace, two parallel ops) — without this
+            // stamp such records carried no split at all. Gate wait absorbs the whole wall;
+            // phases never entered report 0; loadedBefore stays null (unknown without the gate).
+            if (statsBox is not null)
+            {
+                statsBox.Stats = new LoadStats(
+                    ToMs(System.Diagnostics.Stopwatch.GetTimestamp() - tEnter), 0, 0, 0,
+                    null, requested.Count, 0, 0, 0);
+            }
+            throw;
+        }
         long tGate = System.Diagnostics.Stopwatch.GetTimestamp();
         int loadedBefore = _loaded.Count;
         try
@@ -117,10 +136,12 @@ public sealed class SemanticWorkspace : IDisposable
                     reuseIds[name] = _loaded[name].Id;
                     _workspace.TryApplyChanges(_workspace.CurrentSolution.RemoveProject(_loaded[name].Id));
                     _loaded.Remove(name);
+                    // epuc.1 review r2: stamped PER REMOVAL, not after the loop — a load dying
+                    // mid-loop must still explain why `loaded` dropped below `loadedBefore`.
+                    reloadedCount++;
                 }
             }
 
-            reloadedCount = reuseIds.Count; // epuc.1: stamped before load, survives a dying load
             tFinger = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
             var toLoad = TopoOrder(q, requested.Where(n => !_loaded.ContainsKey(n)).ToList());
             tTopo = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
@@ -191,6 +212,44 @@ public sealed class SemanticWorkspace : IDisposable
 
     private static double ToMs(long ticks) => ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
+    // xqxw: HintPath/package MetadataReferences were re-created PER PROJECT — the same vendor
+    // dll re-mapped, re-validated, and later re-bound for every project in a scan set (field
+    // telemetry: scanLoad.projectLoadMs 12.3s cold). PortableExecutableReference is immutable
+    // and designed for reuse across compilations; reusing ONE instance also lets Roslyn share
+    // the lazily-decoded assembly symbols. One stat per lookup replaces a full map+parse.
+    // Invalidation is (mtime, size) — the same heuristic MSBuild up-to-date checks use, with
+    // the same KNOWN WINDOW: a timestamp-preserving pipeline (MSBuild Copy propagates source
+    // mtime; build caches normalize stamps) dropping a same-length dll serves the stale
+    // instance until restart or the next stamp/size change. Accepted deliberately (review):
+    // direct NTFS writes cannot collide (100ns stamps); escalate to content hashing only on
+    // field evidence. Entries live until workspace Dispose — no eviction; the retained bytes
+    // are bounded by the workspace's distinct dll set and strictly beat the old one-copy-per-
+    // project duplication while any two consumers share a dll. Only touched under _gate
+    // (LoadProject runs inside EnsureLoadedAsync's critical section) — no lock needed.
+    private readonly Dictionary<string, (DateTime MTimeUtc, long Size, PortableExecutableReference Ref)>
+        _metadataRefCache = new(StringComparer.OrdinalIgnoreCase);
+
+    internal PortableExecutableReference? GetOrCreateMetadataRef(string fullPath) // internal: tests pin identity+invalidation
+    {
+        try
+        {
+            var fi = new FileInfo(fullPath);
+            if (!fi.Exists) return null;
+            if (_metadataRefCache.TryGetValue(fullPath, out var cached) &&
+                cached.MTimeUtc == fi.LastWriteTimeUtc && cached.Size == fi.Length)
+            {
+                return cached.Ref;
+            }
+            var mref = MetadataReference.CreateFromFile(fullPath);
+            _metadataRefCache[fullPath] = (fi.LastWriteTimeUtc, fi.Length, mref);
+            return mref;
+        }
+        catch
+        {
+            return null; // unreadable/malformed dll: same skip semantics as before
+        }
+    }
+
     // ---------------------------------------------------------------- loading
 
     private LoadedProject? LoadProject(
@@ -217,19 +276,70 @@ public sealed class SemanticWorkspace : IDisposable
         // Reuse the prior id on reload (keeps dependents' references valid); mint a new
         // one only for a genuinely new project.
         var projectId = reuseId ?? ProjectId.CreateNewId(debugName: name);
-        foreach (var rel in files)
+
+        // pv1k: the per-file open→read→decode ran strictly sequentially — on a cold scan set
+        // that is thousands of small CreateFile calls on one thread (field telemetry:
+        // scanLoad.projectLoadMs 12.3s; this stage dominates). The reads are independent pure
+        // functions, so fan them out bounded and ORDER-PRESERVING (index-addressed results —
+        // document order must stay deterministic). Everything that is not thread-safe stays
+        // on this thread: the SQLite fallback (q.ContentByPath) runs afterward for the rare
+        // disk-miss, and DocumentInfo/workspace mutation below never see worker threads.
+        // A worker exception propagates (as AggregateException) into the same per-project
+        // catch that marked sequential-era failures — project lands in `failed`; only the
+        // log text shape differs (review r2 nit, accepted).
+        // Big files (review r2 LOW): DOP workers each staging a ≤256MB raw buffer could hold
+        // ~2GB transiently where the old loop peaked at one buffer — anything over the
+        // threshold is deferred to the sequential pass, restoring the old one-at-a-time peak
+        // (plus at most DOP small buffers).
+        const long ParallelReadMaxBytes = 4 * 1024 * 1024;
+        var decoded = new SourceText?[files.Count];
+        var deferredBig = new bool[files.Count];
+        System.Threading.Tasks.Parallel.For(0, files.Count, new ParallelOptions
         {
-            string full = Path.Combine(_workspaceRoot,
-                rel.Replace('/', Path.DirectorySeparatorChar));
-            SourceText text;
-            byte[]? liveBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, rel,
+            MaxDegreeOfParallelism = Math.Min(8, Environment.ProcessorCount),
+        }, i =>
+        {
+            string workerFull = Path.Combine(_workspaceRoot,
+                files[i].Replace('/', Path.DirectorySeparatorChar));
+            try
+            {
+                if (new FileInfo(workerFull) is { Exists: true, Length: > ParallelReadMaxBytes })
+                {
+                    deferredBig[i] = true;
+                    return;
+                }
+            }
+            catch
+            {
+                // stat failed: fall through to the bounded reader, which resolves it safely
+            }
+            byte[]? liveBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, files[i],
                 DeltaRefresher.MaxIndexedFileBytes);
             if (liveBytes is not null)
             {
                 using var stream = new MemoryStream(liveBytes, writable: false);
-                text = SourceText.From(stream);
+                decoded[i] = SourceText.From(stream);
             }
-            else
+        });
+
+        for (int i = 0; i < files.Count; i++)
+        {
+            string rel = files[i];
+            string full = Path.Combine(_workspaceRoot,
+                rel.Replace('/', Path.DirectorySeparatorChar));
+            SourceText? text = decoded[i];
+            if (text is null && deferredBig[i])
+            {
+                // Sequential big-file read: same bytes, same authority, old-era peak memory.
+                byte[]? bigBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, rel,
+                    DeltaRefresher.MaxIndexedFileBytes);
+                if (bigBytes is not null)
+                {
+                    using var stream = new MemoryStream(bigBytes, writable: false);
+                    text = SourceText.From(stream);
+                }
+            }
+            if (text is null)
             {
                 string? indexed = q.ContentByPath(rel);
                 if (indexed is null) continue;
@@ -313,16 +423,14 @@ public sealed class SemanticWorkspace : IDisposable
                 continue;
             }
             string full = Path.Combine(_workspaceRoot, hint.Replace('/', Path.DirectorySeparatorChar));
-            if (File.Exists(full))
-            {
-                try { metadataRefs.Add(MetadataReference.CreateFromFile(full)); } catch { /* skip */ }
-            }
+            // Existence is checked inside GetOrCreateMetadataRef (one stat serves both).
+            if (GetOrCreateMetadataRef(full) is { } mref) metadataRefs.Add(mref);
         }
         foreach (var (pkg, version) in parsed.PackageRefs)
         {
             if (ReferenceAssemblyLocator.ResolvePackageDll(pkg, version) is { } dll)
             {
-                try { metadataRefs.Add(MetadataReference.CreateFromFile(dll)); } catch { /* skip */ }
+                if (GetOrCreateMetadataRef(dll) is { } mref) metadataRefs.Add(mref);
             }
         }
 

@@ -45,6 +45,39 @@ public sealed class BuildProgress
             // would fold scan/parse time into it and systematically overstate the remaining time.
             Interlocked.Exchange(ref _indexingPhaseStartMs, _sw.ElapsedMilliseconds);
         }
+        lock (_phaseLog) { _phaseLog.Add((phase, _sw.ElapsedMilliseconds)); } // x5ls.1.2
+    }
+
+    // x5ls.1.2: phase-transition log for the telemetry API's index.build.completed
+    // phaseDurations — measured starts, never reconstructed after the fact.
+    private readonly List<(string Phase, long StartMs)> _phaseLog = new() { ("scanning", 0) };
+
+    /// <summary>The current phase and its elapsed time, read ATOMICALLY under one lock
+    /// (x5ls.1.2 reviews B4 + B-r2: two separate reads let a SetPhase land in between,
+    /// pairing the old phase label with the new phase's near-zero elapsed in one frame).</summary>
+    public (string Phase, long ElapsedInPhaseMs) CurrentPhase()
+    {
+        lock (_phaseLog)
+        {
+            var last = _phaseLog[^1];
+            return (last.Phase, Math.Max(0, _sw.ElapsedMilliseconds - last.StartMs));
+        }
+    }
+
+    /// <summary>Per-phase durations: each phase runs from its recorded start to the next
+    /// phase's start (the last one to now). Snapshot-safe; used once at build completion.</summary>
+    public IReadOnlyList<(string Phase, long DurationMs)> PhaseDurations()
+    {
+        lock (_phaseLog)
+        {
+            var result = new List<(string, long)>(_phaseLog.Count);
+            for (int i = 0; i < _phaseLog.Count; i++)
+            {
+                long end = i + 1 < _phaseLog.Count ? _phaseLog[i + 1].StartMs : _sw.ElapsedMilliseconds;
+                result.Add((_phaseLog[i].Phase, Math.Max(0, end - _phaseLog[i].StartMs)));
+            }
+            return result;
+        }
     }
 
     public void SetFilesTotal(int total) => _filesTotal = total;

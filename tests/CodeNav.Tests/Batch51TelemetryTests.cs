@@ -132,6 +132,31 @@ public class Batch51TelemetryTests
         finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
     }
 
+    [Fact]
+    public async Task GateDeathStillPublishesGateOnlySplit()
+    {
+        // Review r2: a deadline dying while QUEUED for the workspace gate (cold workspace, two
+        // parallel ops) is the primary gate-contention signal — the stats box must still carry
+        // a gate-only split: gateWaitMs = whole wall, phases-never-entered = 0, and
+        // loadedBefore ABSENT (null — the warm-set size is unreadable without the gate).
+        string root = Directory.CreateTempSubdirectory("codenav-51-gate").FullName;
+        try
+        {
+            using var ws = new SemanticWorkspace(root, Path.Combine(root, "index.db"));
+            var box = new SemanticWorkspace.LoadStatsBox();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                ws.EnsureLoadedAsync(new[] { "P" }, new CancellationToken(canceled: true),
+                    statsBox: box));
+            Assert.NotNull(box.Stats);
+            Assert.Null(box.Stats!.LoadedBefore);   // unknown, never fabricated as 0
+            Assert.Equal(1, box.Stats.Requested);
+            Assert.Equal(0, box.Stats.FingerprintMs); // phase never entered
+            Assert.Equal(0, box.Stats.ProjectLoadMs);
+            Assert.Equal(0, box.Stats.Loaded);
+        }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
+    }
+
     private static string ReadShared(string path)
     {
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);

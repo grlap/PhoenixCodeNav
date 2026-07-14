@@ -31,20 +31,17 @@ git --no-optional-locks status --short
 git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only
 git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only
 git ls-files --others --exclude-standard
-git ls-files --others --ignored --exclude-standard -- ':(icase,glob)**/AGENTS.md' ':(icase,glob)**/AGENTS.override.md' ':(icase,glob)**/CLAUDE.md' ':(icase,glob)**/CLAUDE.local.md' ':(icase,glob)**/.mcp.json' ':(icase,glob)**/.agents' ':(icase,glob)**/.agents/**' ':(icase,glob)**/.claude' ':(icase,glob)**/.claude/**' ':(icase,glob)**/.codex' ':(icase,glob)**/.codex/**' ':(icase,literal)tests/CodeNav.Tests/ReviewCommandContractTests.cs'
 ```
 
 If any inventory command fails or its path output is truncated or malformed, return INCONCLUSIVE before reading content or spawning reviewers.
 
-The review target is the union of staged, unstaged, and ordinary untracked files. The final command is a scoped, path-only inventory of ignored trust-surface entries; never open those entries. Treat any returned ignored trust path as a bootstrap match even though ignored files are not part of the ordinary review target. If the ordinary target is empty and the ignored trust inventory is empty, tell the user there is nothing to review and stop.
-
-Enforce the bootstrap trust boundary before using the dirty worktree's commands. Normalize every repository-relative target path to `/` separators and apply the repository's case-insensitive Windows matching semantics. At any depth, treat a basename of `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `CLAUDE.local.md`, or `.mcp.json`, any path containing an `.agents`, `.claude`, or `.codex` directory segment, and `tests/CodeNav.Tests/ReviewCommandContractTests.cs` as review trust-surface changes. If any target matches, this self-hosted gate cannot certify the change: return INCONCLUSIVE and do not spawn reviewers. Require an independent external/manual adversarial review driven by trusted instructions, or a review explicitly run from the last committed trusted command/lens versions outside the changed worktree. A dirty self-review may be supplemental evidence only, never the required CLEAN gate.
+The review target is the union of staged, unstaged, and ordinary untracked files. If that target is empty, tell the user there is nothing to review and stop. Review-policy and instruction files are ordinary review targets: do not exclude or short-circuit them; include their exact dirty bytes in validation, identity, and both delegated reviews.
 
 Record the absolute repository root from `git rev-parse --show-toplevel`; pass it as `cwd` to both TermAl sessions so the local slash command resolves from this repository.
 
 Before hashing, diffing, or opening target content, inspect changed-entry metadata without following links or reparse points. Require every path and traversed ancestor to remain inside the repository root. Treat tracked symlinks as Git link metadata and never dereference them; if an untracked symlink/junction/reparse point or any resolved path can escape the root, return INCONCLUSIVE without reading it.
 
-Only after the bootstrap and containment checks pass, run:
+Only after the containment checks pass, run:
 
 ```text
 git --no-pager diff --no-ext-diff --no-textconv --no-color --check
@@ -66,14 +63,13 @@ Use a binary-safe direct native pipe into `git hash-object --stdin` for each det
 
 Validation belongs in the writable parent, not in read-only reviewer children.
 
-1. Confirm reintroduction-test evidence for behavior changes or bug fixes. Accept evidence from the active session, Beads notes, or the user's handoff. If a regression test was never demonstrated red with the defect reintroduced, stop and report that the repository's commit discipline is not satisfied. Do not invent evidence.
-2. Run `dotnet build PhoenixCodeNav.sln -c Release --no-restore`. Validation must use the dependency graph already restored by the implementation session; it must not unexpectedly download packages. If assets are missing or stale, stop and ask the implementer to restore explicitly before review.
-3. Require a successful build with literal `0 Warning(s)` and `0 Error(s)`.
-4. Run `dotnet test PhoenixCodeNav.sln -c Release --no-build --no-restore`.
+1. Run `dotnet build PhoenixCodeNav.sln -c Release --no-restore`. Validation must use the dependency graph already restored by the implementation session; it must not unexpectedly download packages. If assets are missing or stale, stop and ask the implementer to restore explicitly before review.
+2. Require a successful build with literal `0 Warning(s)` and `0 Error(s)`.
+3. Run `dotnet test PhoenixCodeNav.sln -c Release --no-build --no-restore`.
 
 If build or tests fail, stop and report the output. The sole documented exception is `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep`: when it is the only failure, rerun that exact test in isolation. Continue only if the isolated rerun passes, and carry the flake note into the final review. Do not silently bless any other intermittent failure.
 
-After validation, restart all of Step 1 from its path-only ordinary and ignored inventories. Reapply bootstrap trust matching and no-follow containment before any diff check, content hash, or spawn; scan reviewable untracked text files for conflict markers and whitespace errors only after those checks pass. Recompute the target identity. If validation changed the identity, repeat Step 2 against the new identity and then restart all of Step 1 again. Never validate one byte set and send another to reviewers, and never allow a validation-created trust path to reach delegation.
+After validation, restart all of Step 1 from its path-only inventories. Reapply no-follow containment before any diff check, content hash, or spawn; scan reviewable untracked text files for conflict markers and whitespace errors only after those checks pass. Recompute the target identity. If validation changed the identity, repeat Step 2 against the new identity and then restart all of Step 1 again. Never validate one byte set and send another to reviewers.
 
 ## Step 3: Attempt exactly two delegated reviewers
 
@@ -126,7 +122,6 @@ Use this shape:
 # Delegated Review
 
 ## Validation
-- Reintroduction evidence: ...
 - Release build: ...
 - Full suite: ...
 - Known flake note: ...
@@ -183,7 +178,7 @@ After reconciliation, rerun `git --no-optional-locks status --short` and the cha
 
 ## Step 7: Hand off
 
-- `NOT CLEAN`: list blocking Beads ids and tell the implementer to fix, re-run reintroduction verification and quality gates, then request verification from the original Codex and Claude child sessions through the TermAl UI. If those sessions cannot be continued, stop and ask for explicit direction; a fresh `/review-with-delegate` run is additional evidence but does not satisfy literal same-session verification.
+- `NOT CLEAN`: list blocking Beads ids and tell the implementer to fix, re-run focused tests and quality gates, then request verification from the original Codex and Claude child sessions through the TermAl UI. If those sessions cannot be continued, stop and ask for explicit direction; a fresh `/review-with-delegate` run is additional evidence but does not satisfy literal same-session verification.
 - `INCONCLUSIVE`: report the missing reviewer/tool condition. It does not satisfy the commit discipline.
 - `CLEAN`: state that the review gate passed. Do not commit or push inside this command; return control to the outer workflow.
 

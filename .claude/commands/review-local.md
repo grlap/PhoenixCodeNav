@@ -26,24 +26,19 @@ git --no-optional-locks status --short
 git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only
 git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only
 git ls-files --others --exclude-standard
-git ls-files --others --ignored --exclude-standard -- ':(icase,glob)**/AGENTS.md' ':(icase,glob)**/AGENTS.override.md' ':(icase,glob)**/CLAUDE.md' ':(icase,glob)**/CLAUDE.local.md' ':(icase,glob)**/.mcp.json' ':(icase,glob)**/.agents' ':(icase,glob)**/.agents/**' ':(icase,glob)**/.claude' ':(icase,glob)**/.claude/**' ':(icase,glob)**/.codex' ':(icase,glob)**/.codex/**' ':(icase,literal)tests/CodeNav.Tests/ReviewCommandContractTests.cs'
 ```
 
 If any inventory command fails or its path output is truncated or malformed, return a lifecycle `Status: completed` packet with `Review verdict: INCONCLUSIVE` and stop before reading target content.
 
-The target is the union of staged, unstaged, and ordinary untracked files. The final command is a scoped, path-only inventory of ignored trust-surface entries; never open those entries, and treat any returned path as a bootstrap match. Do not open target-file content until the bootstrap check below is complete.
-
-If the ordinary target and ignored trust inventory are both empty, return a `## Result` packet with lifecycle `Status: completed`, `Review verdict: INCONCLUSIVE` in `Summary:`, and an explanation that no changes were visible to the child even though the parent requested review, then stop.
-
-Normalize repository-relative target paths to `/` separators and use case-insensitive matching on Windows. At any depth, a basename of `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.md`, `CLAUDE.local.md`, or `.mcp.json`, any `.agents`, `.claude`, or `.codex` directory segment, and `tests/CodeNav.Tests/ReviewCommandContractTests.cs` are review trust-surface changes. If any target matches, this dirty command/lens set is reviewing its own trust policy: emit a lifecycle `Status: completed` packet with `Review verdict: INCONCLUSIVE`, the matching path names, and the bootstrap reason, then stop before the broad scan or loading any reviewer lens or changed trust-surface content. Do not attempt advisory inspection with dirty instructions; the independent external/manual review supplies those findings.
+The target is the union of staged, unstaged, and ordinary untracked files. If the target is empty, return a `## Result` packet with lifecycle `Status: completed`, `Review verdict: INCONCLUSIVE` in `Summary:`, and an explanation that no changes were visible to the child even though the parent requested review, then stop. Review-policy and instruction files are ordinary review targets: inspect their exact dirty bytes instead of refusing the review.
 
 Record the absolute repository root with `git rev-parse --show-toplevel`.
 
 Before hashing, diffing, or opening target content, inspect changed-entry metadata without following links or reparse points; apply the same lstat/containment check to the instruction files about to be read. Require every path and traversed ancestor to remain inside the repository root. Treat tracked symlinks as Git link metadata and never dereference them; if an untracked symlink/junction/reparse point or any resolved path can escape the root, return `Review verdict: INCONCLUSIVE` without reading it.
 
-Read the now-unchanged `CLAUDE.md` and `AGENTS.md`; their commit, Beads, build, and repository-safety rules govern the remaining review.
+Read the current `CLAUDE.md` and `AGENTS.md`; their commit, Beads, build, and repository-safety rules govern the remaining review. If either file is dirty, it is also part of the exact review target and must be inspected adversarially.
 
-Only after the bootstrap and containment checks pass, run the content-bearing diffs:
+Only after the containment checks pass, run the content-bearing diffs:
 
 ```text
 git --no-pager diff --binary --no-ext-diff --no-textconv --no-color
@@ -69,7 +64,7 @@ Review every changed file yourself across all of these concerns before applying 
 - MCP schema, stable contracts, budgets, cursors, and truncation;
 - untrusted-workspace/process security;
 - concurrency, deadlines, memory, and large-monorepo performance;
-- regression and reintroduction-test quality.
+- regression-test quality.
 
 Read relevant callers and tests on demand. Do not rely on the diff alone.
 
@@ -121,7 +116,7 @@ Always verify the following when touched:
 3. Counts honor filters; bounded counts are labeled lower bounds; every cap and trim is observable.
 4. Confidence (`exact|indexed|heuristic`), navigation layer, partialReason, coverage, timing, and freshness metadata match the evidence actually returned.
 5. Stable note ids identify one cause each; prose may evolve without changing the id.
-6. Regression tests structurally exercise the defect and would distinguish the fixed behavior from the old behavior. Historical red-run/reintroduction evidence is owned and reported by the parent validation gate; do not fabricate it or return INCONCLUSIVE solely because that parent evidence is not visible inside the child.
+6. Regression and contract tests structurally exercise the changed behavior and contain decisive assertions that would fail under obvious broken implementations.
 
 ## Phase 5: Consolidate
 
@@ -155,7 +150,7 @@ Lens Summaries:
 - MCP Contract and Honesty: ...
 - Security: ...
 - Performance and Concurrency: ...
-- Testing and Reintroduction: ...
+- Testing: ...
 
 Proposed Beads Updates:
 - Search/update/create/reopen/close: ...
