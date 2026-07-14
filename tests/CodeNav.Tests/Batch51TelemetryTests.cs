@@ -68,6 +68,10 @@ public class Batch51TelemetryTests
                 // last-load — the field name is the contract (ownerLoad, not load).
                 Assert.Contains("\"ownerLoad\":", content);
                 Assert.Contains("\"gateWaitMs\":", content);
+                // Field regression (48s query invisible): the op's own load/query wall split
+                // must ride every completed record — query is the dominant cost now.
+                Assert.Contains("\"clusterLoadMs\":", content);
+                Assert.Contains("\"queryMs\":", content);
 
                 // (2) privacy: no drive-rooted path may appear in any record —
                 // neither drive-letter (C:\\) nor UNC (\\\\server\\share) shaped.

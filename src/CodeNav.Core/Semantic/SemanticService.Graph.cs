@@ -26,6 +26,8 @@ public sealed partial class SemanticService
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         bool clusterLoadInProgress = true;
+        var swOp = System.Diagnostics.Stopwatch.StartNew(); // field 48s gap: op wall split
+        long loadMs = 0;
         var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
         var scanBox = new SemanticWorkspace.LoadStatsBox();
         try
@@ -52,6 +54,7 @@ public sealed partial class SemanticService
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, statsBox: scanBox).ConfigureAwait(false);
             clusterLoadInProgress = false;
+            loadMs = swOp.ElapsedMilliseconds;
             if (symbol is null)
             {
                 EmitOpTelemetry("callers", "unresolved", "symbol_not_resolved_in_scope",
@@ -77,20 +80,25 @@ public sealed partial class SemanticService
                 }
                 results.Add(new SemanticCaller(Describe(info.CallingSymbol), sites));
             }
-            EmitOpTelemetry("callers", "exact", null, ownerBox.Stats, scanBox.Stats); // epuc.1
+            EmitOpTelemetry("callers", "exact", null, ownerBox.Stats, scanBox.Stats,
+                clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs); // epuc.1
             return (results, coverage, skipped, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
             string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
-            EmitOpTelemetry("callers", "degraded", reason, ownerBox.Stats, scanBox.Stats); // epuc.1
+            EmitOpTelemetry("callers", "degraded", reason, ownerBox.Stats, scanBox.Stats,
+                clusterLoadMs: clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
+                queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs); // epuc.1
             return (null, null, null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic callers failed: {ex}");
-            EmitOpTelemetry("callers", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats); // epuc.1
+            EmitOpTelemetry("callers", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
+                clusterLoadMs: loadMs > 0 ? loadMs : null,
+                queryMs: loadMs > 0 ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
             return (null, null, null, $"semantic_error:{ex.GetType().Name}");
         }
     }
@@ -100,6 +108,8 @@ public sealed partial class SemanticService
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         bool loadCompleted = false; // t2b: cold-cluster warm-up vs real scan timeout
+        var swOp = System.Diagnostics.Stopwatch.StartNew(); // field 48s gap: op wall split
+        long loadMs = 0;
         var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
         try
         {
@@ -113,6 +123,7 @@ public sealed partial class SemanticService
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox).ConfigureAwait(false);
             loadCompleted = true;
+            loadMs = swOp.ElapsedMilliseconds;
             if (symbol is null || solution is null)
             {
                 EmitOpTelemetry("callees", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
@@ -144,20 +155,25 @@ public sealed partial class SemanticService
                 .Select(kv => new SemanticCallee(Describe(kv.Key), kv.Value.Distinct().Take(8).ToList()))
                 .OrderBy(c => c.Callee.SymbolDisplay, StringComparer.Ordinal)
                 .ToList();
-            EmitOpTelemetry("callees", "exact", null, ownerBox.Stats); // epuc.1
+            EmitOpTelemetry("callees", "exact", null, ownerBox.Stats,
+                clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs); // epuc.1
             return (results, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
             string reason = loadCompleted ? "semantic_timeout" : "cluster_cold_load";
-            EmitOpTelemetry("callees", "degraded", reason, ownerBox.Stats); // epuc.1
+            EmitOpTelemetry("callees", "degraded", reason, ownerBox.Stats,
+                clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
+                queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
             return (null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic callees failed: {ex}");
-            EmitOpTelemetry("callees", "error", ex.GetType().Name, ownerBox.Stats); // epuc.1
+            EmitOpTelemetry("callees", "error", ex.GetType().Name, ownerBox.Stats,
+                clusterLoadMs: loadCompleted ? loadMs : null,
+                queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
     }
@@ -169,6 +185,8 @@ public sealed partial class SemanticService
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         bool clusterLoadInProgress = true;
+        var swOp = System.Diagnostics.Stopwatch.StartNew(); // field 48s gap: op wall split
+        long loadMs = 0;
         var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
         var scanBox = new SemanticWorkspace.LoadStatsBox();
         try
@@ -211,6 +229,7 @@ public sealed partial class SemanticService
                 indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
                 statsBox: scanBox).ConfigureAwait(false);
             clusterLoadInProgress = false;
+            loadMs = swOp.ElapsedMilliseconds;
             if (symbol is not INamedTypeSymbol type)
             {
                 string why = symbol is null ? "symbol_not_resolved_in_scope" : "not_a_type";
@@ -239,20 +258,25 @@ public sealed partial class SemanticService
 
             // Review r2: materialize BEFORE the emit — see DefinitionAsync.
             var payload = new SemanticTypeHierarchy(Describe(type), baseTypes, interfaces, down);
-            EmitOpTelemetry("type_hierarchy", "exact", null, ownerBox.Stats, scanBox.Stats); // epuc.1
+            EmitOpTelemetry("type_hierarchy", "exact", null, ownerBox.Stats, scanBox.Stats,
+                clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs); // epuc.1
             return (payload, coverage, skipped, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
             string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
-            EmitOpTelemetry("type_hierarchy", "degraded", reason, ownerBox.Stats, scanBox.Stats); // epuc.1
+            EmitOpTelemetry("type_hierarchy", "degraded", reason, ownerBox.Stats, scanBox.Stats,
+                clusterLoadMs: clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
+                queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs); // epuc.1
             return (null, null, null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic type hierarchy failed: {ex}");
-            EmitOpTelemetry("type_hierarchy", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats); // epuc.1 review F3
+            EmitOpTelemetry("type_hierarchy", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
+                clusterLoadMs: loadMs > 0 ? loadMs : null,
+                queryMs: loadMs > 0 ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1 review F3
             return (null, null, null, $"semantic_error:{ex.GetType().Name}");
         }
     }

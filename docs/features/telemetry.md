@@ -42,6 +42,8 @@ load ran).
 | `tool` | `references` \| `implementations` \| `type_hierarchy` \| `definition` \| `callers` \| `callees` |
 | `result` | `exact` (success) \| `degraded` (deadline died: see `reason`) \| `unresolved` (position/symbol didn't resolve; see `reason`) \| `error` |
 | `reason` | `cluster_cold_load` \| `semantic_timeout` \| `index_snapshot_unavailable` \| `symbol_not_resolved` \| `symbol_not_resolved_in_scope` \| `not_a_type` \| exception type name |
+| `clusterLoadMs` | the op's LOAD+RESOLVE wall (all phases through symbol resolution) — restored after a field regression hid a 48s query behind load-only telemetry |
+| `queryMs` | the op's FIND wall (SymbolFinder/scan/count after resolution; includes lazy Roslyn compilation on cold ops — the v1 caveat below). Null when the op died during load |
 | `cold` | present+true when phase 1 found zero projects already loaded — the workspace was cold before this op |
 | `ownerLoad` | stage split of phase 1: loading the owning project's dependency closure (all six tools) |
 | `scanLoad` | stage split of phase 2: loading the dependent scan set (`references`/`implementations`/`callers`/`type_hierarchy` only) |

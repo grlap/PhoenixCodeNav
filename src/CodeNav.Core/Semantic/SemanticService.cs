@@ -134,7 +134,8 @@ public sealed partial class SemanticService : IDisposable
     /// TelemetryLog.Emit never blocks or throws into this path.</summary>
     private void EmitOpTelemetry(string tool, string result, string? reason,
         SemanticWorkspace.LoadStats? ownerLoad = null,
-        SemanticWorkspace.LoadStats? scanLoad = null)
+        SemanticWorkspace.LoadStats? scanLoad = null,
+        long? clusterLoadMs = null, long? queryMs = null)
     {
         _manager.Telemetry.Emit(new
         {
@@ -147,6 +148,11 @@ public sealed partial class SemanticService : IDisposable
             tool,
             result,
             reason,
+            // Field regression fix (IPartnerFrameworkInterface, 48s query invisible): the F2
+            // redesign dropped the op's own load/query wall split — the response envelope kept
+            // it, the record lost it, and query became the dominant cost with zero telemetry.
+            clusterLoadMs,
+            queryMs,
             cold = ownerLoad is { LoadedBefore: 0 } ? true : (bool?)null,
             ownerLoad = Shape(ownerLoad),
             scanLoad = Shape(scanLoad),
@@ -173,6 +179,8 @@ public sealed partial class SemanticService : IDisposable
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 60000));
         bool loadCompleted = false;
+        var swOp = System.Diagnostics.Stopwatch.StartNew(); // field 48s gap: op wall split
+        long loadMs = 0;
         var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
         try
         {
@@ -186,6 +194,7 @@ public sealed partial class SemanticService : IDisposable
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox).ConfigureAwait(false);
             loadCompleted = true;
+            loadMs = swOp.ElapsedMilliseconds;
             if (symbol is null)
             {
                 EmitOpTelemetry("definition", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
@@ -194,7 +203,8 @@ public sealed partial class SemanticService : IDisposable
             // Review r2: materialize BEFORE the emit — a Describe throw after an "exact"
             // record would add a second ("error") record for the same op via the catch.
             var described = Describe(symbol);
-            EmitOpTelemetry("definition", "exact", null, ownerBox.Stats); // epuc.1
+            EmitOpTelemetry("definition", "exact", null, ownerBox.Stats,
+                clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs); // epuc.1
             return (described, null);
         }
         catch (OperationCanceledException)
@@ -204,13 +214,17 @@ public sealed partial class SemanticService : IDisposable
             // old uniform "semantic_timeout" sent agents raising timeoutMs (or distrusting the
             // tool) when the fix was simply to call again.
             string reason = loadCompleted ? "semantic_timeout" : "cluster_cold_load";
-            EmitOpTelemetry("definition", "degraded", reason, ownerBox.Stats); // epuc.1
+            EmitOpTelemetry("definition", "degraded", reason, ownerBox.Stats,
+                clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
+                queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
             return (null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic definition failed: {ex.Message}");
-            EmitOpTelemetry("definition", "error", ex.GetType().Name, ownerBox.Stats); // epuc.1 review F3
+            EmitOpTelemetry("definition", "error", ex.GetType().Name, ownerBox.Stats,
+                clusterLoadMs: loadCompleted ? loadMs : null,
+                queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1 review F3
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
     }
@@ -390,20 +404,26 @@ public sealed partial class SemanticService : IDisposable
                 outOfGraph.Count > 0 ? outOfGraph : null,
                 ClusterLoadMs: clusterLoadMs,
                 QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs);
-            EmitOpTelemetry("references", "exact", null, ownerBox.Stats, scanBox.Stats); // epuc.1
+            EmitOpTelemetry("references", "exact", null, ownerBox.Stats, scanBox.Stats,
+                clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
             return (result, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: cold-cluster warm-up vs real scan timeout — see DefinitionAsync for rationale.
             string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
-            EmitOpTelemetry("references", "degraded", reason, ownerBox.Stats, scanBox.Stats); // epuc.1
+            // Field 48s gap: a timed-out op is exactly the record that NEEDS the query wall.
+            EmitOpTelemetry("references", "degraded", reason, ownerBox.Stats, scanBox.Stats,
+                clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
+                clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
             return (null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic references failed: {ex}");
-            EmitOpTelemetry("references", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats); // epuc.1
+            EmitOpTelemetry("references", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
+                clusterLoadMs > 0 ? clusterLoadMs : null,
+                clusterLoadMs > 0 ? swPhase.ElapsedMilliseconds - clusterLoadMs : null); // epuc.1
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
     }
@@ -505,20 +525,25 @@ public sealed partial class SemanticService : IDisposable
             var payload = new SemanticImplementations(Describe(symbol), results, coverage, skipped,
                 deadlineExhausted,
                 ClusterLoadMs: clusterLoadMs, QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs);
-            EmitOpTelemetry("implementations", "exact", null, ownerBox.Stats, scanBox.Stats); // epuc.1
+            EmitOpTelemetry("implementations", "exact", null, ownerBox.Stats, scanBox.Stats,
+                clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
             return (payload, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: cold-cluster warm-up vs real scan timeout — see DefinitionAsync for rationale.
             string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
-            EmitOpTelemetry("implementations", "degraded", reason, ownerBox.Stats, scanBox.Stats); // epuc.1
+            EmitOpTelemetry("implementations", "degraded", reason, ownerBox.Stats, scanBox.Stats,
+                clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
+                clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
             return (null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic implementations failed: {ex}");
-            EmitOpTelemetry("implementations", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats); // epuc.1
+            EmitOpTelemetry("implementations", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
+                clusterLoadMs > 0 ? clusterLoadMs : null,
+                clusterLoadMs > 0 ? swPhase.ElapsedMilliseconds - clusterLoadMs : null); // epuc.1
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
     }
