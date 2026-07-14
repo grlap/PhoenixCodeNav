@@ -26,22 +26,38 @@ public sealed partial class SemanticService
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         bool clusterLoadInProgress = true;
+        var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
+        var scanBox = new SemanticWorkspace.LoadStatsBox();
         try
         {
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
-            if (indexSnapshot is null) return (null, null, null, "index_snapshot_unavailable");
+            if (indexSnapshot is null)
+            {
+                EmitOpTelemetry("callers", "unresolved", "index_snapshot_unavailable"); // epuc.1
+                return (null, null, null, "index_snapshot_unavailable");
+            }
 
             var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
-                path, line, column, nameHint, cts.Token, indexSnapshot.Queries).ConfigureAwait(false);
+                path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
+                statsBox: ownerBox).ConfigureAwait(false);
             clusterLoadInProgress = false;
-            if (symbolA is null || owningProject is null) return (null, null, null, "symbol_not_resolved");
+            if (symbolA is null || owningProject is null)
+            {
+                EmitOpTelemetry("callers", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
+                return (null, null, null, "symbol_not_resolved");
+            }
 
             clusterLoadInProgress = true;
             var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
-                indexSnapshot.Queries, cts.Token).ConfigureAwait(false);
+                indexSnapshot.Queries, cts.Token, statsBox: scanBox).ConfigureAwait(false);
             clusterLoadInProgress = false;
-            if (symbol is null) return (null, null, null, "symbol_not_resolved_in_scope");
+            if (symbol is null)
+            {
+                EmitOpTelemetry("callers", "unresolved", "symbol_not_resolved_in_scope",
+                    ownerBox.Stats, scanBox.Stats); // epuc.1
+                return (null, null, null, "symbol_not_resolved_in_scope");
+            }
 
             var callers = await SymbolFinder.FindCallersAsync(symbol, solution, cts.Token).ConfigureAwait(false);
             var testFlags = ProjectTestFlags();
@@ -61,20 +77,20 @@ public sealed partial class SemanticService
                 }
                 results.Add(new SemanticCaller(Describe(info.CallingSymbol), sites));
             }
-            EmitOpTelemetry("callers", "exact", null); // epuc.1
+            EmitOpTelemetry("callers", "exact", null, ownerBox.Stats, scanBox.Stats); // epuc.1
             return (results, coverage, skipped, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
             string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
-            EmitOpTelemetry("callers", "degraded", reason); // epuc.1
+            EmitOpTelemetry("callers", "degraded", reason, ownerBox.Stats, scanBox.Stats); // epuc.1
             return (null, null, null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic callers failed: {ex}");
-            EmitOpTelemetry("callers", "error", ex.GetType().Name); // epuc.1
+            EmitOpTelemetry("callers", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats); // epuc.1
             return (null, null, null, $"semantic_error:{ex.GetType().Name}");
         }
     }
@@ -84,14 +100,24 @@ public sealed partial class SemanticService
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         bool loadCompleted = false; // t2b: cold-cluster warm-up vs real scan timeout
+        var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
         try
         {
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
-            if (indexSnapshot is null) return (null, "index_snapshot_unavailable");
+            if (indexSnapshot is null)
+            {
+                EmitOpTelemetry("callees", "unresolved", "index_snapshot_unavailable"); // epuc.1
+                return (null, "index_snapshot_unavailable");
+            }
             var (solution, symbol, _) = await LoadOwnerAndResolveAsync(
-                path, line, column, nameHint, cts.Token, indexSnapshot.Queries).ConfigureAwait(false);
+                path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
+                statsBox: ownerBox).ConfigureAwait(false);
             loadCompleted = true;
-            if (symbol is null || solution is null) return (null, "symbol_not_resolved");
+            if (symbol is null || solution is null)
+            {
+                EmitOpTelemetry("callees", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
+                return (null, "symbol_not_resolved");
+            }
 
             var byTarget = new Dictionary<ISymbol, List<int>>(SymbolEqualityComparer.Default);
             foreach (var syntaxRef in symbol.DeclaringSyntaxReferences)
@@ -118,20 +144,20 @@ public sealed partial class SemanticService
                 .Select(kv => new SemanticCallee(Describe(kv.Key), kv.Value.Distinct().Take(8).ToList()))
                 .OrderBy(c => c.Callee.SymbolDisplay, StringComparer.Ordinal)
                 .ToList();
-            EmitOpTelemetry("callees", "exact", null); // epuc.1
+            EmitOpTelemetry("callees", "exact", null, ownerBox.Stats); // epuc.1
             return (results, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
             string reason = loadCompleted ? "semantic_timeout" : "cluster_cold_load";
-            EmitOpTelemetry("callees", "degraded", reason); // epuc.1
+            EmitOpTelemetry("callees", "degraded", reason, ownerBox.Stats); // epuc.1
             return (null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic callees failed: {ex}");
-            EmitOpTelemetry("callees", "error", ex.GetType().Name); // epuc.1
+            EmitOpTelemetry("callees", "error", ex.GetType().Name, ownerBox.Stats); // epuc.1
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
     }
@@ -143,17 +169,32 @@ public sealed partial class SemanticService
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         bool clusterLoadInProgress = true;
+        var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
+        var scanBox = new SemanticWorkspace.LoadStatsBox();
         try
         {
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
-            if (indexSnapshot is null) return (null, null, null, "index_snapshot_unavailable");
+            if (indexSnapshot is null)
+            {
+                EmitOpTelemetry("type_hierarchy", "unresolved", "index_snapshot_unavailable"); // epuc.1
+                return (null, null, null, "index_snapshot_unavailable");
+            }
 
             var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
-                path, line, column, nameHint, cts.Token, indexSnapshot.Queries, arityHint)
+                path, line, column, nameHint, cts.Token, indexSnapshot.Queries, arityHint,
+                statsBox: ownerBox)
                 .ConfigureAwait(false);
             clusterLoadInProgress = false;
-            if (symbolA is null || owningProject is null) return (null, null, null, "symbol_not_resolved");
-            if (symbolA is not INamedTypeSymbol) return (null, null, null, "not_a_type");
+            if (symbolA is null || owningProject is null)
+            {
+                EmitOpTelemetry("type_hierarchy", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
+                return (null, null, null, "symbol_not_resolved");
+            }
+            if (symbolA is not INamedTypeSymbol)
+            {
+                EmitOpTelemetry("type_hierarchy", "unresolved", "not_a_type", ownerBox.Stats); // epuc.1
+                return (null, null, null, "not_a_type");
+            }
 
             // Implementer seeds, same as ImplementationsAsync (field 0.7.0: type_hierarchy showed
             // 8 exact hits with coverage 1/1 — the hits were RESIDUE from a prior implementations
@@ -167,11 +208,14 @@ public sealed partial class SemanticService
             clusterLoadInProgress = true;
             var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
-                indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint).ConfigureAwait(false);
+                indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
+                statsBox: scanBox).ConfigureAwait(false);
             clusterLoadInProgress = false;
             if (symbol is not INamedTypeSymbol type)
             {
-                return (null, null, null, symbol is null ? "symbol_not_resolved_in_scope" : "not_a_type");
+                string why = symbol is null ? "symbol_not_resolved_in_scope" : "not_a_type";
+                EmitOpTelemetry("type_hierarchy", "unresolved", why, ownerBox.Stats, scanBox.Stats); // epuc.1
+                return (null, null, null, why);
             }
 
             var baseTypes = new List<SemanticDeclaration>();
@@ -193,19 +237,20 @@ public sealed partial class SemanticService
                 down.AddRange(derived.OfType<ISymbol>().Select(Describe));
             }
 
-            EmitOpTelemetry("type_hierarchy", "exact", null); // epuc.1
+            EmitOpTelemetry("type_hierarchy", "exact", null, ownerBox.Stats, scanBox.Stats); // epuc.1
             return (new SemanticTypeHierarchy(Describe(type), baseTypes, interfaces, down), coverage, skipped, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
             string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
-            EmitOpTelemetry("type_hierarchy", "degraded", reason); // epuc.1
+            EmitOpTelemetry("type_hierarchy", "degraded", reason, ownerBox.Stats, scanBox.Stats); // epuc.1
             return (null, null, null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic type hierarchy failed: {ex}");
+            EmitOpTelemetry("type_hierarchy", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats); // epuc.1 review F3
             return (null, null, null, $"semantic_error:{ex.GetType().Name}");
         }
     }

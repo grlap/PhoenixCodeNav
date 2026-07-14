@@ -31,6 +31,7 @@ public sealed class TelemetryLog : IDisposable
     private readonly Action<string> _log;
     private readonly Queue<string> _ring = new();
     private readonly object _ringGate = new();
+    private static int _fileSequence; // review F6: uniquifies same-second same-pid streams
     private long _dropped;
     private long _written;
     private bool _capAnnounced;
@@ -46,13 +47,22 @@ public sealed class TelemetryLog : IDisposable
     {
         _log = log ?? (_ => { });
         string dir = Path.Combine(workspaceRoot, ".codenav", "telemetry");
-        string file = $"phoenix-{Environment.ProcessId}-{DateTime.UtcNow:yyyyMMddHHmmss}.jsonl";
+        // Review F6: pid+seconds collided when two managers opened one root within a second
+        // (second stream silently dead after its Append failed against FileShare.Read) — the
+        // per-process sequence makes every stream's file unique.
+        int seq = Interlocked.Increment(ref _fileSequence);
+        string file = $"phoenix-{Environment.ProcessId}-{DateTime.UtcNow:yyyyMMddHHmmss}-{seq}.jsonl";
         _filePath = Path.Combine(dir, file);
         _pending = Channel.CreateBounded<string>(new BoundedChannelOptions(ChannelCapacity)
         {
             FullMode = BoundedChannelFullMode.DropOldest, // never block a request path
             SingleReader = true,
-        });
+        },
+        // Review F1: DropOldest makes TryWrite return TRUE while silently evicting the oldest
+        // queued record — the itemDropped callback is the ONLY place evictions are visible.
+        // Without it the "counted and disclosed" contract (and the portal spec's observable
+        // dropped counter) was dead code.
+        _ => Interlocked.Increment(ref _dropped));
         _drainer = Task.Run(DrainAsync);
         TryCleanupStale(dir);
     }
@@ -82,7 +92,9 @@ public sealed class TelemetryLog : IDisposable
         }
         if (!_pending.Writer.TryWrite(line))
         {
-            Interlocked.Increment(ref _dropped); // channel completed (dispose) — count honestly
+            // Only reachable after Dispose completed the channel (DropOldest never rejects a
+            // live write — evictions surface via the itemDropped callback above).
+            Interlocked.Increment(ref _dropped);
         }
     }
 

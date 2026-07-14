@@ -56,26 +56,38 @@ public sealed class SemanticWorkspace : IDisposable
         _poolIndexConnections = poolIndexConnections;
     }
 
+    public sealed record LoadStats(double GateWaitMs, double FingerprintMs, double TopoMs,
+        double ProjectLoadMs, int LoadedBefore, int Requested, int Reloaded, int Loaded,
+        int Failed);
+
+    /// <summary>epuc.1 (review F2): per-CALL stats vehicle. The first cut published stats via
+    /// an ambient last-load property — a concurrent caller could emit ANOTHER op's load as its
+    /// own, two-phase ops lost their cold phase-1 split to phase-2's overwrite, and a load
+    /// that died mid-flight (the cluster_cold_load case itself) published nothing. The box is
+    /// filled in EnsureLoadedAsync's finally, so success, cancellation, and failure all carry
+    /// THIS call's split, with the dying moment attributed to the phase that was running.</summary>
+    public sealed class LoadStatsBox
+    {
+        public LoadStats? Stats { get; internal set; }
+    }
+
     /// <summary>
     /// Ensures the given projects (dependency closures must already be included by the
     /// caller for full-fidelity targets) are loaded; returns a solution snapshot.
     /// Load order is topological (dependencies first); references to projects outside
     /// the requested set are skipped (navigation-grade holes).
     /// </summary>
-    /// <summary>epuc.1: stage timings + work counts of the most recent EnsureLoadedAsync,
-    /// swapped in atomically before the gate releases. The caller that just awaited the load
-    /// reads it immediately on the same logical flow; concurrent callers each see SOME recent
-    /// load's stats, which is exactly the advisory quality telemetry needs.</summary>
-    public LoadStats? LastLoadStats { get; private set; }
-
-    public sealed record LoadStats(double GateWaitMs, double FingerprintMs, double TopoMs,
-        double ProjectLoadMs, int LoadedBefore, int Requested, int Reloaded, int Loaded,
-        int Failed);
-
     public async Task<(Solution Solution, ClusterCoverage Coverage)> EnsureLoadedAsync(
         IReadOnlyCollection<string> projectNames, CancellationToken ct,
-        IReadOnlyCollection<string>? ensureReferenceTo = null)
+        IReadOnlyCollection<string>? ensureReferenceTo = null,
+        LoadStatsBox? statsBox = null)
     {
+        // Allocated BEFORE the gate: nothing may sit between WaitAsync and try that could
+        // throw, or the semaphore leaks. (The finally reads these plus _loaded under the gate.)
+        var requested = new HashSet<string>(projectNames, StringComparer.OrdinalIgnoreCase);
+        var failed = new List<string>();
+        long tFinger = 0, tTopo = 0; // 0 = the phase never completed (died mid-phase)
+        int reloadedCount = 0;
         long tEnter = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         long tGate = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -84,8 +96,6 @@ public sealed class SemanticWorkspace : IDisposable
         {
             using var q = new IndexQueries(_dbPath, pinReadSnapshot: false,
                 pooling: _poolIndexConnections);
-            var requested = new HashSet<string>(projectNames, StringComparer.OrdinalIgnoreCase);
-            var failed = new List<string>();
             var skipped = new List<string>();
 
             // Reload any requested project whose files changed since load. Reuse its
@@ -110,9 +120,10 @@ public sealed class SemanticWorkspace : IDisposable
                 }
             }
 
-            long tFinger = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
+            reloadedCount = reuseIds.Count; // epuc.1: stamped before load, survives a dying load
+            tFinger = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
             var toLoad = TopoOrder(q, requested.Where(n => !_loaded.ContainsKey(n)).ToList());
-            long tTopo = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
+            tTopo = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
             var frameworkRefs = ReferenceAssemblyLocator.Net472References(out string? refDir);
             if (refDir is null)
             {
@@ -148,13 +159,6 @@ public sealed class SemanticWorkspace : IDisposable
 
             EvictBeyondCap(requested);
 
-            // epuc.1: publish the stage split before the gate releases.
-            long tDone = System.Diagnostics.Stopwatch.GetTimestamp();
-            LastLoadStats = new LoadStats(
-                ToMs(tGate - tEnter), ToMs(tFinger - tGate), ToMs(tTopo - tFinger),
-                ToMs(tDone - tTopo), loadedBefore, requested.Count, reuseIds.Count,
-                requested.Count(n => _loaded.ContainsKey(n)), failed.Count);
-
             var coverage = new ClusterCoverage(
                 LoadedProjects: requested.Count(n => _loaded.ContainsKey(n)),
                 RequestedProjects: requested.Count,
@@ -166,6 +170,21 @@ public sealed class SemanticWorkspace : IDisposable
         }
         finally
         {
+            // epuc.1 (review F2): fill THIS call's box even when the load dies mid-flight —
+            // cluster_cold_load records are precisely the ones whose split we need most.
+            // A phase that never stamped its end gets the remaining wall (died in-phase);
+            // phases never entered report 0.
+            if (statsBox is not null)
+            {
+                long tEnd = System.Diagnostics.Stopwatch.GetTimestamp();
+                statsBox.Stats = new LoadStats(
+                    ToMs(tGate - tEnter),
+                    tFinger > 0 ? ToMs(tFinger - tGate) : ToMs(tEnd - tGate),
+                    tTopo > 0 ? ToMs(tTopo - tFinger) : tFinger > 0 ? ToMs(tEnd - tFinger) : 0,
+                    tTopo > 0 ? ToMs(tEnd - tTopo) : 0,
+                    loadedBefore, requested.Count, reloadedCount,
+                    requested.Count(n => _loaded.ContainsKey(n)), failed.Count);
+            }
             _gate.Release();
         }
     }
