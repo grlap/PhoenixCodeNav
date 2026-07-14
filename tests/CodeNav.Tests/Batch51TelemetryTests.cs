@@ -69,9 +69,14 @@ public class Batch51TelemetryTests
                 Assert.Contains("\"ownerLoad\":", content);
                 Assert.Contains("\"gateWaitMs\":", content);
                 // Field regression (48s query invisible): the op's own load/query wall split
-                // must ride every completed record — query is the dominant cost now.
-                Assert.Contains("\"clusterLoadMs\":", content);
-                Assert.Contains("\"queryMs\":", content);
+                // must ride the EXACT record itself — a retried first attempt can leave a
+                // degraded record carrying the fields, so whole-file Contains could false-pass
+                // (review q3): assert on the exact record's own line.
+                string exactLine = content.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                    .First(l => l.Contains("\"result\":\"exact\"")
+                             && l.Contains("\"tool\":\"definition\""));
+                Assert.Contains("\"clusterLoadMs\":", exactLine);
+                Assert.Contains("\"queryMs\":", exactLine);
 
                 // (2) privacy: no drive-rooted path may appear in any record —
                 // neither drive-letter (C:\\) nor UNC (\\\\server\\share) shaped.

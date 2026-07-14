@@ -25,7 +25,7 @@ process is alive).
 
 ```json
 {"e":"semanticOp","ts":"2026-07-13T23:49:12.482Z","corr":"a1b2c3d4",
- "tool":"references","result":"exact","cold":true,
+ "tool":"references","result":"exact","clusterLoadMs":15400,"queryMs":47642,"cold":true,
  "ownerLoad":{"gateWaitMs":0.2,"fingerprintMs":1.5,"topoMs":48.0,"projectLoadMs":8917.3,
               "loadedBefore":0,"requested":4,"reloaded":0,"loaded":4,"failed":0},
  "scanLoad":{"gateWaitMs":0.1,"fingerprintMs":3.9,"topoMs":95.2,"projectLoadMs":6120.4,

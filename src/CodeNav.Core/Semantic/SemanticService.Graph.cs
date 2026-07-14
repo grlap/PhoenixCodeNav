@@ -43,6 +43,7 @@ public sealed partial class SemanticService
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox).ConfigureAwait(false);
             clusterLoadInProgress = false;
+            loadMs = swOp.ElapsedMilliseconds; // review q2: progressive stamp (see references)
             if (symbolA is null || owningProject is null)
             {
                 EmitOpTelemetry("callers", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
@@ -97,8 +98,8 @@ public sealed partial class SemanticService
         {
             _log($"Semantic callers failed: {ex}");
             EmitOpTelemetry("callers", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
-                clusterLoadMs: loadMs > 0 ? loadMs : null,
-                queryMs: loadMs > 0 ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
+                clusterLoadMs: clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
+                queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs); // epuc.1
             return (null, null, null, $"semantic_error:{ex.GetType().Name}");
         }
     }
@@ -171,8 +172,9 @@ public sealed partial class SemanticService
         catch (Exception ex)
         {
             _log($"Semantic callees failed: {ex}");
+            // Shape parity with the two-phase ops (review q2-r2): in-load error = whole wall.
             EmitOpTelemetry("callees", "error", ex.GetType().Name, ownerBox.Stats,
-                clusterLoadMs: loadCompleted ? loadMs : null,
+                clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
                 queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
@@ -203,6 +205,7 @@ public sealed partial class SemanticService
                 statsBox: ownerBox)
                 .ConfigureAwait(false);
             clusterLoadInProgress = false;
+            loadMs = swOp.ElapsedMilliseconds; // review q2: progressive stamp (see references)
             if (symbolA is null || owningProject is null)
             {
                 EmitOpTelemetry("type_hierarchy", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
@@ -275,8 +278,8 @@ public sealed partial class SemanticService
         {
             _log($"Semantic type hierarchy failed: {ex}");
             EmitOpTelemetry("type_hierarchy", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
-                clusterLoadMs: loadMs > 0 ? loadMs : null,
-                queryMs: loadMs > 0 ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1 review F3
+                clusterLoadMs: clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
+                queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs); // epuc.1 review F3
             return (null, null, null, $"semantic_error:{ex.GetType().Name}");
         }
     }

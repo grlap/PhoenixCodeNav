@@ -222,8 +222,10 @@ public sealed partial class SemanticService : IDisposable
         catch (Exception ex)
         {
             _log($"Semantic definition failed: {ex.Message}");
+            // In-load error carries the whole wall as load (review q2-r2: shape parity
+            // with the four two-phase ops — the running phase absorbs the wall).
             EmitOpTelemetry("definition", "error", ex.GetType().Name, ownerBox.Stats,
-                clusterLoadMs: loadCompleted ? loadMs : null,
+                clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
                 queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1 review F3
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
@@ -256,6 +258,10 @@ public sealed partial class SemanticService : IDisposable
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox).ConfigureAwait(false);
             clusterLoadInProgress = false; // candidate discovery is a query phase, not cold loading
+            // Review q2 (progressive stamp): a deadline in the DISCOVERY window otherwise
+            // reports clusterLoadMs 0 / queryMs = whole wall — the exact inverse of the truth
+            // when phase-1 burned the budget. The post-phase-2 stamp overwrites cumulatively.
+            clusterLoadMs = swPhase.ElapsedMilliseconds;
             if (symbolA is null || owningProject is null)
             {
                 EmitOpTelemetry("references", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
@@ -422,8 +428,8 @@ public sealed partial class SemanticService : IDisposable
         {
             _log($"Semantic references failed: {ex}");
             EmitOpTelemetry("references", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
-                clusterLoadMs > 0 ? clusterLoadMs : null,
-                clusterLoadMs > 0 ? swPhase.ElapsedMilliseconds - clusterLoadMs : null); // epuc.1
+                clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
+                clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
     }
@@ -454,6 +460,7 @@ public sealed partial class SemanticService : IDisposable
                 statsBox: ownerBox)
                 .ConfigureAwait(false);
             clusterLoadInProgress = false;
+            clusterLoadMs = swPhase.ElapsedMilliseconds; // review q2: progressive stamp (see references)
             if (symbolA is null || owningProject is null)
             {
                 EmitOpTelemetry("implementations", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
@@ -542,8 +549,8 @@ public sealed partial class SemanticService : IDisposable
         {
             _log($"Semantic implementations failed: {ex}");
             EmitOpTelemetry("implementations", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
-                clusterLoadMs > 0 ? clusterLoadMs : null,
-                clusterLoadMs > 0 ? swPhase.ElapsedMilliseconds - clusterLoadMs : null); // epuc.1
+                clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
+                clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
     }
