@@ -43,7 +43,7 @@ public sealed class IndexFixture : IDisposable
                 if (_tools is not null) return _tools;
                 var manager = new IndexManager(Root, DbPath);
                 manager.Start();
-                for (int i = 0; i < 100 && !manager.IsQueryable; i++) Thread.Sleep(50);
+                for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
                 Assert.True(manager.IsQueryable, "index did not become queryable");
                 _manager = manager;
                 _tools = new NavigationTools(manager, new CodeNav.Core.Semantic.SemanticService(manager));

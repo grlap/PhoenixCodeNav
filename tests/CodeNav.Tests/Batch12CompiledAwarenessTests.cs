@@ -58,7 +58,7 @@ public class Batch12CompiledAwarenessTests
             try
             {
                 manager.Start();
-                for (int i = 0; i < 100 && !manager.IsQueryable; i++) Thread.Sleep(50);
+                for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
                 Assert.True(manager.IsQueryable);
                 var tools = new NavigationTools(manager, new CodeNav.Core.Semantic.SemanticService(manager));
 

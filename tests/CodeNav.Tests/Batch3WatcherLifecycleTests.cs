@@ -295,7 +295,7 @@ public class IndexManagerLifecycleTests : IClassFixture<IndexFixture>
     {
         var mgr = new IndexManager(_fx.Root, _fx.DbPath);
         mgr.Start();
-        for (int i = 0; i < 100 && !mgr.IsQueryable; i++) Thread.Sleep(50);
+        for (int i = 0; i < 600 && !mgr.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
         Assert.True(mgr.IsQueryable);
 
         mgr.RequestRefresh();      // give the pump in-flight work

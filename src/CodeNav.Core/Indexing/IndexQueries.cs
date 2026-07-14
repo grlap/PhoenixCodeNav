@@ -1167,6 +1167,94 @@ public sealed partial class IndexQueries : IDisposable
         return false;
     }
 
+    /// <summary>jj1q: the full SYNTACTIC subtype closure of a type — every type whose base
+    /// list transitively reaches <paramref name="rootName"/> (A→B→C→D chains of any depth;
+    /// interfaces included so class-via-derived-interface implementers stay reachable).
+    /// Whole-token + arity-checked per hop. Callers run a SEMANTIC verification pass over the
+    /// result (same-name collisions across namespaces enter the closure by design and must be
+    /// pruned there — syntax narrows, semantics verifies). <paramref name="capped"/> reports
+    /// an aborted walk on pathological fan-out: callers MUST fall back to the exhaustive
+    /// compiler search then — a truncated closure must never ship as an exact answer.</summary>
+    public List<SymbolHit> TransitiveImplementationClosure(
+        string rootName, int? rootArity, out bool capped,
+        int maxTypes = 2000, CancellationToken cancellationToken = default)
+    {
+        capped = false;
+        var results = new List<SymbolHit>();
+        if (string.IsNullOrEmpty(rootName)) return results;
+        var seenDeclarations = new HashSet<string>(StringComparer.Ordinal);
+        var visitedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var frontier = new Queue<(string Name, int? Arity)>();
+        frontier.Enqueue((rootName, rootArity));
+        visitedNames.Add($"{rootName}`{rootArity?.ToString() ?? "?"}");
+        while (frontier.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var (name, arity) = frontier.Dequeue();
+            foreach (var hit in BaseListMentions(name, arity, maxTypes + 1, cancellationToken))
+            {
+                string key = hit.DeclarationKey
+                    ?? $"{hit.Ns}|{hit.Container}|{hit.Name}|{hit.Arity}|{hit.FilePath}|{hit.StartLine}";
+                if (!seenDeclarations.Add(key)) continue;
+                if (results.Count >= maxTypes)
+                {
+                    capped = true;
+                    return results;
+                }
+                results.Add(hit);
+                // Partial declarations of one type share a name — visitedNames keeps the
+                // frontier from re-walking a name, while every declaration is still returned.
+                if (visitedNames.Add($"{hit.Name}`{hit.Arity}"))
+                {
+                    frontier.Enqueue((hit.Name, hit.Arity));
+                }
+            }
+        }
+        return results;
+    }
+
+    /// <summary>All type declarations (interfaces INCLUDED — unlike the heuristic
+    /// ImplementationCandidates, which serves a tool that only lists instantiable-ish kinds)
+    /// whose base list names <paramref name="name"/> as a whole identifier token with the
+    /// given arity. Pages until exhausted or <paramref name="cap"/>.</summary>
+    private List<SymbolHit> BaseListMentions(string name, int? targetArity, int cap,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(name) || cap <= 0) return new();
+        string esc = EscapeLike(name);
+        var matches = new List<SymbolHit>();
+        int offset = 0;
+        const int page = 512;
+        while (matches.Count < cap)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var rows = Query(
+                """
+                SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
+                FROM symbols s JOIN files f ON f.id = s.file_id
+                WHERE s.kind IN ('class','struct','record','record_struct','interface')
+                  AND s.name <> $n
+                  AND s.signature LIKE $pat ESCAPE '\'
+                ORDER BY s.id
+                LIMIT $lim OFFSET $off
+                """,
+                ReadSymbol,
+                ("$n", name), ("$pat", $"%: %{esc}%"), ("$lim", page), ("$off", offset));
+            foreach (SymbolHit hit in rows)
+            {
+                if (BaseListContainsIdentity(hit.Signature, name, targetArity))
+                {
+                    matches.Add(hit);
+                    if (matches.Count == cap) break;
+                }
+            }
+            if (rows.Count < page) break;
+            offset += rows.Count;
+        }
+        return matches;
+    }
+
     /// <summary>
     /// Every project containing a type whose base list names <paramref name="name"/> as a whole
     /// identifier token. Semantic cluster discovery must enumerate projects before applying its

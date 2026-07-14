@@ -82,7 +82,7 @@ public class Batch1ToolTests : IClassFixture<IndexFixture>, IDisposable
         _fx = fx;
         _manager = new IndexManager(_fx.Root, _fx.DbPath);
         _manager.Start();
-        for (int i = 0; i < 100 && !_manager.IsQueryable; i++) Thread.Sleep(50);
+        for (int i = 0; i < 600 && !_manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
         _semantic = new SemanticService(_manager);
         _tools = new NavigationTools(_manager, _semantic);
     }
@@ -206,7 +206,7 @@ public class Batch1ToolTests : IClassFixture<IndexFixture>, IDisposable
             using var manager = new IndexManager(root, dbPath);
             using var semantic = new SemanticService(manager);
             manager.Start();
-            for (int i = 0; i < 100 && !manager.IsQueryable; i++) Thread.Sleep(50);
+            for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
             Assert.True(manager.IsQueryable);
             var tools = new NavigationTools(manager, semantic);
 

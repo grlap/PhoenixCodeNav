@@ -222,9 +222,16 @@ public sealed partial class SemanticService
             // call's loads, not this call's own discovery; unseeded, a cold type_hierarchy on a
             // cross-project interface finds nothing). Seeding makes it self-sufficient AND makes
             // coverage describe the projects this answer actually needed.
-            List<string> implementerSeeds;
-            implementerSeeds = indexSnapshot.Queries
-                .ImplementationCandidateProjects(symbolA.Name, cts.Token);
+            // jj1q: transitive-closure seeds (see ImplementationsAsync — level-1 seeding
+            // was a correctness hole for deep chains, not just a perf ceiling).
+            var typeA = (INamedTypeSymbol)symbolA;
+            var swClosure = System.Diagnostics.Stopwatch.StartNew();
+            var typeClosure = indexSnapshot.Queries.TransitiveImplementationClosure(
+                typeA.Name, typeA.Arity, out bool closureCapped, cancellationToken: cts.Token);
+            long closureMs = swClosure.ElapsedMilliseconds;
+            List<string> implementerSeeds = closureCapped
+                ? indexSnapshot.Queries.ImplementationCandidateProjects(symbolA.Name, cts.Token)
+                : ClosureSeedProjects(indexSnapshot.Queries, typeClosure);
 
             clusterLoadInProgress = true;
             var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
@@ -248,21 +255,45 @@ public sealed partial class SemanticService
             var interfaces = type.AllInterfaces.Select(i => Describe((ISymbol)i)).ToList();
 
             var down = new List<SemanticDeclaration>();
-            if (type.TypeKind == TypeKind.Interface)
+            // jj1q: closure-verified downward direction — same walk as implementations (the
+            // global SymbolFinder scan materialized all loaded compilations; field row 83 was
+            // type_hierarchy blowing its deadline on exactly this).
+            object? queryStages;
+            if (!closureCapped)
             {
-                var impls = await SymbolFinder.FindImplementationsAsync(type, solution, cancellationToken: cts.Token).ConfigureAwait(false);
-                down.AddRange(impls.OfType<ISymbol>().Select(Describe));
+                var (verifyMs, verified) = await VerifyClosureImplementersAsync(type, solution,
+                    typeClosure,
+                    impl => down.Add(Describe(impl)),
+                    cts.Token).ConfigureAwait(false);
+                queryStages = new
+                {
+                    path = "closure_verified",
+                    closureMs,
+                    verifyMs,
+                    candidates = typeClosure.Count,
+                    verified,
+                };
             }
             else
             {
-                var derived = await SymbolFinder.FindDerivedClassesAsync(type, solution, transitive: true, cancellationToken: cts.Token).ConfigureAwait(false);
-                down.AddRange(derived.OfType<ISymbol>().Select(Describe));
+                if (type.TypeKind == TypeKind.Interface)
+                {
+                    var impls = await SymbolFinder.FindImplementationsAsync(type, solution, cancellationToken: cts.Token).ConfigureAwait(false);
+                    down.AddRange(impls.OfType<ISymbol>().Select(Describe));
+                }
+                else
+                {
+                    var derived = await SymbolFinder.FindDerivedClassesAsync(type, solution, transitive: true, cancellationToken: cts.Token).ConfigureAwait(false);
+                    down.AddRange(derived.OfType<ISymbol>().Select(Describe));
+                }
+                queryStages = new { path = "exhaustive_fallback", closureCapped };
             }
 
             // Review r2: materialize BEFORE the emit — see DefinitionAsync.
             var payload = new SemanticTypeHierarchy(Describe(type), baseTypes, interfaces, down);
             EmitOpTelemetry("type_hierarchy", "exact", null, ownerBox.Stats, scanBox.Stats,
-                clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs); // epuc.1
+                clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs,
+                queryStages: queryStages); // epuc.1 + jj1q stages
             return (payload, coverage, skipped, null);
         }
         catch (OperationCanceledException)

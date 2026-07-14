@@ -51,7 +51,17 @@ load ran).
 | `*.fingerprintMs` | warm-set freshness check |
 | `*.topoMs` | dependency-closure discovery (index queries + topo order) |
 | `*.projectLoadMs` | project parse + source reads + metadata refs + workspace mutation |
+| `*.projectParseMs` | csproj/packages.config read + parse (sub-split of projectLoadMs) |
+| `*.sourceReadMs` | source file open+read+decode — the pv1k fan-out + fallback (sub-split) |
+| `*.metadataResolveMs` | dll metadata reference resolution — xqxw cache hits/misses (sub-split) |
+| `*.workspaceMutationMs` | Roslyn TryApplyChanges of the ADDED project (sub-split) |
 | `*.loadedBefore/requested/reloaded/loaded/failed` | warm-set size before this load, and this load's work volume |
+
+The four sub-splits undershoot `projectLoadMs` by a real, named residue: per-project index SQL
+(project row, file list, fingerprint), `ProjectInfo` construction, ProjectReference wiring
+(graph SQL + cycle checks), and — on cap-crossing calls — LRU evictions (workspace mutations
+that land outside `workspaceMutationMs`). On eviction-heavy or large scan sets the residue can
+reach seconds; it is attributable work, not measurement noise.
 
 The load blocks are **per-call**: each operation's record carries the splits of the loads
 that operation itself ran, filled even when the load died mid-flight (a `cluster_cold_load`

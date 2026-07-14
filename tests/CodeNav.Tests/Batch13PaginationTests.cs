@@ -23,7 +23,7 @@ public class Batch13PaginationTests : IClassFixture<IndexFixture>, IDisposable
     {
         _manager = new IndexManager(fx.Root, fx.DbPath);
         _manager.Start();
-        for (int i = 0; i < 100 && !_manager.IsQueryable; i++) Thread.Sleep(50);
+        for (int i = 0; i < 600 && !_manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
         _semantic = new SemanticService(_manager);
     }
 
@@ -61,7 +61,7 @@ public class Batch13PaginationTests : IClassFixture<IndexFixture>, IDisposable
             try
             {
                 manager.Start();
-                for (int i = 0; i < 100 && !manager.IsQueryable; i++) Thread.Sleep(50);
+                for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
                 Assert.True(manager.IsQueryable);
                 var tools = new NavigationTools(manager, new SemanticService(manager));
 

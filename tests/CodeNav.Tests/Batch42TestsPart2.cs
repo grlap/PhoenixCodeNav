@@ -1461,12 +1461,26 @@ public class Batch42TestsPart2
             WriteReviewRepo(root);
             using var m = StartManager(root);
             var tools = new NavigationTools(m, new SemanticService(m));
-            File.WriteAllText(Path.Combine(root, "Fresh.cs"),
-                "namespace Fresh42; public class FreshType42 { }\n");
-
-            var pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
-                () => tools.ReviewPack(paths: "Fresh.cs", maxBytes: 24576),
-                j => j.TryGetProperty("unmappedChanges", out _), "review_pack with unmappedChanges");
+            // This test RACES the watcher: the file must still be unindexed when the pack
+            // runs, and once a debounced refresh indexes it the classification flips to
+            // file_level forever - so each retry attempt recreates a FRESH file (new name)
+            // and the pack is scoped to that one path, restarting the race it usually wins
+            // (write-to-pack is milliseconds; the debounce is hundreds).
+            int freshAttempt = 0;
+            string freshName = "";
+            var pack = SemanticRetry.ParseWithRetry(
+                () =>
+                {
+                    freshAttempt++;
+                    freshName = $"Fresh{freshAttempt}.cs";
+                    File.WriteAllText(Path.Combine(root, freshName),
+                        $"namespace Fresh42; public class FreshType42_{freshAttempt} {{ }}\n");
+                    return tools.ReviewPack(paths: freshName, maxBytes: 24576);
+                },
+                j => j.TryGetProperty("unmappedChanges", out var u)
+                     && u.GetProperty("items").EnumerateArray().Any(i =>
+                         i.GetProperty("reason").GetString() == "whole_file_unindexed"),
+                "review_pack with a whole_file_unindexed note");
             JsonElement item = Assert.Single(pack.GetProperty("unmappedChanges")
                 .GetProperty("items").EnumerateArray());
             Assert.Equal("whole_file_unindexed", item.GetProperty("reason").GetString());

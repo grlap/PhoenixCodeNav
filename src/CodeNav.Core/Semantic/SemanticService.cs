@@ -135,7 +135,8 @@ public sealed partial class SemanticService : IDisposable
     private void EmitOpTelemetry(string tool, string result, string? reason,
         SemanticWorkspace.LoadStats? ownerLoad = null,
         SemanticWorkspace.LoadStats? scanLoad = null,
-        long? clusterLoadMs = null, long? queryMs = null)
+        long? clusterLoadMs = null, long? queryMs = null,
+        object? queryStages = null)
     {
         _manager.Telemetry.Emit(new
         {
@@ -153,6 +154,9 @@ public sealed partial class SemanticService : IDisposable
             // it, the record lost it, and query became the dominant cost with zero telemetry.
             clusterLoadMs,
             queryMs,
+            // jj1q: the closure-verified find path reports its own stage split — the field's
+            // "break down the 43.7s inside queryMs" ask, answered by owning the stages.
+            queryStages,
             cold = ownerLoad is { LoadedBefore: 0 } ? true : (bool?)null,
             ownerLoad = Shape(ownerLoad),
             scanLoad = Shape(scanLoad),
@@ -164,8 +168,10 @@ public sealed partial class SemanticService : IDisposable
             fingerprintMs = Math.Round(load.FingerprintMs, 1),
             topoMs = Math.Round(load.TopoMs, 1),
             projectLoadMs = Math.Round(load.ProjectLoadMs, 1),
-            // x5ls.1.3: the sub-splits of projectLoadMs (parse+read+metadata+mutation ≈ the
-            // lump; residue is loop overhead). These answer wusi-vs-xqxw with field data.
+            // x5ls.1.3: the sub-splits of projectLoadMs. The residue (lump minus the four)
+            // is NOT noise: per-project index SQL (ProjectByName/ProjectFiles/fingerprint),
+            // ProjectInfo.Create, ProjectReference wiring, and cap evictions (review s1).
+            // These answer wusi-vs-xqxw with field data.
             projectParseMs = Math.Round(load.ProjectParseMs, 1),
             sourceReadMs = Math.Round(load.SourceReadMs, 1),
             metadataResolveMs = Math.Round(load.MetadataResolveMs, 1),
@@ -473,13 +479,30 @@ public sealed partial class SemanticService : IDisposable
                 return (null, "symbol_not_resolved");
             }
 
-            // Seed the scan-set with the projects that syntactically implement/derive the type (base-list
-            // match in the index). Without this a cross-project interface — declared in a core project,
-            // implemented in leaf projects — resolves to an empty list because the implementer projects
-            // never entered the semantic cluster (they name the interface too rarely to rank in).
+            // Seed the scan-set with the projects that syntactically implement/derive the type.
+            // jj1q upgraded this from level-1 base-list matches to the TRANSITIVE closure's
+            // projects — the deep-chain fixture proved level-1 seeding was a correctness hole:
+            // a leaf implementer four hops down never textually mentions the target, so its
+            // project was never loaded and even the exhaustive walk could not see it.
             List<string> implementerSeeds;
-            implementerSeeds = indexSnapshot.Queries
-                .ImplementationCandidateProjects(symbolA.Name, cts.Token);
+            IReadOnlyList<SymbolHit>? typeClosure = null;
+            bool closureCapped = false;
+            long closureMs = 0;
+            if (symbolA is INamedTypeSymbol typeA)
+            {
+                var swClosure = System.Diagnostics.Stopwatch.StartNew();
+                typeClosure = indexSnapshot.Queries.TransitiveImplementationClosure(
+                    typeA.Name, typeA.Arity, out closureCapped, cancellationToken: cts.Token);
+                closureMs = swClosure.ElapsedMilliseconds;
+                implementerSeeds = closureCapped
+                    ? indexSnapshot.Queries.ImplementationCandidateProjects(symbolA.Name, cts.Token)
+                    : ClosureSeedProjects(indexSnapshot.Queries, typeClosure);
+            }
+            else
+            {
+                implementerSeeds = indexSnapshot.Queries
+                    .ImplementationCandidateProjects(symbolA.Name, cts.Token);
+            }
 
             clusterLoadInProgress = true;
             var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
@@ -497,22 +520,54 @@ public sealed partial class SemanticService : IDisposable
 
             var results = new List<SemanticImplementation>();
             bool deadlineExhausted = false;
+            object? queryStages = null;
             // Salvage wrapper (24n): a deadline firing after SOME finder pass completed (e.g. the
             // member path's implementations found, overrides not yet) keeps the found portion as a
             // lower bound. A deadline before anything was found still exits via the outer catch.
             try
             {
-                if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface)
+                if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Interface or TypeKind.Class } targetType)
                 {
-                    var impls = await SymbolFinder.FindImplementationsAsync(iface, solution, cancellationToken: cts.Token).ConfigureAwait(false);
-                    foreach (var impl in impls)
-                        results.Add(new SemanticImplementation(Describe(impl), DerivationVia(impl, iface)));
-                }
-                else if (symbol is INamedTypeSymbol { TypeKind: TypeKind.Class } cls)
-                {
-                    var derived = await SymbolFinder.FindDerivedClassesAsync(cls, solution, cancellationToken: cts.Token).ConfigureAwait(false);
-                    foreach (var d in derived)
-                        results.Add(new SemanticImplementation(Describe(d), DerivationVia(d, cls)));
+                    // jj1q: closure-verified path — the index walked the transitive subtype
+                    // closure at the seeds point (any chain depth), its projects were LOADED
+                    // as seeds, and semantics now verifies each candidate. Only candidate
+                    // projects materialize compilations (field two-trace: the global walk cost
+                    // 43.9s WARM across 90 compilations for 8 results).
+                    if (typeClosure is not null && !closureCapped)
+                    {
+                        var (verifyMs, verified) = await VerifyClosureImplementersAsync(
+                            targetType, solution, typeClosure,
+                            impl => results.Add(new SemanticImplementation(
+                                Describe(impl), DerivationVia(impl, targetType))),
+                            cts.Token).ConfigureAwait(false);
+                        queryStages = new
+                        {
+                            path = "closure_verified",
+                            closureMs,
+                            verifyMs,
+                            candidates = typeClosure.Count,
+                            verified,
+                        };
+                    }
+                    else
+                    {
+                        // Pathological fan-out (or a non-type resolution oddity): the
+                        // exhaustive compiler walk — slower, never truncated. A capped
+                        // closure must not ship as an exact answer.
+                        if (targetType.TypeKind == TypeKind.Interface)
+                        {
+                            var impls = await SymbolFinder.FindImplementationsAsync(targetType, solution, cancellationToken: cts.Token).ConfigureAwait(false);
+                            foreach (var impl in impls)
+                                results.Add(new SemanticImplementation(Describe(impl), DerivationVia(impl, targetType)));
+                        }
+                        else
+                        {
+                            var derived = await SymbolFinder.FindDerivedClassesAsync(targetType, solution, cancellationToken: cts.Token).ConfigureAwait(false);
+                            foreach (var d in derived)
+                                results.Add(new SemanticImplementation(Describe(d), DerivationVia(d, targetType)));
+                        }
+                        queryStages = new { path = "exhaustive_fallback", closureCapped };
+                    }
                 }
                 else
                 {
@@ -539,7 +594,8 @@ public sealed partial class SemanticService : IDisposable
                 deadlineExhausted,
                 ClusterLoadMs: clusterLoadMs, QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs);
             EmitOpTelemetry("implementations", "exact", null, ownerBox.Stats, scanBox.Stats,
-                clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
+                clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs,
+                queryStages); // epuc.1 + jj1q stages
             return (payload, null);
         }
         catch (OperationCanceledException)
@@ -835,6 +891,135 @@ public sealed partial class SemanticService : IDisposable
     /// <paramref name="type"/>'s hierarchy when it is implemented/inherited indirectly (so the caller
     /// sees "via BarBase"); null when <paramref name="type"/> declares it directly or the link cannot
     /// be pinpointed. Powers the derivation path in implementations ranking.</summary>
+    /// <summary>jj1q: closure-verified implementer discovery — replaces the global
+    /// SymbolFinder walk (field two-trace: 43.9s warm across 90 compilations for 8 results;
+    /// the walk forces compilation materialization per visited project, and Roslyn's weak
+    /// compilation cache makes repeats pay again). Syntax narrows: the index supplies the full
+    /// TRANSITIVE base-list closure (A→B→C→D chains of any depth, derived-interface hops
+    /// included). Semantics verifies: each candidate resolves in the loaded solution and its
+    /// AllInterfaces/base chain must actually reach the target (same-name collisions across
+    /// namespaces are pruned here). Only candidate-declaring projects materialize
+    /// compilations. Verified symbols stream through <paramref name="onVerified"/> so a
+    /// mid-loop deadline preserves the found-so-far lower bound (24n).
+    /// Returns Capped=true WITHOUT verifying when the closure walk aborted on pathological
+    /// fan-out — the caller MUST run the exhaustive compiler search then (a truncated closure
+    /// must never ship as an exact answer).</summary>
+    private async Task<(long VerifyMs, int Verified)>
+        VerifyClosureImplementersAsync(INamedTypeSymbol target, Solution solution,
+            IReadOnlyList<SymbolHit> closure, Action<INamedTypeSymbol> onVerified,
+            CancellationToken ct)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        string targetId = target.OriginalDefinition.GetDocumentationCommentId()
+            ?? target.OriginalDefinition.ToDisplayString();
+        // HOP-LOCAL verification (deep-chain fixture): a candidate's AllInterfaces binds in
+        // ITS OWN compilation, and workspace wiring is depth-1 - four projects down, the
+        // chain's middle types are unresolvable and AllInterfaces silently severs (the old
+        // exhaustive walk had the same blindness). Instead, each candidate only needs its
+        // DIRECT bases - always resolvable via the direct project reference - checked against
+        // the already-verified set. The closure arrives in BFS order from the target, so
+        // parents verify before children; interface hops verify (join the set) but are not
+        // emitted (parity with FindImplementationsAsync's output shape).
+        var verifiedIds = new HashSet<string>(StringComparer.Ordinal) { targetId };
+        var emitted = new HashSet<string>(StringComparer.Ordinal);
+        int verifiedCount = 0;
+
+        // Pass 1: resolve every candidate ONCE (per-file document lookup + declaration match).
+        var resolved = new List<(INamedTypeSymbol Candidate, string Id)>();
+        var resolvedIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var hit in closure)
+        {
+            ct.ThrowIfCancellationRequested();
+            string full = Path.Combine(_manager.WorkspaceRoot,
+                hit.FilePath.Replace('/', Path.DirectorySeparatorChar));
+            foreach (var docId in solution.GetDocumentIdsWithFilePath(full))
+            {
+                var document = solution.GetDocument(docId);
+                if (document is null) continue;
+                var root = await document.GetSyntaxRootAsync(ct).ConfigureAwait(false);
+                var model = await document.GetSemanticModelAsync(ct).ConfigureAwait(false);
+                if (root is null || model is null) continue;
+                var declaration = root.DescendantNodes()
+                    .OfType<BaseTypeDeclarationSyntax>()
+                    .FirstOrDefault(d => d.Identifier.ValueText == hit.Name
+                        && d.GetLocation().GetLineSpan().StartLinePosition.Line + 1 <= hit.StartLine
+                        && d.GetLocation().GetLineSpan().EndLinePosition.Line + 1 >= hit.StartLine);
+                if (declaration is null) continue;
+                if (model.GetDeclaredSymbol(declaration, ct) is not INamedTypeSymbol candidate) continue;
+                string id = candidate.OriginalDefinition.GetDocumentationCommentId()
+                    ?? candidate.OriginalDefinition.ToDisplayString();
+                if (resolvedIds.Add(id)) resolved.Add((candidate, id)); // partials dedupe here
+                break; // one document resolution per hit (linked files are duplicates)
+            }
+        }
+
+        // Pass 2..N: hop-local verification to FIXPOINT. BFS order verifies most chains in one
+        // pass, but a candidate first discovered through an impostor name-line can have its
+        // only LEGITIMATE parent verify later - iterate until no new verification lands
+        // (bounded by closure size; each pass is cheap symbol-graph reads, no re-resolution).
+        bool progressed = true;
+        while (progressed)
+        {
+            progressed = false;
+            ct.ThrowIfCancellationRequested();
+            foreach (var (candidate, id) in resolved)
+            {
+                if (verifiedIds.Contains(id)) continue;
+                if (!DirectBaseIds(candidate).Any(verifiedIds.Contains)) continue;
+                verifiedIds.Add(id); // children hop through this candidate
+                progressed = true;
+                // Interface hops verify (the chain continues through them) but are not
+                // implementations - parity with FindImplementationsAsync's output shape.
+                if (candidate.TypeKind != TypeKind.Interface && emitted.Add(id))
+                {
+                    verifiedCount++;
+                    onVerified(candidate);
+                }
+            }
+        }
+        return (sw.ElapsedMilliseconds, verifiedCount);
+    }
+
+    /// <summary>jj1q: distinct projects declaring the closure's candidates — these SEED the
+    /// scan-set load. The deep-chain fixture proved this is a CORRECTNESS requirement, not an
+    /// optimization: a transitive implementer's project that never textually mentions the
+    /// target (LeafHandler four hops down) was never a load candidate, so even the exhaustive
+    /// compiler walk could not see it — the old path silently missed deep chains.</summary>
+    private static List<string> ClosureSeedProjects(IndexQueries queries,
+        IReadOnlyList<SymbolHit> closure)
+    {
+        var seeds = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var hit in closure)
+        {
+            if (!files.Add(hit.FilePath)) continue;
+            foreach (var owner in queries.ProjectsContaining(hit.FilePath))
+            {
+                if (seen.Add(owner.Name)) seeds.Add(owner.Name);
+            }
+        }
+        return seeds;
+    }
+
+    /// <summary>The candidate's DIRECT bases only - its immediate BaseType and its
+    /// syntactically declared interfaces. Direct bases always resolve (the direct project
+    /// reference is wired); anything deeper may not (depth-1 wiring), which is exactly why
+    /// verification hops one level at a time against the verified set.</summary>
+    private static IEnumerable<string> DirectBaseIds(INamedTypeSymbol candidate)
+    {
+        if (candidate.BaseType is { } b)
+        {
+            yield return b.OriginalDefinition.GetDocumentationCommentId()
+                ?? b.OriginalDefinition.ToDisplayString();
+        }
+        foreach (var i in candidate.Interfaces)
+        {
+            yield return i.OriginalDefinition.GetDocumentationCommentId()
+                ?? i.OriginalDefinition.ToDisplayString();
+        }
+    }
+
     private static string? DerivationVia(ISymbol type, INamedTypeSymbol contract)
     {
         if (type is not INamedTypeSymbol named) return null;

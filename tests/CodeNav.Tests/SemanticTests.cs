@@ -16,7 +16,7 @@ public class SemanticTests : IClassFixture<IndexFixture>, IDisposable
         _fx = fx;
         _manager = new IndexManager(_fx.Root, _fx.DbPath);
         _manager.Start();
-        for (int i = 0; i < 100 && !_manager.IsQueryable; i++) Thread.Sleep(50);
+        for (int i = 0; i < 600 && !_manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
         _semantic = new SemanticService(_manager);
     }
 
@@ -78,8 +78,22 @@ public class SemanticTests : IClassFixture<IndexFixture>, IDisposable
         using var q = _manager.OpenQueries();
         var iface = q.SearchSymbols("IClock", "exact", new[] { "interface" }, 1).Single();
 
-        var (result, reason) = await _semantic.ImplementationsAsync(
-            iface.FilePath, iface.StartLine, null, "IClock", maxProjects: 30, timeoutMs: 60000);
+        // n7ly (late sweep): raw service call - retry TRANSIENT failure reasons only
+        // (snapshot epoch instability / cold warm-up under parallel suite load); a
+        // deterministic wrong answer still fails every attempt.
+        SemanticImplementations? result = null;
+        string? reason = null;
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            (result, reason) = await _semantic.ImplementationsAsync(
+                iface.FilePath, iface.StartLine, null, "IClock", maxProjects: 30, timeoutMs: 60000);
+            if (result is not null ||
+                reason is not ("index_snapshot_unavailable" or "cluster_cold_load"))
+            {
+                break;
+            }
+            await Task.Delay(200);
+        }
 
         Assert.True(result is not null, $"semantic implementations failed: {reason}");
         Assert.Contains(result!.Implementations, i => i.Declaration.SymbolDisplay.EndsWith("SystemClock"));

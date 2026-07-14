@@ -374,6 +374,13 @@ public sealed class SemanticWorkspace : IDisposable
                 loader: TextLoader.From(TextAndVersion.Create(text, VersionStamp.Create(), full)),
                 filePath: full));
         }
+        if (phaseTicks is not null) // x5ls.1.3: source_read ends (fan-out + fallback + docs).
+        {
+            // Review s1: closing HERE, not after ProjectReference wiring — the wiring stage
+            // (per-project graph SQL + cycle DFS over the resident solution) would otherwise
+            // bias sourceReadMs, the exact metric the wusi decision reads. Wiring is residue.
+            phaseTicks.Read += System.Diagnostics.Stopwatch.GetTimestamp() - tPhase;
+        }
 
         // Project references FIRST (order matters for the dll-substitution below): in-cluster
         // only; unloaded refs become navigation-grade holes.
@@ -420,10 +427,6 @@ public sealed class SemanticWorkspace : IDisposable
             }
         }
 
-        if (phaseTicks is not null) // x5ls.1.3: source_read ends (fan-out + fallback + docs)
-        {
-            phaseTicks.Read += System.Diagnostics.Stopwatch.GetTimestamp() - tPhase;
-        }
         tPhase = System.Diagnostics.Stopwatch.GetTimestamp(); // metadata_resolve starts
         var metadataRefs = new List<MetadataReference>(frameworkRefs);
         foreach (var (assembly, hint) in parsed.AssemblyRefs)
