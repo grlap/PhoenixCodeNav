@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#07090f">
+  <title>Phoenix Operations</title>
+  <meta name="description" content="A local, read-only operational view of PhoenixCodeNav.">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/portal.css">
+  <script type="module" src="/assets/portal.js"></script>
+</head>
+<body data-connection="loading" data-workspace-state="indexing">
+  <a class="skip-link" href="#main">Skip to operations</a>
+
+  <div class="atmosphere" aria-hidden="true">
+    <div class="atmosphere__grid"></div>
+    <div class="atmosphere__flare atmosphere__flare--ember"></div>
+    <div class="atmosphere__flare atmosphere__flare--violet"></div>
+    <div class="atmosphere__stars"></div>
+  </div>
+
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#overview" aria-label="Phoenix Operations home">
+        <span class="brand__mark" aria-hidden="true">
+          <i></i><i></i><i></i>
+        </span>
+        <span class="brand__wordmark">
+          <strong>Phoenix</strong>
+          <small>Operations</small>
+        </span>
+      </a>
+
+      <nav class="primary-nav" aria-label="Portal sections">
+        <a class="primary-nav__item is-active" href="#overview">Overview</a>
+        <a class="primary-nav__item" href="#activity">Activity</a>
+        <a class="primary-nav__item" href="#instances">Instances</a>
+      </nav>
+
+      <div class="topbar__actions">
+        <label class="workspace-picker">
+          <span>Workspace</span>
+          <select id="workspace-select" aria-label="Select workspace"></select>
+        </label>
+        <button class="motion-toggle" id="motion-toggle" type="button" aria-pressed="false">
+          <span class="motion-toggle__icon" aria-hidden="true"><i></i><i></i></span>
+          <span class="motion-toggle__label">Pause motion</span>
+        </button>
+        <div class="connection-pill" role="status" aria-live="polite">
+          <i aria-hidden="true"></i>
+          <span id="connection-label">Connecting</span>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="overview" aria-labelledby="workspace-state">
+        <div class="hero__copy" data-reveal>
+          <p class="section-kicker"><span></span>Workspace overview</p>
+          <div class="hero__state-line">
+            <h1 id="workspace-state">LOADING</h1>
+            <span class="state-beacon" aria-hidden="true"><i></i><b></b></span>
+          </div>
+          <p class="hero__summary" id="workspace-summary">Reading the local operational snapshot.</p>
+          <div class="hero__badges" aria-label="Workspace status details">
+            <span class="status-chip status-chip--cyan"><i></i><b id="instance-count">—</b> instances</span>
+            <span class="status-chip status-chip--violet"><i></i>semantics <b id="semantic-state">—</b></span>
+            <span class="status-chip status-chip--lime"><i></i>data <b id="data-state">—</b></span>
+          </div>
+        </div>
+
+        <div class="hero__visual" aria-hidden="true" data-reveal>
+          <div class="system-orbit">
+            <div class="system-orbit__halo"></div>
+            <div class="system-orbit__ring system-orbit__ring--outer">
+              <i class="system-node system-node--one"></i>
+              <i class="system-node system-node--two"></i>
+            </div>
+            <div class="system-orbit__ring system-orbit__ring--inner">
+              <i class="system-node system-node--three"></i>
+            </div>
+            <div class="system-orbit__core">
+              <span>PHX</span>
+              <small id="orbit-state">live</small>
+            </div>
+            <div class="system-orbit__signal system-orbit__signal--one"></div>
+            <div class="system-orbit__signal system-orbit__signal--two"></div>
+          </div>
+          <span class="visual-caption visual-caption--top">INDEX / 01</span>
+          <span class="visual-caption visual-caption--bottom">LOCAL SIGNAL</span>
+        </div>
+
+        <article class="build-panel" id="build-panel" data-reveal aria-labelledby="build-title">
+          <div class="build-panel__head">
+            <div>
+              <span class="panel-label">Cold index progress</span>
+              <h2 id="build-title">Indexing source</h2>
+            </div>
+            <div class="build-panel__live"><i aria-hidden="true"></i><span>LIVE</span></div>
+          </div>
+
+          <ol class="phase-rail" id="phase-rail" aria-label="Index build phases"></ol>
+
+          <div class="progress-block">
+            <div class="progress-block__labels">
+              <span id="progress-files">— files</span>
+              <strong id="progress-percent">—</strong>
+            </div>
+            <div class="progress-track" role="progressbar" aria-label="Index build progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress-track">
+              <svg viewBox="0 0 1000 18" preserveAspectRatio="none" aria-hidden="true">
+                <defs>
+                  <linearGradient id="progress-gradient" x1="0" x2="1">
+                    <stop offset="0" stop-color="#ff6b3d"></stop>
+                    <stop offset=".58" stop-color="#d653ff"></stop>
+                    <stop offset="1" stop-color="#5bd6ff"></stop>
+                  </linearGradient>
+                </defs>
+                <rect class="progress-track__base" x="0" y="1" width="1000" height="16" rx="8"></rect>
+                <rect class="progress-track__fill" id="progress-fill" x="0" y="1" width="0" height="16" rx="8"></rect>
+              </svg>
+              <span class="progress-track__glow" id="progress-glow" aria-hidden="true"></span>
+            </div>
+          </div>
+
+          <dl class="build-stats">
+            <div>
+              <dt>Throughput</dt>
+              <dd><strong id="build-rate">—</strong><small>files / sec</small></dd>
+            </div>
+            <div>
+              <dt>Elapsed</dt>
+              <dd><strong id="build-elapsed">—</strong><small>seconds</small></dd>
+            </div>
+            <div>
+              <dt>Remaining</dt>
+              <dd><strong id="build-eta">—</strong><small>measured ETA</small></dd>
+            </div>
+            <div>
+              <dt>Skipped</dt>
+              <dd><strong id="build-skipped">—</strong><small>files</small></dd>
+            </div>
+          </dl>
+        </article>
+      </section>
+
+      <section class="signal-grid" aria-label="Operational signals">
+        <article class="signal-card signal-card--queries" data-reveal>
+          <header>
+            <span class="panel-label">Queries</span>
+            <span class="signal-card__status signal-card__status--live"><i></i>live</span>
+          </header>
+          <div class="signal-card__metric">
+            <strong id="query-count" data-count="0">0</strong>
+            <span>recent operations</span>
+          </div>
+          <div class="query-spark" aria-hidden="true">
+            <svg viewBox="0 0 360 92" preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="spark-fill" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0" stop-color="#5bd6ff" stop-opacity=".34"></stop>
+                  <stop offset="1" stop-color="#5bd6ff" stop-opacity="0"></stop>
+                </linearGradient>
+              </defs>
+              <path class="query-spark__area" d="M0 76 C35 72 42 54 72 58 S121 73 151 42 S206 60 240 27 S305 38 360 10 L360 92 L0 92 Z"></path>
+              <path class="query-spark__line" d="M0 76 C35 72 42 54 72 58 S121 73 151 42 S206 60 240 27 S305 38 360 10"></path>
+            </svg>
+          </div>
+          <footer><span>p95</span><strong id="query-p95">—</strong></footer>
+        </article>
+
+        <article class="signal-card signal-card--semantics" data-reveal>
+          <header>
+            <span class="panel-label">Semantics</span>
+            <span class="signal-card__status"><i></i>compiler</span>
+          </header>
+          <div class="semantic-gauge" aria-hidden="true">
+            <div class="semantic-gauge__ring"><i></i><b></b></div>
+            <span id="semantic-score">—</span>
+          </div>
+          <div class="signal-card__copy">
+            <strong id="semantic-label">Warming</strong>
+            <span id="semantic-detail">Loading project clusters</span>
+          </div>
+        </article>
+
+        <article class="signal-card signal-card--freshness" data-reveal>
+          <header>
+            <span class="panel-label">Freshness</span>
+            <span class="signal-card__status"><i></i>watching</span>
+          </header>
+          <div class="freshness-head">
+            <strong id="freshness-label">—</strong>
+            <span>indexed state</span>
+          </div>
+          <div class="freshness-line" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i>
+            <b></b>
+          </div>
+          <footer><span>Epoch</span><strong id="index-epoch">—</strong></footer>
+        </article>
+
+        <article class="signal-card signal-card--health" data-reveal>
+          <header>
+            <span class="panel-label">Health</span>
+            <span class="signal-card__status signal-card__status--healthy"><i></i>healthy</span>
+          </header>
+          <div class="health-cluster" aria-hidden="true">
+            <span class="health-cluster__core">IDX</span>
+            <span class="health-cluster__node health-cluster__node--writer">W</span>
+            <span class="health-cluster__node health-cluster__node--follower">F</span>
+            <i></i><b></b>
+          </div>
+          <div class="signal-card__copy">
+            <strong id="health-label">All systems nominal</strong>
+            <span id="health-detail">Writer and followers connected</span>
+          </div>
+        </article>
+      </section>
+
+      <section class="operations-layout">
+        <article class="activity-panel" id="activity" data-reveal aria-labelledby="activity-title">
+          <header class="section-head">
+            <div>
+              <span class="panel-label">Recent activity</span>
+              <h2 id="activity-title">The system, as it happens.</h2>
+            </div>
+            <div class="activity-legend" aria-label="Confidence legend">
+              <span><i class="legend-dot legend-dot--exact"></i>Exact</span>
+              <span><i class="legend-dot legend-dot--indexed"></i>Indexed</span>
+              <span><i class="legend-dot legend-dot--partial"></i>Partial</span>
+            </div>
+          </header>
+          <div class="activity-list" id="activity-list" aria-live="polite"></div>
+        </article>
+
+        <aside class="instances-panel" id="instances" data-reveal aria-labelledby="instances-title">
+          <header class="section-head section-head--compact">
+            <div>
+              <span class="panel-label">Instances</span>
+              <h2 id="instances-title">One index. Many agents.</h2>
+            </div>
+            <span class="instances-panel__count" id="instances-panel-count">—</span>
+          </header>
+          <div class="instance-map" aria-hidden="true">
+            <div class="instance-map__index">INDEX <small id="instance-index-id">01</small></div>
+            <div class="instance-map__orbit"><i></i><b></b></div>
+          </div>
+          <div class="instance-list" id="instance-list"></div>
+        </aside>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>Phoenix Operations <b>preview</b></span>
+      <span>Local · read-only · fixture mode</span>
+      <span id="portal-version">v—</span>
+    </footer>
+  </div>
+
+  <dialog class="detail-drawer" id="operation-dialog" aria-labelledby="dialog-title">
+    <div class="detail-drawer__surface">
+      <header>
+        <div>
+          <span class="panel-label">Operation detail</span>
+          <h2 id="dialog-title">Operation</h2>
+        </div>
+        <form method="dialog"><button class="drawer-close" type="submit" aria-label="Close operation detail">×</button></form>
+      </header>
+      <div id="dialog-content"></div>
+    </div>
+  </dialog>
+
+  <div class="loading-screen" id="loading-screen" role="status" aria-live="polite">
+    <div class="loading-screen__mark" aria-hidden="true"><i></i><b></b></div>
+    <span>Connecting to Phoenix</span>
+  </div>
+</body>
+</html>
