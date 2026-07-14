@@ -57,10 +57,23 @@ public sealed class SemanticWorkspace : IDisposable
     }
 
     /// <summary>LoadedBefore is null when the load died QUEUED for the gate — the warm-set
-    /// size is guarded by the gate and cannot be read honestly from outside it (review r2).</summary>
+    /// size is guarded by the gate and cannot be read honestly from outside it (review r2).
+    /// x5ls.1.3: the four sub-splits dissect ProjectLoadMs (field: 6.8s lump post-xqxw/pv1k) —
+    /// csproj/packages parsing, source open+read+decode, dll metadata resolution, and Roslyn
+    /// workspace mutation. Their sum can undershoot ProjectLoadMs (loop residue); phases never
+    /// entered report 0.</summary>
     public sealed record LoadStats(double GateWaitMs, double FingerprintMs, double TopoMs,
         double ProjectLoadMs, int? LoadedBefore, int Requested, int Reloaded, int Loaded,
-        int Failed);
+        int Failed, double ProjectParseMs = 0, double SourceReadMs = 0,
+        double MetadataResolveMs = 0, double WorkspaceMutationMs = 0);
+
+    /// <summary>x5ls.1.3: tick accumulator threaded through LoadProject — one per
+    /// EnsureLoadedAsync call, summed across that call's projects (single-threaded under the
+    /// gate; the pv1k worker fan-out is bracketed from the outside, never written from workers).</summary>
+    private sealed class LoadPhaseTicks
+    {
+        public long Parse, Read, Metadata, Mutation;
+    }
 
     /// <summary>epuc.1 (review F2): per-CALL stats vehicle. The first cut published stats via
     /// an ambient last-load property — a concurrent caller could emit ANOTHER op's load as its
@@ -88,6 +101,7 @@ public sealed class SemanticWorkspace : IDisposable
         // throw, or the semaphore leaks. (The finally reads these plus _loaded under the gate.)
         var requested = new HashSet<string>(projectNames, StringComparer.OrdinalIgnoreCase);
         var failed = new List<string>();
+        var phaseTicks = new LoadPhaseTicks(); // x5ls.1.3: sub-splits of projectLoadMs
         long tFinger = 0, tTopo = 0; // 0 = the phase never completed (died mid-phase)
         int reloadedCount = 0;
         long tEnter = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
@@ -157,7 +171,7 @@ public sealed class SemanticWorkspace : IDisposable
                 try
                 {
                     var reuseId = reuseIds.TryGetValue(name, out var rid) ? rid : null;
-                    if (LoadProject(q, name, frameworkRefs, reuseId, ensureReferenceTo) is { } lp)
+                    if (LoadProject(q, name, frameworkRefs, reuseId, ensureReferenceTo, phaseTicks) is { } lp)
                     {
                         _loaded[name] = lp;
                     }
@@ -204,7 +218,9 @@ public sealed class SemanticWorkspace : IDisposable
                     tTopo > 0 ? ToMs(tTopo - tFinger) : tFinger > 0 ? ToMs(tEnd - tFinger) : 0,
                     tTopo > 0 ? ToMs(tEnd - tTopo) : 0,
                     loadedBefore, requested.Count, reloadedCount,
-                    requested.Count(n => _loaded.ContainsKey(n)), failed.Count);
+                    requested.Count(n => _loaded.ContainsKey(n)), failed.Count,
+                    ToMs(phaseTicks.Parse), ToMs(phaseTicks.Read),
+                    ToMs(phaseTicks.Metadata), ToMs(phaseTicks.Mutation));
             }
             _gate.Release();
         }
@@ -254,7 +270,8 @@ public sealed class SemanticWorkspace : IDisposable
 
     private LoadedProject? LoadProject(
         IndexQueries q, string name, IReadOnlyList<MetadataReference> frameworkRefs,
-        ProjectId? reuseId, IReadOnlyCollection<string>? ensureReferenceTo)
+        ProjectId? reuseId, IReadOnlyCollection<string>? ensureReferenceTo,
+        LoadPhaseTicks? phaseTicks = null)
     {
         var row = q.ProjectByName(name);
         if (row is null) return null;
@@ -262,12 +279,17 @@ public sealed class SemanticWorkspace : IDisposable
         // Preserve live load-time fidelity (assembly refs, hint paths), but capture through the
         // bounded no-follow reader so a project or packages.config FIFO/socket/link cannot block
         // semantic loading. The byte parser remains BOM/encoding aware.
+        long tPhase = System.Diagnostics.Stopwatch.GetTimestamp(); // x5ls.1.3
         byte[] projectBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, row.Path,
             IndexBuilder.MaxStructuralFileBytes) ?? [];
         string packagesPath = PackagesConfigPath(row.Path);
         byte[]? packagesBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, packagesPath,
             IndexBuilder.MaxStructuralFileBytes);
         var parsed = ProjectFileParser.ParseSnapshot(row.Path, projectBytes, packagesBytes);
+        if (phaseTicks is not null)
+        {
+            phaseTicks.Parse += System.Diagnostics.Stopwatch.GetTimestamp() - tPhase;
+        }
 
         var files = q.ProjectFiles(name);
         if (files.Count == 0) return null;
@@ -292,6 +314,7 @@ public sealed class SemanticWorkspace : IDisposable
         // threshold is deferred to the sequential pass, restoring the old one-at-a-time peak
         // (plus at most DOP small buffers).
         const long ParallelReadMaxBytes = 4 * 1024 * 1024;
+        tPhase = System.Diagnostics.Stopwatch.GetTimestamp(); // x5ls.1.3: source_read starts
         var decoded = new SourceText?[files.Count];
         var deferredBig = new bool[files.Count];
         System.Threading.Tasks.Parallel.For(0, files.Count, new ParallelOptions
@@ -397,6 +420,11 @@ public sealed class SemanticWorkspace : IDisposable
             }
         }
 
+        if (phaseTicks is not null) // x5ls.1.3: source_read ends (fan-out + fallback + docs)
+        {
+            phaseTicks.Read += System.Diagnostics.Stopwatch.GetTimestamp() - tPhase;
+        }
+        tPhase = System.Diagnostics.Stopwatch.GetTimestamp(); // metadata_resolve starts
         var metadataRefs = new List<MetadataReference>(frameworkRefs);
         foreach (var (assembly, hint) in parsed.AssemblyRefs)
         {
@@ -434,6 +462,10 @@ public sealed class SemanticWorkspace : IDisposable
             }
         }
 
+        if (phaseTicks is not null) // x5ls.1.3: metadata_resolve ends
+        {
+            phaseTicks.Metadata += System.Diagnostics.Stopwatch.GetTimestamp() - tPhase;
+        }
         var info = ProjectInfo.Create(
                 projectId,
                 VersionStamp.Create(),
@@ -447,7 +479,13 @@ public sealed class SemanticWorkspace : IDisposable
                 projectReferences: projectRefs,
                 metadataReferences: metadataRefs);
 
-        if (!_workspace.TryApplyChanges(_workspace.CurrentSolution.AddProject(info)))
+        tPhase = System.Diagnostics.Stopwatch.GetTimestamp(); // x5ls.1.3: workspace_mutation
+        bool applied = _workspace.TryApplyChanges(_workspace.CurrentSolution.AddProject(info));
+        if (phaseTicks is not null)
+        {
+            phaseTicks.Mutation += System.Diagnostics.Stopwatch.GetTimestamp() - tPhase;
+        }
+        if (!applied)
         {
             return null;
         }

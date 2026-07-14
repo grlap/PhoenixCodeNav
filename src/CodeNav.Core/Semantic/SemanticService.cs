@@ -164,6 +164,12 @@ public sealed partial class SemanticService : IDisposable
             fingerprintMs = Math.Round(load.FingerprintMs, 1),
             topoMs = Math.Round(load.TopoMs, 1),
             projectLoadMs = Math.Round(load.ProjectLoadMs, 1),
+            // x5ls.1.3: the sub-splits of projectLoadMs (parse+read+metadata+mutation ≈ the
+            // lump; residue is loop overhead). These answer wusi-vs-xqxw with field data.
+            projectParseMs = Math.Round(load.ProjectParseMs, 1),
+            sourceReadMs = Math.Round(load.SourceReadMs, 1),
+            metadataResolveMs = Math.Round(load.MetadataResolveMs, 1),
+            workspaceMutationMs = Math.Round(load.WorkspaceMutationMs, 1),
             loadedBefore = load.LoadedBefore,
             requested = load.Requested,
             reloaded = load.Reloaded,

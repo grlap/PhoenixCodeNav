@@ -77,6 +77,10 @@ public class Batch51TelemetryTests
                              && l.Contains("\"tool\":\"definition\""));
                 Assert.Contains("\"clusterLoadMs\":", exactLine);
                 Assert.Contains("\"queryMs\":", exactLine);
+                // x5ls.1.3: the projectLoadMs sub-splits ride every load block — these decide
+                // the wusi (index-first text) question from field data.
+                Assert.Contains("\"sourceReadMs\":", exactLine);
+                Assert.Contains("\"metadataResolveMs\":", exactLine);
 
                 // (2) privacy: no drive-rooted path may appear in any record —
                 // neither drive-letter (C:\\) nor UNC (\\\\server\\share) shaped.
