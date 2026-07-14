@@ -121,6 +121,43 @@ public sealed partial class SemanticService : IDisposable
         }
     }
 
+    // ---------------------------------------------------------------- epuc.1 telemetry
+
+    /// <summary>Emits one bounded telemetry record for a completed semantic operation — tool,
+    /// outcome/reason, the op's own load/query split when it has one, and the workspace's most
+    /// recent stage stats (gate wait, fingerprints, topo order, project loads, warm-set size).
+    /// Privacy per docs/internal-operations-portal.md: no symbol names, no arguments, no paths.
+    /// TelemetryLog.Emit never blocks or throws into this path.</summary>
+    private void EmitOpTelemetry(string tool, string result, string? reason,
+        long? clusterLoadMs = null, long? queryMs = null)
+    {
+        var load = _workspace?.LastLoadStats;
+        _manager.Telemetry.Emit(new
+        {
+            e = "semanticOp",
+            ts = DateTime.UtcNow.ToString("O"),
+            corr = Guid.NewGuid().ToString("N")[..8],
+            tool,
+            result,
+            reason,
+            clusterLoadMs,
+            queryMs,
+            cold = load is { LoadedBefore: 0 } ? true : (bool?)null,
+            load = load is null ? null : new
+            {
+                gateWaitMs = Math.Round(load.GateWaitMs, 1),
+                fingerprintMs = Math.Round(load.FingerprintMs, 1),
+                topoMs = Math.Round(load.TopoMs, 1),
+                projectLoadMs = Math.Round(load.ProjectLoadMs, 1),
+                loadedBefore = load.LoadedBefore,
+                requested = load.Requested,
+                reloaded = load.Reloaded,
+                loaded = load.Loaded,
+                failed = load.Failed,
+            },
+        });
+    }
+
     // ---------------------------------------------------------------- definition
 
     public async Task<(SemanticDeclaration? Result, string? FailReason)> DefinitionAsync(
@@ -136,6 +173,7 @@ public sealed partial class SemanticService : IDisposable
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries).ConfigureAwait(false);
             loadCompleted = true;
             if (symbol is null) return (null, "symbol_not_resolved");
+            EmitOpTelemetry("definition", "exact", null); // epuc.1
             return (Describe(symbol), null);
         }
         catch (OperationCanceledException)
@@ -144,7 +182,9 @@ public sealed partial class SemanticService : IDisposable
             // first-call-after-(re)build warm-up, and an immediate retry usually succeeds. The
             // old uniform "semantic_timeout" sent agents raising timeoutMs (or distrusting the
             // tool) when the fix was simply to call again.
-            return (null, loadCompleted ? "semantic_timeout" : "cluster_cold_load");
+            string reason = loadCompleted ? "semantic_timeout" : "cluster_cold_load";
+            EmitOpTelemetry("definition", "degraded", reason); // epuc.1
+            return (null, reason);
         }
         catch (Exception ex)
         {
@@ -311,16 +351,21 @@ public sealed partial class SemanticService : IDisposable
                 outOfGraph.Count > 0 ? outOfGraph : null,
                 ClusterLoadMs: clusterLoadMs,
                 QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs);
+            EmitOpTelemetry("references", "exact", null,
+                clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
             return (result, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: cold-cluster warm-up vs real scan timeout — see DefinitionAsync for rationale.
-            return (null, clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout");
+            string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
+            EmitOpTelemetry("references", "degraded", reason); // epuc.1
+            return (null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic references failed: {ex}");
+            EmitOpTelemetry("references", "error", ex.GetType().Name); // epuc.1
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
     }
@@ -401,17 +446,22 @@ public sealed partial class SemanticService : IDisposable
                 .ThenBy(r => r.Declaration.SymbolDisplay, StringComparer.Ordinal)
                 .ToList();
 
+            EmitOpTelemetry("implementations", "exact", null,
+                clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
             return (new SemanticImplementations(Describe(symbol), results, coverage, skipped, deadlineExhausted,
                 ClusterLoadMs: clusterLoadMs, QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs), null);
         }
         catch (OperationCanceledException)
         {
             // t2b: cold-cluster warm-up vs real scan timeout — see DefinitionAsync for rationale.
-            return (null, clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout");
+            string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
+            EmitOpTelemetry("implementations", "degraded", reason); // epuc.1
+            return (null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic implementations failed: {ex}");
+            EmitOpTelemetry("implementations", "error", ex.GetType().Name); // epuc.1
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
     }

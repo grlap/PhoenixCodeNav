@@ -61,16 +61,20 @@ public sealed partial class SemanticService
                 }
                 results.Add(new SemanticCaller(Describe(info.CallingSymbol), sites));
             }
+            EmitOpTelemetry("callers", "exact", null); // epuc.1
             return (results, coverage, skipped, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
-            return (null, null, null, clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout");
+            string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
+            EmitOpTelemetry("callers", "degraded", reason); // epuc.1
+            return (null, null, null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic callers failed: {ex}");
+            EmitOpTelemetry("callers", "error", ex.GetType().Name); // epuc.1
             return (null, null, null, $"semantic_error:{ex.GetType().Name}");
         }
     }
@@ -114,16 +118,20 @@ public sealed partial class SemanticService
                 .Select(kv => new SemanticCallee(Describe(kv.Key), kv.Value.Distinct().Take(8).ToList()))
                 .OrderBy(c => c.Callee.SymbolDisplay, StringComparer.Ordinal)
                 .ToList();
+            EmitOpTelemetry("callees", "exact", null); // epuc.1
             return (results, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
-            return (null, loadCompleted ? "semantic_timeout" : "cluster_cold_load");
+            string reason = loadCompleted ? "semantic_timeout" : "cluster_cold_load";
+            EmitOpTelemetry("callees", "degraded", reason); // epuc.1
+            return (null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic callees failed: {ex}");
+            EmitOpTelemetry("callees", "error", ex.GetType().Name); // epuc.1
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
     }
@@ -185,12 +193,15 @@ public sealed partial class SemanticService
                 down.AddRange(derived.OfType<ISymbol>().Select(Describe));
             }
 
+            EmitOpTelemetry("type_hierarchy", "exact", null); // epuc.1
             return (new SemanticTypeHierarchy(Describe(type), baseTypes, interfaces, down), coverage, skipped, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: see DefinitionAsync — a deadline dying during LOAD is warm-up, not a timeout.
-            return (null, null, null, clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout");
+            string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
+            EmitOpTelemetry("type_hierarchy", "degraded", reason); // epuc.1
+            return (null, null, null, reason);
         }
         catch (Exception ex)
         {

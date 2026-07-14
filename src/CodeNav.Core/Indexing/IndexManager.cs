@@ -154,7 +154,15 @@ public sealed class IndexManager : IDisposable
         _dbPath = Path.GetFullPath(dbPath ?? IndexBuilder.DefaultDbPath(_workspaceRoot));
         _databaseIoPath = _dbPath;
         _log = log ?? (_ => { });
+        // epuc.1: one bounded telemetry stream per manager (== per workspace per process).
+        // Lazy-free by design: the writer task parks on an empty channel until first Emit.
+        Telemetry = new Diagnostics.TelemetryLog(_workspaceRoot, _log);
     }
+
+    /// <summary>epuc.1: the workspace's bounded telemetry stream (JSONL file + in-memory
+    /// ring). Consumers: SemanticService per-operation records today; the x5ls portal's IPC
+    /// snapshots later. Never blocks or throws into request paths.</summary>
+    internal Diagnostics.TelemetryLog Telemetry { get; }
 
     public string WorkspaceRoot => _workspaceRoot;
     public string DbPath => _dbPath;
@@ -1196,6 +1204,7 @@ public sealed class IndexManager : IDisposable
     public void Dispose()
     {
         lock (_disposeLock) { _disposed = true; } // block any in-flight watcher publication
+        Telemetry.Dispose();                 // epuc.1: flush the bounded stream (2s cap)
         _gitWatcher?.Dispose();              // stop git HEAD signals
         _gitHeadRetry?.Dispose();            // 17zd: stop the null-HEAD retry (callback checks _disposed)
         _watcher?.Dispose();                 // stop new events reaching the queue

@@ -62,11 +62,24 @@ public sealed class SemanticWorkspace : IDisposable
     /// Load order is topological (dependencies first); references to projects outside
     /// the requested set are skipped (navigation-grade holes).
     /// </summary>
+    /// <summary>epuc.1: stage timings + work counts of the most recent EnsureLoadedAsync,
+    /// swapped in atomically before the gate releases. The caller that just awaited the load
+    /// reads it immediately on the same logical flow; concurrent callers each see SOME recent
+    /// load's stats, which is exactly the advisory quality telemetry needs.</summary>
+    public LoadStats? LastLoadStats { get; private set; }
+
+    public sealed record LoadStats(double GateWaitMs, double FingerprintMs, double TopoMs,
+        double ProjectLoadMs, int LoadedBefore, int Requested, int Reloaded, int Loaded,
+        int Failed);
+
     public async Task<(Solution Solution, ClusterCoverage Coverage)> EnsureLoadedAsync(
         IReadOnlyCollection<string> projectNames, CancellationToken ct,
         IReadOnlyCollection<string>? ensureReferenceTo = null)
     {
+        long tEnter = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
         await _gate.WaitAsync(ct).ConfigureAwait(false);
+        long tGate = System.Diagnostics.Stopwatch.GetTimestamp();
+        int loadedBefore = _loaded.Count;
         try
         {
             using var q = new IndexQueries(_dbPath, pinReadSnapshot: false,
@@ -97,7 +110,9 @@ public sealed class SemanticWorkspace : IDisposable
                 }
             }
 
+            long tFinger = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
             var toLoad = TopoOrder(q, requested.Where(n => !_loaded.ContainsKey(n)).ToList());
+            long tTopo = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
             var frameworkRefs = ReferenceAssemblyLocator.Net472References(out string? refDir);
             if (refDir is null)
             {
@@ -133,6 +148,13 @@ public sealed class SemanticWorkspace : IDisposable
 
             EvictBeyondCap(requested);
 
+            // epuc.1: publish the stage split before the gate releases.
+            long tDone = System.Diagnostics.Stopwatch.GetTimestamp();
+            LastLoadStats = new LoadStats(
+                ToMs(tGate - tEnter), ToMs(tFinger - tGate), ToMs(tTopo - tFinger),
+                ToMs(tDone - tTopo), loadedBefore, requested.Count, reuseIds.Count,
+                requested.Count(n => _loaded.ContainsKey(n)), failed.Count);
+
             var coverage = new ClusterCoverage(
                 LoadedProjects: requested.Count(n => _loaded.ContainsKey(n)),
                 RequestedProjects: requested.Count,
@@ -147,6 +169,8 @@ public sealed class SemanticWorkspace : IDisposable
             _gate.Release();
         }
     }
+
+    private static double ToMs(long ticks) => ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
     // ---------------------------------------------------------------- loading
 
