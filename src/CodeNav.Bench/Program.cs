@@ -85,13 +85,13 @@ static async Task<int> RunSemanticScenario(string workspace, string dbPath)
 
     await Time("definition COLD (cluster load incl. ref assemblies)", async () =>
     {
-        var (d, r) = await sem.DefinitionAsync(usagePath, usageLine, usageCol, null, 120000);
+        var (d, r, _) = await sem.DefinitionAsync(usagePath, usageLine, usageCol, null, 120000);
         return d is not null ? $"→ {d.DocumentationCommentId}" : $"FAILED: {r}";
     });
 
     await Time("definition WARM (same position)", async () =>
     {
-        var (d, r) = await sem.DefinitionAsync(usagePath, usageLine, usageCol, null, 120000);
+        var (d, r, _) = await sem.DefinitionAsync(usagePath, usageLine, usageCol, null, 120000);
         return d is not null ? "ok" : $"FAILED: {r}";
     });
 
@@ -124,7 +124,7 @@ static async Task<int> RunSemanticScenario(string workspace, string dbPath)
 
     await Time("definition WARM after big loads (cache retained)", async () =>
     {
-        var (d, r) = await sem.DefinitionAsync(usagePath, usageLine, usageCol, null, 120000);
+        var (d, r, _) = await sem.DefinitionAsync(usagePath, usageLine, usageCol, null, 120000);
         return d is not null ? "ok" : $"FAILED: {r}";
     });
 

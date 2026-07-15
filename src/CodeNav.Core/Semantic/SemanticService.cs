@@ -40,7 +40,8 @@ public sealed record SemanticReferences(
     // cold-cluster confusion ("first call after rebuild times out, second is instant") is
     // answerable from these two numbers without guessing.
     long? ClusterLoadMs = null,
-    long? QueryMs = null);
+    long? QueryMs = null,
+    bool ProjectModelUnproven = false);
 
 /// <summary>One implementation / derived class / override, tagged for hierarchy ranking.
 /// <paramref name="Via"/> names the base type that introduces the queried interface when the type
@@ -54,7 +55,8 @@ public sealed record SemanticImplementations(
     List<string> SkippedCandidateProjects,
     bool DeadlineExhausted = false,                 // 24n: deadline fired mid-search — list is a lower bound
     long? ClusterLoadMs = null,                     // t2b: deadline budget split — load+resolve vs
-    long? QueryMs = null);                          // find; see SemanticReferences for rationale
+    long? QueryMs = null,                           // find; see SemanticReferences for rationale
+    bool ProjectModelUnproven = false);
 
 /// <summary>
 /// Owns: exact (compiler-backed) navigation operations with deadlines — symbol
@@ -186,7 +188,8 @@ public sealed partial class SemanticService : IDisposable
 
     // ---------------------------------------------------------------- definition
 
-    public async Task<(SemanticDeclaration? Result, string? FailReason)> DefinitionAsync(
+    public async Task<(SemanticDeclaration? Result, string? FailReason,
+        bool ProjectModelUnproven)> DefinitionAsync(
         string path, int line, int? column, string? nameHint, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 60000));
@@ -200,9 +203,9 @@ public sealed partial class SemanticService : IDisposable
             if (indexSnapshot is null)
             {
                 EmitOpTelemetry("definition", "unresolved", "index_snapshot_unavailable"); // epuc.1
-                return (null, "index_snapshot_unavailable");
+                return (null, "index_snapshot_unavailable", false);
             }
-            var (_, symbol, _) = await LoadOwnerAndResolveAsync(
+            var (_, symbol, owningProject, coverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox).ConfigureAwait(false);
             loadCompleted = true;
@@ -210,14 +213,17 @@ public sealed partial class SemanticService : IDisposable
             if (symbol is null)
             {
                 EmitOpTelemetry("definition", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
-                return (null, "symbol_not_resolved");
+                return (null, "symbol_not_resolved", false);
             }
             // Review r2: materialize BEFORE the emit — a Describe throw after an "exact"
             // record would add a second ("error") record for the same op via the catch.
             var described = Describe(symbol);
-            EmitOpTelemetry("definition", "exact", null, ownerBox.Stats,
+            bool projectModelUnproven = FriendAssemblyAuthorityUnproven(symbol,
+                owningProject is null ? [] : [owningProject], coverage);
+            EmitOpTelemetry("definition", projectModelUnproven ? "partial" : "exact",
+                projectModelUnproven ? "project_model_unproven" : null, ownerBox.Stats,
                 clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs); // epuc.1
-            return (described, null);
+            return (described, null, projectModelUnproven);
         }
         catch (OperationCanceledException)
         {
@@ -229,7 +235,7 @@ public sealed partial class SemanticService : IDisposable
             EmitOpTelemetry("definition", "degraded", reason, ownerBox.Stats,
                 clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
                 queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
-            return (null, reason);
+            return (null, reason, false);
         }
         catch (Exception ex)
         {
@@ -239,7 +245,7 @@ public sealed partial class SemanticService : IDisposable
             EmitOpTelemetry("definition", "error", ex.GetType().Name, ownerBox.Stats,
                 clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
                 queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1 review F3
-            return (null, $"semantic_error:{ex.GetType().Name}");
+            return (null, $"semantic_error:{ex.GetType().Name}", false);
         }
     }
 
@@ -266,7 +272,7 @@ public sealed partial class SemanticService : IDisposable
             }
 
             // Phase 1: load the owner closure and resolve, to learn the symbol name.
-            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
+            var (_, symbolA, owningProject, _) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox).ConfigureAwait(false);
             clusterLoadInProgress = false; // candidate discovery is a query phase, not cold loading
@@ -411,6 +417,8 @@ public sealed partial class SemanticService : IDisposable
                 deadlineExhausted = true;
             }
 
+            bool projectModelUnproven = FriendAssemblyAuthorityUnproven(symbol,
+                groups.Keys, coverage);
             var result = new SemanticReferences(
                 Describe(symbol),
                 total,
@@ -421,8 +429,11 @@ public sealed partial class SemanticService : IDisposable
                 deadlineExhausted,
                 outOfGraph.Count > 0 ? outOfGraph : null,
                 ClusterLoadMs: clusterLoadMs,
-                QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs);
-            EmitOpTelemetry("references", "exact", null, ownerBox.Stats, scanBox.Stats,
+                QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs,
+                ProjectModelUnproven: projectModelUnproven);
+            EmitOpTelemetry("references", projectModelUnproven ? "partial" : "exact",
+                projectModelUnproven ? "project_model_unproven" : null,
+                ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
             return (result, null);
         }
@@ -467,7 +478,7 @@ public sealed partial class SemanticService : IDisposable
                 return (null, "index_snapshot_unavailable");
             }
 
-            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
+            var (_, symbolA, owningProject, _) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries, arityHint,
                 statsBox: ownerBox)
                 .ConfigureAwait(false);
@@ -535,7 +546,7 @@ public sealed partial class SemanticService : IDisposable
                     // 43.9s WARM across 90 compilations for 8 results).
                     if (typeClosure is not null && !closureCapped)
                     {
-                        var (verifyMs, verified) = await VerifyClosureImplementersAsync(
+                        var verification = await VerifyClosureImplementersAsync(
                             targetType, solution, typeClosure,
                             impl => results.Add(new SemanticImplementation(
                                 Describe(impl), DerivationVia(impl, targetType))),
@@ -544,9 +555,15 @@ public sealed partial class SemanticService : IDisposable
                         {
                             path = "closure_verified",
                             closureMs,
-                            verifyMs,
+                            verifyMs = verification.VerifyMs,
                             candidates = typeClosure.Count,
-                            verified,
+                            verified = verification.Verified,
+                            documentCandidates = verification.DocumentCandidates,
+                            declarationsMatched = verification.DeclarationsMatched,
+                            symbolsResolved = verification.SymbolsResolved,
+                            directBaseLinks = verification.DirectBaseLinks,
+                            errorDirectBaseLinks = verification.ErrorDirectBaseLinks,
+                            targetDirectMatches = verification.TargetDirectMatches,
                         };
                     }
                     else
@@ -590,10 +607,16 @@ public sealed partial class SemanticService : IDisposable
                 .ToList();
 
             // Review r2: materialize BEFORE the emit — see DefinitionAsync.
+            bool projectModelUnproven = FriendAssemblyAuthorityUnproven(symbol,
+                results.Select(result => result.Declaration.Assembly ?? ""), coverage);
             var payload = new SemanticImplementations(Describe(symbol), results, coverage, skipped,
                 deadlineExhausted,
-                ClusterLoadMs: clusterLoadMs, QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs);
-            EmitOpTelemetry("implementations", "exact", null, ownerBox.Stats, scanBox.Stats,
+                ClusterLoadMs: clusterLoadMs,
+                QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs,
+                ProjectModelUnproven: projectModelUnproven);
+            EmitOpTelemetry("implementations", projectModelUnproven ? "partial" : "exact",
+                projectModelUnproven ? "project_model_unproven" : null,
+                ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs,
                 queryStages); // epuc.1 + jj1q stages
             return (payload, null);
@@ -626,7 +649,8 @@ public sealed partial class SemanticService : IDisposable
     /// resolution and search share one snapshot (otherwise a reload/eviction between them
     /// silently orphans the symbol and yields empty "exact" results).
     /// </summary>
-    private async Task<(Solution? Solution, ISymbol? Symbol, string? OwningProject)> LoadOwnerAndResolveAsync(
+    private async Task<(Solution? Solution, ISymbol? Symbol, string? OwningProject,
+        ClusterCoverage? Coverage)> LoadOwnerAndResolveAsync(
         string path, int line, int? column, string? nameHint, CancellationToken ct,
         IndexQueries? snapshotQueries = null, int? arityHint = null,
         SemanticWorkspace.LoadStatsBox? statsBox = null)
@@ -637,7 +661,7 @@ public sealed partial class SemanticService : IDisposable
         if (snapshotQueries is not null)
         {
             var owners = snapshotQueries.ProjectsContaining(relPath);
-            if (owners.Count == 0) return (null, null, null);
+            if (owners.Count == 0) return (null, null, null, null);
             owningProject = (owners.FirstOrDefault(o => !o.IsTest) ?? owners[0]).Name;
             closure = snapshotQueries.DependencyClosure(new[] { owningProject });
         }
@@ -645,17 +669,18 @@ public sealed partial class SemanticService : IDisposable
         {
             using var queries = _manager.OpenQueries();
             var owners = queries.ProjectsContaining(relPath);
-            if (owners.Count == 0) return (null, null, null);
+            if (owners.Count == 0) return (null, null, null, null);
             owningProject = (owners.FirstOrDefault(o => !o.IsTest) ?? owners[0]).Name;
             closure = queries.DependencyClosure(new[] { owningProject });
         }
 
-        var (solution, _) = await Workspace.EnsureLoadedAsync(closure, ct, statsBox: statsBox)
+        var (solution, coverage) = await Workspace.EnsureLoadedAsync(closure, ct,
+                statsBox: statsBox)
             .ConfigureAwait(false);
         var symbol = await ResolveInSolutionAsync(
                 solution, owningProject, relPath, line, column, nameHint, ct, arityHint)
             .ConfigureAwait(false);
-        return (solution, symbol, owningProject);
+        return (solution, symbol, owningProject, coverage);
     }
 
     /// <summary>
@@ -861,6 +886,35 @@ public sealed partial class SemanticService : IDisposable
 
     // ---------------------------------------------------------------- shaping
 
+    private static bool FriendAssemblyAuthorityUnproven(ISymbol symbol,
+        IEnumerable<string> accessingProjects, ClusterCoverage? coverage)
+    {
+        string? declaringAssembly = symbol.ContainingAssembly?.Name;
+        if (declaringAssembly is null || !RequiresFriendAssemblyAccess(symbol) ||
+            coverage?.UnprovenFriendAssemblyProjects is not { Count: > 0 } unproven ||
+            !unproven.Contains(declaringAssembly, StringComparer.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+        return accessingProjects.Any(project =>
+            !string.IsNullOrWhiteSpace(project) &&
+            !project.Equals(declaringAssembly, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool RequiresFriendAssemblyAccess(ISymbol symbol)
+    {
+        for (ISymbol? current = symbol; current is not null; current = current.ContainingType)
+        {
+            if (current.DeclaredAccessibility is Accessibility.Internal or
+                Accessibility.ProtectedAndInternal or Accessibility.ProtectedOrInternal)
+            {
+                return true;
+            }
+            if (current.ContainingType is null) break;
+        }
+        return false;
+    }
+
     private SemanticDeclaration Describe(ISymbol symbol)
     {
         var spans = new List<DeclarationSpan>();
@@ -904,7 +958,17 @@ public sealed partial class SemanticService : IDisposable
     /// Returns Capped=true WITHOUT verifying when the closure walk aborted on pathological
     /// fan-out — the caller MUST run the exhaustive compiler search then (a truncated closure
     /// must never ship as an exact answer).</summary>
-    private async Task<(long VerifyMs, int Verified)>
+    private sealed record ClosureVerificationResult(
+        long VerifyMs,
+        int Verified,
+        int DocumentCandidates,
+        int DeclarationsMatched,
+        int SymbolsResolved,
+        int DirectBaseLinks,
+        int ErrorDirectBaseLinks,
+        int TargetDirectMatches);
+
+    private async Task<ClosureVerificationResult>
         VerifyClosureImplementersAsync(INamedTypeSymbol target, Solution solution,
             IReadOnlyList<SymbolHit> closure, Action<INamedTypeSymbol> onVerified,
             CancellationToken ct)
@@ -925,7 +989,13 @@ public sealed partial class SemanticService : IDisposable
         int verifiedCount = 0;
 
         // Pass 1: resolve every candidate ONCE (per-file document lookup + declaration match).
-        var resolved = new List<(INamedTypeSymbol Candidate, string Id)>();
+        int documentCandidates = 0;
+        int declarationsMatched = 0;
+        int symbolsResolved = 0;
+        int directBaseLinks = 0;
+        int errorDirectBaseLinks = 0;
+        int targetDirectMatches = 0;
+        var resolved = new List<(INamedTypeSymbol Candidate, string Id, string[] DirectBaseIds)>();
         var resolvedIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var hit in closure)
         {
@@ -934,6 +1004,7 @@ public sealed partial class SemanticService : IDisposable
                 hit.FilePath.Replace('/', Path.DirectorySeparatorChar));
             foreach (var docId in solution.GetDocumentIdsWithFilePath(full))
             {
+                documentCandidates++;
                 var document = solution.GetDocument(docId);
                 if (document is null) continue;
                 var root = await document.GetSyntaxRootAsync(ct).ConfigureAwait(false);
@@ -945,10 +1016,17 @@ public sealed partial class SemanticService : IDisposable
                         && d.GetLocation().GetLineSpan().StartLinePosition.Line + 1 <= hit.StartLine
                         && d.GetLocation().GetLineSpan().EndLinePosition.Line + 1 >= hit.StartLine);
                 if (declaration is null) continue;
+                declarationsMatched++;
                 if (model.GetDeclaredSymbol(declaration, ct) is not INamedTypeSymbol candidate) continue;
+                symbolsResolved++;
                 string id = candidate.OriginalDefinition.GetDocumentationCommentId()
                     ?? candidate.OriginalDefinition.ToDisplayString();
-                if (resolvedIds.Add(id)) resolved.Add((candidate, id)); // partials dedupe here
+                string[] directBaseIds = DirectBaseIds(candidate).ToArray();
+                directBaseLinks += directBaseIds.Length;
+                errorDirectBaseLinks += (candidate.BaseType?.TypeKind == TypeKind.Error ? 1 : 0)
+                    + candidate.Interfaces.Count(i => i.TypeKind == TypeKind.Error);
+                if (directBaseIds.Contains(targetId, StringComparer.Ordinal)) targetDirectMatches++;
+                if (resolvedIds.Add(id)) resolved.Add((candidate, id, directBaseIds)); // partials dedupe here
                 break; // one document resolution per hit (linked files are duplicates)
             }
         }
@@ -962,10 +1040,10 @@ public sealed partial class SemanticService : IDisposable
         {
             progressed = false;
             ct.ThrowIfCancellationRequested();
-            foreach (var (candidate, id) in resolved)
+            foreach (var (candidate, id, directBaseIds) in resolved)
             {
                 if (verifiedIds.Contains(id)) continue;
-                if (!DirectBaseIds(candidate).Any(verifiedIds.Contains)) continue;
+                if (!directBaseIds.Any(verifiedIds.Contains)) continue;
                 verifiedIds.Add(id); // children hop through this candidate
                 progressed = true;
                 // Interface hops verify (the chain continues through them) but are not
@@ -977,7 +1055,15 @@ public sealed partial class SemanticService : IDisposable
                 }
             }
         }
-        return (sw.ElapsedMilliseconds, verifiedCount);
+        return new ClosureVerificationResult(
+            sw.ElapsedMilliseconds,
+            verifiedCount,
+            documentCandidates,
+            declarationsMatched,
+            symbolsResolved,
+            directBaseLinks,
+            errorDirectBaseLinks,
+            targetDirectMatches);
     }
 
     /// <summary>jj1q: distinct projects declaring the closure's candidates — these SEED the

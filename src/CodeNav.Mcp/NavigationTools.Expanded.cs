@@ -33,7 +33,7 @@ public sealed partial class NavigationTools
         var (target, hint) = ResolveSemanticTarget(name, null, "method,property,constructor", path, line, column);
         if (target is { } t)
         {
-            var (result, coverage, skippedCandidateProjects, reason) = _semantic
+            var (result, coverage, skippedCandidateProjects, projectModelUnproven, reason) = _semantic
                 .CallersAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
                 .GetAwaiter().GetResult();
             reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
@@ -42,7 +42,8 @@ public sealed partial class NavigationTools
                 bool bounded = (skippedCandidateProjects?.Count ?? 0) > 0 ||
                     (coverage?.FailedProjects.Count ?? 0) > 0 ||
                     (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects);
-                var meta = Meta.From(_manager.Health(), "exact", "semantic");
+                var meta = Meta.From(_manager.Health(),
+                    projectModelUnproven ? "indexed" : "exact", "semantic");
                 var skippedProjects = skippedCandidateProjects ?? new List<string>();
                 return Json.WithAuxiliaryListBudget(result, skippedProjects,
                     (items, truncated, skippedItems, skippedTruncated) => new
@@ -58,8 +59,9 @@ public sealed partial class NavigationTools
                         ? skippedProjects.Count
                         : (int?)null,
                     skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
-                    partial = bounded ? true : (bool?)null,
-                    partialReason = bounded ? "candidate_cluster_bounded" : null,
+                    partial = bounded || projectModelUnproven ? true : (bool?)null,
+                    partialReason = bounded ? "candidate_cluster_bounded"
+                        : projectModelUnproven ? "project_model_unproven" : null,
                     truncated,
                     meta,
                 });
@@ -89,7 +91,7 @@ public sealed partial class NavigationTools
         {
             return Json.Serialize(new { error = "target_not_found_in_index", name });
         }
-        var (result, reason) = _semantic
+        var (result, projectModelUnproven, reason) = _semantic
             .CalleesAsync(t.Path, t.Line, t.Column, hint, timeoutMs)
             .GetAwaiter().GetResult();
         reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
@@ -102,7 +104,8 @@ public sealed partial class NavigationTools
                 meta = Meta.From(_manager.Health(), "indexed", "semantic"),
             });
         }
-        var meta0 = Meta.From(_manager.Health(), "exact", "semantic");
+        var meta0 = Meta.From(_manager.Health(),
+            projectModelUnproven ? "indexed" : "exact", "semantic");
         return Json.WithListBudget(result, (items, truncated) => new
         {
             callees = items.Select(c => new
@@ -110,6 +113,8 @@ public sealed partial class NavigationTools
                 callee = SemanticSymbolJson(c.Callee),
                 callLines = c.CallLines,
             }),
+            partial = projectModelUnproven ? true : (bool?)null,
+            partialReason = projectModelUnproven ? "project_model_unproven" : null,
             truncated,
             meta = meta0,
         });
@@ -195,11 +200,13 @@ public sealed partial class NavigationTools
             });
         }
         var down = result.DerivedOrImplementing;
-        var meta1 = Meta.From(_manager.Health(), "exact", "semantic");
+        var meta1 = Meta.From(_manager.Health(),
+            result.ProjectModelUnproven ? "indexed" : "exact", "semantic");
         var skippedProjects = skippedCandidateProjects ?? new List<string>();
         bool coverageBounded = (skippedCandidateProjects?.Count ?? 0) > 0 ||
             (coverage?.FailedProjects.Count ?? 0) > 0 ||
-            (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects);
+            (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects) ||
+            result.ProjectModelUnproven;
 
         // Parity with implementations: when compiler-exact finds no derived/implementing types — often
         // a type-twin identity mismatch across assemblies, or bounded coverage — surface the index
@@ -255,10 +262,16 @@ public sealed partial class NavigationTools
                         : (int?)null,
                     skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
                     partial = coverageBounded ? true : (bool?)null,
-                    partialReason = coverageBounded ? "candidate_cluster_bounded" : "no_semantic_derived",
+                    partialReason = (skippedCandidateProjects?.Count ?? 0) > 0 ||
+                                    (coverage?.FailedProjects.Count ?? 0) > 0 ||
+                                    (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects)
+                        ? "candidate_cluster_bounded"
+                        : result.ProjectModelUnproven
+                            ? "project_model_unproven"
+                            : "no_semantic_derived",
                     // Field (lhg): stale "generated twin" wording replaced — key on the causes we
                     // can actually still hit post-edge-recovery, with the remediation inline.
-                    note = "Compiler-exact resolution found no derived/implementing types, but these name it in their base list (derivedOrImplementing is heuristic here). Implementer projects were likely not loaded into the semantic cluster (raise maxProjects, or scope with pathGlob), or the implementers bind the name to a declaration outside the workspace. baseTypes/interfaces remain exact. Verify with source_context.",
+                    note = "Compiler resolution found no derived/implementing types, but these name it in their base list (derivedOrImplementing is heuristic here). Implementer projects were likely not loaded into the semantic cluster (raise maxProjects, or scope with pathGlob), the implementers bind the name to a declaration outside the workspace, or imported project authority can change a friend grant (see partialReason). baseTypes/interfaces are compiler-resolved; verify with source_context.",
                     coverage = coverage is null ? null : CoverageJson(coverage),
                     timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
                     truncated = truncated || heuristic.Count >= 50,
@@ -281,7 +294,11 @@ public sealed partial class NavigationTools
                 : (int?)null,
             skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
             partial = coverageBounded ? true : (bool?)null,
-            partialReason = coverageBounded ? "candidate_cluster_bounded" : null,
+            partialReason = (skippedCandidateProjects?.Count ?? 0) > 0 ||
+                            (coverage?.FailedProjects.Count ?? 0) > 0 ||
+                            (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects)
+                ? "candidate_cluster_bounded"
+                : result.ProjectModelUnproven ? "project_model_unproven" : null,
             timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
             truncated,
             meta = meta1,
@@ -471,9 +488,12 @@ public sealed partial class NavigationTools
         // 1. Definition (semantic first, indexed fallback).
         var (target, _) = ResolveSemanticTarget(name, container, null, null, 0, 0);
         SemanticDeclaration? semDecl = null;
+        bool semanticProjectModelUnproven = false;
         if (target is { } t)
         {
-            (semDecl, _) = _semantic.DefinitionAsync(t.Path, t.Line, t.Column, name, timeoutMs).GetAwaiter().GetResult();
+            (semDecl, _, semanticProjectModelUnproven) = _semantic
+                .DefinitionAsync(t.Path, t.Line, t.Column, name, timeoutMs)
+                .GetAwaiter().GetResult();
         }
         var indexedDecls = q.SearchSymbols(name, "exact", null, 5, includeGenerated: false);
         if (container is { } c)
@@ -522,7 +542,9 @@ public sealed partial class NavigationTools
                 .Select(s => new { s.Name, s.Kind, s.StartLine }).Take(10).ToList<object>()
             : new List<object>();
 
-        var meta = Meta.From(_manager.Health(), semDecl is not null ? "exact" : "indexed", semDecl is not null ? "semantic" : "syntax");
+        var meta = Meta.From(_manager.Health(),
+            semDecl is not null && !semanticProjectModelUnproven ? "exact" : "indexed",
+            semDecl is not null ? "semantic" : "syntax");
         var omitted = new List<string>();
 
         object Build(bool dropSiblings, bool dropEdges, bool dropTests, bool dropSource) => new
@@ -530,6 +552,8 @@ public sealed partial class NavigationTools
             name,
             summary = $"{name}: declared in {owner ?? "unknown project"}; {refTotal} candidate references across {refGroups.Count} projects; {tests.Count} related test groups.",
             symbol = semDecl is not null ? SemanticSymbolJson(semDecl) : null,
+            partial = semanticProjectModelUnproven ? true : (bool?)null,
+            partialReason = semanticProjectModelUnproven ? "project_model_unproven" : null,
             declarations = indexedDecls.Select(SymbolJson),
             primarySource = dropSource ? null : primarySource,
             references = new

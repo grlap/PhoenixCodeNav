@@ -12,7 +12,8 @@ public sealed record SemanticTypeHierarchy(
     SemanticDeclaration Symbol,
     List<SemanticDeclaration> BaseTypes,
     List<SemanticDeclaration> Interfaces,
-    List<SemanticDeclaration> DerivedOrImplementing);
+    List<SemanticDeclaration> DerivedOrImplementing,
+    bool ProjectModelUnproven = false);
 
 /// <summary>
 /// Owns: call-graph and type-hierarchy operations (split out of SemanticService.cs).
@@ -21,7 +22,8 @@ public sealed record SemanticTypeHierarchy(
 public sealed partial class SemanticService
 {
     public async Task<(List<SemanticCaller>? Result, ClusterCoverage? Coverage,
-        List<string>? SkippedCandidateProjects, string? FailReason)> CallersAsync(
+        List<string>? SkippedCandidateProjects, bool ProjectModelUnproven,
+        string? FailReason)> CallersAsync(
         string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
@@ -36,10 +38,10 @@ public sealed partial class SemanticService
             if (indexSnapshot is null)
             {
                 EmitOpTelemetry("callers", "unresolved", "index_snapshot_unavailable"); // epuc.1
-                return (null, null, null, "index_snapshot_unavailable");
+                return (null, null, null, false, "index_snapshot_unavailable");
             }
 
-            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
+            var (_, symbolA, owningProject, _) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox).ConfigureAwait(false);
             clusterLoadInProgress = false;
@@ -47,7 +49,7 @@ public sealed partial class SemanticService
             if (symbolA is null || owningProject is null)
             {
                 EmitOpTelemetry("callers", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
-                return (null, null, null, "symbol_not_resolved");
+                return (null, null, null, false, "symbol_not_resolved");
             }
 
             clusterLoadInProgress = true;
@@ -60,7 +62,7 @@ public sealed partial class SemanticService
             {
                 EmitOpTelemetry("callers", "unresolved", "symbol_not_resolved_in_scope",
                     ownerBox.Stats, scanBox.Stats); // epuc.1
-                return (null, null, null, "symbol_not_resolved_in_scope");
+                return (null, null, null, false, "symbol_not_resolved_in_scope");
             }
 
             var callers = await SymbolFinder.FindCallersAsync(symbol, solution, cts.Token).ConfigureAwait(false);
@@ -81,9 +83,14 @@ public sealed partial class SemanticService
                 }
                 results.Add(new SemanticCaller(Describe(info.CallingSymbol), sites));
             }
-            EmitOpTelemetry("callers", "exact", null, ownerBox.Stats, scanBox.Stats,
+            bool projectModelUnproven = FriendAssemblyAuthorityUnproven(symbol,
+                results.SelectMany(result => result.CallSites).Select(site => site.Project),
+                coverage);
+            EmitOpTelemetry("callers", projectModelUnproven ? "partial" : "exact",
+                projectModelUnproven ? "project_model_unproven" : null,
+                ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs); // epuc.1
-            return (results, coverage, skipped, null);
+            return (results, coverage, skipped, projectModelUnproven, null);
         }
         catch (OperationCanceledException)
         {
@@ -92,7 +99,7 @@ public sealed partial class SemanticService
             EmitOpTelemetry("callers", "degraded", reason, ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs: clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
                 queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs); // epuc.1
-            return (null, null, null, reason);
+            return (null, null, null, false, reason);
         }
         catch (Exception ex)
         {
@@ -100,11 +107,12 @@ public sealed partial class SemanticService
             EmitOpTelemetry("callers", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs: clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
                 queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs); // epuc.1
-            return (null, null, null, $"semantic_error:{ex.GetType().Name}");
+            return (null, null, null, false, $"semantic_error:{ex.GetType().Name}");
         }
     }
 
-    public async Task<(List<SemanticCallee>? Result, string? FailReason)> CalleesAsync(
+    public async Task<(List<SemanticCallee>? Result, bool ProjectModelUnproven,
+        string? FailReason)> CalleesAsync(
         string path, int line, int? column, string? nameHint, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
@@ -118,9 +126,9 @@ public sealed partial class SemanticService
             if (indexSnapshot is null)
             {
                 EmitOpTelemetry("callees", "unresolved", "index_snapshot_unavailable"); // epuc.1
-                return (null, "index_snapshot_unavailable");
+                return (null, false, "index_snapshot_unavailable");
             }
-            var (solution, symbol, _) = await LoadOwnerAndResolveAsync(
+            var (solution, symbol, owningProject, coverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox).ConfigureAwait(false);
             loadCompleted = true;
@@ -128,7 +136,7 @@ public sealed partial class SemanticService
             if (symbol is null || solution is null)
             {
                 EmitOpTelemetry("callees", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
-                return (null, "symbol_not_resolved");
+                return (null, false, "symbol_not_resolved");
             }
 
             var byTarget = new Dictionary<ISymbol, List<int>>(SymbolEqualityComparer.Default);
@@ -156,9 +164,12 @@ public sealed partial class SemanticService
                 .Select(kv => new SemanticCallee(Describe(kv.Key), kv.Value.Distinct().Take(8).ToList()))
                 .OrderBy(c => c.Callee.SymbolDisplay, StringComparer.Ordinal)
                 .ToList();
-            EmitOpTelemetry("callees", "exact", null, ownerBox.Stats,
+            bool projectModelUnproven = owningProject is not null && byTarget.Keys.Any(target =>
+                FriendAssemblyAuthorityUnproven(target, [owningProject], coverage));
+            EmitOpTelemetry("callees", projectModelUnproven ? "partial" : "exact",
+                projectModelUnproven ? "project_model_unproven" : null, ownerBox.Stats,
                 clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs); // epuc.1
-            return (results, null);
+            return (results, projectModelUnproven, null);
         }
         catch (OperationCanceledException)
         {
@@ -167,7 +178,7 @@ public sealed partial class SemanticService
             EmitOpTelemetry("callees", "degraded", reason, ownerBox.Stats,
                 clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
                 queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
-            return (null, reason);
+            return (null, false, reason);
         }
         catch (Exception ex)
         {
@@ -176,7 +187,7 @@ public sealed partial class SemanticService
             EmitOpTelemetry("callees", "error", ex.GetType().Name, ownerBox.Stats,
                 clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
                 queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
-            return (null, $"semantic_error:{ex.GetType().Name}");
+            return (null, false, $"semantic_error:{ex.GetType().Name}");
         }
     }
 
@@ -200,7 +211,7 @@ public sealed partial class SemanticService
                 return (null, null, null, "index_snapshot_unavailable");
             }
 
-            var (_, symbolA, owningProject) = await LoadOwnerAndResolveAsync(
+            var (_, symbolA, owningProject, _) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries, arityHint,
                 statsBox: ownerBox)
                 .ConfigureAwait(false);
@@ -247,12 +258,15 @@ public sealed partial class SemanticService
                 return (null, null, null, why);
             }
 
+            var baseSymbols = new List<INamedTypeSymbol>();
             var baseTypes = new List<SemanticDeclaration>();
             for (var b = type.BaseType; b is not null && b.SpecialType != SpecialType.System_Object; b = b.BaseType)
             {
+                baseSymbols.Add(b);
                 baseTypes.Add(Describe(b));
             }
-            var interfaces = type.AllInterfaces.Select(i => Describe((ISymbol)i)).ToList();
+            var interfaceSymbols = type.AllInterfaces.ToList();
+            var interfaces = interfaceSymbols.Select(i => Describe((ISymbol)i)).ToList();
 
             var down = new List<SemanticDeclaration>();
             // jj1q: closure-verified downward direction — same walk as implementations (the
@@ -261,7 +275,7 @@ public sealed partial class SemanticService
             object? queryStages;
             if (!closureCapped)
             {
-                var (verifyMs, verified) = await VerifyClosureImplementersAsync(type, solution,
+                var verification = await VerifyClosureImplementersAsync(type, solution,
                     typeClosure,
                     impl => down.Add(Describe(impl)),
                     cts.Token).ConfigureAwait(false);
@@ -269,9 +283,15 @@ public sealed partial class SemanticService
                 {
                     path = "closure_verified",
                     closureMs,
-                    verifyMs,
+                    verifyMs = verification.VerifyMs,
                     candidates = typeClosure.Count,
-                    verified,
+                    verified = verification.Verified,
+                    documentCandidates = verification.DocumentCandidates,
+                    declarationsMatched = verification.DeclarationsMatched,
+                    symbolsResolved = verification.SymbolsResolved,
+                    directBaseLinks = verification.DirectBaseLinks,
+                    errorDirectBaseLinks = verification.ErrorDirectBaseLinks,
+                    targetDirectMatches = verification.TargetDirectMatches,
                 };
             }
             else
@@ -290,8 +310,17 @@ public sealed partial class SemanticService
             }
 
             // Review r2: materialize BEFORE the emit — see DefinitionAsync.
-            var payload = new SemanticTypeHierarchy(Describe(type), baseTypes, interfaces, down);
-            EmitOpTelemetry("type_hierarchy", "exact", null, ownerBox.Stats, scanBox.Stats,
+            string accessingAssembly = type.ContainingAssembly?.Name ?? owningProject;
+            bool projectModelUnproven =
+                baseSymbols.Cast<ISymbol>().Concat(interfaceSymbols).Any(baseOrInterface =>
+                    FriendAssemblyAuthorityUnproven(baseOrInterface, [accessingAssembly], coverage)) ||
+                FriendAssemblyAuthorityUnproven(type,
+                    down.Select(candidate => candidate.Assembly ?? ""), coverage);
+            var payload = new SemanticTypeHierarchy(
+                Describe(type), baseTypes, interfaces, down, projectModelUnproven);
+            EmitOpTelemetry("type_hierarchy", projectModelUnproven ? "partial" : "exact",
+                projectModelUnproven ? "project_model_unproven" : null,
+                ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs,
                 queryStages: queryStages); // epuc.1 + jj1q stages
             return (payload, coverage, skipped, null);

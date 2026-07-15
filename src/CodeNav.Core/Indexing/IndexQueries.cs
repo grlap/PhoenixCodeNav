@@ -1344,7 +1344,49 @@ public sealed partial class IndexQueries : IDisposable
             r => r.GetString(0), ("$n", projectName));
     }
 
-    /// <summary>Fingerprints for MANY projects in one grouped query. The warm-cache check in
+    /// <summary>Whether an implicit Directory.Build.props/targets file can participate in this
+    /// project's MSBuild evaluation. This is an authority-boundary check, not an evaluator: the
+    /// semantic layer uses it to disclose that locally modeled generated attributes may differ
+    /// from the real build. Unix remains case-sensitive; Windows follows its filesystem.</summary>
+    public bool HasApplicableDirectoryBuildAuthority(string projectPath)
+    {
+        projectPath = WorkspacePaths.Normalize(projectPath);
+        int slash = projectPath.LastIndexOf('/');
+        string directory = slash < 0 ? "" : projectPath[..slash];
+        var candidates = new List<string>();
+        for (int depth = 0; depth < 128; depth++)
+        {
+            string prefix = directory.Length == 0 ? "" : directory + "/";
+            candidates.Add(prefix + "Directory.Build.props");
+            candidates.Add(prefix + "Directory.Build.targets");
+            if (directory.Length == 0) break;
+            int parentSlash = directory.LastIndexOf('/');
+            directory = parentSlash < 0 ? "" : directory[..parentSlash];
+        }
+
+        foreach (string[] chunk in candidates.Chunk(200))
+        {
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$p{i}");
+                args.Add(($"$p{i}", chunk[i]));
+            }
+            string lhs = OperatingSystem.IsWindows() ? "path COLLATE NOCASE" : "path";
+            if (Query($"SELECT 1 FROM files WHERE {lhs} IN ({string.Join(",", parameters)}) LIMIT 1",
+                    r => r.GetInt32(0), args.ToArray()).Count > 0)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Fingerprints for MANY projects in one grouped query. Includes each project file
+    /// and associated packages.config because both contribute semantic compiler inputs (for
+    /// example generated IVT attributes and package metadata references).
+    /// The warm-cache check in
     /// EnsureLoadedAsync ran ProjectFingerprint once per already-loaded project on EVERY semantic
     /// call — dozens to hundreds of point queries per references/implementations invocation (dz3).</summary>
     public Dictionary<string, (long FileCount, long HashSum)> ProjectFingerprints(IReadOnlyCollection<string> projectNames)
@@ -1362,36 +1404,72 @@ public sealed partial class IndexQueries : IDisposable
             }
             foreach (var row in Query(
                 $"""
-                SELECT p.name, COUNT(*), TOTAL(f.hash) FROM compile_items ci
-                JOIN projects p ON p.id = ci.project_id
-                JOIN files f ON f.id = ci.file_id
-                WHERE p.name COLLATE NOCASE IN ({string.Join(",", ph)}) AND f.lang = 'cs'
-                GROUP BY p.name COLLATE NOCASE -- must union case-variant names exactly like the single
+                SELECT input.name, COUNT(*),
+                       SUM(input.hash & 4294967295),
+                       SUM((input.hash >> 32) & 4294967295)
+                FROM (
+                    SELECT p.name, f.hash FROM compile_items ci
+                    JOIN projects p ON p.id = ci.project_id
+                    JOIN files f ON f.id = ci.file_id
+                    WHERE p.name COLLATE NOCASE IN ({string.Join(",", ph)}) AND f.lang = 'cs'
+                    UNION ALL
+                    SELECT p.name, f.hash FROM projects p
+                    JOIN files f ON f.path = p.path
+                    WHERE p.name COLLATE NOCASE IN ({string.Join(",", ph)})
+                    UNION ALL
+                    SELECT p.name, f.hash FROM projects p
+                    JOIN files f ON f.path =
+                        rtrim(p.path, replace(p.path, '/', '')) || 'packages.config'
+                    WHERE p.name COLLATE NOCASE IN ({string.Join(",", ph)})
+                ) input
+                GROUP BY input.name COLLATE NOCASE -- must union case-variant names exactly like the single
                                                -- query's '= $n COLLATE NOCASE', or the warm check and
                                                -- the load-time fingerprint permanently disagree and the
                                                -- project reloads on EVERY semantic call (review repro)
                 """,
-                r => (Name: r.GetString(0), Count: r.GetInt64(1), Sum: (long)r.GetDouble(2)), args.ToArray()))
+                r => (Name: r.GetString(0), Count: r.GetInt64(1),
+                    LowSum: r.GetInt64(2), HighSum: r.GetInt64(3)), args.ToArray()))
             {
-                result[row.Name] = (row.Count, row.Sum);
+                result[row.Name] = (row.Count, CombineFingerprintSums(row.LowSum, row.HighSum));
             }
         }
         return result; // names with no compiled files are simply absent => caller defaults to (0, 0)
     }
 
-    /// <summary>Cheap change fingerprint for a project's compiled files.</summary>
+    /// <summary>Cheap change fingerprint for a project's compiled files, project model, and
+    /// associated packages.config metadata input.</summary>
     public (long FileCount, long HashSum) ProjectFingerprint(string projectName)
     {
         var rows = Query(
             """
-            SELECT COUNT(*), TOTAL(f.hash) FROM compile_items ci
-            JOIN projects p ON p.id = ci.project_id
-            JOIN files f ON f.id = ci.file_id
-            WHERE p.name = $n COLLATE NOCASE AND f.lang = 'cs'
+            SELECT COUNT(*),
+                   COALESCE(SUM(input.hash & 4294967295), 0),
+                   COALESCE(SUM((input.hash >> 32) & 4294967295), 0)
+            FROM (
+                SELECT f.hash FROM compile_items ci
+                JOIN projects p ON p.id = ci.project_id
+                JOIN files f ON f.id = ci.file_id
+                WHERE p.name = $n COLLATE NOCASE AND f.lang = 'cs'
+                UNION ALL
+                SELECT f.hash FROM projects p
+                JOIN files f ON f.path = p.path
+                WHERE p.name = $n COLLATE NOCASE
+                UNION ALL
+                SELECT f.hash FROM projects p
+                JOIN files f ON f.path =
+                    rtrim(p.path, replace(p.path, '/', '')) || 'packages.config'
+                WHERE p.name = $n COLLATE NOCASE
+            ) input
             """,
-            r => (Count: r.GetInt64(0), Sum: (long)r.GetDouble(1)), ("$n", projectName));
-        return rows.Count > 0 ? (rows[0].Count, rows[0].Sum) : (0, 0);
+            r => (Count: r.GetInt64(0), LowSum: r.GetInt64(1), HighSum: r.GetInt64(2)),
+            ("$n", projectName));
+        return rows.Count > 0
+            ? (rows[0].Count, CombineFingerprintSums(rows[0].LowSum, rows[0].HighSum))
+            : (0, 0);
     }
+
+    private static long CombineFingerprintSums(long lowSum, long highSum) =>
+        unchecked((lowSum * 397) ^ highSum);
 
     /// <summary>
     /// Every project whose files textually contain the identifier (FTS whole-token candidates),

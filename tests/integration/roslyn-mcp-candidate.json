@@ -1,0 +1,15 @@
+{
+  "name": "roslyn-e7680f-0.11.9-ivt-candidate",
+  "mcpVersion": "0.11.9",
+  "roslynCommit": "e7680f251b8fc52a0ba7108906c0e40ff3263a32",
+  "phoenixHead": "1b3d9ef3a591dc31f347f94a09323908b04f46e0",
+  "phoenixTargetSha256": "47a2d2d4a8adc91e33d10b4a491f184d4ae4915f1ff525838d015e3ff88d6d84",
+  "phoenixIdentityEntryCount": 19,
+  "mcpSha256": "840d485fabd5c5a5c4a86f99ff40985df4700c39706ea28246b87a8d2807b945",
+  "target": {
+    "friendRelationshipConfidence": "indexed",
+    "friendRelationshipPartialReason": "project_model_unproven",
+    "exactReferences": 47,
+    "exactReferenceProjects": 7
+  }
+}

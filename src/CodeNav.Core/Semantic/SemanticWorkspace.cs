@@ -14,7 +14,11 @@ public sealed record ClusterCoverage(
     bool FrameworkRefsAvailable,
     // Field 0.7.0 ("coverage 1/1 but 8 hits from 8 projects"): SymbolFinder scans the WHOLE
     // solution, including projects resident from earlier calls — this makes that visible.
-    int SolutionProjects = 0);
+    int SolutionProjects = 0,
+    // Projects whose locally modeled InternalsVisibleTo attributes can be changed by imported
+    // MSBuild authority. Friend-only relationships involving these projects are candidates, not
+    // exact facts from the real build.
+    IReadOnlyList<string>? UnprovenFriendAssemblyProjects = null);
 
 /// <summary>
 /// Owns: an AdhocWorkspace populated lazily with per-project compilations built from
@@ -40,6 +44,7 @@ public sealed class SemanticWorkspace : IDisposable
     {
         public required ProjectId Id { get; init; }
         public required (long Count, long Sum) Fingerprint { get; set; }
+        public required bool UnprovenFriendAssemblyAuthority { get; init; }
         public long LastUse { get; set; }
     }
 
@@ -200,7 +205,13 @@ public sealed class SemanticWorkspace : IDisposable
                 SkippedProjects: skipped,
                 FailedProjects: failed,
                 FrameworkRefsAvailable: refDir is not null,
-                SolutionProjects: _workspace.CurrentSolution.ProjectIds.Count);
+                SolutionProjects: _workspace.CurrentSolution.ProjectIds.Count,
+                UnprovenFriendAssemblyProjects: requested
+                    .Where(projectName =>
+                        _loaded.TryGetValue(projectName, out LoadedProject? project) &&
+                        project.UnprovenFriendAssemblyAuthority)
+                    .OrderBy(projectName => projectName, StringComparer.OrdinalIgnoreCase)
+                    .ToList());
             return (_workspace.CurrentSolution, coverage);
         }
         finally
@@ -286,6 +297,13 @@ public sealed class SemanticWorkspace : IDisposable
         byte[]? packagesBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, packagesPath,
             IndexBuilder.MaxStructuralFileBytes);
         var parsed = ProjectFileParser.ParseSnapshot(row.Path, projectBytes, packagesBytes);
+        bool unprovenFriendAssemblyAuthority = parsed.InternalsVisibleTo is { Count: > 0 } &&
+            (!parsed.InternalsVisibleToAuthorityComplete ||
+             q.HasApplicableDirectoryBuildAuthority(row.Path));
+        if (unprovenFriendAssemblyAuthority)
+        {
+            _log($"Semantic project-model boundary: imported friend-assembly authority is unproven for {name}.");
+        }
         if (phaseTicks is not null)
         {
             phaseTicks.Parse += System.Diagnostics.Stopwatch.GetTimestamp() - tPhase;
@@ -373,6 +391,23 @@ public sealed class SemanticWorkspace : IDisposable
                 name: Path.GetFileName(rel),
                 loader: TextLoader.From(TextAndVersion.Create(text, VersionStamp.Create(), full)),
                 filePath: full));
+        }
+
+        // MSBuild's GenerateAssemblyInfo target turns literal InternalsVisibleTo items into
+        // assembly attributes. Recreate only the parser's fail-closed subset in the ad-hoc
+        // compilation; without it, legitimate friend projects bind internal base types as error
+        // symbols and exact implementation/hierarchy verification silently falls back to syntax.
+        // This document intentionally has no file path: it is compiler input, not indexed source.
+        if (parsed.InternalsVisibleTo is { Count: > 0 } friendAssemblies)
+        {
+            string generated = string.Join('\n', friendAssemblies.Select(friend =>
+                $"[assembly: global::System.Runtime.CompilerServices.InternalsVisibleToAttribute({SyntaxFactory.Literal(friend).Text})]")) + '\n';
+            SourceText text = SourceText.From(generated);
+            const string generatedName = "__PhoenixCodeNav.InternalsVisibleTo.g.cs";
+            docs.Add(DocumentInfo.Create(
+                DocumentId.CreateNewId(projectId, debugName: generatedName),
+                name: generatedName,
+                loader: TextLoader.From(TextAndVersion.Create(text, VersionStamp.Create()))));
         }
         if (phaseTicks is not null) // x5ls.1.3: source_read ends (fan-out + fallback + docs).
         {
@@ -496,6 +531,7 @@ public sealed class SemanticWorkspace : IDisposable
         {
             Id = projectId,
             Fingerprint = q.ProjectFingerprint(name),
+            UnprovenFriendAssemblyAuthority = unprovenFriendAssemblyAuthority,
             LastUse = ++_useCounter,
         };
     }

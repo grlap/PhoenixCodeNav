@@ -46,7 +46,7 @@ public class SemanticTests : IClassFixture<IndexFixture>, IDisposable
         string realLine = content.Split('\n')[hit.Line - 1];
         column = realLine.IndexOf("NotNull", StringComparison.Ordinal) + 1;
 
-        var (decl, reason) = await _semantic.DefinitionAsync(hit.FilePath, hit.Line, column, null, 30000);
+        var (decl, reason, _) = await _semantic.DefinitionAsync(hit.FilePath, hit.Line, column, null, 30000);
 
         Assert.True(decl is not null, $"semantic definition failed: {reason}");
         Assert.Equal("M:Acme.Platform.Common.Guard.NotNull(System.Object,System.String)", decl!.DocumentationCommentId);

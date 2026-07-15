@@ -79,7 +79,8 @@ public sealed partial class NavigationTools
                 new { id = "hierarchy-ranking", summary = "implementations ranks concrete hits first; conditional likelyImplementation names the sole concrete hit and via identifies indirect base derivation. implementations wraps hit metadata; type_hierarchy returns flat symbols" },
                 new { id = "implementer-completeness", summary = "Member fallback exposes implementerCount/omittedImplementers. When identity is compiler-resolved but implementers are indexed, symbolConfidence exact and implementationsConfidence heuristic remain separate; type_hierarchy fallback returns heuristic base-list candidates without compiler-only bases/interfaces" },
                 new { id = "generic-arity-resolution", summary = "v0.11.8 implementations/type_hierarchy select by arity or symbolId; mixed-arity names refuse; syntax fallback is arity-exact" },
-                new { id = "compiled-awareness", summary = "search_symbol flags 'orphaned' for files in no project's compile set (silent when compiled; Include globs expanded, Remove honored — residual gaps: .projitems/props globs/Conditions); repo_overview.orphanedFiles; semantic resolution never targets an uncompiled declaration; impact and context_pack likewise prefer COMPILED declarations for ownership (an orphaned copy sorting first no longer zeroes transitiveDependentProjects)" },
+                new { id = "friend-assembly-semantics", summary = "v0.11.9 models literal local SDK InternalsVisibleTo grants; friend-only results disclose project_model_unproven when imports, package build assets, or Directory.Build authority can change the grant" },
+                new { id = "compiled-awareness", summary = "search_symbol orphaned; repo_overview.orphanedFiles; compiled ownership guides semantic resolution, impact, and context_pack" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is LOGGED, never silent" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
                 new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + didYouMean (variantKind 'tokenForm': Mode4 <-> 'Mode 4'; variantKind 'spelling': single-token Damerau edit-distance-1 against indexed SYMBOL names, first-char-anchored — first-character typos and sub-4-char tokens are deliberately not covered — every suggestion PROBED before surfacing, never substituted) + contextual notes; elsewhere/didYouMean precise probes carry structured samples {path, line, containingSymbol} beside samplePaths (the redirect no longer drops the owner context main hits carry; the cross-line co-occur branch stays paths-only — its evidence is file-level)" },
@@ -1054,7 +1055,7 @@ public sealed partial class NavigationTools
             var (target, hint) = ResolveSemanticTarget(name, container, kinds, path, line, column);
             if (target is { } t)
             {
-                var (decl, reason) = _semantic
+                var (decl, reason, projectModelUnproven) = _semantic
                     .DefinitionAsync(t.Path, t.Line, t.Column, hint, timeoutMs)
                     .GetAwaiter().GetResult();
                 if (decl is not null)
@@ -1079,8 +1080,11 @@ public sealed partial class NavigationTools
                         declarations = items.Select(d => new { d.Path, d.StartLine, d.EndLine }),
                         declarationsTruncated = (listTrunc || totalDecls > MaxDeclarationSites) ? true : (bool?)null,
                         body,
+                        partial = projectModelUnproven ? true : (bool?)null,
+                        partialReason = projectModelUnproven ? "project_model_unproven" : null,
                         timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds }, // 24n
-                        meta = Meta.From(_manager.Health(), "exact", "semantic"),
+                        meta = Meta.From(_manager.Health(),
+                            projectModelUnproven ? "indexed" : "exact", "semantic"),
                     });
                     // Semantic spans come from live sources — pair them with live content.
                     object? MakeSemanticBody(int budget) =>
@@ -1286,8 +1290,9 @@ public sealed partial class NavigationTools
                 bool bounded = result.SkippedCandidateProjects.Count > 0 ||
                     result.Coverage.FailedProjects.Count > 0 ||
                     result.Coverage.LoadedProjects < result.Coverage.RequestedProjects;
-                bool partial = exhausted || bounded;
-                var meta0 = Meta.From(_manager.Health(), "exact", "semantic");
+                bool partial = exhausted || bounded || result.ProjectModelUnproven;
+                var meta0 = Meta.From(_manager.Health(),
+                    result.ProjectModelUnproven ? "indexed" : "exact", "semantic");
                 long elapsedMs = swSem.ElapsedMilliseconds;
                 return Json.WithAuxiliaryListBudget(impls, result.SkippedCandidateProjects,
                     (items, truncated, skippedItems, skippedTruncated) => new
@@ -1320,7 +1325,9 @@ public sealed partial class NavigationTools
                         ? $"semantic_timeout: deadline exhausted after {elapsedMs}ms of {deadlineMs}ms; this list is a lower bound (raise timeoutMs)"
                         : bounded
                             ? $"candidate_cluster_bounded: skipped {result.SkippedCandidateProjects.Count} candidate projects and {result.Coverage.FailedProjects.Count} failed loads (raise maxProjects)"
-                            : null,
+                            : result.ProjectModelUnproven
+                                ? "project_model_unproven"
+                                : null,
                     // t2b: where the budget went — cluster load+resolve vs the finder passes.
                     timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
                     truncated,
@@ -1563,16 +1570,18 @@ public sealed partial class NavigationTools
                         }
                     }
                     bool exhausted = result.DeadlineExhausted;
-                    bool partial = exhausted || result.SkippedCandidateProjects.Count > 0 || result.Coverage.FailedProjects.Count > 0;
+                    bool partial = exhausted || result.SkippedCandidateProjects.Count > 0 ||
+                        result.Coverage.FailedProjects.Count > 0 || result.ProjectModelUnproven;
                     // "at least": exhausted counts are a salvaged lower bound (24n), never the census.
                     string atLeast = exhausted ? "at least " : "";
-                    var meta0 = Meta.From(_manager.Health(), "exact", "semantic");
+                    var meta0 = Meta.From(_manager.Health(),
+                        result.ProjectModelUnproven ? "indexed" : "exact", "semantic");
                     long elapsedMs = swSem.ElapsedMilliseconds;
                     return Json.WithAuxiliaryListBudget(groups0, result.SkippedCandidateProjects,
                         (items, truncated, skippedItems, skippedTruncated) => new
                     {
                         symbol = SemanticSymbolJson(result.Symbol),
-                        summary = $"{atLeast}{result.TotalLocations} exact references across {groups0.Count} projects ({mix0}).",
+                        summary = $"{atLeast}{result.TotalLocations} {(result.ProjectModelUnproven ? "compiler-resolved candidate" : "exact")} references across {groups0.Count} projects ({mix0}).",
                         totalReferences = result.TotalLocations,
                         totalIsLowerBound = exhausted ? true : (bool?)null,
                         // HOW the symbol is used, e.g. {"call":20,"xmldoc":480} — the anti-"500 refs
@@ -1594,7 +1603,9 @@ public sealed partial class NavigationTools
                                   + (result.SkippedCandidateProjects.Count > 0 || result.Coverage.FailedProjects.Count > 0
                                       ? $"; also skipped {result.SkippedCandidateProjects.Count} candidate projects, {result.Coverage.FailedProjects.Count} failed loads"
                                       : "")
-                                : $"skipped {result.SkippedCandidateProjects.Count} candidate projects (raise maxProjects), {result.Coverage.FailedProjects.Count} failed loads",
+                                : result.SkippedCandidateProjects.Count > 0 || result.Coverage.FailedProjects.Count > 0
+                                    ? $"skipped {result.SkippedCandidateProjects.Count} candidate projects (raise maxProjects), {result.Coverage.FailedProjects.Count} failed loads"
+                                    : "project_model_unproven",
                         skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
                         skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
                             ? result.SkippedCandidateProjects.Count
@@ -1894,6 +1905,12 @@ public sealed partial class NavigationTools
                                   c.FailedProjects.Any(project => Json.Utf8Bytes(project) > 256)
             ? true
             : (bool?)null,
+        unprovenFriendAssemblyProjects = c.UnprovenFriendAssemblyProjects is { Count: > 0 } unproven
+            ? unproven.Take(8).Select(project => Json.Utf8Prefix(project, 256, out _)).ToList()
+            : null,
+        unprovenFriendAssemblyProjectCount = c.UnprovenFriendAssemblyProjects is { Count: > 0 }
+            ? c.UnprovenFriendAssemblyProjects.Count
+            : (int?)null,
         frameworkRefsAvailable = c.FrameworkRefsAvailable,
     };
 

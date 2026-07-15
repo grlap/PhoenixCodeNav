@@ -151,6 +151,7 @@ public class ProjectFileParserTests : IDisposable
                 <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
               </PropertyGroup>
               <ItemGroup>
+                <InternalsVisibleTo Include="Custom.Friend" />
                 <Compile Include="Generated\Client.cs" />
                 <ProjectReference Include="..\Library\Library.csproj" />
                 <Reference Include="Custom.Dependency, Version=4.0.0.0">
@@ -174,6 +175,7 @@ public class ProjectFileParserTests : IDisposable
         Assert.Equal(pathParsed.ExplicitCompileItems, snapshotParsed.ExplicitCompileItems);
         Assert.Equal(pathParsed.CompileOperations, snapshotParsed.CompileOperations);
         Assert.Equal(pathParsed.DefaultCompileItems, snapshotParsed.DefaultCompileItems);
+        Assert.Equal(pathParsed.InternalsVisibleTo, snapshotParsed.InternalsVisibleTo);
         Assert.Equal(pathParsed.LoadStatus, snapshotParsed.LoadStatus);
 
         Assert.Contains(snapshotParsed.AssemblyRefs, reference =>
@@ -181,6 +183,118 @@ public class ProjectFileParserTests : IDisposable
             reference.HintPath == "artifacts/Custom.Dependency.dll");
         Assert.Equal(new[] { "src/Library/Library.csproj" },
             snapshotParsed.ProjectRefRelPaths);
+        Assert.Null(snapshotParsed.InternalsVisibleTo); // legacy items are not SDK assembly-info facts
+    }
+
+    [Fact]
+    public void InternalsVisibleToRequiresAnUnconditionalLiteralSimpleName()
+    {
+        string rel = WriteFile("src/Friends/Friends.csproj", """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+              <ItemGroup>
+                <InternalsVisibleTo Include="Friend.One; Friend.Two" />
+                <InternalsVisibleTo Include="friend.one" />
+                <InternalsVisibleTo Include="Excluded.Friend" Exclude="Excluded.Friend" />
+                <InternalsVisibleTo Include="Removed.Friend" />
+                <InternalsVisibleTo Remove="Removed.Friend" />
+                <InternalsVisibleTo Include="Updated.Friend" />
+                <InternalsVisibleTo Update="Updated.Friend" PublicKey="001122" />
+                <InternalsVisibleTo Include="$(DynamicFriend)" />
+                <InternalsVisibleTo Include="Keyed.Friend" Key="$(FriendKey)" />
+                <InternalsVisibleTo Include="PublicKey.Friend"><PublicKey>001122</PublicKey></InternalsVisibleTo>
+                <InternalsVisibleTo Include="LowerPublicKey.Friend"><publickey>001122</publickey></InternalsVisibleTo>
+                <InternalsVisibleTo Include="LowerPublicKeyAttribute.Friend" publickey="001122" />
+                <InternalsVisibleTo Include="LiteralKey.Friend" Key="001122" />
+                <InternalsVisibleTo Include="Strong.Friend, PublicKey=001122" />
+                <internalsvisibletO Include="Friend.Three" />
+              </ItemGroup>
+              <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+                <InternalsVisibleTo Include="Conditional.Friend" />
+              </ItemGroup>
+              <Choose>
+                <When Condition="'$(Configuration)' == 'Release'">
+                  <ItemGroup><InternalsVisibleTo Include="Chosen.Friend" /></ItemGroup>
+                </When>
+              </Choose>
+              <Target Name="AddFriend">
+                <ItemGroup><InternalsVisibleTo Include="Target.Friend" /></ItemGroup>
+              </Target>
+            </Project>
+            """);
+
+        ParsedProject parsed = ProjectFileParser.Parse(_root, rel);
+
+        Assert.Equal(new[] { "Friend.One", "Friend.Three", "Friend.Two" },
+            parsed.InternalsVisibleTo);
+    }
+
+    [Theory]
+    [InlineData("GenerateAssemblyInfo")]
+    [InlineData("GenerateInternalsVisibleToAttributes")]
+    [InlineData("PublicKey")]
+    [InlineData("SignAssembly")]
+    [InlineData("PublicSign")]
+    [InlineData("AssemblyOriginatorKeyFile")]
+    [InlineData("generateassemblyinfo")]
+    [InlineData("signassembly")]
+    public void InternalsVisibleToFailsClosedWhenSdkGenerationIsDisabledOrKeyed(string property)
+    {
+        string value = property.ToUpperInvariant() switch
+        {
+            "GENERATEASSEMBLYINFO" or "GENERATEINTERNALSVISIBLETOATTRIBUTES" => "false",
+            "SIGNASSEMBLY" or "PUBLICSIGN" => "true",
+            "ASSEMBLYORIGINATORKEYFILE" => "friend.snk",
+            _ => "001122",
+        };
+        string rel = WriteFile($"src/{property}/{property}.csproj", $$"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net9.0</TargetFramework>
+                <{{property}}>{{value}}</{{property}}>
+              </PropertyGroup>
+              <ItemGroup><InternalsVisibleTo Include="Friend.Consumer" /></ItemGroup>
+            </Project>
+            """);
+
+        ParsedProject parsed = ProjectFileParser.Parse(_root, rel);
+        Assert.Null(parsed.InternalsVisibleTo);
+    }
+
+    [Theory]
+    [InlineData("Key")]
+    [InlineData("PublicKey")]
+    [InlineData("key")]
+    [InlineData("publickey")]
+    public void InternalsVisibleToFailsClosedForItemDefinitionKeyMetadata(string metadata)
+    {
+        string rel = WriteFile($"src/ItemDefinition{metadata}/ItemDefinition{metadata}.csproj", $$"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+              <ItemDefinitionGroup>
+                <InternalsVisibleTo><{{metadata}}>001122</{{metadata}}></InternalsVisibleTo>
+              </ItemDefinitionGroup>
+              <ItemGroup><InternalsVisibleTo Include="Friend.Consumer" /></ItemGroup>
+            </Project>
+            """);
+
+        ParsedProject parsed = ProjectFileParser.Parse(_root, rel);
+        Assert.Null(parsed.InternalsVisibleTo);
+    }
+
+    [Fact]
+    public void LegacyInternalsVisibleToItemIsNotAnSdkGeneratedAttribute()
+    {
+        string rel = WriteFile("src/LegacyFriend/LegacyFriend.csproj", """
+            <Project ToolsVersion="15.0"
+                     xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+              <PropertyGroup><TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion></PropertyGroup>
+              <ItemGroup><InternalsVisibleTo Include="Friend.Consumer" /></ItemGroup>
+            </Project>
+            """);
+
+        ParsedProject parsed = ProjectFileParser.Parse(_root, rel);
+        Assert.Null(parsed.InternalsVisibleTo);
     }
 
     [Fact]

@@ -26,7 +26,15 @@ public sealed record ParsedProject(
     List<string>? CompileRemoveGlobs = null,        // workspace-relative patterns
     bool DefaultCompileItems = true,                // SDK **/*.cs default; false when EnableDefaultCompileItems=false (always false for legacy)
     bool CompileOwnershipComplete = true,           // false for bounded review shapes with imports the raw XML cannot evaluate
-    List<CompileMembershipOperation>? CompileOperations = null);
+    List<CompileMembershipOperation>? CompileOperations = null,
+    // Literal project-root items from the standard SDK assembly-info generation path only.
+    // SemanticWorkspace materializes these as generated assembly attributes so friend projects
+    // bind internal source symbols exactly. Unsupported MSBuild evaluation shapes fail closed.
+    List<string>? InternalsVisibleTo = null,
+    // True only when this project file itself closes every authority boundary that can alter the
+    // generated IVT attribute. SemanticWorkspace additionally checks applicable Directory.Build
+    // files from the pinned index before allowing compiler-exact claims.
+    bool InternalsVisibleToAuthorityComplete = true);
 
 /// <summary>One wildcard/SDK &lt;Compile Include&gt; spec with its own Exclude= filters (Exclude only
 /// prunes THAT item's wildcard expansion — the legacy exclusion idiom, since legacy MSBuild has no
@@ -233,6 +241,10 @@ public static class ProjectFileParser
             }
         }
 
+        var internalsVisibleTo = ParseGeneratedInternalsVisibleTo(root, isSdk);
+        bool internalsVisibleToAuthorityComplete = internalsVisibleTo is null ||
+            HasClosedInternalsVisibleToAuthority(root, isSdk, packageRefs);
+
         bool defaultCompileItems = isSdk &&
             !string.Equals(Prop(root, "EnableDefaultCompileItems")?.Trim(), "false", StringComparison.OrdinalIgnoreCase);
 
@@ -270,7 +282,9 @@ public static class ProjectFileParser
             projectRefs.Distinct().ToList(), packageRefs, compileItems, assemblyRefs, "parsed",
             includeGlobs.Count > 0 ? includeGlobs : null,
             removeGlobs.Count > 0 ? removeGlobs : null,
-            defaultCompileItems);
+            defaultCompileItems,
+            InternalsVisibleTo: internalsVisibleTo,
+            InternalsVisibleToAuthorityComplete: internalsVisibleToAuthorityComplete);
     }
 
     /// <summary>Parses only the compile-item shape from an already bounded, no-follow project-file
@@ -414,6 +428,215 @@ public static class ProjectFileParser
         root.Elements().Any(element => element.Name.LocalName == "Sdk") ||
         root.Descendants().Any(element => element.Name.LocalName == "Import" &&
             element.Attribute("Sdk") is not null);
+
+    /// <summary>
+    /// Models the narrow SDK target contract that converts InternalsVisibleTo items into assembly
+    /// attributes. Operations that cannot be modeled locally return no grants. Plain unsupported
+    /// Includes are also omitted rather than granting access Phoenix cannot prove from this file.
+    /// </summary>
+    private const int MaxInternalsVisibleToOperations = 4096;
+
+    private static bool HasClosedInternalsVisibleToAuthority(XElement root, bool isSdk,
+        IReadOnlyCollection<(string Package, string Version)> packageRefs)
+    {
+        // This is deliberately not an import evaluator. A single standard root SDK plus local XML
+        // is the only closed shape. Explicit/custom SDK imports and package build assets remain
+        // useful as modeled candidates, but their responses must disclose project_model_unproven.
+        string[] rootSdks = (root.Attribute("Sdk")?.Value ?? "")
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        bool standardRootSdk = rootSdks.Length == 1 &&
+            (rootSdks[0].Equals("Microsoft.NET.Sdk", StringComparison.OrdinalIgnoreCase) ||
+             rootSdks[0].StartsWith("Microsoft.NET.Sdk/", StringComparison.OrdinalIgnoreCase));
+        return isSdk && standardRootSdk && packageRefs.Count == 0 &&
+               !root.Elements().Any(element => element.Name.LocalName == "Sdk") &&
+               !root.Descendants().Any(element => element.Name.LocalName == "Import");
+    }
+
+    private static List<string>? ParseGeneratedInternalsVisibleTo(XElement root, bool isSdk)
+    {
+        // A legacy project can use an item with this name for arbitrary custom targets. Require
+        // the implicit SDK import shape that owns Microsoft.NET.GenerateAssemblyInfo.targets.
+        bool hasRootSdk = root.Attribute("Sdk") is not null ||
+                          root.Elements().Any(element => element.Name.LocalName == "Sdk");
+        if (!isSdk || !hasRootSdk)
+        {
+            return null;
+        }
+
+        var assemblyInfo = EvaluateSdkBooleanProperty(root, "GenerateAssemblyInfo");
+        var ivtAttributes = EvaluateSdkBooleanProperty(root,
+            "GenerateInternalsVisibleToAttributes");
+        if (!assemblyInfo.Complete || !ivtAttributes.Complete ||
+            HasNonEmptyOrUnevaluatedProjectProperty(root, "PublicKey") ||
+            HasNonEmptyOrUnevaluatedProjectProperty(root, "AssemblyOriginatorKeyFile") ||
+            HasEnabledOrUnevaluatedBooleanProjectProperty(root, "SignAssembly") ||
+            HasEnabledOrUnevaluatedBooleanProjectProperty(root, "PublicSign") ||
+            HasInternalsVisibleToItemDefinitionKey(root))
+        {
+            return null;
+        }
+        if (!assemblyInfo.Enabled || !ivtAttributes.Enabled)
+        {
+            return null; // the SDK target is disabled in this project.
+        }
+
+        var friends = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int operations = 0;
+        foreach (XElement item in root.Elements()
+                     .Where(element => element.Name.LocalName == "ItemGroup")
+                     .SelectMany(group => group.Elements()
+                         .Where(element => MsBuildNameEquals(
+                             element.Name.LocalName, "InternalsVisibleTo"))))
+        {
+            if (++operations > MaxInternalsVisibleToOperations) return null;
+            string? include = item.Attribute("Include")?.Value;
+            string? remove = item.Attribute("Remove")?.Value;
+            string? update = item.Attribute("Update")?.Value;
+            int operationCount = (include is null ? 0 : 1) + (remove is null ? 0 : 1) +
+                                 (update is null ? 0 : 1);
+            if (operationCount != 1) return null;
+
+            bool conditioned = IsConditionedOrTargetScoped(item);
+            if (conditioned)
+            {
+                // A conditional Include can safely be omitted. A conditional Remove/Update may
+                // revoke/key a grant that we would otherwise synthesize, so the model is unknown.
+                if (remove is not null || update is not null) return null;
+                continue;
+            }
+
+            bool hasKeyMetadata = HasItemMetadata(item, "Key") ||
+                                  HasItemMetadata(item, "PublicKey");
+            if (include is not null)
+            {
+                // Keyed IVTs are valid build inputs, but Phoenix cannot prove the consuming
+                // project's signing identity. Omitting the one item is the safe direction.
+                if (hasKeyMetadata) continue;
+                HashSet<string>? excluded = ParseLiteralAssemblyNames(
+                    item.Attribute("Exclude")?.Value, allowMissing: true);
+                if (excluded is null && item.Attribute("Exclude") is not null) continue;
+
+                HashSet<string>? included = ParseLiteralAssemblyNames(include, allowMissing: false);
+                if (included is null) continue;
+                foreach (string friend in included)
+                {
+                    if (excluded?.Contains(friend) == true) continue;
+                    friends.Add(friend);
+                }
+                continue;
+            }
+
+            string operation = remove ?? update!;
+            HashSet<string>? affected = ParseLiteralAssemblyNames(operation, allowMissing: false);
+            if (affected is null) return null;
+            if (remove is not null || hasKeyMetadata)
+            {
+                friends.ExceptWith(affected);
+            }
+        }
+
+        // Target/Choose-scoped Includes are safe to omit. A hidden Remove/Update is not: it can
+        // invalidate a direct item above for a configuration we did not evaluate.
+        foreach (XElement nested in root.Descendants().Where(element =>
+                     MsBuildNameEquals(element.Name.LocalName, "InternalsVisibleTo") &&
+                     element.Parent?.Name.LocalName != "ItemGroup" ||
+                     MsBuildNameEquals(element.Name.LocalName, "InternalsVisibleTo") &&
+                     element.Parent?.Parent != root))
+        {
+            if (nested.Attribute("Remove") is not null || nested.Attribute("Update") is not null)
+                return null;
+        }
+
+        return friends.Count > 0
+            ? friends.OrderBy(friend => friend, StringComparer.OrdinalIgnoreCase).ToList()
+            : null;
+    }
+
+    private static (bool Enabled, bool Complete) EvaluateSdkBooleanProperty(
+        XElement root, string propertyName)
+    {
+        bool enabled = true; // Microsoft.NET.GenerateAssemblyInfo.targets default.
+        foreach (XElement property in root.Descendants().Where(element =>
+                     MsBuildNameEquals(element.Name.LocalName, propertyName) &&
+                     element.Parent?.Name.LocalName == "PropertyGroup"))
+        {
+            bool direct = property.Parent?.Name.LocalName == "PropertyGroup" &&
+                          property.Parent.Parent == root;
+            string value = property.Value.Trim();
+            if (!direct || IsConditionedOrTargetScoped(property) ||
+                ContainsMsBuildExpression(value) || !bool.TryParse(value, out enabled))
+            {
+                return (false, false);
+            }
+        }
+        return (enabled, true);
+    }
+
+    private static bool HasNonEmptyOrUnevaluatedProjectProperty(XElement root, string propertyName)
+    {
+        foreach (XElement property in root.Descendants().Where(element =>
+                     MsBuildNameEquals(element.Name.LocalName, propertyName) &&
+                     element.Parent?.Name.LocalName == "PropertyGroup"))
+        {
+            bool direct = property.Parent?.Name.LocalName == "PropertyGroup" &&
+                          property.Parent.Parent == root;
+            string value = property.Value.Trim();
+            if (!direct || IsConditionedOrTargetScoped(property) ||
+                ContainsMsBuildExpression(value) || value.Length > 0)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool HasEnabledOrUnevaluatedBooleanProjectProperty(
+        XElement root, string propertyName)
+    {
+        foreach (XElement property in root.Descendants().Where(element =>
+                     MsBuildNameEquals(element.Name.LocalName, propertyName) &&
+                     element.Parent?.Name.LocalName == "PropertyGroup"))
+        {
+            bool direct = property.Parent?.Parent == root;
+            string value = property.Value.Trim();
+            if (!direct || IsConditionedOrTargetScoped(property) ||
+                ContainsMsBuildExpression(value) || !bool.TryParse(value, out bool enabled) ||
+                enabled)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool HasInternalsVisibleToItemDefinitionKey(XElement root) =>
+        root.Descendants().Any(item =>
+            MsBuildNameEquals(item.Name.LocalName, "InternalsVisibleTo") &&
+            item.Ancestors().Any(ancestor => ancestor.Name.LocalName == "ItemDefinitionGroup") &&
+            (HasItemMetadata(item, "Key") || HasItemMetadata(item, "PublicKey")));
+
+    private static bool HasItemMetadata(XElement item, string name) =>
+        item.Attributes().Any(attribute => MsBuildNameEquals(attribute.Name.LocalName, name)) ||
+        item.Elements().Any(element => MsBuildNameEquals(element.Name.LocalName, name));
+
+    private static bool MsBuildNameEquals(string left, string right) =>
+        string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+
+    private static HashSet<string>? ParseLiteralAssemblyNames(string? value, bool allowMissing)
+    {
+        if (value is null) return allowMissing
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : null;
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string spec in value.Split(';',
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (ContainsMsBuildExpression(spec) || spec.IndexOfAny(['*', '?', ',']) >= 0)
+                return null;
+            result.Add(spec);
+        }
+        return result.Count > 0 ? result : null;
+    }
 
     private static bool ContainsMsBuildExpression(string value) =>
         value.Contains("$(", StringComparison.Ordinal) ||
