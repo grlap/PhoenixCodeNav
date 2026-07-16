@@ -6,15 +6,17 @@ using CodeNav.WorkspaceGen;
 namespace CodeNav.Tests;
 
 /// <summary>
-/// Builds one small synthetic workspace + index for the whole test class.
+/// Builds one small synthetic workspace + index for either an exclusive mutable class or the
+/// shared read-only functional collection.
 /// </summary>
-public sealed class IndexFixture : IDisposable
+public class IndexFixture : IDisposable
 {
     public string Root { get; }
     public string DbPath { get; }
 
     private readonly object _toolsGate = new();
     private IndexManager? _manager;
+    private CodeNav.Core.Semantic.SemanticService? _semantic;
     private NavigationTools? _tools;
 
     public IndexFixture()
@@ -34,30 +36,53 @@ public sealed class IndexFixture : IDisposable
     /// read-only follower mode, where fixture refreshes cannot run. Lazy so classes that
     /// only use Open() (direct read connections need no lease) never attach a live watcher.
     /// </summary>
+    private void EnsureSharedHost()
+    {
+        lock (_toolsGate)
+        {
+            if (_tools is not null) return;
+
+            var manager = new IndexManager(Root, DbPath);
+            manager.Start();
+            for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
+            Assert.True(manager.IsQueryable, "index did not become queryable");
+            _manager = manager;
+            _semantic = new CodeNav.Core.Semantic.SemanticService(manager);
+            _tools = new NavigationTools(manager, _semantic);
+        }
+    }
+
+    public IndexManager SharedManager
+    {
+        get { EnsureSharedHost(); return _manager!; }
+    }
+
+    public CodeNav.Core.Semantic.SemanticService SharedSemantic
+    {
+        get { EnsureSharedHost(); return _semantic!; }
+    }
+
     public NavigationTools SharedTools
     {
-        get
-        {
-            lock (_toolsGate)
-            {
-                if (_tools is not null) return _tools;
-                var manager = new IndexManager(Root, DbPath);
-                manager.Start();
-                for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-                Assert.True(manager.IsQueryable, "index did not become queryable");
-                _manager = manager;
-                _tools = new NavigationTools(manager, new CodeNav.Core.Semantic.SemanticService(manager));
-                return _tools;
-            }
-        }
+        get { EnsureSharedHost(); return _tools!; }
     }
 
     public void Dispose()
     {
+        _semantic?.Dispose();
         _manager?.Dispose(); // releases the store, pooled connections, and the ownership lease
         TestWorkspaceCleanup.ClearIndexPools(Root);
         try { Directory.Delete(Root, recursive: true); } catch { /* leave temp on Windows lock */ }
     }
+}
+
+public sealed class SharedIndexFixture : IndexFixture
+{
+    private static int _instancesCreated;
+
+    public SharedIndexFixture() => Interlocked.Increment(ref _instancesCreated);
+
+    public static int InstancesCreated => Volatile.Read(ref _instancesCreated);
 }
 
 public class IndexEndToEndTests : IClassFixture<IndexFixture>
@@ -292,14 +317,15 @@ public class IndexEndToEndTests : IClassFixture<IndexFixture>
     }
 }
 
-public class McpToolLayerTests : IClassFixture<IndexFixture>
+[Collection(SharedIndexCollection.Name)]
+public class McpToolLayerTests
 {
     private readonly IndexFixture _fx;
 
-    public McpToolLayerTests(IndexFixture fx) => _fx = fx;
+    public McpToolLayerTests(SharedIndexFixture fx) => _fx = fx;
 
-    // One shared writer per class fixture: a manager per test (never disposed by xUnit) would
-    // leave later tests as read-only followers, unable to perform fixture refreshes.
+    // One shared writer for the functional collection; individual tests never attach competing
+    // managers to this immutable index.
     private NavigationTools Tools() => _fx.SharedTools;
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;

@@ -180,7 +180,12 @@ read-only and does not promote itself; restart it after the writer exits if it m
 ## Development
 
 ```text
-dotnet test tests/CodeNav.Tests                                  # full suite
+dotnet test tests/CodeNav.Tests                                  # fast unit + contract checks
+dotnet test tests/CodeNav.IndexTests                             # index + semantic functionality
+dotnet test tests/CodeNav.GitTests                               # Git/worktree manipulation
+dotnet test tests/CodeNav.WatcherTests                           # watcher timing
+dotnet test tests/CodeNav.LifecycleTests                         # leases, followers, process lifecycle
+dotnet test PhoenixCodeNav.sln                                   # complete gate
 dotnet run --project src/CodeNav.WorkspaceGen -- --out C:/temp/acme-2k \
     --projects 2000 --density 6 --clean                          # synthetic enterprise repo
 dotnet run --project src/CodeNav.Bench -c Release -- --workspace C:/temp/acme-2k --rebuild
@@ -190,7 +195,8 @@ bash scripts/smoke-mcp.sh C:/temp/acme-2k                        # stdio protoco
 
 Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.Mcp` (server, ships as
 `PhoenixCodeNav.Mcp.exe`), `CodeNav.WorkspaceGen` (synthetic workspace generator),
-`CodeNav.Bench` (benchmarks vs the brief's latency targets), `CodeNav.Tests`.
+`CodeNav.Bench` (benchmarks vs the brief's latency targets), plus focused unit, index, Git,
+watcher, and lifecycle test projects under `tests/`.
 
 ## Known limitations (v1)
 

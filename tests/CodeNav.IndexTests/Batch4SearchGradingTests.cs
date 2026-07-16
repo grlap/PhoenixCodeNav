@@ -77,10 +77,11 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             "    }\n}\n");
         try
         {
-            using (var store = new IndexStore(_fx.DbPath, createNew: false))
-            {
-                DeltaRefresher.Refresh(store, _fx.Root, new[] { rel });
-            }
+            IndexManagerTestSupport.RefreshAndWait(
+                _manager,
+                new[] { rel },
+                q => q.ContentByPath(rel)?.Contains("ZebraBeta", StringComparison.Ordinal) == true,
+                "the added grading fixture was not indexed");
 
             using var q = _manager.OpenQueries();
             var res = q.SearchTextGraded("ZebraAlpha ZebraBeta", 20, null, 300, 0, "auto");
@@ -108,8 +109,11 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         finally
         {
             File.Delete(full);
-            using var store = new IndexStore(_fx.DbPath, createNew: false);
-            DeltaRefresher.Refresh(store, _fx.Root, new[] { rel });
+            IndexManagerTestSupport.RefreshAndWait(
+                _manager,
+                new[] { rel },
+                q => q.ContentByPath(rel) is null,
+                "the deleted grading fixture remained indexed");
         }
     }
 
@@ -131,10 +135,11 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             "}\n");
         try
         {
-            using (var store = new IndexStore(_fx.DbPath, createNew: false))
-            {
-                DeltaRefresher.Refresh(store, _fx.Root, new[] { rel });
-            }
+            IndexManagerTestSupport.RefreshAndWait(
+                _manager,
+                new[] { rel },
+                q => q.ContentByPath(rel)?.Contains("ZebItem", StringComparison.Ordinal) == true,
+                "the substring grading fixture was not indexed");
             using var q = _manager.OpenQueries();
             var res = q.SearchTextGraded("Zeb ZebItem", 20, null, 300, 0, "auto");
             // No line contains BOTH whole tokens ('Zeb' as a token appears only on the standalone line).
@@ -146,8 +151,11 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         finally
         {
             File.Delete(full);
-            using var store = new IndexStore(_fx.DbPath, createNew: false);
-            DeltaRefresher.Refresh(store, _fx.Root, new[] { rel });
+            IndexManagerTestSupport.RefreshAndWait(
+                _manager,
+                new[] { rel },
+                q => q.ContentByPath(rel) is null,
+                "the deleted substring fixture remained indexed");
         }
     }
 

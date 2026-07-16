@@ -8,6 +8,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="CodeNav.Tests" />
+    <InternalsVisibleTo Include="CodeNav.IndexTests" />
+    <InternalsVisibleTo Include="CodeNav.GitTests" />
+    <InternalsVisibleTo Include="CodeNav.WatcherTests" />
+    <InternalsVisibleTo Include="CodeNav.LifecycleTests" />
   </ItemGroup>
 
   <ItemGroup>

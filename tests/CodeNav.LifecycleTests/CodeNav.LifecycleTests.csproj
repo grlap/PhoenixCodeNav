@@ -1,10 +1,12 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <AssemblyName>CodeNav.LifecycleTests</AssemblyName>
+    <RootNamespace>CodeNav.Tests</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,11 +22,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CodeNav.Core\CodeNav.Core.csproj" />
+    <ProjectReference Include="..\..\src\CodeNav.Mcp\CodeNav.Mcp.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="..\TestSupport\SemanticRetry.cs" Link="TestSupport\SemanticRetry.cs" />
-    <Compile Include="..\TestSupport\TestTelemetryBroker.cs" Link="TestSupport\TestTelemetryBroker.cs" />
     <Compile Include="..\TestSupport\TestWorkspaceCleanup.cs" Link="TestSupport\TestWorkspaceCleanup.cs" />
   </ItemGroup>
 

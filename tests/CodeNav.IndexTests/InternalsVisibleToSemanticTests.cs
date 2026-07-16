@@ -69,7 +69,7 @@ public sealed class InternalsVisibleToSemanticTests
         }
         finally
         {
-            Batch42Support.Cleanup(root);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -219,7 +219,7 @@ public sealed class InternalsVisibleToSemanticTests
         }
         finally
         {
-            Batch42Support.Cleanup(root);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -261,7 +261,7 @@ public sealed class InternalsVisibleToSemanticTests
         }
         finally
         {
-            Batch42Support.Cleanup(root);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -341,7 +341,7 @@ public sealed class InternalsVisibleToSemanticTests
         }
         finally
         {
-            Batch42Support.Cleanup(root);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 

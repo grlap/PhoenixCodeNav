@@ -80,7 +80,8 @@ public sealed class IndexManager : IDisposable
     // shape-derivation mislabeled tool-requested batches as watcher_batch and git fallback
     // sweeps as full_sweep. Producers label at the source; the pump falls back to shape.
     private sealed record RefreshRequest(IReadOnlyCollection<string>? Paths, string? RecordCommit = null,
-        bool FullRebuild = false, string? Reason = null);
+        bool FullRebuild = false, string? Reason = null,
+        TaskCompletionSource? CompletionForTest = null);
 
     private readonly string _workspaceRoot;
     private readonly string _dbPath;
@@ -1003,7 +1004,11 @@ public sealed class IndexManager : IDisposable
                 }
                 continue;
             }
-            if (_store is null) continue;
+            if (_store is null)
+            {
+                req.CompletionForTest?.TrySetResult();
+                continue;
+            }
             string previous = _state;
             // x5ls.1.2: one outcome frame per refresh batch. The reason comes from the
             // PRODUCER's explicit label (review B2: shape-derivation mislabeled tool requests
@@ -1061,6 +1066,7 @@ public sealed class IndexManager : IDisposable
             {
                 EndIndexMutation();
             }
+            req.CompletionForTest?.TrySetResult();
         }
     }
 
@@ -1220,6 +1226,22 @@ public sealed class IndexManager : IDisposable
     {
         if (!IsWriter || _disposed) return false;
         return _refreshQueue.Writer.TryWrite(new RefreshRequest(paths, Reason: "explicit"));
+    }
+
+    /// <summary>Queues a targeted refresh and exposes completion of that exact pump request to
+    /// test assemblies. Production callers use <see cref="RequestRefresh"/> and observe the
+    /// public freshness surface; tests that mutate a live manager need a FIFO barrier that cannot
+    /// be confused with an unrelated applied-delta counter increment.</summary>
+    internal bool RequestRefreshForTest(IReadOnlyCollection<string>? paths, out Task completion)
+    {
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        completion = signal.Task;
+        if (!IsWriter || _disposed) return false;
+        if (_refreshQueue.Writer.TryWrite(new RefreshRequest(paths, Reason: "explicit",
+                CompletionForTest: signal)))
+            return true;
+        signal.TrySetResult();
+        return false;
     }
 
     /// <summary>Queues a REBUILD-FROM-SCRATCH (tky): delete the db, run a full build, reopen.

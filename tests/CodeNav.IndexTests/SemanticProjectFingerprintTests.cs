@@ -85,7 +85,7 @@ public sealed class SemanticProjectFingerprintTests
         }
         finally
         {
-            Batch42Support.Cleanup(root);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 

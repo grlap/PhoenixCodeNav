@@ -14,23 +14,14 @@ namespace CodeNav.Tests;
 /// resolved on page 1 on later pages — re-running the exact->prefix->substring ladder from a non-zero
 /// offset returns an empty page because the fallback is gated to offset==0.
 /// </summary>
-public class Batch13PaginationTests : IClassFixture<IndexFixture>, IDisposable
+[Collection(SharedIndexCollection.Name)]
+public class Batch13PaginationTests
 {
-    private readonly IndexManager _manager;
-    private readonly SemanticService _semantic;
+    private readonly NavigationTools _tools;
 
-    public Batch13PaginationTests(IndexFixture fx)
+    public Batch13PaginationTests(SharedIndexFixture fx)
     {
-        _manager = new IndexManager(fx.Root, fx.DbPath);
-        _manager.Start();
-        for (int i = 0; i < 600 && !_manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-        _semantic = new SemanticService(_manager);
-    }
-
-    public void Dispose()
-    {
-        _semantic.Dispose();
-        _manager.Dispose();
+        _tools = fx.SharedTools;
     }
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
@@ -98,14 +89,13 @@ public class Batch13PaginationTests : IClassFixture<IndexFixture>, IDisposable
     [Fact]
     public void SearchSymbolAutoPaginationContinuesResolvedMode()
     {
-        var tools = new NavigationTools(_manager, _semantic);
-        var p1 = Parse(tools.SearchSymbol("I", match: "auto", limit: 2));
+        var p1 = Parse(_tools.SearchSymbol("I", match: "auto", limit: 2));
         // Fixture invariant: many 'I'-prefixed interfaces, no symbol named exactly "I" -> auto resolves prefix.
         Assert.Equal("prefix", p1.GetProperty("matchMode").GetString());
         string? cursor = p1.GetProperty("nextCursor").GetString();
         Assert.NotNull(cursor); // more interface matches exist beyond page 1
 
-        var p2 = Parse(tools.SearchSymbol("I", match: "auto", limit: 2, cursor: cursor));
+        var p2 = Parse(_tools.SearchSymbol("I", match: "auto", limit: 2, cursor: cursor));
         Assert.Equal("prefix", p2.GetProperty("matchMode").GetString()); // continued, not restarted at exact
         Assert.True(p2.GetProperty("symbols").GetArrayLength() > 0, "page 2 empty — auto ladder restarted (bug cli)");
     }
@@ -115,8 +105,7 @@ public class Batch13PaginationTests : IClassFixture<IndexFixture>, IDisposable
     [Fact]
     public void SearchSymbolPaginationVisitsEveryResultOnce()
     {
-        var tools = new NavigationTools(_manager, _semantic);
-        var all = Parse(tools.SearchSymbol("I", match: "prefix", limit: 100));
+        var all = Parse(_tools.SearchSymbol("I", match: "prefix", limit: 100));
         if (all.TryGetProperty("nextCursor", out _)) return; // baseline itself paged/truncated — no clean total
         int total = all.GetProperty("symbols").GetArrayLength();
         if (total < 4) return; // need enough to span several pages
@@ -125,7 +114,7 @@ public class Batch13PaginationTests : IClassFixture<IndexFixture>, IDisposable
         string? cursor = null;
         for (int guard = 0; guard <= total + 5; guard++)
         {
-            var page = Parse(tools.SearchSymbol("I", match: "prefix", limit: 3, cursor: cursor));
+            var page = Parse(_tools.SearchSymbol("I", match: "prefix", limit: 3, cursor: cursor));
             seen += page.GetProperty("symbols").GetArrayLength();
             if (!page.TryGetProperty("nextCursor", out var nc) || nc.ValueKind == JsonValueKind.Null) break;
             cursor = nc.GetString();

@@ -5,25 +5,16 @@ using CodeNav.Mcp;
 
 namespace CodeNav.Tests;
 
-public class SemanticTests : IClassFixture<IndexFixture>, IDisposable
+[Collection(SharedIndexCollection.Name)]
+public class SemanticTests
 {
-    private readonly IndexFixture _fx;
     private readonly IndexManager _manager;
     private readonly SemanticService _semantic;
 
-    public SemanticTests(IndexFixture fx)
+    public SemanticTests(SharedIndexFixture fx)
     {
-        _fx = fx;
-        _manager = new IndexManager(_fx.Root, _fx.DbPath);
-        _manager.Start();
-        for (int i = 0; i < 600 && !_manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-        _semantic = new SemanticService(_manager);
-    }
-
-    public void Dispose()
-    {
-        _semantic.Dispose();
-        _manager.Dispose();
+        _manager = fx.SharedManager;
+        _semantic = fx.SharedSemantic;
     }
 
     [Fact]

@@ -154,6 +154,41 @@ public class Batch40Tests
         finally { Cleanup(root); }
     }
 
+    [Fact]
+    public async Task ExactRefreshCompletionHandlesWatcherWinningBeforeExplicitRequest()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-40-watcher-wins").FullName;
+        try
+        {
+            WriteProgressWorkspace(root);
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var m = new IndexManager(root, dbPath);
+            m.Start();
+            Assert.True(WaitUntil(() => m.IsQueryable, 20000));
+
+            // Drain startup work first, then let the watcher apply the edit before the helper
+            // queues its explicit request. That request is hash-identical and therefore must
+            // complete without relying on pendingProcessed to move.
+            Assert.True(m.RequestRefreshForTest(Array.Empty<string>(), out Task startupBarrier));
+            await startupBarrier.WaitAsync(TimeSpan.FromSeconds(20));
+            File.AppendAllText(Path.Combine(root, "Lab", "Alpha.cs"),
+                "\nnamespace Lab { public class WatcherWon40 { } }");
+            Assert.True(WaitUntil(() =>
+            {
+                using var q = m.OpenQueries();
+                return q.SearchSymbols("WatcherWon40", "exact", null, 2).Count > 0;
+            }, 20000), "watcher did not index the edit before the explicit request");
+
+            long processedAfterWatcher = m.Health().PendingProcessed;
+            IndexManagerTestSupport.RefreshAndWait(m, new[] { "Lab/Alpha.cs" },
+                q => q.SearchSymbols("WatcherWon40", "exact", null, 2).Count > 0,
+                "hash-identical explicit request did not complete after the watcher won");
+            Assert.Equal(processedAfterWatcher, m.Health().PendingProcessed);
+        }
+        finally { Cleanup(root); }
+    }
+
     // ---------------------------------------------------------------- fixture
 
     private static void WriteProgressWorkspace(string root)

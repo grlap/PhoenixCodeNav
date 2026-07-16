@@ -81,10 +81,11 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
             "public static void ReloadMarkerNoop() { }\n\n        public static void NotNull"));
         try
         {
-            using (var store = new IndexStore(_fx.DbPath, createNew: false))
-            {
-                DeltaRefresher.Refresh(store, _fx.Root, new[] { guard.FilePath });
-            }
+            IndexManagerTestSupport.RefreshAndWait(
+                _manager,
+                new[] { guard.FilePath },
+                q => q.ContentByPath(guard.FilePath)?.Contains("ReloadMarkerNoop", StringComparison.Ordinal) == true,
+                "the dependency edit was not indexed");
 
             var (after, r2) = await ReferencesWithRetry(guard.FilePath, guard.StartLine); // n7ly
             Assert.True(after is not null, $"second references failed: {r2}");
@@ -99,8 +100,11 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
         finally
         {
             File.WriteAllText(full, original);
-            using var store = new IndexStore(_fx.DbPath, createNew: false);
-            DeltaRefresher.Refresh(store, _fx.Root, new[] { guard.FilePath });
+            IndexManagerTestSupport.RefreshAndWait(
+                _manager,
+                new[] { guard.FilePath },
+                q => q.ContentByPath(guard.FilePath)?.Contains("ReloadMarkerNoop", StringComparison.Ordinal) == false,
+                "the dependency fixture was not restored");
         }
     }
 
@@ -136,10 +140,11 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
                 "public static void ReloadMarker2() { }\n\n        public static void NotNull"));
             try
             {
-                using (var store = new IndexStore(_fx.DbPath, createNew: false))
-                {
-                    DeltaRefresher.Refresh(store, _fx.Root, new[] { guard.FilePath });
-                }
+                IndexManagerTestSupport.RefreshAndWait(
+                    _manager,
+                    new[] { guard.FilePath },
+                    q => q.ContentByPath(guard.FilePath)?.Contains("ReloadMarker2", StringComparison.Ordinal) == true,
+                    "the dependent reload edit was not indexed");
                 var (sol2, _) = await workspace.EnsureLoadedAsync(set, CancellationToken.None);
                 Assert.True(await DependentSeesGuard(sol2, dependent),
                     "dependent lost visibility of Guard after Platform.Common reload (hja)");
@@ -147,8 +152,11 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
             finally
             {
                 File.WriteAllText(full, original);
-                using var store = new IndexStore(_fx.DbPath, createNew: false);
-                DeltaRefresher.Refresh(store, _fx.Root, new[] { guard.FilePath });
+                IndexManagerTestSupport.RefreshAndWait(
+                    _manager,
+                    new[] { guard.FilePath },
+                    q => q.ContentByPath(guard.FilePath)?.Contains("ReloadMarker2", StringComparison.Ordinal) == false,
+                    "the dependent reload fixture was not restored");
             }
         }
         finally

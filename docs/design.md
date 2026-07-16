@@ -22,8 +22,16 @@ PhoenixCodeNav.sln
 │   └── Responses.cs          # JSON policy, response budgets, the Meta envelope
 ├── src/CodeNav.WorkspaceGen/  # deterministic synthetic 2k-project workspace generator (for tests/benchmarks)
 ├── src/CodeNav.Bench/         # cold-build + warm-query benchmarks vs the latency targets
-└── tests/CodeNav.Tests/       # 76 tests
+├── tests/CodeNav.Tests/       # fast unit and contract checks
+├── tests/CodeNav.IndexTests/  # index/semantic behavior; shared immutable functional index
+├── tests/CodeNav.GitTests/    # isolated repositories, worktrees, diffs, and Git safety
+├── tests/CodeNav.WatcherTests/ # isolated watcher timing checks
+└── tests/CodeNav.LifecycleTests/ # writer leases, followers, and process lifecycle
 ```
+
+The functional index collection builds its standard generated workspace once and reuses it
+for read-only behavior checks. Tests that mutate files, SQLite state, Git repositories, or
+watchers keep exclusive workspaces and writer ownership.
 
 `CodeNav.Core` has no dependency on the MCP SDK — it is a plain library that could back a
 different front end. `CodeNav.Mcp` is a thin protocol/shaping layer over it.

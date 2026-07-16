@@ -11,11 +11,12 @@ namespace CodeNav.Tests;
 /// on an exact declaration without re-resolving a name or an overload. Uses the shared 40-project
 /// fixture (Guard is a stable single class).
 /// </summary>
-public class Batch8SymbolIdTests : IClassFixture<IndexFixture>
+[Collection(SharedIndexCollection.Name)]
+public class Batch8SymbolIdTests
 {
     private readonly IndexFixture _fx;
 
-    public Batch8SymbolIdTests(IndexFixture fx) => _fx = fx;
+    public Batch8SymbolIdTests(SharedIndexFixture fx) => _fx = fx;
 
     // One shared writer per class fixture: a manager per test (never disposed by xUnit) would
     // leave later tests as read-only followers, unable to perform fixture refreshes.

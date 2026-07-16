@@ -47,17 +47,21 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
         File.WriteAllText(full, content);
         try
         {
-            using (var store = new IndexStore(_fx.DbPath, createNew: false))
-            {
-                DeltaRefresher.Refresh(store, _fx.Root, new[] { rel });
-            }
+            IndexManagerTestSupport.RefreshAndWait(
+                _manager,
+                new[] { rel },
+                q => q.ContentByPath(rel) == content,
+                $"the temporary fixture {rel} was not indexed");
             body(rel);
         }
         finally
         {
             File.Delete(full);
-            using var store = new IndexStore(_fx.DbPath, createNew: false);
-            DeltaRefresher.Refresh(store, _fx.Root, new[] { rel });
+            IndexManagerTestSupport.RefreshAndWait(
+                _manager,
+                new[] { rel },
+                q => q.ContentByPath(rel) is null,
+                $"the deleted temporary fixture {rel} remained indexed");
         }
     }
 
@@ -320,10 +324,13 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
             "namespace Zeb.Part { public partial class ZebHost { public partial class ZebPartialType { } } }\n");
         try
         {
-            using (var store = new IndexStore(_fx.DbPath, createNew: false))
-            {
-                DeltaRefresher.Refresh(store, _fx.Root, new[] { rel1, rel2, rel3 });
-            }
+            IndexManagerTestSupport.RefreshAndWait(
+                _manager,
+                new[] { rel1, rel2, rel3 },
+                q => q.ContentByPath(rel1) is not null &&
+                     q.ContentByPath(rel2) is not null &&
+                     q.ContentByPath(rel3) is not null,
+                "the partial-type fixtures were not indexed");
 
             var tools = Tools();
             // Prove the decoy file actually indexed — otherwise the DoesNotContain below is vacuous.
@@ -345,8 +352,13 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
             File.Delete(full1);
             File.Delete(full2);
             File.Delete(full3);
-            using var store = new IndexStore(_fx.DbPath, createNew: false);
-            DeltaRefresher.Refresh(store, _fx.Root, new[] { rel1, rel2, rel3 });
+            IndexManagerTestSupport.RefreshAndWait(
+                _manager,
+                new[] { rel1, rel2, rel3 },
+                q => q.ContentByPath(rel1) is null &&
+                     q.ContentByPath(rel2) is null &&
+                     q.ContentByPath(rel3) is null,
+                "the deleted partial-type fixtures remained indexed");
         }
     }
 

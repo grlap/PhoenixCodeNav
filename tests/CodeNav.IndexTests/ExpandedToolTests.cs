@@ -5,27 +5,18 @@ using CodeNav.Mcp;
 
 namespace CodeNav.Tests;
 
-public class ExpandedToolTests : IClassFixture<IndexFixture>, IDisposable
+[Collection(SharedIndexCollection.Name)]
+public class ExpandedToolTests
 {
-    private readonly IndexFixture _fx;
     private readonly IndexManager _manager;
     private readonly SemanticService _semantic;
     private readonly NavigationTools _tools;
 
-    public ExpandedToolTests(IndexFixture fx)
+    public ExpandedToolTests(SharedIndexFixture fx)
     {
-        _fx = fx;
-        _manager = new IndexManager(_fx.Root, _fx.DbPath);
-        _manager.Start();
-        for (int i = 0; i < 600 && !_manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-        _semantic = new SemanticService(_manager);
-        _tools = new NavigationTools(_manager, _semantic);
-    }
-
-    public void Dispose()
-    {
-        _semantic.Dispose();
-        _manager.Dispose();
+        _manager = fx.SharedManager;
+        _semantic = fx.SharedSemantic;
+        _tools = fx.SharedTools;
     }
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
