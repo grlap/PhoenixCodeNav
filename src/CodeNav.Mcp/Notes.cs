@@ -23,6 +23,7 @@ internal static class NoteIds
     public const string ReviewSymbolCountCap = "review.symbol_count_cap";
     public const string ReviewByteBudget = "review.byte_budget";
     public const string ReviewChangedFilesCap = "review.changed_files_cap";
+    public const string ReviewUnsupportedLanguageFiles = "review.unsupported_language_files";
     public const string ReviewDeletedFilesCap = "review.deleted_files_cap";
     public const string ReviewFormerTypesCap = "review.former_types_cap";
     public const string ReviewFormerSymbolsCap = "review.former_symbols_cap";

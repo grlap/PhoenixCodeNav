@@ -10,6 +10,9 @@ public static class FileClassifier
     private static readonly string[] GeneratedNameSuffixes =
     {
         ".g.cs", ".g.i.cs", ".designer.cs", ".generated.cs", ".AssemblyAttributes.cs",
+        ".g.fs", ".g.i.fs", ".designer.fs", ".generated.fs", ".AssemblyAttributes.fs",
+        ".g.fsi", ".g.i.fsi", ".designer.fsi", ".generated.fsi",
+        ".g.fsx", ".g.i.fsx", ".designer.fsx", ".generated.fsx",
     };
 
     public static bool LooksGenerated(string relPath, string content)

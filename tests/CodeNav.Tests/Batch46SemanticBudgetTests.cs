@@ -137,13 +137,29 @@ public class Batch46SemanticBudgetTests
             using var semantic = new SemanticService(manager);
             if (!semantic.FrameworkRefsAvailable) return;
 
-            var (result, reason) = await semantic.ImplementationsAsync(
-                target.FilePath,
-                target.StartLine,
-                column: null,
-                nameHint: target.Name,
-                maxProjects: SemanticService.DefaultCandidateProjectBudget,
-                timeoutMs: 120_000);
+            // n7ly: startup publishes queryability before its queued freshness sweep has
+            // necessarily completed. Under full-suite CPU pressure that sweep can hold the
+            // snapshot epoch beyond the bounded acquisition window, whose contract is retry.
+            // Retry only the two documented transient semantic states; a stable wrong result
+            // or any other failure reason still reaches the decisive assertions below.
+            SemanticImplementations? result = null;
+            string? reason = null;
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                (result, reason) = await semantic.ImplementationsAsync(
+                    target.FilePath,
+                    target.StartLine,
+                    column: null,
+                    nameHint: target.Name,
+                    maxProjects: SemanticService.DefaultCandidateProjectBudget,
+                    timeoutMs: 120_000);
+                if (result is not null ||
+                    reason is not ("index_snapshot_unavailable" or "cluster_cold_load"))
+                {
+                    break;
+                }
+                await Task.Delay(250);
+            }
 
             Assert.True(result is not null, $"semantic implementations failed: {reason}");
             Assert.False(result!.DeadlineExhausted);
@@ -189,6 +205,25 @@ public class Batch46SemanticBudgetTests
             JsonElement callers = Invoke(tools => tools.Callers(
                 name: "Run", maxProjects: 1, timeoutMs: 120_000));
             AssertPartial(callers);
+
+            using (var referenceSemantic = new SemanticService(manager))
+            {
+                var referenceTools = new NavigationTools(manager, referenceSemantic);
+                JsonElement references = SemanticRetry.ParseWithRetry(
+                    () => referenceTools.References(name: "Run", maxProjects: 1,
+                        timeoutMs: 120_000),
+                    json => json.TryGetProperty("partialReason", out JsonElement reason) &&
+                            (reason.GetString() ?? "").Contains(
+                                "candidate_cluster_bounded", StringComparison.Ordinal),
+                    "bounded reference census");
+                Assert.True(references.GetProperty("partial").GetBoolean());
+                Assert.True(references.GetProperty("totalIsLowerBound").GetBoolean());
+                Assert.StartsWith("at least ", references.GetProperty("summary").GetString());
+                Assert.Equal("indexed", references.GetProperty("meta")
+                    .GetProperty("confidence").GetString());
+                Assert.NotEmpty(references.GetProperty("skippedCandidateProjects")
+                    .EnumerateArray());
+            }
 
             JsonElement Invoke(Func<NavigationTools, string> invoke)
             {

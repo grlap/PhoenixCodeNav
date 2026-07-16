@@ -14,7 +14,9 @@ namespace CodeNav.Core.Indexing;
 /// and a removed file does not cascade to a shallower project — that is this nearest-root MODEL's
 /// rule (real MSBuild globs can reach deeper, but cascading would resurrect dead twins). Shared by
 /// IndexBuilder (initial build) and DeltaRefresher (project-phase rebuild).
-/// Does not own: parsing csproj (ProjectFileParser) or glob matching (MsBuildGlob).
+/// F# SDK projects have no invented default unless the project explicitly enables SDK default
+/// compile items; their ordered Compile items otherwise remain the ownership authority. Does not
+/// own: parsing project files (ProjectFileParser) or glob matching (MsBuildGlob).
 /// </summary>
 public static class CompileItemResolver
 {
@@ -23,19 +25,25 @@ public static class CompileItemResolver
         SqliteTransaction tx,
         IReadOnlyList<ParsedProject> projects,
         IReadOnlyDictionary<string, long> projectIds,
-        IReadOnlyDictionary<string, long> csFileIdsByPath)
+        IReadOnlyDictionary<string, long> sourceFileIdsByPath)
     {
         // Sorted path index so an include glob scans only the range under its literal prefix
         // instead of every file (a 2k-legacy-project monolith would otherwise pay P x F matches).
-        var sortedPaths = csFileIdsByPath.Keys.ToArray();
-        Array.Sort(sortedPaths, WorkspacePaths.FileSystemPathComparer);
+        var pathsByLanguage = sourceFileIdsByPath.Keys
+            .GroupBy(SourceLanguage, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key,
+                group => group.OrderBy(path => path, WorkspacePaths.FileSystemPathComparer).ToArray(),
+                StringComparer.Ordinal);
 
-        var defaultRoots = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
+        var defaultRoots = new Dictionary<(string Language, string Dir), long>(
+            new LanguageDirectoryComparer());
         var removesByPid = new Dictionary<long, List<string>>();
 
         foreach (var p in projects)
         {
             long pid = projectIds[p.RelPath];
+            pathsByLanguage.TryGetValue(p.Language, out string[]? projectLanguagePaths);
+            projectLanguagePaths ??= [];
             var removes = p.CompileRemoveGlobs;
             if (removes is { Count: > 0 }) removesByPid[pid] = removes;
 
@@ -49,7 +57,8 @@ public static class CompileItemResolver
             {
                 foreach (var item in items)
                 {
-                    if (csFileIdsByPath.TryGetValue(item, out long fid))
+                    if (SourceLanguage(item) == p.Language &&
+                        sourceFileIdsByPath.TryGetValue(item, out long fid))
                     {
                         store.InsertCompileItem(tx, pid, fid);
                     }
@@ -60,18 +69,21 @@ public static class CompileItemResolver
                 // SDK default items (or a failed-parse project, whose shape is unknowable): the
                 // project dir becomes a glob root; ownership resolved in the prefix pass below.
                 string dir = WorkspacePaths.ToGitPath(Path.GetDirectoryName(p.RelPath) ?? "");
-                defaultRoots[dir] = pid;
+                defaultRoots[(p.Language, dir)] = pid;
             }
 
             if (p.CompileIncludeGlobs is { } globs)
             {
                 foreach (var glob in globs)
                 {
-                    foreach (var path in CandidatePaths(sortedPaths, csFileIdsByPath, glob.Include))
+                    foreach (var path in CandidatePaths(projectLanguagePaths,
+                                 sourceFileIdsByPath, glob.Include))
                     {
-                        if (MsBuildGlob.IsMatch(path, glob.Include) && !IsRemoved(glob.Excludes, path))
+                        if (SourceLanguage(path) == p.Language &&
+                            MsBuildGlob.IsMatch(path, glob.Include) &&
+                            !IsRemoved(glob.Excludes, path))
                         {
-                            store.InsertCompileItem(tx, pid, csFileIdsByPath[path]);
+                            store.InsertCompileItem(tx, pid, sourceFileIdsByPath[path]);
                         }
                     }
                 }
@@ -80,8 +92,13 @@ public static class CompileItemResolver
 
         if (defaultRoots.Count == 0) return;
 
-        foreach (var (path, fid) in csFileIdsByPath)
+        foreach (var (path, fid) in sourceFileIdsByPath)
         {
+            // Language grouping is broader than SDK implicit ownership: F# projects may explicitly
+            // compile .fsi files, and .fsx remains searchable text, but the SDK default glob is
+            // **/*.fs only. Never turn an unlisted signature or script into a compiled item.
+            if (!IsImplicitDefaultSource(path)) continue;
+
             // Longest project-dir prefix wins (approximation of SDK globbing) — but a file the
             // winning project explicitly <Compile Remove>d is NOT compiled by it, and this nearest-
             // root model does not cascade to a shallower project (cascading would resurrect dead
@@ -90,9 +107,8 @@ public static class CompileItemResolver
             while (true)
             {
                 int slash = dir.LastIndexOf('/');
-                if (slash < 0) break;
-                dir = dir[..slash];
-                if (defaultRoots.TryGetValue(dir, out long pid))
+                dir = slash < 0 ? "" : dir[..slash];
+                if (defaultRoots.TryGetValue((SourceLanguage(path), dir), out long pid))
                 {
                     if (!removesByPid.TryGetValue(pid, out var removes) || !IsRemoved(removes, path))
                     {
@@ -100,8 +116,37 @@ public static class CompileItemResolver
                     }
                     break;
                 }
+                if (slash < 0) break;
             }
         }
+    }
+
+    private static string SourceLanguage(string path)
+    {
+        string extension = Path.GetExtension(path);
+        return extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".fsx", StringComparison.OrdinalIgnoreCase)
+            ? "fs"
+            : "cs";
+    }
+
+    internal static bool IsImplicitDefaultSource(string path)
+    {
+        string extension = Path.GetExtension(path);
+        return extension.Equals(".cs", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".fs", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class LanguageDirectoryComparer : IEqualityComparer<(string Language, string Dir)>
+    {
+        public bool Equals((string Language, string Dir) x, (string Language, string Dir) y) =>
+            StringComparer.Ordinal.Equals(x.Language, y.Language) &&
+            WorkspacePaths.FileSystemPathComparer.Equals(x.Dir, y.Dir);
+
+        public int GetHashCode((string Language, string Dir) value) =>
+            HashCode.Combine(StringComparer.Ordinal.GetHashCode(value.Language),
+                WorkspacePaths.FileSystemPathComparer.GetHashCode(value.Dir));
     }
 
     private static bool IsRemoved(List<string>? removes, string path)

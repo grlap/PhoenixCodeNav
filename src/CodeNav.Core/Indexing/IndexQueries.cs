@@ -15,7 +15,14 @@ public sealed record SymbolHit(
     string? Accessors = null,    // "get=public;set=private" only when an accessor differs (hu7)
     string? DeclarationKey = null);
 
-public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated);
+public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated,
+    string Language = "cs");
+
+/// <summary>A whole-token FTS candidate attributed to one physical project row. Keeping the
+/// physical path/language here prevents an unsupported F# owner from being silently replaced by
+/// a same-logical-name C# project during semantic scan-set construction.</summary>
+public sealed record SemanticTextCandidateProject(
+    long ProjectId, string Project, string ProjectPath, string Language, int FileCount);
 
 public sealed record TextHit(
     string FilePath, int Line, string LineText, bool IsGenerated,
@@ -31,15 +38,25 @@ public sealed record TextHit(
 public sealed record TextSearchResult(
     List<TextHit> Hits, int TotalPrecise, int TotalPartial, List<string> FilesMatchedAcrossLines);
 
-public sealed record ProjectRow(long Id, string Path, string Name, string Style, string Tfms, bool IsTest, string LoadStatus);
+public sealed record ProjectRow(long Id, string Path, string Name, string Style, string Tfms,
+    bool IsTest, string LoadStatus, string Language = "cs");
 
 public sealed record GraphEdge(string FromProject, string ToProject,
     string Kind = "project"); // 'project' | 'assembly' — edge provenance (bxw, schema v10)
 
+/// <summary>A direct physical project edge used only by the C# semantic workspace. Unlike the
+/// public logical-name graph, this retains both project paths and languages so an edge to an F#
+/// row cannot be silently substituted with a same-named C# project.</summary>
+public sealed record SemanticProjectEdge(
+    long FromId, string FromPath, string FromProject, string FromLanguage,
+    long ToId, string ToPath, string ToProject, string ToLanguage,
+    string Kind = "project");
+
 public sealed record ReferenceGroup(string Project, bool IsTestProject, int Count, List<TextHit> Samples);
 
 public sealed record OverviewStats(
-    long CsFiles, long TotalLines, long Symbols, long Projects, long LegacyProjects,
+    long CsFiles, long FsFiles, long TotalLines, long Symbols, long Projects,
+    long CSharpProjects, long FSharpProjects, long LegacyProjects,
     long SdkProjects, long TestProjects, long Solutions, long GeneratedFiles, long OrphanedFiles,
     string TfmBreakdown, string? IndexVersion, string? IndexedAtUtc);
 
@@ -200,11 +217,30 @@ public sealed partial class IndexQueries : IDisposable
 
         return Query(
             $"""
-            SELECT f.id, f.path, f.size, f.line_count, f.is_generated FROM files f
+            SELECT f.id, f.path, f.size, f.line_count, f.is_generated, f.lang FROM files f
             {where}
             ORDER BY f.is_generated, length(f.path), f.path LIMIT $lim OFFSET $off
             """,
-            r => new FileHit(r.GetInt64(0), r.GetString(1), r.GetInt64(2), r.GetInt32(3), r.GetBoolean(4)),
+            r => new FileHit(r.GetInt64(0), r.GetString(1), r.GetInt64(2), r.GetInt32(3),
+                r.GetBoolean(4), r.GetString(5)),
+            args.ToArray());
+    }
+
+    /// <summary>Source languages present in an explicit path scope, using the exact same glob and
+    /// exclude semantics as symbol search. Project/config rows are intentionally excluded: this
+    /// describes source coverage, not every structural file that happens to share a directory.</summary>
+    public List<string> SourceLanguagesForPathScope(string pathGlob,
+        IReadOnlyList<string>? excludePaths = null, bool includeGenerated = false)
+    {
+        if (string.IsNullOrEmpty(pathGlob)) return [];
+        var args = new List<(string, object)>();
+        var where = new System.Text.StringBuilder(
+            "WHERE f.lang IN ('cs', 'fs')");
+        if (!includeGenerated) where.Append(" AND f.is_generated = 0");
+        AppendPathFilter(where, args, pathGlob, excludePaths);
+        return Query(
+            $"SELECT DISTINCT f.lang FROM files f {where} ORDER BY f.lang",
+            reader => reader.GetString(0),
             args.ToArray());
     }
 
@@ -896,17 +932,59 @@ public sealed partial class IndexQueries : IDisposable
     public ProjectRow? ProjectByName(string name)
     {
         var rows = Query(
-            "SELECT id, path, name, style, tfms, is_test, load_status FROM projects WHERE name = $n COLLATE NOCASE LIMIT 1",
+            "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects WHERE name = $n COLLATE NOCASE ORDER BY path LIMIT 1",
             ReadProject, ("$n", name));
         return rows.Count > 0 ? rows[0] : null;
     }
 
+    /// <summary>All physical project rows sharing a logical assembly/project name. The semantic
+    /// layer uses this to prefer a real C# row without losing the established name-level identity
+    /// used for paired target-framework projects.</summary>
+    public List<ProjectRow> ProjectsByName(string name) => Query(
+        "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects " +
+        "WHERE name = $n COLLATE NOCASE ORDER BY path",
+        ReadProject, ("$n", name));
+
+    /// <summary>Language summary for only the requested logical project names. A logical name
+    /// backed by both C# and F# physical projects is reported as mixed instead of whichever row
+    /// happened to be read first.</summary>
+    public Dictionary<string, string> ProjectLanguages(IReadOnlyCollection<string> projectNames)
+    {
+        var languages = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (string[] chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(200))
+        {
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$n{i}");
+                args.Add(($"$n{i}", chunk[i]));
+            }
+            foreach (var row in Query(
+                         $"SELECT name, lang FROM projects WHERE name COLLATE NOCASE IN ({string.Join(",", parameters)}) ORDER BY name, lang",
+                         reader => (Name: reader.GetString(0), Language: reader.GetString(1)),
+                         args.ToArray()))
+            {
+                if (!languages.TryGetValue(row.Name, out HashSet<string>? set))
+                {
+                    set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    languages[row.Name] = set;
+                }
+                set.Add(row.Language);
+            }
+        }
+
+        return languages.ToDictionary(pair => pair.Key,
+            pair => pair.Value.Count == 1 ? pair.Value.Single() : "mixed",
+            StringComparer.OrdinalIgnoreCase);
+    }
+
     public List<ProjectRow> AllProjects() => Query(
-        "SELECT id, path, name, style, tfms, is_test, load_status FROM projects ORDER BY path, name",
+        "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects ORDER BY path, name",
         ReadProject);
 
     public List<ProjectRow> AllProjects(int limit) => Query(
-        "SELECT id, path, name, style, tfms, is_test, load_status FROM projects " +
+        "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects " +
         "ORDER BY path, name LIMIT $lim",
         ReadProject, ("$lim", Math.Max(0, limit)));
 
@@ -940,7 +1018,7 @@ public sealed partial class IndexQueries : IDisposable
     {
         return Query(
             """
-            SELECT p.id, p.path, p.name, p.style, p.tfms, p.is_test, p.load_status
+            SELECT p.id, p.path, p.name, p.style, p.tfms, p.is_test, p.load_status, p.lang
             FROM compile_items ci
             JOIN files f ON f.id = ci.file_id
             JOIN projects p ON p.id = ci.project_id
@@ -973,7 +1051,9 @@ public sealed partial class IndexQueries : IDisposable
                 _ => null,
             };
             if (sql is null) return new List<GraphEdge>();
-            return Query(sql, r => new GraphEdge(r.GetString(0), r.GetString(1), r.GetString(2)), ("$n", projectName));
+            return Query(sql,
+                r => new GraphEdge(r.GetString(0), r.GetString(1), r.GetString(2)),
+                ("$n", projectName));
         }
 
         var edges = Query(
@@ -990,7 +1070,7 @@ public sealed partial class IndexQueries : IDisposable
         // adjacency maps, so kind must be re-attached from the loaded edge set. The BFS is
         // NAME-keyed by construction (depth 1 is row-granular: a same-AssemblyName pair can
         // surface one edge per ROW, each with its own kind) — so a mixed-kind name pair takes
-        // the NAME-LEVEL policy answer here, same as EdgeKindMap: 'project' wins (any real
+        // here, same as EdgeKindMap: 'project' wins (any real
         // ProjectReference row means the coupling carries refactors; review F2 — plain
         // last-writer rode the JOIN's planner-dependent row order and could flip a recovered
         // coupling invisible at the tool's default depth). Keys are case-folded (review F4:
@@ -1038,6 +1118,115 @@ public sealed partial class IndexQueries : IDisposable
         }
         return result;
     }
+
+    /// <summary>Direct downstream edges from every physical C# row sharing a logical project
+    /// name. Target language/path remain physical facts. This deliberately does not replace the
+    /// public language-neutral graph: Roslyn wiring is the only consumer that must exclude F#
+    /// targets while preserving established same-name C# unions.</summary>
+    public List<SemanticProjectEdge> SemanticProjectEdges(string projectName) =>
+        SemanticProjectEdges([projectName]);
+
+    /// <summary>Batched form used by coverage reporting so physical unsupported targets are read
+    /// from the current index epoch on every request rather than cached in a warm Roslyn project.</summary>
+    public List<SemanticProjectEdge> SemanticProjectEdges(
+        IReadOnlyCollection<string> projectNames)
+    {
+        var result = new List<SemanticProjectEdge>();
+        foreach (string[] chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(200))
+        {
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$n{i}");
+                args.Add(($"$n{i}", chunk[i]));
+            }
+            result.AddRange(Query(
+                $"""
+                SELECT pf.id, pf.path, pf.name, pf.lang,
+                       pt.id, pt.path, pt.name, pt.lang, r.kind
+                FROM project_refs r
+                JOIN projects pf ON pf.id = r.from_id
+                JOIN projects pt ON pt.id = r.to_id
+                WHERE pf.name COLLATE NOCASE IN ({string.Join(",", parameters)})
+                  AND pf.lang = 'cs'
+                ORDER BY pf.path, pt.path, r.kind
+                """,
+                reader => new SemanticProjectEdge(
+                    reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
+                    reader.GetString(3), reader.GetInt64(4), reader.GetString(5),
+                    reader.GetString(6), reader.GetString(7), reader.GetString(8)),
+                args.ToArray()));
+        }
+        return result;
+    }
+
+    /// <summary>Supported C# physical reachability for a whole semantic load. Logical-name graph
+    /// closure is insufficient here: a C# consumer may point at an F# row whose assembly name
+    /// collides with a loaded C# row, and wiring that namesake would give Roslyn a dependency the
+    /// real project does not have. One cancellable recursive query replaces a traversal per newly
+    /// loaded project.</summary>
+    public Dictionary<string, HashSet<string>> SemanticCSharpReachability(
+        IReadOnlyCollection<string> fromProjects,
+        IReadOnlyCollection<string> toProjects,
+        CancellationToken cancellationToken = default)
+    {
+        string[] from = fromProjects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        string[] to = toProjects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var result = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        if (from.Length == 0 || to.Length == 0) return result;
+
+        var args = new List<(string, object)>();
+        var fromParameters = new string[from.Length];
+        var toParameters = new string[to.Length];
+        for (int i = 0; i < from.Length; i++)
+        {
+            fromParameters[i] = $"$from{i}";
+            args.Add((fromParameters[i], from[i]));
+        }
+        for (int i = 0; i < to.Length; i++)
+        {
+            toParameters[i] = $"$to{i}";
+            args.Add((toParameters[i], to[i]));
+        }
+
+        var rows = QueryCoreCancellable(_readSnapshot,
+            $"""
+            WITH RECURSIVE roots(root_name, id) AS (
+              SELECT p.name, p.id
+              FROM projects p
+              WHERE p.name COLLATE NOCASE IN ({string.Join(",", fromParameters)})
+                AND p.lang = 'cs'
+            ), reachable(root_name, id) AS (
+              SELECT root_name, id FROM roots
+              UNION
+              SELECT current.root_name, pt.id
+              FROM reachable current
+              JOIN project_refs r ON r.from_id = current.id
+              JOIN projects pt ON pt.id = r.to_id
+              WHERE pt.lang = 'cs'
+            )
+            SELECT DISTINCT current.root_name, target.name
+            FROM reachable current
+            JOIN projects target ON target.id = current.id
+            WHERE target.name COLLATE NOCASE IN ({string.Join(",", toParameters)})
+            ORDER BY current.root_name, target.name
+            """,
+            reader => (From: reader.GetString(0), To: reader.GetString(1)),
+            cancellationToken, args.ToArray());
+        foreach (var row in rows)
+        {
+            if (!result.TryGetValue(row.From, out HashSet<string>? targets))
+                result[row.From] = targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            targets.Add(row.To);
+        }
+        return result;
+    }
+
+    public bool HasSemanticCSharpPath(string fromProject, string toProject,
+        CancellationToken cancellationToken = default) =>
+        SemanticCSharpReachability([fromProject], [toProject], cancellationToken)
+            .TryGetValue(fromProject, out HashSet<string>? targets) && targets.Contains(toProject);
 
     // ---------------------------------------------------------------- semantic-layer support
 
@@ -1261,7 +1450,8 @@ public sealed partial class IndexQueries : IDisposable
     /// caller-selected project budget; a symbol-hit cap here would silently make maxProjects lie.
     /// </summary>
     public List<string> ImplementationCandidateProjects(
-        string name, CancellationToken cancellationToken = default)
+        string name, CancellationToken cancellationToken = default,
+        bool includeGenerated = true, bool includeTests = true)
     {
         if (string.IsNullOrEmpty(name)) return new();
         string esc = EscapeLike(name);
@@ -1275,7 +1465,7 @@ public sealed partial class IndexQueries : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             var batch = QueryCoreCancellable(snapshot,
                 """
-                SELECT DISTINCT c.id, c.signature, p.name
+                SELECT DISTINCT c.id, c.signature, p.name, f.is_generated, p.is_test
                 FROM (
                     SELECT s.id, s.file_id, s.signature
                     FROM symbols s
@@ -1286,12 +1476,15 @@ public sealed partial class IndexQueries : IDisposable
                     ORDER BY s.id
                     LIMIT $batch
                 ) c
+                JOIN files f ON f.id = c.file_id
                 LEFT JOIN compile_items ci ON ci.file_id = c.file_id
                 LEFT JOIN projects p ON p.id = ci.project_id
                 ORDER BY c.id, p.name COLLATE NOCASE
                 """,
                 r => (Id: r.GetInt64(0), Signature: r.GetString(1),
-                    Project: r.IsDBNull(2) ? null : r.GetString(2)),
+                    Project: r.IsDBNull(2) ? null : r.GetString(2),
+                    IsGenerated: r.GetBoolean(3),
+                    IsTest: r.IsDBNull(4) ? (bool?)null : r.GetBoolean(4)),
                 cancellationToken,
                 ("$n", name), ("$pat", $"%: %{esc}%"), ("$after", afterSymbolId),
                 ("$batch", CandidateDiscoveryBatchSize));
@@ -1299,6 +1492,8 @@ public sealed partial class IndexQueries : IDisposable
             afterSymbolId = batch[^1].Id;
             foreach (var candidate in batch)
             {
+                if (!includeGenerated && candidate.IsGenerated) continue;
+                if (!includeTests && candidate.IsTest is true) continue;
                 if (candidate.Project is not null &&
                     ContainsWholeToken(candidate.Signature, name) &&
                     seen.Add(candidate.Project))
@@ -1313,15 +1508,21 @@ public sealed partial class IndexQueries : IDisposable
         return projects;
     }
 
-    /// <summary>Project name → is-test flag for the whole workspace (small).</summary>
-    public Dictionary<string, bool> AllProjectTestFlags()
+    /// <summary>Project name → is-test flag for the whole workspace (small). An optional
+    /// physical-language scope keeps Roslyn consumers from folding a same-name F# row into the
+    /// C# assembly. Without a scope, duplicate names are OR-reduced deterministically.</summary>
+    public Dictionary<string, bool> AllProjectTestFlags(string? language = null)
     {
         var map = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (name, isTest) in Query(
-                     "SELECT name, is_test FROM projects",
-                     r => (Name: r.GetString(0), IsTest: r.GetBoolean(1))))
+        var rows = language is null
+            ? Query("SELECT name, is_test FROM projects",
+                r => (Name: r.GetString(0), IsTest: r.GetBoolean(1)))
+            : Query("SELECT name, is_test FROM projects WHERE lang = $lang",
+                r => (Name: r.GetString(0), IsTest: r.GetBoolean(1)),
+                ("$lang", language));
+        foreach (var (name, isTest) in rows)
         {
-            map[name] = isTest;
+            map[name] = isTest || (map.TryGetValue(name, out bool current) && current);
         }
         return map;
     }
@@ -1475,12 +1676,15 @@ public sealed partial class IndexQueries : IDisposable
     /// Every project whose files textually contain the identifier (FTS whole-token candidates),
     /// ordered by match volume. Project selection is bounded later by the caller's maxProjects;
     /// truncating matching files before this GROUP BY silently hid projects in large repositories.
+    /// Reference filters apply before per-project ranking so excluded test/generated-only matches
+    /// cannot consume a candidate budget or become false skipped/out-of-graph coverage.
     /// </summary>
-    public List<(string Project, int FileCount)> CandidateProjectsForName(
-        string name, CancellationToken cancellationToken = default)
+    public List<SemanticTextCandidateProject> CandidateProjectsForName(
+        string name, CancellationToken cancellationToken = default,
+        bool includeGenerated = true, bool includeTests = true)
     {
         if (string.IsNullOrEmpty(name)) return new();
-        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var counts = new Dictionary<long, (string Project, string Path, string Language, int Count)>();
         long afterFileId = 0;
         using var ownedSnapshot = _readSnapshot is null ? _conn.BeginTransaction(deferred: true) : null;
         SqliteTransaction snapshot = ownedSnapshot ?? _readSnapshot!;
@@ -1489,7 +1693,8 @@ public sealed partial class IndexQueries : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             var batch = QueryCoreCancellable(snapshot,
                 """
-                SELECT DISTINCT m.fid, p.name
+                SELECT DISTINCT m.fid, p.id, p.name, p.path, p.lang,
+                                f.is_generated, p.is_test
                 FROM (
                     SELECT rowid AS fid
                     FROM fts_content
@@ -1497,18 +1702,25 @@ public sealed partial class IndexQueries : IDisposable
                     ORDER BY rowid
                     LIMIT $batch
                 ) m
+                JOIN files f ON f.id = m.fid
                 LEFT JOIN compile_items ci ON ci.file_id = m.fid
                 LEFT JOIN projects p ON p.id = ci.project_id
-                ORDER BY m.fid, p.name COLLATE NOCASE
+                ORDER BY m.fid, p.path
                 """,
-                r => (FileId: r.GetInt64(0), Project: r.IsDBNull(1) ? null : r.GetString(1)),
+                r => (FileId: r.GetInt64(0),
+                    ProjectId: r.IsDBNull(1) ? (long?)null : r.GetInt64(1),
+                    Project: r.IsDBNull(2) ? null : r.GetString(2),
+                    ProjectPath: r.IsDBNull(3) ? null : r.GetString(3),
+                    Language: r.IsDBNull(4) ? null : r.GetString(4),
+                    IsGenerated: r.GetBoolean(5),
+                    IsTest: r.IsDBNull(6) ? (bool?)null : r.GetBoolean(6)),
                 cancellationToken,
                 ("$q", $"\"{name.Replace("\"", "")}\""), ("$after", afterFileId),
                 ("$batch", CandidateDiscoveryBatchSize));
             if (batch.Count == 0) break;
             afterFileId = batch[^1].FileId;
             long currentFileId = -1;
-            var projectsForFile = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var projectsForFile = new HashSet<long>();
             foreach (var match in batch)
             {
                 if (match.FileId != currentFileId)
@@ -1516,17 +1728,28 @@ public sealed partial class IndexQueries : IDisposable
                     currentFileId = match.FileId;
                     projectsForFile.Clear();
                 }
-                if (match.Project is not null && projectsForFile.Add(match.Project))
-                    counts[match.Project] = counts.GetValueOrDefault(match.Project) + 1;
+                if (!includeGenerated && match.IsGenerated) continue;
+                if (!includeTests && match.IsTest is true) continue;
+                if (match.ProjectId is { } projectId && match.Project is not null &&
+                    match.ProjectPath is not null && match.Language is not null &&
+                    projectsForFile.Add(projectId))
+                {
+                    if (counts.TryGetValue(projectId, out var existing))
+                        counts[projectId] = existing with { Count = existing.Count + 1 };
+                    else
+                        counts[projectId] = (match.Project, match.ProjectPath, match.Language, 1);
+                }
             }
             cancellationToken.ThrowIfCancellationRequested();
             if (batch.Select(match => match.FileId).Distinct().Count() < CandidateDiscoveryBatchSize)
                 break;
         }
-        return counts
-            .Select(entry => (Project: entry.Key, FileCount: entry.Value))
+        return counts.Select(entry => new SemanticTextCandidateProject(
+                entry.Key, entry.Value.Project, entry.Value.Path, entry.Value.Language,
+                entry.Value.Count))
             .OrderByDescending(entry => entry.FileCount)
             .ThenBy(entry => entry.Project, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(entry => entry.ProjectPath, StringComparer.Ordinal)
             .ToList();
     }
 
@@ -1838,9 +2061,9 @@ public sealed partial class IndexQueries : IDisposable
     public FileHit? FileByPath(string filePath)
     {
         var rows = Query(
-            "SELECT id, path, size, line_count, is_generated FROM files WHERE path = $p",
+            "SELECT id, path, size, line_count, is_generated, lang FROM files WHERE path = $p",
             r => new FileHit(r.GetInt64(0), r.GetString(1), r.GetInt64(2), r.GetInt32(3),
-                r.GetBoolean(4)), ("$p", filePath));
+                r.GetBoolean(4), r.GetString(5)), ("$p", filePath));
         return rows.Count > 0 ? rows[0] : null;
     }
 
@@ -1872,17 +2095,22 @@ public sealed partial class IndexQueries : IDisposable
 
         return new OverviewStats(
             CsFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='cs'"),
-            TotalLines: Scalar("SELECT COALESCE(SUM(line_count),0) FROM files WHERE lang='cs'"),
+            FsFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='fs'"),
+            TotalLines: Scalar("SELECT COALESCE(SUM(line_count),0) FROM files WHERE lang IN ('cs','fs')"),
             Symbols: Scalar("SELECT COUNT(*) FROM symbols"),
             Projects: Scalar("SELECT COUNT(*) FROM projects"),
+            CSharpProjects: Scalar("SELECT COUNT(*) FROM projects WHERE lang='cs'"),
+            FSharpProjects: Scalar("SELECT COUNT(*) FROM projects WHERE lang='fs'"),
             LegacyProjects: Scalar("SELECT COUNT(*) FROM projects WHERE style='legacy'"),
             SdkProjects: Scalar("SELECT COUNT(*) FROM projects WHERE style='sdk'"),
             TestProjects: Scalar("SELECT COUNT(*) FROM projects WHERE is_test=1"),
             Solutions: Scalar("SELECT COUNT(*) FROM solutions"),
             GeneratedFiles: Scalar("SELECT COUNT(*) FROM files WHERE is_generated=1"),
-            // Indexed .cs files in no project's compile set — the "really compiled?" count (see
-            // OrphanedPaths for the exact semantics and remaining shared/props/Condition gaps).
-            OrphanedFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='cs' AND NOT EXISTS (SELECT 1 FROM compile_items ci WHERE ci.file_id = files.id)"),
+            // Indexed C# and compiled-form F# source (.fs/.fsi) in no project's compile set —
+            // the "really compiled?" count. F# scripts are intentionally outside project compile
+            // sets, so .fsx is source/search evidence but never an orphan (see OrphanedPaths for
+            // the exact C# symbol semantics and remaining shared/props/Condition gaps).
+            OrphanedFiles: Scalar("SELECT COUNT(*) FROM files WHERE (lang='cs' OR (lang='fs' AND lower(path) NOT LIKE '%.fsx')) AND NOT EXISTS (SELECT 1 FROM compile_items ci WHERE ci.file_id = files.id)"),
             TfmBreakdown: tfms,
             IndexVersion: version,
             IndexedAtUtc: at);
@@ -1954,7 +2182,7 @@ public sealed partial class IndexQueries : IDisposable
 
     private static ProjectRow ReadProject(SqliteDataReader r) => new(
         r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3),
-        r.GetString(4), r.GetBoolean(5), r.GetString(6));
+        r.GetString(4), r.GetBoolean(5), r.GetString(6), r.GetString(7));
 
     private List<T> Query<T>(string sql, Func<SqliteDataReader, T> map, params (string, object)[] args) =>
         QueryCore(_readSnapshot, sql, map, args);

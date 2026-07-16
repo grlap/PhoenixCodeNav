@@ -35,7 +35,8 @@ public static class DeltaRefresher
             scan = WorkspaceScanner.Scan(workspaceRoot);
             var seen = new HashSet<string>(WorkspacePaths.FileSystemPathComparer);
             candidates = new List<string>();
-            foreach (var f in scan.CsFiles.Concat(scan.ProjectFiles).Concat(scan.SolutionFiles).Concat(scan.ConfigFiles))
+            foreach (var f in scan.CsFiles.Concat(scan.FsFiles).Concat(scan.ProjectFiles)
+                         .Concat(scan.SolutionFiles).Concat(scan.ConfigFiles))
             {
                 seen.Add(f.RelPath);
                 if (!stored.TryGetValue(f.RelPath, out _))
@@ -59,12 +60,47 @@ public static class DeltaRefresher
 
         int added = 0, changed = 0, deleted = 0;
         bool projectDataDirty = false;
-        Dictionary<string, long>? globRoots = null; // lazy: only built when a .cs file is ADDED
-        bool? hasLegacy = null;                     // lazy: gates the incremental attribution
+        var globRootsByLanguage = new Dictionary<string, Dictionary<string, long>>(
+            StringComparer.Ordinal);
+        var hasNonTrivialByLanguage = new Dictionary<string, bool>(StringComparer.Ordinal);
 
         string? refreshedAtUtc = null;
         using (var tx = store.BeginTransaction())
         {
+            void AttributeAddedSource(string sourceLanguage, string relPath, long fileId)
+            {
+                if (!hasNonTrivialByLanguage.TryGetValue(sourceLanguage, out bool nonTrivial))
+                {
+                    nonTrivial = store.HasNonTrivialCompileShapes(sourceLanguage);
+                    hasNonTrivialByLanguage[sourceLanguage] = nonTrivial;
+                }
+                if (nonTrivial)
+                {
+                    projectDataDirty = true;
+                    return;
+                }
+
+                if (!CompileItemResolver.IsImplicitDefaultSource(relPath)) return;
+
+                if (!globRootsByLanguage.TryGetValue(sourceLanguage, out var roots))
+                {
+                    roots = BuildGlobRoots(store, sourceLanguage);
+                    globRootsByLanguage[sourceLanguage] = roots;
+                }
+                string fileDir = relPath;
+                while (true)
+                {
+                    int slash = fileDir.LastIndexOf('/');
+                    fileDir = slash < 0 ? "" : fileDir[..slash];
+                    if (roots.TryGetValue(fileDir, out long projectId))
+                    {
+                        store.InsertCompileItem(tx, projectId, fileId);
+                        break;
+                    }
+                    if (slash < 0) break;
+                }
+            }
+
             foreach (var rel in candidates)
             {
                 // Every candidate is in the canonical Git/index path domain: scanner and watcher
@@ -81,7 +117,7 @@ public static class DeltaRefresher
                 bool known = stored.TryGetValue(rel, out var old);
                 string lang = LangOf(rel);
                 if (lang == "other") continue;
-                bool authoritativeProjectInput = lang == "csproj" || IsPackagesConfig(rel);
+                bool authoritativeProjectInput = lang is "csproj" or "fsproj" || IsPackagesConfig(rel);
                 bool projectShapePath = authoritativeProjectInput || lang == "sln";
 
                 GitInfo.WorkspaceFileReadResult read =
@@ -164,46 +200,29 @@ public static class DeltaRefresher
                         // Include/Remove globs (3tz) can claim or exclude the new file in ways only the
                         // full rebuild re-evaluates. With any such shape present we fall back to the
                         // full rebuild, which itself no longer walks the disk.
-                        hasLegacy ??= store.HasNonTrivialCompileShapes();
-                        if (hasLegacy.Value)
-                        {
-                            projectDataDirty = true;
-                        }
-                        else
-                        {
-                            // Longest glob-root dir prefix wins, mirroring CompileItemResolver's walk
-                            // exactly (including its root-dir quirk, so both attributions always agree).
-                            globRoots ??= BuildGlobRoots(store);
-                            string fdir = rel;
-                            while (true)
-                            {
-                                int slash = fdir.LastIndexOf('/');
-                                if (slash < 0) break;
-                                fdir = fdir[..slash];
-                                if (globRoots.TryGetValue(fdir, out long pid))
-                                {
-                                    store.InsertCompileItem(tx, pid, id);
-                                    break;
-                                }
-                            }
-                        }
+                        AttributeAddedSource("cs", rel, id);
                     }
                 }
                 else
                 {
                     int lines = content.Count(c => c == '\n') + 1;
+                    bool isGenerated = lang == "fs" &&
+                        FileClassifier.LooksGenerated(rel, content);
                     if (known)
                     {
                         string oldContent = store.GetContentForWrite(old!.Id) ?? "";
-                        store.UpdateFileRow(tx, old.Id, bytes.LongLength, mtimeTicks, hash, lines, false, false);
+                        store.UpdateFileRow(tx, old.Id, bytes.LongLength, mtimeTicks, hash, lines,
+                            isGenerated, false);
                         store.ReplaceContent(tx, old.Id, oldContent, content);
                         changed++;
                     }
                     else
                     {
-                        long id = store.InsertFile(tx, rel, bytes.LongLength, mtimeTicks, hash, lang, lines, false, false);
+                        long id = store.InsertFile(tx, rel, bytes.LongLength, mtimeTicks, hash,
+                            lang, lines, isGenerated, false);
                         store.InsertContent(tx, id, content);
                         added++;
+                        if (lang == "fs") AttributeAddedSource("fs", rel, id);
                     }
                     if (projectShapePath) projectDataDirty = true;
                 }
@@ -236,10 +255,10 @@ public static class DeltaRefresher
 
     /// <summary>Same longest-dir-prefix map CompileItemResolver builds: non-legacy (SDK or failed-
     /// parse) project dirs, keyed for the added-file walk. Built at most once per refresh.</summary>
-    private static Dictionary<string, long> BuildGlobRoots(IndexStore store)
+    private static Dictionary<string, long> BuildGlobRoots(IndexStore store, string language)
     {
         var roots = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
-        foreach (var (id, relPath) in store.GlobRootProjects())
+        foreach (var (id, relPath) in store.GlobRootProjects(language))
         {
             string dir = WorkspacePaths.ToGitPath(Path.GetDirectoryName(relPath) ?? "");
             roots[dir] = id;
@@ -264,7 +283,7 @@ public static class DeltaRefresher
     {
         List<(long Id, string Path, string Lang)> rows = store.FileIdPathLang(tx);
         Dictionary<string, IndexStore.StoredFile> stored = store.AllFilesByPath(tx);
-        List<string> projectPaths = rows.Where(row => row.Lang == "csproj")
+        List<string> projectPaths = rows.Where(row => row.Lang is "csproj" or "fsproj")
             .Select(row => row.Path).OrderBy(path => path, StringComparer.Ordinal).ToList();
         List<string> solutionPaths = rows.Where(row => row.Lang == "sln")
             .Select(row => row.Path).OrderBy(path => path, StringComparer.Ordinal).ToList();
@@ -309,10 +328,10 @@ public static class DeltaRefresher
             optionalSolutionBytes += bytes.LongLength;
         }
 
-        var csFileIds = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
+        var sourceFileIds = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
         foreach (var (id, path, lang) in rows)
         {
-            if (lang == "cs") csFileIds[path] = id;
+            if (lang is "cs" or "fs") sourceFileIds[path] = id;
         }
 
         store.ClearProjectData(tx);
@@ -346,7 +365,7 @@ public static class DeltaRefresher
         // the whole graph here, and losing the recovered edges would silently re-break
         // cross-project implementations/references until the next full rebuild.
         AssemblyRefEdges.Write(store, tx, parsedProjects, projectIds);
-        CompileItemResolver.Write(store, tx, parsedProjects, projectIds, csFileIds);
+        CompileItemResolver.Write(store, tx, parsedProjects, projectIds, sourceFileIds);
         // isTest R3 parity with the full build (a .cs file GAINING [TestFixture] converges on the
         // next graph rebuild — csproj-touch or full — an accepted staleness, same as ownership).
         store.PromoteTestProjectsByCompiledAttributes(tx);
@@ -359,7 +378,9 @@ public static class DeltaRefresher
         return ext switch
         {
             ".cs" => "cs",
+            ".fs" or ".fsi" or ".fsx" => "fs",
             ".csproj" => "csproj",
+            ".fsproj" => "fsproj",
             ".sln" or ".slnx" or ".slnf" => "sln",
             ".config" or ".props" or ".targets" => "config",
             ".json" when name.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase)

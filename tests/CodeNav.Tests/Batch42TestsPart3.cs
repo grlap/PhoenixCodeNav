@@ -107,6 +107,8 @@ public class Batch42TestsPart3
     [Theory]
     [InlineData("src/App.csproj", true)]
     [InlineData("src/App.csproj.user", true)]
+    [InlineData("src/App.fsproj", true)]
+    [InlineData("src/App.fsproj.user", true)]
     [InlineData("shared/Shared.shproj", true)]
     [InlineData("build/Build.proj", true)]
     [InlineData("shared/Imports.projitems", true)]
@@ -264,6 +266,34 @@ public class Batch42TestsPart3
             ignoreCaseOverride: false));
         Assert.Contains(project.Id, NavigationTools.LikelyOwningProjectIds("Owner/Moved.cs",
             [project], shapes, ignoreCaseOverride: true));
+    }
+
+    [Fact]
+    public void ProjectOwnershipDoesNotCrossSourceLanguages()
+    {
+        byte[] fsProjectXml = System.Text.Encoding.UTF8.GetBytes(
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
+            "<Compile Include=\"Library.fs\" /></ItemGroup></Project>");
+        byte[] csProjectXml = System.Text.Encoding.UTF8.GetBytes(
+            "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+            "<EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>" +
+            "<ItemGroup><Compile Include=\"Library.fs\" /></ItemGroup></Project>");
+        var fsProject = new ProjectRow(1, "Core/Core.fsproj", "Core", "sdk", "net9.0",
+            false, "parsed", "fs");
+        var csProject = new ProjectRow(2, "Core/Impostor.csproj", "Impostor", "sdk", "net9.0",
+            false, "parsed", "cs");
+        var shapes = new Dictionary<long, CodeNav.Core.Discovery.ParsedProject>
+        {
+            [fsProject.Id] = CodeNav.Core.Discovery.ProjectFileParser.ParseCompileShape(
+                fsProject.Path, fsProjectXml),
+            [csProject.Id] = CodeNav.Core.Discovery.ProjectFileParser.ParseCompileShape(
+                csProject.Path, csProjectXml),
+        };
+
+        HashSet<long> owners = NavigationTools.LikelyOwningProjectIds("Core/Library.fs",
+            [fsProject, csProject], shapes, ignoreCaseOverride: false);
+
+        Assert.Equal(fsProject.Id, Assert.Single(owners));
     }
 
     [Theory]
@@ -689,7 +719,7 @@ public class Batch42TestsPart3
             int refreshes = 0;
             manager.ReviewSnapshotAfterQueryForTest = sql =>
             {
-                if (!sql.Contains("SELECT id, path, size, line_count, is_generated FROM files",
+                if (!sql.Contains("SELECT id, path, size, line_count, is_generated, lang FROM files",
                         StringComparison.Ordinal) || Interlocked.Exchange(ref refreshes, 1) != 0)
                     return;
 
@@ -757,7 +787,7 @@ public class Batch42TestsPart3
             int rebuildRequests = 0;
             manager.ReviewSnapshotAfterQueryForTest = sql =>
             {
-                if (!sql.Contains("SELECT id, path, size, line_count, is_generated FROM files",
+                if (!sql.Contains("SELECT id, path, size, line_count, is_generated, lang FROM files",
                         StringComparison.Ordinal) ||
                     Interlocked.Exchange(ref rebuildRequests, 1) != 0)
                     return;

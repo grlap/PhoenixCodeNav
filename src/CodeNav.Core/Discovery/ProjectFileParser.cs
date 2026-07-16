@@ -34,7 +34,8 @@ public sealed record ParsedProject(
     // True only when this project file itself closes every authority boundary that can alter the
     // generated IVT attribute. SemanticWorkspace additionally checks applicable Directory.Build
     // files from the pinned index before allowing compiler-exact claims.
-    bool InternalsVisibleToAuthorityComplete = true);
+    bool InternalsVisibleToAuthorityComplete = true,
+    string Language = "cs");                    // "cs" | "fs"
 
 /// <summary>One wildcard/SDK &lt;Compile Include&gt; spec with its own Exclude= filters (Exclude only
 /// prunes THAT item's wildcard expansion — the legacy exclusion idiom, since legacy MSBuild has no
@@ -44,7 +45,7 @@ public sealed record CompileMembershipOperation(bool Include, string Pattern,
     List<string>? Excludes = null);
 
 /// <summary>
-/// Owns: reading a single .csproj (legacy or SDK style) into a ParsedProject without
+/// Owns: reading a single .csproj/.fsproj (legacy or SDK style) into a ParsedProject without
 /// MSBuild evaluation — raw XML facts only, confidence "indexed" not "exact".
 /// Does not own: file discovery, storage, or semantic project loading (M3).
 /// </summary>
@@ -93,8 +94,12 @@ public static class ProjectFileParser
         }
         catch (Exception ex)
         {
+            string language = ProjectLanguage(relPath);
             return new ParsedProject(relPath, name, "unknown", null, "", LooksLikeTestName(name),
-                new(), new(), null, new(), $"failed:{ex.GetType().Name}");
+                new(), new(), null, new(), $"failed:{ex.GetType().Name}",
+                DefaultCompileItems: language == "cs",
+                CompileOwnershipComplete: language == "cs",
+                Language: language);
         }
 
         XDocument? packagesDoc = null;
@@ -126,8 +131,12 @@ public static class ProjectFileParser
         }
         catch (Exception ex)
         {
+            string language = ProjectLanguage(relPath);
             return new ParsedProject(relPath, name, "unknown", null, "",
-                LooksLikeTestName(name), [], [], null, [], $"failed:{ex.GetType().Name}");
+                LooksLikeTestName(name), [], [], null, [], $"failed:{ex.GetType().Name}",
+                DefaultCompileItems: language == "cs",
+                CompileOwnershipComplete: language == "cs",
+                Language: language);
         }
     }
 
@@ -149,6 +158,7 @@ public static class ProjectFileParser
         XDocument? packagesConfig)
     {
         string name = Path.GetFileNameWithoutExtension(relPath);
+        string language = ProjectLanguage(relPath);
         string projectDir = WorkspacePaths.ToGitPath(Path.GetDirectoryName(relPath) ?? "");
 
         var root = doc.Root!;
@@ -245,8 +255,14 @@ public static class ProjectFileParser
         bool internalsVisibleToAuthorityComplete = internalsVisibleTo is null ||
             HasClosedInternalsVisibleToAuthority(root, isSdk, packageRefs);
 
-        bool defaultCompileItems = isSdk &&
-            !string.Equals(Prop(root, "EnableDefaultCompileItems")?.Trim(), "false", StringComparison.OrdinalIgnoreCase);
+        // C# SDK projects conventionally get an implicit **/*.cs set. F# defaults this off to
+        // preserve compile order, but the SDK does honor an explicit, unconditional literal
+        // EnableDefaultCompileItems=true. Model that opt-in without evaluating conditions or
+        // expressions that could claim ownership the real build does not have.
+        bool defaultCompileItems = isSdk && (language == "cs"
+            ? !string.Equals(Prop(root, "EnableDefaultCompileItems")?.Trim(), "false",
+                StringComparison.OrdinalIgnoreCase)
+            : HasLiteralUnconditionalProperty(root, "EnableDefaultCompileItems", "true"));
 
         // packages.config for legacy package refs. Snapshot callers supply the exact bounded bytes
         // captured alongside the project, so graph facts cannot come from a later filesystem epoch.
@@ -284,7 +300,8 @@ public static class ProjectFileParser
             removeGlobs.Count > 0 ? removeGlobs : null,
             defaultCompileItems,
             InternalsVisibleTo: internalsVisibleTo,
-            InternalsVisibleToAuthorityComplete: internalsVisibleToAuthorityComplete);
+            InternalsVisibleToAuthorityComplete: internalsVisibleToAuthorityComplete,
+            Language: language);
     }
 
     /// <summary>Parses only the compile-item shape from an already bounded, no-follow project-file
@@ -292,6 +309,7 @@ public static class ProjectFileParser
     public static ParsedProject ParseCompileShape(string relPath, byte[] xmlBytes)
     {
         string name = Path.GetFileNameWithoutExtension(relPath);
+        string language = ProjectLanguage(relPath);
         string projectDir = WorkspacePaths.ToGitPath(Path.GetDirectoryName(relPath) ?? "");
         XDocument doc;
         try
@@ -308,14 +326,20 @@ public static class ProjectFileParser
         catch (Exception ex)
         {
             return new ParsedProject(relPath, name, "unknown", null, "", false,
-                [], [], null, [], $"failed:{ex.GetType().Name}");
+                [], [], null, [], $"failed:{ex.GetType().Name}",
+                DefaultCompileItems: language == "cs",
+                CompileOwnershipComplete: language == "cs",
+                Language: language);
         }
 
         XElement? root = doc.Root;
         if (root is null)
         {
             return new ParsedProject(relPath, name, "unknown", null, "", false,
-                [], [], null, [], "failed:missing_root");
+                [], [], null, [], "failed:missing_root",
+                DefaultCompileItems: language == "cs",
+                CompileOwnershipComplete: language == "cs",
+                Language: language);
         }
         bool isSdk = IsSdkProject(root);
         List<string>? compileItems = isSdk ? null : [];
@@ -394,14 +418,20 @@ public static class ProjectFileParser
         bool recognizedDefaultCompileValue = defaultCompileValue is null ||
             defaultCompileValue.Equals("true", StringComparison.OrdinalIgnoreCase) ||
             defaultCompileValue.Equals("false", StringComparison.OrdinalIgnoreCase);
-        bool defaultCompileItems = isSdk && (defaultCompileValue is null ||
-            defaultCompileValue.Equals("true", StringComparison.OrdinalIgnoreCase));
         bool defaultCompileEvaluationComplete = defaultCompileProperties.Count <= 1 &&
             recognizedDefaultCompileValue &&
             defaultCompileProperties.All(property =>
+                property.Parent?.Name.LocalName == "PropertyGroup" &&
+                property.Parent.Parent == root &&
                 !ContainsMsBuildExpression(property.Value) &&
                 !property.AncestorsAndSelf().Any(ancestor =>
-                    ancestor.Attribute("Condition") is not null));
+                    ancestor.Attribute("Condition") is not null ||
+                    ancestor.Name.LocalName is "Target" or "Choose" or "When" or "Otherwise"));
+        bool defaultCompileItems = isSdk && defaultCompileEvaluationComplete &&
+            (language == "cs"
+                ? defaultCompileValue is null ||
+                  defaultCompileValue.Equals("true", StringComparison.OrdinalIgnoreCase)
+                : defaultCompileValue?.Equals("true", StringComparison.OrdinalIgnoreCase) == true);
         bool hasUnevaluatedDefaultMembership = root.Descendants()
             .Any(element => IsUnevaluatedCompileMembershipProperty(element.Name.LocalName));
         bool hasPackageBuildImports = root.Descendants().Any(element =>
@@ -420,8 +450,13 @@ public static class ProjectFileParser
             [], [], compileItems, [], "parsed",
             includeGlobs.Count > 0 ? includeGlobs : null,
             removeGlobs.Count > 0 ? removeGlobs : null, defaultCompileItems,
-            compileOwnershipComplete, compileOperations);
+            compileOwnershipComplete, compileOperations, Language: language);
     }
+
+    private static string ProjectLanguage(string relPath) =>
+        Path.GetExtension(relPath).Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
+            ? "fs"
+            : "cs";
 
     private static bool IsSdkProject(XElement root) =>
         root.Attribute("Sdk") is not null ||
@@ -696,6 +731,23 @@ public static class ProjectFileParser
 
     private static string? Prop(XElement root, string localName) =>
         root.Descendants().FirstOrDefault(e => e.Name.LocalName == localName)?.Value;
+
+    private static bool HasLiteralUnconditionalProperty(XElement root, string localName,
+        string expectedValue)
+    {
+        List<XElement> properties = root.Descendants()
+            .Where(element => element.Name.LocalName == localName)
+            .ToList();
+        return properties.Count == 1 &&
+               properties[0].Parent?.Name.LocalName == "PropertyGroup" &&
+               properties[0].Parent?.Parent == root &&
+               properties[0].Value.Trim().Equals(expectedValue,
+                   StringComparison.OrdinalIgnoreCase) &&
+               !ContainsMsBuildExpression(properties[0].Value) &&
+               !properties[0].AncestorsAndSelf().Any(ancestor =>
+                   ancestor.Attribute("Condition") is not null ||
+                   ancestor.Name.LocalName is "Target" or "Choose" or "When" or "Otherwise");
+    }
 
     /// <summary>Resolves an MSBuild relative include against the project dir into a workspace-relative path.</summary>
     internal static string NormalizeRelative(string projectDir, string include)

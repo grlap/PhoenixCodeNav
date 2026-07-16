@@ -22,19 +22,25 @@ agent spends most of its context *finding* the edit surface instead of *making* 
 ## What PhoenixCodeNav is
 
 A **read-only [MCP](https://modelcontextprotocol.io) server** that gives any agent a
-fast, structured, honesty-labeled way to navigate large C# codebases. It indexes the
+fast, structured, honesty-labeled way to navigate large C# and mixed C#/F# codebases. It indexes the
 workspace once (persisted SQLite) and answers navigation questions in three layers,
 each of which tells you *how much to trust it*:
 
 | Layer | Answers | Confidence |
 |---|---|---|
-| **Indexed text** (FTS5) | where literal text/config/keys appear, ranked | `indexed` |
-| **Syntax** (Roslyn parse) | file outlines, symbol declarations, spans | `indexed` |
-| **Semantic** (Roslyn compile) | exact definitions, references, implementations, call graph | `exact` |
+| **Indexed text** (FTS5, C# + F#) | where literal text/config/keys appear, ranked | `indexed` |
+| **Syntax** (Roslyn parse, C#) | file outlines, symbol declarations, spans | `indexed` |
+| **Semantic** (Roslyn compile, C#) | exact definitions, references, implementations, call graph | `exact` |
 
 Plus structural facts (project graph, ownership, dependency paths) and composites
 (`context_pack`, `impact`). Every response is budget-capped, line-addressable, and
 carries `confidence` + index-freshness metadata.
+
+F# support is intentionally text-and-topology only: source text, `.fsproj` compile ownership,
+and C#↔F# project edges are available without FSharp.Compiler.Service. Syntax or semantic requests
+on F# files return `unsupported_language` rather than a misleading empty answer. Indexed search
+is language-neutral unless the caller supplies a file scope; a mixed C#/F# symbol scope returns
+the available C# symbols and explicitly marks the skipped F# portion as partial.
 
 The design rule is: **return the smallest precise context that lets the agent take the
 next step** — and never present a guess as a fact.

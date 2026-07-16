@@ -28,6 +28,7 @@ public sealed partial class NavigationTools
 {
     internal Func<GlobMatchBudget>? ReviewProjectGlobBudgetFactoryForTest;
     private const int ReviewMaxFiles = 200;        // changed .cs files mapped to symbols
+    private const int ReviewMaxUnsupportedLanguageFiles = 200;
     private const int ReviewMaxDeletedFiles = 20;  // deleted files re-parsed from the base blob
     private const int ReviewMaxTypesPerDeleted = 5;
     private const int ReviewMaxFormerSymbols = 100;
@@ -80,6 +81,8 @@ public sealed partial class NavigationTools
     private sealed record ReviewDeletedFile(string Path, List<ReviewFormerSymbol>? FormerTypes,
         int? FormerTypesTotal, bool? FormerTypesTruncated, string? RecoveryStatus = null);
     private sealed record ReviewMovedFile(string From, string To, string Match);
+    private sealed record ReviewUnsupportedLanguageFile(
+        string Path, string Language, string Change);
     internal sealed record ReviewProjectShapeSnapshot(List<ProjectRow> Projects,
         Dictionary<long, ParsedProject> Parsed, int RequestedAtLeast, int Attempted, int BytesRead,
         long LoadElapsedMilliseconds, bool ShapeBudgetHit, bool EvaluationIncomplete,
@@ -130,7 +133,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "review_pack")]
-    [Description("ONE budget-bounded review digest: diff -> touched symbols -> per-symbol impact. Default reviews the working tree against the index's recorded commit (falling back to HEAD when no indexed commit exists), so diff evidence and indexed symbols share one baseline; pass baseRef (sha or branch name, e.g. the merge-base) to choose another base, or pass explicit paths. Digests are INDEX-backed (confidence indexed) and each carries a symbolId handle. Former symbols in surviving files, exact file moves, deleted types, and symbol-less C# changes are reported explicitly; every bounded section exposes coverage.")]
+    [Description("ONE budget-bounded review digest: diff -> touched symbols -> per-symbol impact. Default reviews the working tree against the index's recorded commit (falling back to HEAD when no indexed commit exists), so diff evidence and indexed symbols share one baseline; pass baseRef (sha or branch name, e.g. the merge-base) to choose another base, or pass explicit paths. Digests are INDEX-backed (confidence indexed) and each carries a symbolId handle. Former symbols in surviving files, exact file moves, deleted types, symbol-less C# changes, and file-level unsupported-language source changes are reported explicitly; every bounded section exposes coverage.")]
     public string ReviewPack(
         [Description("Base to diff against: a commit sha or a ref name (strict charset; typically the merge-base). Default: the index's recorded commit, so diff evidence and indexed symbols share one baseline.")] string? baseRef = null,
         [Description("Comma-separated workspace-relative paths to review INSTEAD of a git diff (whole-file granularity; no git needed).")] string? paths = null,
@@ -263,6 +266,7 @@ public sealed partial class NavigationTools
             return parsed;
         }
         int untrackedCount = 0;
+        var untrackedPaths = new HashSet<string>(StringComparer.Ordinal);
         bool projectShapeChanged = false;
         if (paths is not null)
         {
@@ -360,6 +364,7 @@ public sealed partial class NavigationTools
                     !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(root, fullPath))
                 {
                     changed[p] = WholeFile();
+                    untrackedPaths.Add(p);
                     untrackedCount++;
                 }
             }
@@ -392,6 +397,23 @@ public sealed partial class NavigationTools
         {
             notes.Add(new ReviewNote(NoteIds.ReviewChangedFilesCap,
                 $"Only {csFiles.Count} of {csFilesTotal} changed C# files were mapped to symbols; narrow with 'paths' to inspect the remainder."));
+        }
+        var allUnsupportedLanguageFiles = changed.Keys
+            .Where(IsFSharpSourcePath)
+            .Select(path => new ReviewUnsupportedLanguageFile(path, "fs",
+                untrackedPaths.Contains(path) ? "untracked" : paths is not null ? "explicit" : "changed"))
+            .Concat(deleted.Where(IsFSharpSourcePath)
+                .Select(path => new ReviewUnsupportedLanguageFile(path, "fs", "deleted")))
+            .OrderBy(item => item.Path, StringComparer.Ordinal)
+            .ThenBy(item => item.Change, StringComparer.Ordinal)
+            .ToList();
+        int unsupportedLanguageFilesTotal = allUnsupportedLanguageFiles.Count;
+        var unsupportedLanguageFiles = allUnsupportedLanguageFiles
+            .Take(ReviewMaxUnsupportedLanguageFiles).ToList();
+        if (unsupportedLanguageFilesTotal > 0)
+        {
+            notes.Add(new ReviewNote(NoteIds.ReviewUnsupportedLanguageFiles,
+                $"{unsupportedLanguageFilesTotal} F# source change(s) are reported at file level because tier-a indexing has no F# syntax or compiler model; inspect their raw diffs directly."));
         }
         var projectFiles = changed.Keys.Concat(deleted)
             .Where(IsProjectShapePath)
@@ -1058,6 +1080,8 @@ public sealed partial class NavigationTools
                 sampleBytesPerList);
         var meta = Meta.From(pinnedIndexHealth, "indexed", "text");
         var symbolItems = new List<object>(digests);
+        var unsupportedLanguageItems = new List<ReviewUnsupportedLanguageFile>(
+            unsupportedLanguageFiles);
         var projectItems = new List<string>(projectFiles);
         var deletedItems = new List<ReviewDeletedFile>(deletedOut);
         var unmappedItems = new List<ReviewUnmappedHunk>(unmappedHunks);
@@ -1087,6 +1111,7 @@ public sealed partial class NavigationTools
                 {
                     total = changed.Count + deleted.Count,
                     cs = csFilesTotal,
+                    fs = changed.Keys.Count(IsFSharpSourcePath),
                     projectFiles = projectFiles.Count,
                     deleted = deleted.Count,
                     untracked = untrackedCount > 0 ? untrackedCount : (int?)null,
@@ -1100,6 +1125,19 @@ public sealed partial class NavigationTools
                     returned = csFiles.Count,
                     truncated = changedFileCapHit ? true : (bool?)null,
                 },
+                unsupportedLanguageFiles = unsupportedLanguageItems.Count > 0
+                    ? unsupportedLanguageItems
+                    : null,
+                unsupportedLanguageFilesCoverage = unsupportedLanguageFilesTotal == 0
+                    ? null
+                    : new
+                    {
+                        total = unsupportedLanguageFilesTotal,
+                        returned = unsupportedLanguageItems.Count,
+                        truncated = unsupportedLanguageItems.Count < unsupportedLanguageFilesTotal
+                            ? true
+                            : (bool?)null,
+                    },
                 baseBlobRecoveryCoverage = baseBlobRequests == 0 ? null : new
                 {
                     attempted = baseBlobAttempts,
@@ -1275,6 +1313,7 @@ public sealed partial class NavigationTools
                            TrimReviewList(excludedSubmoduleSample) ||
                            TrimReviewList(excludedUntrackedRepositorySample) ||
                            TrimReviewList(excludedUntrackedLinkSample) ||
+                           TrimReviewList(unsupportedLanguageItems) ||
                            TrimReviewList(projectItems) ||
                            TrimReviewList(symbolItems) ||
                            TrimReviewList(deletedItems) ||
@@ -1537,6 +1576,7 @@ public sealed partial class NavigationTools
         Action? onMatchAttempt = null, Action? afterDefaultSdkEvaluationForTest = null)
     {
         string normalizedFile = CodeNav.Core.WorkspacePaths.Normalize(filePath);
+        string sourceLanguage = ReviewSourceLanguage(normalizedFile);
         bool ignoreCase = ignoreCaseOverride ?? OperatingSystem.IsWindows();
         matchBudget ??= new GlobMatchBudget(ReviewMaxProjectGlobSegments,
             ReviewMaxProjectGlobOperations,
@@ -1550,6 +1590,9 @@ public sealed partial class NavigationTools
         foreach (ProjectRow project in projects)
         {
             if (!OwnershipBudgetCheckpoint(matchBudget)) return [];
+            // Compile items are language-specific. A raw Include in an fsproj cannot prove
+            // ownership of C# source (or vice versa), even when the path/glob itself matches.
+            if (!project.Language.Equals(sourceLanguage, StringComparison.Ordinal)) continue;
             if (!parsedProjects.TryGetValue(project.Id, out ParsedProject? parsed)) continue;
             string projectPath = CodeNav.Core.WorkspacePaths.Normalize(project.Path);
             int slash = projectPath.LastIndexOf('/');
@@ -1600,6 +1643,17 @@ public sealed partial class NavigationTools
         return owners;
     }
 
+    private static string ReviewSourceLanguage(string normalizedPath)
+        => IsFSharpSourcePath(normalizedPath) ? "fs" : "cs";
+
+    private static bool IsFSharpSourcePath(string normalizedPath)
+    {
+        string extension = Path.GetExtension(normalizedPath);
+        return extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".fsx", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool OwnershipBudgetCheckpoint(GlobMatchBudget budget) =>
         MsBuildGlob.Match("", "", ignoreCase: false, budget) !=
         GlobMatchOutcome.BudgetExhausted;
@@ -1635,6 +1689,8 @@ public sealed partial class NavigationTools
         string fileName = normalized[(normalized.LastIndexOf('/') + 1)..];
         return normalized.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) ||
                normalized.EndsWith(".csproj.user", StringComparison.OrdinalIgnoreCase) ||
+               normalized.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase) ||
+               normalized.EndsWith(".fsproj.user", StringComparison.OrdinalIgnoreCase) ||
                normalized.EndsWith(".shproj", StringComparison.OrdinalIgnoreCase) ||
                normalized.EndsWith(".proj", StringComparison.OrdinalIgnoreCase) ||
                normalized.EndsWith(".projitems", StringComparison.OrdinalIgnoreCase) ||

@@ -139,7 +139,7 @@ public sealed partial class IndexQueries
             $"""
             SELECT COUNT(DISTINCT f.id) FROM files f
             {join}
-            {where} AND f.lang IN ('cs','csproj','sln','config')
+            {where} AND f.lang IN ('cs','fs','csproj','fsproj','sln','config')
             """,
             r => r.GetInt64(0), args.ToArray())[0];
         args.Add(("$lim", max));
@@ -147,7 +147,7 @@ public sealed partial class IndexQueries
             $"""
             SELECT f.id, f.path, f.is_generated FROM files f
             {join}
-            {where} AND f.lang IN ('cs','csproj','sln','config')
+            {where} AND f.lang IN ('cs','fs','csproj','fsproj','sln','config')
             GROUP BY f.id
             ORDER BY f.is_generated, length(f.path)
             LIMIT $lim

@@ -13,11 +13,10 @@ namespace CodeNav.Core.Indexing;
 /// referencing project consumes the referenced one. That blindness is exactly why
 /// implementations/references on a cross-project interface returned zero while the syntactic
 /// base-list index could see all 8 implementers.
-/// Name collisions (two workspace projects producing the same assembly name — the monolith's
-/// net-old/net-new pairing idiom) resolve to the FIRST row: the whole downstream is name-keyed
-/// (graph queries and closures return names; the semantic workspace loads and merges BY name),
-/// so an edge to any row is the same name-level fact — the original no-edge policy silently
-/// severed every consumer of a PAIRED declarer (field 0.7.2: cold references returned exact 0).
+/// Same-language name collisions (the monolith's net-old/net-new pairing idiom) resolve to the
+/// first row because the downstream remains name-keyed. Mixed C#/F# collisions retain one target
+/// per language: the public graph still has one name-level fact, while semantic coverage can see
+/// that the recovered binding is ambiguous instead of trusting path order and claiming exactness.
 /// A HintPath into a never-indexed dir (packages/bin/obj/...) marks the dll EXTERNAL: no edge
 /// even on a name match (review: the NuGet-vs-vendored-fork false edge). Matching is by the
 /// Include simple name only — no HintPath-basename fallback (review-reproduced false-edge source).
@@ -35,25 +34,39 @@ internal static class AssemblyRefEdges
         IReadOnlyList<ParsedProject> parsedProjects,
         IReadOnlyDictionary<string, long> projectIdsByRelPath)
     {
-        // Assembly-name -> project id. ParsedProject.Name already prefers <AssemblyName> over the
+        // Assembly-name -> physical project candidates. ParsedProject.Name already prefers
+        // <AssemblyName> over the
         // csproj file name, which is the name a <Reference>'s Include simple name actually refers
         // to. FAILED-parse projects carry only a file-derived name guess — they never claim a slot.
         //
-        // NAME COLLISIONS resolve to the FIRST row, not to no-edge (field 0.7.2 regression): the
+        // SAME-LANGUAGE name collisions resolve to the FIRST row, not to no-edge (field 0.7.2 regression): the
         // monolith's net-old/net-new idiom pairs csprojs under ONE assembly name — including the
         // flagship declarer itself — and the old poison-to-null silently severed EVERY consumer's
         // edge to it (cold references loaded 1/1 and returned an "exact" zero). Picking a row is
         // safe because the entire downstream is NAME-keyed: ProjectGraph/closures return names,
         // and the semantic workspace loads BY NAME — merging a pair's compile sets into one adhoc
         // project regardless of which row an edge points at. An edge to any row is the same
-        // name-level fact; no-edge is the only wrong answer.
-        var byName = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        // name-level fact; no-edge is the only wrong answer. A mixed C#/F# collision is different:
+        // choosing one physical row by path order can either wire an unrelated C# source project
+        // or erase unsupported F# coverage. Keep one representative per language so the logical
+        // graph stays stable while Roslyn-facing coverage fails closed.
+        var byName = new Dictionary<string, List<(long Id, string Language)>>(
+            StringComparer.OrdinalIgnoreCase);
         int nameCollisions = 0;
         foreach (var p in parsedProjects)
         {
             if (p.LoadStatus.StartsWith("failed", StringComparison.Ordinal)) continue;
             if (!projectIdsByRelPath.TryGetValue(p.RelPath, out long id)) continue;
-            if (!byName.TryAdd(p.Name, id)) nameCollisions++;
+            if (!byName.TryGetValue(p.Name, out var candidates))
+            {
+                candidates = [];
+                byName[p.Name] = candidates;
+            }
+            else
+            {
+                nameCollisions++;
+            }
+            candidates.Add((id, p.Language));
         }
 
         int recovered = 0;
@@ -75,15 +88,21 @@ internal static class AssemblyRefEdges
                 // No basename fallback: mapping an aliased Include via its dll file name was
                 // speculative and review-reproduced as a false-edge source (Include="VendorLib"
                 // whose HintPath file name happens to match a workspace project).
-                if (!byName.TryGetValue(assembly, out long toId)) continue; // not an in-workspace assembly
+                if (!byName.TryGetValue(assembly, out var targets)) continue; // not an in-workspace assembly
                 // Self-guard at NAME level, not row level (review): a same-name pair member
                 // referencing its own assembly name would pass a row-id check (different rows)
                 // and mint a name-level SELF-edge — DependentClosure then returns the project as
                 // its own dependent (contract: "target excluded") and impact inflates its count.
-                if (toId == fromId) continue;
                 if (string.Equals(assembly, p.Name, StringComparison.OrdinalIgnoreCase)) continue;
-                store.InsertProjectRef(tx, fromId, toId, kind: "assembly"); // provenance (bxw)
-                recovered++;
+                foreach (var target in targets
+                             .GroupBy(candidate => candidate.Language,
+                                 StringComparer.OrdinalIgnoreCase)
+                             .Select(group => group.First()))
+                {
+                    if (target.Id == fromId) continue;
+                    store.InsertProjectRef(tx, fromId, target.Id, kind: "assembly"); // provenance (bxw)
+                    recovered++;
+                }
             }
         }
         return (recovered, nameCollisions);

@@ -67,7 +67,12 @@ public sealed partial class NavigationTools
             // Build identity so a caller can verify WHICH build is deployed. The old hardcoded version
             // went stale at 0.1.0 across many feature batches; commit auto-tracks the actual build.
             build = new { version = BuildInfo.Version, commit = BuildInfo.Commit, indexSchema = BuildInfo.IndexSchema },
-            languages = new[] { "csharp" },
+            languages = new[] { "csharp", "fsharp" },
+            languageLayers = new
+            {
+                csharp = new[] { "text", "syntax", "semantic" },
+                fsharp = new[] { "text", "projectGraph" },
+            },
             navigationLayers = new[] { "text", "syntax", "semantic" },
             // Explicit capability manifest: lets a caller CONFIRM a feature is present without having to
             // trigger its (often silent-when-clean) response fields — grep an id to verify a deploy.
@@ -80,10 +85,14 @@ public sealed partial class NavigationTools
                 new { id = "implementer-completeness", summary = "Member fallback exposes implementerCount/omittedImplementers. When identity is compiler-resolved but implementers are indexed, symbolConfidence exact and implementationsConfidence heuristic remain separate; type_hierarchy fallback returns heuristic base-list candidates without compiler-only bases/interfaces" },
                 new { id = "generic-arity-resolution", summary = "v0.11.8 implementations/type_hierarchy select by arity or symbolId; mixed-arity names refuse; syntax fallback is arity-exact" },
                 new { id = "friend-assembly-semantics", summary = "v0.11.9 models literal local SDK InternalsVisibleTo grants; friend-only results disclose project_model_unproven when imports, package build assets, or Directory.Build authority can change the grant" },
+                new { id = "fsharp-text-indexing", summary = "v0.12.0 indexes .fs/.fsi/.fsx text and FTS candidates" },
+                new { id = "fsharp-project-graph", summary = "v0.12.0 .fsproj compile ownership and reference graph; never loaded into Roslyn" },
+                new { id = "fsharp-unsupported-language-boundary", summary = "v0.12.0 rejects F# C#-syntax/compiler operations explicitly; mixed explicit symbol scopes disclose skipped F# files" },
+                new { id = "review-fsharp-file-coverage", summary = "review_pack: unsupportedLanguageFiles covers F# changes" },
                 new { id = "compiled-awareness", summary = "search_symbol orphaned; repo_overview.orphanedFiles; compiled ownership guides semantic resolution, impact, and context_pack" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is LOGGED, never silent" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
-                new { id = "text-search", summary = "search_text: whole-word tokens, context lines, containingSymbol, precise-by-default; regex:true (.NET, line-based, FTS-narrowed via narrowedOn, ReDoS-guarded) with coverage honesty (filesTotal/budgetHit/timedOut); zero-hit 'elsewhere' redirect probe + didYouMean (variantKind 'tokenForm': Mode4 <-> 'Mode 4'; variantKind 'spelling': single-token Damerau edit-distance-1 against indexed SYMBOL names, first-char-anchored — first-character typos and sub-4-char tokens are deliberately not covered — every suggestion PROBED before surfacing, never substituted) + contextual notes; elsewhere/didYouMean precise probes carry structured samples {path, line, containingSymbol} beside samplePaths (the redirect no longer drops the owner context main hits carry; the cross-line co-occur branch stays paths-only — its evidence is file-level)" },
+                new { id = "text-search", summary = "search_text: whole-word tokens, context, containingSymbol, precise/partial grading; bounded line-based .NET regex narrowed by FTS; filesTotal/budgetHit/timedOut disclose coverage. Zero hits probe elsewhere/didYouMean; suggestions are probed, never substituted, with path/line/owner samples" },
                 new { id = "reference-kinds", summary = "references (exact path): per-location usage kinds — call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/other — with a kinds breakdown, usageKinds filter (validated), and publicConsumersOnly (usages outside the symbol's declaring project); indexed fallback stays unclassified and says so" },
                 new { id = "symbol-handles", summary = "Reindex-detecting idx handles pin source_context, definition, references, impact, implementations, and type_hierarchy" },
                 new { id = "filter-honest-counts", summary = "references: totalReferences/totalCandidates, kinds, groups, and summary all honor includeTests (filtered BEFORE counting on both exact and indexed paths); linked multi-project files counted once; filtered summaries say 'test projects excluded' instead of a misleading '0 test'" },
@@ -124,7 +133,7 @@ public sealed partial class NavigationTools
                 new { id = "review-project-shape-budget", summary = "Bounded no-follow XML caps project count, bytes, and time; projectOwnershipFallbackCoverage plus review.project_shape_budget disclose incomplete deleted-path proof" },
                 new { id = "review-project-glob-budget", summary = "Iterative project-ownership glob budget covers default-SDK checks and Include/Exclude; globBudgetHit plus review.project_glob_budget expose segment, operation, or deadline exhaustion and fail proof closed" },
                 new { id = "review-project-shape-completeness", summary = "Unevaluated imports/SDKs/conditions/expressions block deleted-path proof; projectOwnershipFallbackCoverage.evaluationIncomplete and review.project_shape_incomplete disclose it" },
-                new { id = "review-project-file-guidance", summary = "v0.11.4 one classifier drives changedProjectFiles and review.project_files_changed for modified or deleted .csproj/.csproj.user/.shproj/.proj/.projitems/.sln/.slnx/.slnf/.props/.targets and Directory.Build.rsp and MSBuild.rsp inputs" },
+                new { id = "review-project-file-guidance", summary = "v0.12.0 one classifier drives changedProjectFiles and review.project_files_changed for modified or deleted .csproj/.fsproj/.csproj.user/.fsproj.user/.shproj/.proj/.projitems/.sln/.slnx/.slnf/.props/.targets and Directory.Build.rsp and MSBuild.rsp inputs" },
                 new { id = "review-default-baseline-honesty", summary = "v0.11.4 bounded git_index_baseline_unavailable gives refresh_index or explicit baseRef guidance; caller-supplied invalid refs remain bad_request" },
                 new { id = "review-unmapped-change-coverage", summary = "v0.11.2 unmapped change coverage: namespace and file-level C# regions not fully covered by reviewable indexed symbols appear in bounded unmappedChanges records with explicit side, old/new coordinates, reason, and total/returned/truncated" },
                 new { id = "review-index-epoch-consistency", summary = "review_pack pins rows and response metadata to one stable SQLite read epoch; an overlapping refresh cannot mix old symbols with new ownership or health evidence" },
@@ -251,18 +260,22 @@ public sealed partial class NavigationTools
             projects = new
             {
                 total = stats.Projects,
+                csharp = stats.CSharpProjects,
+                fsharp = stats.FSharpProjects,
                 legacyStyle = stats.LegacyProjects,
                 sdkStyle = stats.SdkProjects,
                 test = stats.TestProjects,
             },
             solutions = stats.Solutions,
             csFiles = stats.CsFiles,
+            fsFiles = stats.FsFiles,
             totalLines = stats.TotalLines,
             symbols = stats.Symbols,
             generatedFiles = stats.GeneratedFiles,
-            // .cs files in no project's compile set — dead code the compiler never builds (3tz: the
-            // graph expands <Compile Include> globs and honors <Compile Remove>; residual gaps are
-            // shared .projitems, props-level globs, and ignored Conditions). Per hit: the orphaned flag.
+            // C# plus compiled-form F# source (.fs/.fsi) in no project's compile set — code no
+            // project compiler consumes. F# scripts (.fsx) are intentionally excluded. The graph
+            // expands <Compile Include> globs and honors <Compile Remove>; residual gaps are shared
+            // .projitems, props-level globs, and ignored Conditions. Per C# symbol hit: orphaned.
             orphanedFiles = stats.OrphanedFiles,
             targetFrameworks = stats.TfmBreakdown,
             // Vendored/generated directory globs detected in the index — pass to search_symbol /
@@ -296,7 +309,14 @@ public sealed partial class NavigationTools
         // page tail (keeping a prefix), so a fixed offset+limit would skip the dropped items (bug e2q).
         return Json.WithListBudget(files, (items, truncated) => new
         {
-            files = items.Select(f => new { f.Path, sizeBytes = f.Size, lines = f.LineCount, f.IsGenerated }),
+            files = items.Select(f => new
+            {
+                f.Path,
+                language = f.Language,
+                sizeBytes = f.Size,
+                lines = f.LineCount,
+                f.IsGenerated,
+            }),
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
             truncated,
             meta,
@@ -304,7 +324,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Ranked full-text search over the indexed C# surface (.cs plus .csproj/.sln/config) — NOT .sql/.js/other file types. WHOLE-WORD and token-based by default: 'Batch' does NOT match 'Batching'. For \\s / alternation / character classes set regex:true (.NET regex, line-based, scoped by pathGlob) — still not rust/ripgrep syntax; other file types need grep. Returns 'precise' hits (all query tokens on one line) by default; set partials='always' for weaker co-occurrence leads. Use context (or contextBefore/contextAfter) for surrounding lines, like grep -C/-B/-A. Best for literals, config keys, error messages, comments; for code identifiers prefer search_symbol/definition/references.")]
+    [Description("Ranked full-text search over indexed C# and F# source plus project/solution/config files. WHOLE-WORD and token-based by default: 'Batch' does NOT match 'Batching'. For \\s / alternation / character classes set regex:true (.NET regex, line-based, scoped by pathGlob) — still not rust/ripgrep syntax; other file types need grep. Returns 'precise' hits (all query tokens on one line) by default; set partials='always' for weaker co-occurrence leads. Use context (or contextBefore/contextAfter) for surrounding lines, like grep -C/-B/-A. Best for literals, config keys, error messages, and comments; F# compiler semantics are not available.")]
     public string SearchText(
         [Description("Text to find. Multi-word queries are AND-ed by token; a line with all tokens is 'precise'.")] string query,
         [Description("Restrict to paths matching this glob (e.g. 'src/Billing/**').")] string? pathGlob = null,
@@ -312,7 +332,7 @@ public sealed partial class NavigationTools
         [Description("Drop hits under known vendor/generated dir names (3rdparty, vendor, external, generated...) at ANY depth. Matches the per-hit noise flag; convenience over excludePath.")] bool firstPartyOnly = false,
         [Description("Restrict to files compiled by this project name.")] string? project = null,
         [Description("'all' (default), 'production' (exclude tests), or 'tests'.")] string scope = "all",
-        [Description("Restrict by file language: cs | csproj | sln | config.")] string? lang = null,
+        [Description("Restrict by file language: cs | fs | csproj | fsproj | sln | config.")] string? lang = null,
         [Description("Include generated files (default false).")] bool includeGenerated = false,
         [Description("Weaker 'some query tokens co-occur, not all on one line' leads: 'never' (default — precise only), 'auto' (fill space precise did not), or 'always'. filesMatchedAcrossLines still flags files where all tokens co-occur across lines.")] string partials = "never",
         [Description("Lines of context around each hit, like grep -C (0-20, default 0 = just the line). Applies both before and after.")] int context = 0,
@@ -472,7 +492,7 @@ public sealed partial class NavigationTools
                 {
                     // Provably index-wide: an FTS AND over all files matched nothing (the inner LIMIT
                     // truncates results, not the match), so no file holds all tokens together.
-                    note = "No file contains all query tokens together (whole-word: 'Batch' does not match 'Batching'). Check spelling, drop a token, try search_symbol match='substring' for identifiers, or grep for non-C# file types.";
+                    note = "No file contains all query tokens together (whole-word: 'Batch' does not match 'Batching'). Check spelling, drop a token, try search_symbol match='substring' for C# identifiers, or grep for non-indexed file types.";
                     noteId = NoteIds.SearchAbsentEverywhere; // ProbeVariants upgrades this to did_you_mean when a suggestion lands
                     ProbeVariants(replaceNote: true);
                 }
@@ -615,11 +635,16 @@ public sealed partial class NavigationTools
         if (NotReady() is { } notReady) return notReady;
         string normPath = NormalizePath(path);
         using var q = _manager.OpenQueries();
-        var rows = q.Outline(normPath);
-        if (rows.Count == 0)
+        FileHit? file = q.FileByPath(normPath);
+        if (file is null)
         {
             return Json.Serialize(new { error = "file_not_indexed", path, meta = Meta.From(_manager.Health(), "indexed", "syntax") });
         }
+        if (file.Language != "cs")
+        {
+            return UnsupportedLanguage(path, file.Language, "outline");
+        }
+        var rows = q.Outline(normPath);
 
         var byId = rows.ToDictionary(r => r.Id);
         var children = new Dictionary<long, List<SymbolHit>>();
@@ -895,7 +920,7 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- symbols
 
     [McpServerTool(Name = "search_symbol")]
-    [Description("Find declared symbols by name across the workspace (types, methods, properties...). Prefer this over search_text for anything that is a code identifier. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored third-party source). Hits carry an 'orphaned' flag (present only when true) for files in NO project's compile set — dead code the compiler never builds (Compile Include globs expanded, Compile Remove honored).")]
+    [Description("Find C# declared symbols by name across the workspace (types, methods, properties...). With no pathGlob the indexed search is language-neutral and returns all available symbol rows. An explicit F#-only pathGlob returns unsupported_language; a mixed C#/F# scope returns its C# symbols with partialReason='unsupported_language_files_skipped'. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored source). Hits carry an 'orphaned' flag (present only when true) for files in NO project's compile set — dead code the compiler never builds (Compile Include globs expanded, Compile Remove honored).")]
     public string SearchSymbol(
         [Description("Symbol name. Match behavior set by 'match'. Empty (or '*') with a 'namespace' or 'pathGlob' ENUMERATES that scope's symbols instead — kind-filterable, paged.")] string query = "",
         [Description("Comma-separated kind filter: class,interface,struct,record,enum,delegate,method,constructor,property,field,event,enum_member. Empty = all.")] string? kinds = null,
@@ -913,6 +938,28 @@ public sealed partial class NavigationTools
         var kindList = SplitCsv(kinds);
         using var q = _manager.OpenQueries();
         var excludes = BuildExcludes(excludePath, firstPartyOnly);
+        if (pathGlob is { Length: > 0 } exactPath &&
+            exactPath.IndexOfAny(new[] { '*', '?', '[' }) < 0 &&
+            q.FileByPath(NormalizePath(exactPath)) is { Language: not "cs" } unsupportedFile)
+        {
+            return UnsupportedLanguage(exactPath, unsupportedFile.Language, "search_symbol");
+        }
+        List<string> scopeLanguages = pathGlob is { Length: > 0 }
+            ? q.SourceLanguagesForPathScope(pathGlob, excludes, includeGenerated)
+            : [];
+        List<string> unsupportedScopeLanguages = scopeLanguages
+            .Where(language => !language.Equals("cs", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        bool scopeHasCSharp = scopeLanguages.Any(language =>
+            language.Equals("cs", StringComparison.OrdinalIgnoreCase));
+        if (pathGlob is { Length: > 0 } unsupportedScope && !scopeHasCSharp &&
+            unsupportedScopeLanguages.Count > 0)
+        {
+            return UnsupportedLanguage(unsupportedScope,
+                string.Join(',', unsupportedScopeLanguages), "search_symbol");
+        }
+        bool unsupportedLanguageFilesSkipped = scopeHasCSharp &&
+            unsupportedScopeLanguages.Count > 0;
 
         List<SymbolHit> hits;
         string effectiveMatch = match;
@@ -985,6 +1032,14 @@ public sealed partial class NavigationTools
             // count so a byte-budget shrink doesn't skip the dropped tail (bug e2q).
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}:{effectiveMatch}" : null,
             truncated,
+            partial = unsupportedLanguageFilesSkipped ? true : (bool?)null,
+            partialReason = unsupportedLanguageFilesSkipped
+                ? "unsupported_language_files_skipped"
+                : null,
+            scopeLanguages = scopeLanguages.Count > 0 ? scopeLanguages : null,
+            unsupportedLanguages = unsupportedScopeLanguages.Count > 0
+                ? unsupportedScopeLanguages
+                : null,
             // Steer the follow-up (feedback: nothing nudged toward references after a symbol
             // hit). First page only — repeating it on cursored pages just burns budget.
             hint = items.Count > 0 && cursor is null
@@ -1004,6 +1059,10 @@ public sealed partial class NavigationTools
         if (NotReady() is { } notReady) return notReady;
         path = NormalizePath(path);
         using var q = _manager.OpenQueries();
+        if (q.FileByPath(path) is { Language: not "cs" } unsupportedFile)
+        {
+            return UnsupportedLanguage(path, unsupportedFile.Language, "symbol_at");
+        }
         var chain = q.SymbolAt(path, line);
         var projects = q.ProjectsContaining(path);
         return Json.Serialize(new
@@ -1012,7 +1071,14 @@ public sealed partial class NavigationTools
             line,
             found = chain.Count > 0,
             chain = chain.Select(SymbolJson),
-            owningProjects = projects.Select(p => new { p.Name, p.Path, p.Style, p.IsTest }),
+            owningProjects = projects.Select(p => new
+            {
+                p.Name,
+                p.Path,
+                p.Style,
+                language = p.Language,
+                p.IsTest,
+            }),
             meta = Meta.From(_manager.Health(), "indexed", "syntax"),
         });
     }
@@ -1042,6 +1108,8 @@ public sealed partial class NavigationTools
             // narrow a bare name, so applying them here can only wrongly suppress the resolved hit.
             kinds = null; container = null;
         }
+        if (UnsupportedLanguageAtPath(path, "definition") is { } unsupportedLanguage)
+            return unsupportedLanguage;
         if (name is null && (path is null || line <= 0))
         {
             return Json.Serialize(new { error = "bad_request", detail = "Provide 'symbolId', 'name', or 'path'+'line'." });
@@ -1257,6 +1325,9 @@ public sealed partial class NavigationTools
         [Description("Resolve by a search_symbol candidate's current idx: handle. Takes precedence over name, path+line, and arity.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        if (symbolId is not { Length: > 0 } &&
+            UnsupportedLanguageAtPath(path, "implementations") is { } unsupportedLanguage)
+            return unsupportedLanguage;
         var (selection, selectionError) = ResolveArityTarget(
             name, path, line, column, arity, symbolId, typeOnly: false);
         if (selectionError is not null) return selectionError;
@@ -1287,12 +1358,21 @@ public sealed partial class NavigationTools
                 var impls = result.Implementations; // already ranked concrete-first by the semantic layer
                 int concreteCount = impls.Count(r => !r.Declaration.IsAbstract);
                 bool exhausted = result.DeadlineExhausted;
-                bool bounded = result.SkippedCandidateProjects.Count > 0 ||
-                    result.Coverage.FailedProjects.Count > 0 ||
-                    result.Coverage.LoadedProjects < result.Coverage.RequestedProjects;
-                bool partial = exhausted || bounded || result.ProjectModelUnproven;
+                bool unsupportedLanguageSkipped = result.Coverage.SkippedProjects.Count > 0;
+                bool candidateBounded = result.SkippedCandidateProjects.Count > 0;
+                bool coverageGap = result.Coverage.LoadedProjects <
+                    result.Coverage.RequestedProjects;
+                bool loadIncomplete = result.Coverage.FailedProjects.Count > 0 ||
+                    (coverageGap && !candidateBounded && !unsupportedLanguageSkipped);
+                bool partial = exhausted || unsupportedLanguageSkipped || candidateBounded ||
+                    loadIncomplete || result.ProjectModelUnproven;
+                string? partialCause = SemanticCoverageReasons.Primary(result.Coverage,
+                    exhausted, candidateBounded,
+                    projectModelUnproven: result.ProjectModelUnproven);
                 var meta0 = Meta.From(_manager.Health(),
-                    result.ProjectModelUnproven ? "indexed" : "exact", "semantic");
+                    unsupportedLanguageSkipped || loadIncomplete || result.ProjectModelUnproven
+                        ? "indexed"
+                        : "exact", "semantic");
                 long elapsedMs = swSem.ElapsedMilliseconds;
                 return Json.WithAuxiliaryListBudget(impls, result.SkippedCandidateProjects,
                     (items, truncated, skippedItems, skippedTruncated) => new
@@ -1321,13 +1401,7 @@ public sealed partial class NavigationTools
                         : (int?)null,
                     skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
                     partial = partial ? true : (bool?)null,
-                    partialReason = exhausted
-                        ? $"semantic_timeout: deadline exhausted after {elapsedMs}ms of {deadlineMs}ms; this list is a lower bound (raise timeoutMs)"
-                        : bounded
-                            ? $"candidate_cluster_bounded: skipped {result.SkippedCandidateProjects.Count} candidate projects and {result.Coverage.FailedProjects.Count} failed loads (raise maxProjects)"
-                            : result.ProjectModelUnproven
-                                ? "project_model_unproven"
-                                : null,
+                    partialReason = partialCause,
                     // t2b: where the budget went — cluster load+resolve vs the finder passes.
                     timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
                     truncated,
@@ -1340,11 +1414,10 @@ public sealed partial class NavigationTools
             // Semantic RESOLVED the symbol but found no implementers, OR it could not resolve. Be
             // honest about which: bounded coverage (raising maxProjects may help) vs genuinely none.
             failReason = result is null ? ExpandReason(reason)
-                : (result.SkippedCandidateProjects.Count > 0 ||
-                   result.Coverage.LoadedProjects < result.Coverage.RequestedProjects ||
-                   result.Coverage.FailedProjects.Count > 0)
-                    ? "candidate_cluster_bounded"
-                    : "no_semantic_implementers";
+                : SemanticCoverageReasons.Primary(result.Coverage,
+                    candidateProjectsSkipped: result.SkippedCandidateProjects.Count > 0,
+                    projectModelUnproven: result.ProjectModelUnproven)
+                  ?? "no_semantic_implementers";
         }
 
         // Heuristic fallback: types whose base list textually mentions the name — a naming
@@ -1496,6 +1569,8 @@ public sealed partial class NavigationTools
             if (error is not null) return error;
             name = hit!.Name; path = hit.FilePath; line = hit.StartLine; column = 0;
         }
+        if (UnsupportedLanguageAtPath(path, "references") is { } unsupportedLanguage)
+            return unsupportedLanguage;
         if (name is null && (path is null || line <= 0))
         {
             return Json.Serialize(new { error = "bad_request", detail = "Provide 'symbolId', 'name', or 'path'+'line'." });
@@ -1570,20 +1645,61 @@ public sealed partial class NavigationTools
                         }
                     }
                     bool exhausted = result.DeadlineExhausted;
-                    bool partial = exhausted || result.SkippedCandidateProjects.Count > 0 ||
-                        result.Coverage.FailedProjects.Count > 0 || result.ProjectModelUnproven;
-                    // "at least": exhausted counts are a salvaged lower bound (24n), never the census.
-                    string atLeast = exhausted ? "at least " : "";
+                    bool unsupportedLanguageSkipped = result.Coverage.SkippedProjects.Count > 0;
+                    bool candidateProjectsSkipped = result.SkippedCandidateProjects.Count > 0;
+                    bool failedLoads = result.Coverage.FailedProjects.Count > 0;
+                    bool coverageIncomplete = result.Coverage.LoadedProjects <
+                        result.Coverage.RequestedProjects;
+                    bool outOfGraphCandidates = result.OutOfGraphCandidateCount > 0;
+                    // Omitted monotonic scope makes the modeled total a lower bound. Project-model
+                    // uncertainty is different: imported MSBuild authority can revoke a locally
+                    // modeled relationship, so candidates may include false positives and must
+                    // not be described as "at least N".
+                    bool monotonicScopeOmitted = exhausted || unsupportedLanguageSkipped ||
+                        candidateProjectsSkipped || failedLoads || coverageIncomplete ||
+                        outOfGraphCandidates;
+                    bool partial = monotonicScopeOmitted || result.ProjectModelUnproven;
+                    bool totalIsLowerBound = monotonicScopeOmitted &&
+                        !result.ProjectModelUnproven;
+                    string atLeast = totalIsLowerBound ? "at least " : "";
+                    bool indexedConfidence = partial;
                     var meta0 = Meta.From(_manager.Health(),
-                        result.ProjectModelUnproven ? "indexed" : "exact", "semantic");
+                        indexedConfidence ? "indexed" : "exact", "semantic");
                     long elapsedMs = swSem.ElapsedMilliseconds;
-                    return Json.WithAuxiliaryListBudget(groups0, result.SkippedCandidateProjects,
-                        (items, truncated, skippedItems, skippedTruncated) => new
+                    var partialReasons = new List<string>();
+                    if (exhausted)
+                        partialReasons.Add($"semantic_timeout: deadline exhausted after {elapsedMs}ms of {deadlineMs}ms; counts cover the scanned portion only (raise timeoutMs)");
+                    if (unsupportedLanguageSkipped)
+                        partialReasons.Add($"unsupported_language_projects_skipped: {result.Coverage.SkippedProjects.Count} project(s) could contain additional references");
+                    if (candidateProjectsSkipped)
+                        partialReasons.Add($"candidate_cluster_bounded: skipped {result.SkippedCandidateProjects.Count} candidate project(s) (raise maxProjects)");
+                    if (failedLoads)
+                        partialReasons.Add($"project_load_failed: {result.Coverage.FailedProjects.Count} project(s) were not scanned");
+                    if (coverageIncomplete && !unsupportedLanguageSkipped && !failedLoads)
+                        partialReasons.Add($"project_coverage_incomplete: loaded {result.Coverage.LoadedProjects} of {result.Coverage.RequestedProjects} requested projects");
+                    if (outOfGraphCandidates)
+                        partialReasons.Add($"out_of_graph_candidates: {result.OutOfGraphCandidateCount} textual candidate project(s) have no loadable dependency path");
+                    if (result.ProjectModelUnproven)
+                        partialReasons.Add("project_model_unproven");
+                    string? partialReason = partialReasons.Count > 0
+                        ? string.Join("; ", partialReasons)
+                        : null;
+                    var boundedOutOfGraph = new List<(string Value, bool Truncated)>();
+                    foreach (string project in result.OutOfGraphCandidates ?? [])
+                    {
+                        string bounded = Json.JsonStringPrefix(project, 512,
+                            out bool identityTruncated);
+                        boundedOutOfGraph.Add((bounded, identityTruncated));
+                    }
+                    return Json.WithAuxiliaryListsBudget(groups0,
+                        result.SkippedCandidateProjects, boundedOutOfGraph,
+                        (items, truncated, skippedItems, skippedTruncated,
+                            outOfGraphItems, outOfGraphBudgetTruncated) => new
                     {
                         symbol = SemanticSymbolJson(result.Symbol),
-                        summary = $"{atLeast}{result.TotalLocations} {(result.ProjectModelUnproven ? "compiler-resolved candidate" : "exact")} references across {groups0.Count} projects ({mix0}).",
+                        summary = $"{atLeast}{result.TotalLocations} {(indexedConfidence ? "compiler-resolved candidate" : "exact")} references across {groups0.Count} projects ({mix0}).",
                         totalReferences = result.TotalLocations,
-                        totalIsLowerBound = exhausted ? true : (bool?)null,
+                        totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
                         // HOW the symbol is used, e.g. {"call":20,"xmldoc":480} — the anti-"500 refs
                         // that are mostly doc mentions" signal. Filter with usageKinds.
                         kinds = result.KindCounts is { Count: > 0 } ? result.KindCounts : null,
@@ -1597,25 +1713,32 @@ public sealed partial class NavigationTools
                         }),
                         coverage = CoverageJson(result.Coverage),
                         partial,
-                        partialReason = !partial ? null
-                            : exhausted
-                                ? $"deadline exhausted after {elapsedMs}ms of {deadlineMs}ms — counts cover the scanned portion only (raise timeoutMs)"
-                                  + (result.SkippedCandidateProjects.Count > 0 || result.Coverage.FailedProjects.Count > 0
-                                      ? $"; also skipped {result.SkippedCandidateProjects.Count} candidate projects, {result.Coverage.FailedProjects.Count} failed loads"
-                                      : "")
-                                : result.SkippedCandidateProjects.Count > 0 || result.Coverage.FailedProjects.Count > 0
-                                    ? $"skipped {result.SkippedCandidateProjects.Count} candidate projects (raise maxProjects), {result.Coverage.FailedProjects.Count} failed loads"
-                                    : "project_model_unproven",
+                        partialReason,
                         skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
                         skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
                             ? result.SkippedCandidateProjects.Count
                             : (int?)null,
                         skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
-                        // kbn: projects that textually mention the symbol but have NO graph path
-                        // to its declarer (plugins, config-wired consumers) — previously dropped
-                        // without a trace. Not loadable via maxProjects; scope with pathGlob or
-                        // run indexed mode to see their candidate lines.
-                        outOfGraphCandidates = result.OutOfGraphCandidates,
+                        // kbn: unscanned projects that textually mention the symbol but have no
+                        // graph path to its declarer (plugins, config-wired consumers). Scope with
+                        // pathGlob or run indexed mode to see their candidate lines.
+                        outOfGraphCandidates = outOfGraphItems.Count > 0
+                            ? outOfGraphItems.Select(item => item.Value).ToList()
+                            : null,
+                        outOfGraphCandidateCount = result.OutOfGraphCandidateCount > 0
+                            ? result.OutOfGraphCandidateCount
+                            : (int?)null,
+                        outOfGraphCandidatesReturned = result.OutOfGraphCandidateCount > 0
+                            ? outOfGraphItems.Count
+                            : (int?)null,
+                        outOfGraphCandidatesTruncated = result.OutOfGraphCandidatesTruncated ||
+                                                        outOfGraphBudgetTruncated
+                            ? true
+                            : (bool?)null,
+                        outOfGraphCandidateItemsTruncated = outOfGraphItems.Any(item =>
+                            item.Truncated)
+                            ? true
+                            : (bool?)null,
                         note = zeroNote,
                         noteId = zeroNote is not null ? NoteIds.ReferencesZeroLoadingGap : null, // a0b: stable, machine-matchable
                         // t2b: where the budget went — cluster load+resolve vs find+count.
@@ -1702,7 +1825,9 @@ public sealed partial class NavigationTools
         if (NotReady() is { } notReady) return notReady;
         depth = Math.Clamp(depth, 1, 5);
         using var q = _manager.OpenQueries();
-        var root = q.ProjectByName(project);
+        List<ProjectRow> rootRows = q.ProjectsByName(project);
+        ProjectRow? root = rootRows.FirstOrDefault(row => row.Language == "cs") ??
+                           rootRows.FirstOrDefault();
         if (root is null)
         {
             return Json.Serialize(new { error = "project_not_found", project, meta = Meta.From(_manager.Health(), "indexed", "text") });
@@ -1712,11 +1837,15 @@ public sealed partial class NavigationTools
             .Append(root.Name)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+        Dictionary<string, string> projectLanguages = q.ProjectLanguages(nodes);
+        string LanguageOf(string name) => projectLanguages.TryGetValue(name, out string? language)
+            ? language
+            : "unknown";
 
         var meta = Meta.From(_manager.Health(), "indexed", "text");
         return Json.WithListBudget(edges, (items, truncated) => new
         {
-            root = new { root.Name, root.Path, root.Style, root.Tfms, root.IsTest },
+            root = new { root.Name, root.Path, root.Style, language = LanguageOf(root.Name), root.Tfms, root.IsTest },
             direction,
             depth,
             nodeCount = nodes.Count,
@@ -1724,7 +1853,14 @@ public sealed partial class NavigationTools
             // 'hintPathReference' = recovered from <Reference>+HintPath / bare Include (the
             // multi-staged build). kind was previously HARDCODED 'projectReference' for every
             // edge — presenting binary couplings as source-graph ones.
-            edges = items.Select(e => new { from = e.FromProject, to = e.ToProject, kind = EdgeKind(e.Kind) }),
+            edges = items.Select(e => new
+            {
+                from = e.FromProject,
+                fromLanguage = LanguageOf(e.FromProject),
+                to = e.ToProject,
+                toLanguage = LanguageOf(e.ToProject),
+                kind = EdgeKind(e.Kind),
+            }),
             truncated,
             meta,
         });
@@ -1741,7 +1877,15 @@ public sealed partial class NavigationTools
         return Json.Serialize(new
         {
             path,
-            projects = projects.Select(p => new { p.Name, p.Path, p.Style, p.Tfms, p.IsTest }),
+            projects = projects.Select(p => new
+            {
+                p.Name,
+                p.Path,
+                p.Style,
+                language = p.Language,
+                p.Tfms,
+                p.IsTest,
+            }),
             meta = Meta.From(_manager.Health(), "indexed", "text"),
         });
     }
@@ -1888,6 +2032,17 @@ public sealed partial class NavigationTools
         };
     }
 
+    private const int CoverageIdentityJsonBytes = 256;
+
+    private static string CoverageIdentity(string value) =>
+        Json.JsonStringPrefix(value, CoverageIdentityJsonBytes, out _);
+
+    private static bool CoverageIdentityTruncated(string value)
+    {
+        _ = Json.JsonStringPrefix(value, CoverageIdentityJsonBytes, out bool truncated);
+        return truncated;
+    }
+
     private static object CoverageJson(ClusterCoverage c) => new
     {
         loadedProjects = c.LoadedProjects,
@@ -1896,23 +2051,67 @@ public sealed partial class NavigationTools
         // calls), so hits can legitimately exceed the requested set — this makes that legible
         // instead of "coverage 1/1 but 8 hits from 8 projects".
         solutionProjects = c.SolutionProjects > 0 ? c.SolutionProjects : (int?)null,
+        skippedProjects = c.SkippedProjects.Count > 0
+            ? c.SkippedProjects.Take(8).Select(CoverageIdentity).ToList()
+            : null,
+        skippedProjectCount = c.SkippedProjects.Count > 0 ? c.SkippedProjects.Count : (int?)null,
+        skippedProjectsTruncated = c.SkippedProjects.Count > 8 ||
+                                   c.SkippedProjects.Any(CoverageIdentityTruncated)
+            ? true
+            : (bool?)null,
         failedProjects = c.FailedProjects.Count > 0
-            ? c.FailedProjects.Take(8).Select(project =>
-                Json.Utf8Prefix(project, 256, out _)).ToList()
+            ? c.FailedProjects.Take(8).Select(CoverageIdentity).ToList()
             : null,
         failedProjectCount = c.FailedProjects.Count > 0 ? c.FailedProjects.Count : (int?)null,
         failedProjectsTruncated = c.FailedProjects.Count > 8 ||
-                                  c.FailedProjects.Any(project => Json.Utf8Bytes(project) > 256)
+                                  c.FailedProjects.Any(CoverageIdentityTruncated)
             ? true
             : (bool?)null,
         unprovenFriendAssemblyProjects = c.UnprovenFriendAssemblyProjects is { Count: > 0 } unproven
-            ? unproven.Take(8).Select(project => Json.Utf8Prefix(project, 256, out _)).ToList()
+            ? unproven.Take(8).Select(CoverageIdentity).ToList()
             : null,
         unprovenFriendAssemblyProjectCount = c.UnprovenFriendAssemblyProjects is { Count: > 0 }
             ? c.UnprovenFriendAssemblyProjects.Count
             : (int?)null,
+        unprovenFriendAssemblyProjectsTruncated = c.UnprovenFriendAssemblyProjects is { Count: > 0 } identities &&
+                                                   (identities.Count > 8 ||
+                                                    identities.Any(CoverageIdentityTruncated))
+            ? true
+            : (bool?)null,
         frameworkRefsAvailable = c.FrameworkRefsAvailable,
     };
+
+    private string UnsupportedLanguage(string path, string language, string operation) =>
+        UnsupportedLanguageForTest(_manager.Health(), path, language, operation);
+
+    internal static string UnsupportedLanguageForTest(IndexHealth health, string path,
+        string language, string operation)
+    {
+        return Json.WithStringBudget(path, 4096, (boundedPath, pathTruncated) => new
+        {
+            error = "unsupported_language",
+            operation,
+            path = boundedPath,
+            pathTruncated = pathTruncated ? true : (bool?)null,
+            language,
+            supportedLanguages = new[] { "cs" },
+            availableForFile = new[] { "find_file", "search_text", "source_context", "projects_containing" },
+            detail = language == "fs"
+                ? "F# is indexed for text and project-graph navigation; syntax outlines and compiler semantics are not available."
+                : $"The indexed language '{language}' supports text navigation only; C# syntax and compiler semantics are not available.",
+            meta = Meta.From(health, "indexed", "text"),
+        });
+    }
+
+    private string? UnsupportedLanguageAtPath(string? path, string operation)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        string normalized = NormalizePath(path);
+        using var q = _manager.OpenQueries();
+        return q.FileByPath(normalized) is { Language: not "cs" } file
+            ? UnsupportedLanguage(normalized, file.Language, operation)
+            : null;
+    }
 
     /// <summary>Combines an explicit excludePath glob with firstPartyOnly's whole-segment vendor
     /// globs into one exclude list (null when empty, so callers pass null for "no filter").

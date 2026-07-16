@@ -25,6 +25,8 @@ public sealed partial class NavigationTools
         [Description("Deadline in ms (default 15000).")] int timeoutMs = 15000)
     {
         if (NotReady() is { } notReady) return notReady;
+        if (UnsupportedLanguageAtPath(path, "callers") is { } unsupportedLanguage)
+            return unsupportedLanguage;
         if (name is null && (path is null || line <= 0))
         {
             return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
@@ -39,11 +41,21 @@ public sealed partial class NavigationTools
             reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
             if (result is not null)
             {
-                bool bounded = (skippedCandidateProjects?.Count ?? 0) > 0 ||
-                    (coverage?.FailedProjects.Count ?? 0) > 0 ||
-                    (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects);
+                bool unsupportedLanguageSkipped = coverage is { SkippedProjects.Count: > 0 };
+                bool candidateBounded = (skippedCandidateProjects?.Count ?? 0) > 0;
+                bool coverageGap = coverage is not null &&
+                    coverage.LoadedProjects < coverage.RequestedProjects;
+                bool loadIncomplete = (coverage?.FailedProjects.Count ?? 0) > 0 ||
+                    (coverageGap && !candidateBounded && !unsupportedLanguageSkipped);
+                bool partial = unsupportedLanguageSkipped || candidateBounded ||
+                    loadIncomplete || projectModelUnproven;
+                string? partialCause = SemanticCoverageReasons.Primary(coverage,
+                    candidateProjectsSkipped: candidateBounded,
+                    projectModelUnproven: projectModelUnproven);
                 var meta = Meta.From(_manager.Health(),
-                    projectModelUnproven ? "indexed" : "exact", "semantic");
+                    unsupportedLanguageSkipped || loadIncomplete || projectModelUnproven
+                        ? "indexed"
+                        : "exact", "semantic");
                 var skippedProjects = skippedCandidateProjects ?? new List<string>();
                 return Json.WithAuxiliaryListBudget(result, skippedProjects,
                     (items, truncated, skippedItems, skippedTruncated) => new
@@ -59,9 +71,8 @@ public sealed partial class NavigationTools
                         ? skippedProjects.Count
                         : (int?)null,
                     skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
-                    partial = bounded || projectModelUnproven ? true : (bool?)null,
-                    partialReason = bounded ? "candidate_cluster_bounded"
-                        : projectModelUnproven ? "project_model_unproven" : null,
+                    partial = partial ? true : (bool?)null,
+                    partialReason = partialCause,
                     truncated,
                     meta,
                 });
@@ -81,6 +92,8 @@ public sealed partial class NavigationTools
         [Description("Deadline in ms (default 10000).")] int timeoutMs = 10000)
     {
         if (NotReady() is { } notReady) return notReady;
+        if (UnsupportedLanguageAtPath(path, "callees") is { } unsupportedLanguage)
+            return unsupportedLanguage;
         if (name is null && (path is null || line <= 0))
         {
             return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
@@ -91,7 +104,7 @@ public sealed partial class NavigationTools
         {
             return Json.Serialize(new { error = "target_not_found_in_index", name });
         }
-        var (result, projectModelUnproven, reason) = _semantic
+        var (result, coverage, projectModelUnproven, reason) = _semantic
             .CalleesAsync(t.Path, t.Line, t.Column, hint, timeoutMs)
             .GetAwaiter().GetResult();
         reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
@@ -104,8 +117,14 @@ public sealed partial class NavigationTools
                 meta = Meta.From(_manager.Health(), "indexed", "semantic"),
             });
         }
-        var meta0 = Meta.From(_manager.Health(),
-            projectModelUnproven ? "indexed" : "exact", "semantic");
+        bool unsupportedLanguageSkipped = coverage is { SkippedProjects.Count: > 0 };
+        bool loadIncomplete = (coverage?.FailedProjects.Count ?? 0) > 0 ||
+            (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects &&
+             !unsupportedLanguageSkipped);
+        bool partial = unsupportedLanguageSkipped || loadIncomplete || projectModelUnproven;
+        string? partialCause = SemanticCoverageReasons.Primary(coverage,
+            projectModelUnproven: projectModelUnproven);
+        var meta0 = Meta.From(_manager.Health(), partial ? "indexed" : "exact", "semantic");
         return Json.WithListBudget(result, (items, truncated) => new
         {
             callees = items.Select(c => new
@@ -113,8 +132,9 @@ public sealed partial class NavigationTools
                 callee = SemanticSymbolJson(c.Callee),
                 callLines = c.CallLines,
             }),
-            partial = projectModelUnproven ? true : (bool?)null,
-            partialReason = projectModelUnproven ? "project_model_unproven" : null,
+            coverage = coverage is null ? null : CoverageJson(coverage),
+            partial = partial ? true : (bool?)null,
+            partialReason = partialCause,
             truncated,
             meta = meta0,
         });
@@ -133,6 +153,9 @@ public sealed partial class NavigationTools
         [Description("Resolve by a search_symbol candidate's current idx: handle. Takes precedence over name, path+line, and arity.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        if (symbolId is not { Length: > 0 } &&
+            UnsupportedLanguageAtPath(path, "type_hierarchy") is { } unsupportedLanguage)
+            return unsupportedLanguage;
         var (selection, selectionError) = ResolveArityTarget(
             name, path, line, column, arity, symbolId, typeOnly: true);
         if (selectionError is not null) return selectionError;
@@ -200,13 +223,19 @@ public sealed partial class NavigationTools
             });
         }
         var down = result.DerivedOrImplementing;
-        var meta1 = Meta.From(_manager.Health(),
-            result.ProjectModelUnproven ? "indexed" : "exact", "semantic");
         var skippedProjects = skippedCandidateProjects ?? new List<string>();
-        bool coverageBounded = (skippedCandidateProjects?.Count ?? 0) > 0 ||
-            (coverage?.FailedProjects.Count ?? 0) > 0 ||
-            (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects) ||
-            result.ProjectModelUnproven;
+        bool unsupportedLanguageSkipped = coverage is { SkippedProjects.Count: > 0 };
+        bool candidateBounded = (skippedCandidateProjects?.Count ?? 0) > 0;
+        bool coverageGap = coverage is not null &&
+            coverage.LoadedProjects < coverage.RequestedProjects;
+        bool loadIncomplete = (coverage?.FailedProjects.Count ?? 0) > 0 ||
+            (coverageGap && !candidateBounded && !unsupportedLanguageSkipped);
+        bool coverageBounded = unsupportedLanguageSkipped || candidateBounded ||
+            loadIncomplete || result.ProjectModelUnproven;
+        var meta1 = Meta.From(_manager.Health(),
+            unsupportedLanguageSkipped || loadIncomplete || result.ProjectModelUnproven
+                ? "indexed"
+                : "exact", "semantic");
 
         // Parity with implementations: when compiler-exact finds no derived/implementing types — often
         // a type-twin identity mismatch across assemblies, or bounded coverage — surface the index
@@ -262,13 +291,10 @@ public sealed partial class NavigationTools
                         : (int?)null,
                     skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
                     partial = coverageBounded ? true : (bool?)null,
-                    partialReason = (skippedCandidateProjects?.Count ?? 0) > 0 ||
-                                    (coverage?.FailedProjects.Count ?? 0) > 0 ||
-                                    (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects)
-                        ? "candidate_cluster_bounded"
-                        : result.ProjectModelUnproven
-                            ? "project_model_unproven"
-                            : "no_semantic_derived",
+                    partialReason = SemanticCoverageReasons.Primary(coverage,
+                        candidateProjectsSkipped: candidateBounded,
+                        projectModelUnproven: result.ProjectModelUnproven)
+                        ?? "no_semantic_derived",
                     // Field (lhg): stale "generated twin" wording replaced — key on the causes we
                     // can actually still hit post-edge-recovery, with the remediation inline.
                     note = "Compiler resolution found no derived/implementing types, but these name it in their base list (derivedOrImplementing is heuristic here). Implementer projects were likely not loaded into the semantic cluster (raise maxProjects, or scope with pathGlob), the implementers bind the name to a declaration outside the workspace, or imported project authority can change a friend grant (see partialReason). baseTypes/interfaces are compiler-resolved; verify with source_context.",
@@ -294,11 +320,9 @@ public sealed partial class NavigationTools
                 : (int?)null,
             skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
             partial = coverageBounded ? true : (bool?)null,
-            partialReason = (skippedCandidateProjects?.Count ?? 0) > 0 ||
-                            (coverage?.FailedProjects.Count ?? 0) > 0 ||
-                            (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects)
-                ? "candidate_cluster_bounded"
-                : result.ProjectModelUnproven ? "project_model_unproven" : null,
+            partialReason = SemanticCoverageReasons.Primary(coverage,
+                candidateProjectsSkipped: candidateBounded,
+                projectModelUnproven: result.ProjectModelUnproven),
             timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
             truncated,
             meta = meta1,

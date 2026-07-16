@@ -150,6 +150,7 @@ public sealed class IndexStore : IDisposable
               dir TEXT NOT NULL,
               name TEXT NOT NULL,
               style TEXT NOT NULL,
+              lang TEXT NOT NULL,
               guid TEXT,
               tfms TEXT NOT NULL,
               is_test INTEGER NOT NULL,
@@ -426,8 +427,8 @@ public sealed class IndexStore : IDisposable
         using var cmd = _write.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO projects(path, dir, name, style, guid, tfms, is_test, load_status, compile_globs)
-            VALUES($p, $d, $n, $st, $g, $tf, $t, $ls, $cg);
+            INSERT INTO projects(path, dir, name, style, lang, guid, tfms, is_test, load_status, compile_globs)
+            VALUES($p, $d, $n, $st, $lang, $g, $tf, $t, $ls, $cg);
             SELECT last_insert_rowid();
             """;
         cmd.Parameters.AddWithValue("$p", p.RelPath);
@@ -435,16 +436,17 @@ public sealed class IndexStore : IDisposable
             WorkspacePaths.ToGitPath(Path.GetDirectoryName(p.RelPath) ?? ""));
         cmd.Parameters.AddWithValue("$n", p.Name);
         cmd.Parameters.AddWithValue("$st", p.Style);
+        cmd.Parameters.AddWithValue("$lang", p.Language);
         cmd.Parameters.AddWithValue("$g", (object?)p.Guid ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$tf", p.TargetFrameworks);
         cmd.Parameters.AddWithValue("$t", p.IsTest ? 1 : 0);
         cmd.Parameters.AddWithValue("$ls", p.LoadStatus);
-        // Include/Remove globs — or an SDK project that OPTS OUT of default items (review 5a: its dir
-        // must not act as an incremental glob root) — make ownership non-derivable from the dir
-        // prefix alone; the incremental added-file attribution falls back to the full rebuild.
+        // Include/Remove globs — or any project that does not authoritatively opt into default
+        // items (review 5a: its dir must not act as an incremental glob root) — make ownership
+        // non-derivable from the dir prefix alone; added-file attribution falls back to a rebuild.
         cmd.Parameters.AddWithValue("$cg",
             p.CompileIncludeGlobs is { Count: > 0 } || p.CompileRemoveGlobs is { Count: > 0 } ||
-            (p.Style == "sdk" && !p.DefaultCompileItems) ? 1 : 0);
+            !p.DefaultCompileItems ? 1 : 0);
         return (long)cmd.ExecuteScalar()!;
     }
 
@@ -543,20 +545,24 @@ public sealed class IndexStore : IDisposable
               AND NOT EXISTS (SELECT 1 FROM project_refs r WHERE r.to_id = projects.id)
             """;
         int promoted = cmd.ExecuteNonQuery();
-        // NAME-level uniformity (review): a same-AssemblyName pair is ONE assembly to every
-        // name-keyed reader — but per-row classification could differ (a referenced twin fails
-        // the leaf guard; parse-time R1/R2 can diverge between twins), and AllProjectTestFlags'
-        // last-row-wins collapse made the NAME's answer depend on scan order vs which twin
-        // carried the incoming edge (review-reproduced: identical workspaces, opposite
-        // classification). If ANY row of a name classifies as test, every row of that name does.
-        // Single pass is a fixed point: propagation is same-name-only, so the eligible-name set
-        // cannot grow (review-verified: a second call returns 0).
+        // NAME+LANGUAGE uniformity (review): same-AssemblyName C# twins form one Roslyn assembly,
+        // but an F# project with the same logical name is a distinct physical compiler boundary.
+        // Per-row classification can differ when a referenced twin fails the leaf guard or
+        // parse-time R1/R2 diverges, so propagate within one language only. Crossing languages
+        // would let a test F# row mark a production C# row as test and make includeTests:false
+        // suppress supported semantic results. One pass is a fixed point because propagation is
+        // confined to the existing (name, lang) class.
         using var uniform = _write.CreateCommand();
         uniform.Transaction = tx;
         uniform.CommandText = """
             UPDATE projects SET is_test = 1
             WHERE is_test = 0
-              AND name COLLATE NOCASE IN (SELECT name FROM projects WHERE is_test = 1)
+              AND EXISTS (
+                  SELECT 1 FROM projects test
+                  WHERE test.is_test = 1
+                    AND test.lang = projects.lang
+                    AND test.name = projects.name COLLATE NOCASE
+              )
             """;
         promoted += uniform.ExecuteNonQuery();
         return promoted;
@@ -668,21 +674,23 @@ public sealed class IndexStore : IDisposable
     /// legacy explicit-&lt;Compile&gt; lists (which can claim a re-added file without a csproj change)
     /// or any Include/Remove compile globs. Gates the incremental added-file attribution: such
     /// shapes are re-read only by the full rebuild.</summary>
-    public bool HasNonTrivialCompileShapes()
+    public bool HasNonTrivialCompileShapes(string language)
     {
         using var cmd = _write.CreateCommand();
-        cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM projects WHERE style = 'legacy' OR compile_globs = 1)";
+        cmd.CommandText = "SELECT EXISTS(SELECT 1 FROM projects WHERE lang = $lang AND (style = 'legacy' OR compile_globs = 1))";
+        cmd.Parameters.AddWithValue("$lang", language);
         return Convert.ToInt64(cmd.ExecuteScalar()) == 1;
     }
 
-    /// <summary>(id, csproj relPath) of projects that own files by their DIRECTORY prefix alone —
-    /// SDK-style or failed-parse, with no Include/Remove globs. Used for the incremental attribution
-    /// of a single added .cs file in trivially-shaped workspaces (zki).</summary>
-    public List<(long Id, string RelPath)> GlobRootProjects()
+    /// <summary>(id, project relPath) of projects that authoritatively own implicit source files by
+    /// their directory prefix alone. Used for incremental added-file attribution in trivially-shaped
+    /// workspaces (zki); failed/disabled F# shapes are excluded by compile_globs=1.</summary>
+    public List<(long Id, string RelPath)> GlobRootProjects(string language)
     {
         var list = new List<(long, string)>();
         using var cmd = _write.CreateCommand();
-        cmd.CommandText = "SELECT id, path FROM projects WHERE style != 'legacy' AND compile_globs = 0";
+        cmd.CommandText = "SELECT id, path FROM projects WHERE lang = $lang AND style != 'legacy' AND compile_globs = 0";
+        cmd.Parameters.AddWithValue("$lang", language);
         using var r = cmd.ExecuteReader();
         while (r.Read()) list.Add((r.GetInt64(0), r.GetString(1)));
         return list;

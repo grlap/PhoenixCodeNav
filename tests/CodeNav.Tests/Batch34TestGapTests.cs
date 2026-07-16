@@ -188,8 +188,14 @@ public class Batch34TestGapTests
                 {
                     if (total >= 2) throw new OperationCanceledException();
                 };
-                var refs = SemanticRetry.ParseExactWithRetry(() => tools.References(name: "Ping", timeoutMs: 60000));
-                Assert.Equal("exact", refs.GetProperty("meta").GetProperty("confidence").GetString());
+                var refs = SemanticRetry.ParseWithRetry(
+                    () => tools.References(name: "Ping", timeoutMs: 60000),
+                    json => json.TryGetProperty("partialReason", out JsonElement reason) &&
+                            (reason.GetString() ?? "").Contains(
+                                "semantic_timeout", StringComparison.Ordinal),
+                    "salvaged deadline lower bound");
+                Assert.Equal("indexed", refs.GetProperty("meta")
+                    .GetProperty("confidence").GetString());
                 Assert.Equal(2, refs.GetProperty("totalReferences").GetInt32()); // counted-so-far survives
                 Assert.True(refs.GetProperty("totalIsLowerBound").GetBoolean());
                 Assert.True(refs.GetProperty("partial").GetBoolean());

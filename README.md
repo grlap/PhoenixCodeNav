@@ -1,7 +1,8 @@
 # PhoenixCodeNav
 
-A code-navigation [MCP](https://modelcontextprotocol.io) server for **very large C# workspaces**
-(designed for enterprise monorepos with thousands of csproj, legacy *and* SDK-style, net472-first).
+A code-navigation [MCP](https://modelcontextprotocol.io) server for **very large C# and mixed
+C#/F# workspaces** (designed for enterprise monorepos with thousands of csproj/fsproj, legacy
+*and* SDK-style, net472-first).
 It gives coding agents (Claude Code, Codex, anything MCP) a fast, structured alternative to
 grep-driven exploration: ranked search, file outlines, exact references, project graphs, and
 compact context packs — with strict response budgets so results never flood the transcript.
@@ -23,14 +24,21 @@ navigation questions in three layers, each labeled with how trustworthy it is:
 
 | Layer | Tools | Confidence |
 |---|---|---|
-| **Indexed text** (SQLite FTS5) | `find_file`, `search_text`, `config_lookup`, `references` (candidates) | `indexed` |
-| **Syntax** (Roslyn parse, no compile) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
-| **Semantic** (Roslyn compilations, lazy clusters) | `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy` | `exact` (falls back to `indexed` with `partialReason`) |
+| **Indexed text** (SQLite FTS5, C# + F#) | `find_file`, `search_text`, `config_lookup`, `references` (candidates) | `indexed` |
+| **Syntax** (Roslyn parse, C# only, no compile) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
+| **Semantic** (Roslyn compilations, C# only, lazy clusters) | `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy` | `exact` (falls back to `indexed` with `partialReason`) |
 
-Plus structural facts parsed directly from every `.csproj` (`project_graph`,
+Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`project_graph`,
 `projects_containing`, `dependency_path`, `repo_overview`) and composites (`context_pack`,
 `impact`, `related_tests`). Solution files may be inventoried for editor context, but they
 never select projects or contribute build, ownership, dependency, or symbol-resolution authority.
+
+F# support is deliberately tier-a and compiler-free: Phoenix indexes `.fs`, `.fsi`, and `.fsx`
+text, parses `.fsproj` compile ownership and references, and preserves C#↔F# project edges. F#
+syntax and compiler-semantic tools return `unsupported_language` instead of an empty or falsely
+exact result; no FSharp.Compiler.Service dependency is required. Indexed searches stay
+language-neutral by default. An explicit F#-only `search_symbol` path scope is rejected, while a
+mixed C#/F# scope returns its C# symbols with `partialReason="unsupported_language_files_skipped"`.
 
 The dependency graph also sees what MSBuild's project view hides in large legacy codebases:
 binary `<Reference Include>` + HintPath couplings from **multi-staged builds** (phase one
@@ -47,9 +55,10 @@ and NuGet-cache package dlls, in-cluster project references. It works identicall
 
 ## Keeping the index fresh
 
-Index updates are incremental: the writer process's file watcher applies debounced deltas
-(edit/add/delete, FTS-consistent); `.csproj` changes rebuild the authoritative project graph,
-while solution changes update only non-authoritative editor inventory. A startup sweep catches
+Index updates are incremental: the writer process's file watcher applies debounced C# and F#
+source deltas (edit/add/delete, FTS-consistent); `.csproj` and `.fsproj` changes rebuild compile
+ownership and the authoritative project graph, while solution changes update only
+non-authoritative editor inventory. A startup sweep catches
 offline edits, and branch switches / pulls are detected by watching `.git` (`repo_overview.git`
 reports indexed vs HEAD commit). Every response carries `indexStatus` / `indexVersion`
 freshness metadata; `refresh_index` is an in-band writer hatch (`force: 'incremental' | 'full'`)
@@ -191,6 +200,9 @@ Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.Mcp` (serv
   globs, and MSBuild `Condition`s are not evaluated.
 - `search_text` regex mode (`regex:true`) is line-based .NET regex narrowed by FTS tokens —
   no multi-line patterns.
+- F# is text/project-graph only. Unscoped indexed search remains language-neutral; C# syntax
+  search with an explicit F#-only scope discloses `unsupported_language`, and a mixed scope marks
+  its C# results partial. File syntax and compiler-semantic operations on F# are unsupported.
 - Indexed `references` are whole-identifier text candidates; use `mode="semantic"` (or the
   default auto-upgrade) for compiler-exact results.
 - Semantic scans load all matching candidate projects by default (`maxProjects:0`). A positive

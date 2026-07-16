@@ -391,7 +391,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("one classifier drives changedProjectFiles", projectFiles);
         Assert.Contains("review.project_files_changed", projectFiles);
         Assert.Contains("modified or deleted", projectFiles);
-        Assert.Contains(".csproj.user/.shproj/.proj/.projitems/.sln/.slnx/.slnf", projectFiles);
+        Assert.Contains(".csproj/.fsproj/.csproj.user/.fsproj.user/.shproj/.proj/.projitems/.sln/.slnx/.slnf", projectFiles);
         Assert.Contains("Directory.Build.rsp and MSBuild.rsp", projectFiles);
         string defaultBaseline = Summary("review-default-baseline-honesty");
         Assert.Contains("bounded git_index_baseline_unavailable", defaultBaseline);
@@ -463,6 +463,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("segment, operation, or deadline exhaustion", "review-project-glob-budget"),
                       ("evaluationIncomplete", "review-project-shape-completeness"),
                       ("review.project_files_changed", "review-project-file-guidance"),
+                      ("unsupportedLanguageFiles", "review-fsharp-file-coverage"),
                       ("git_index_baseline_unavailable", "review-default-baseline-honesty"),
                       ("unmappedChanges", "review-unmapped-change-coverage"),
                       ("one stable SQLite read epoch", "review-index-epoch-consistency"),

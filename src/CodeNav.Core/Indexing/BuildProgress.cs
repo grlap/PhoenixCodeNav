@@ -83,12 +83,12 @@ public sealed class BuildProgress
     public void SetFilesTotal(int total) => _filesTotal = total;
     public void AddFileIndexed() => Interlocked.Increment(ref _filesIndexed);
 
-    /// <summary>efa: a .cs file the build could NOT read (transient IO / access denied) — it is
+    /// <summary>efa: a source file the build could NOT read (transient IO / access denied) — it is
     /// absent from the index until a delta refresh retries it, and pretending the build was
     /// clean hid that.</summary>
     public void AddFileSkipped() => Interlocked.Increment(ref _filesSkipped);
 
-    /// <summary>efa: csprojs whose parse failed (LoadStatus 'failed…') — their compile sets and
+    /// <summary>efa: project files whose parse failed (LoadStatus 'failed…') — their compile sets and
     /// graph edges are guesses at best; a caller watching the build deserves to know how many.</summary>
     public void SetProjectsFailed(int count) => _projectsFailed = count;
 

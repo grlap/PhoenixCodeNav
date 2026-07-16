@@ -173,7 +173,7 @@ public class Batch30ClassifierTests
     // incoming ProjectReference to one twin was HALF-promoted — and the name-keyed flags map
     // (last-row-wins) made the NAME's classification depend on scan order vs which twin carried
     // the edge (review-reproduced: identical workspaces, opposite answers). is_test is now
-    // NAME-uniform: if any row of a name classifies, every row does.
+    // NAME+LANGUAGE-uniform: every C# twin follows its C# peers without crossing into F#.
     [Fact]
     public void SameNamePairClassifiesUniformlyRegardlessOfWhichTwinIsReferenced()
     {

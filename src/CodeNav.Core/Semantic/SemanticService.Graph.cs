@@ -86,8 +86,17 @@ public sealed partial class SemanticService
             bool projectModelUnproven = FriendAssemblyAuthorityUnproven(symbol,
                 results.SelectMany(result => result.CallSites).Select(site => site.Project),
                 coverage);
-            EmitOpTelemetry("callers", projectModelUnproven ? "partial" : "exact",
-                projectModelUnproven ? "project_model_unproven" : null,
+            bool unsupportedLanguageSkipped = coverage.SkippedProjects.Count > 0;
+            bool candidateProjectsSkipped = skipped.Count > 0;
+            bool failedLoads = coverage.FailedProjects.Count > 0;
+            bool coverageIncomplete = coverage.LoadedProjects < coverage.RequestedProjects;
+            bool incomplete = unsupportedLanguageSkipped || candidateProjectsSkipped ||
+                failedLoads || coverageIncomplete || projectModelUnproven;
+            string? telemetryReason = SemanticCoverageReasons.Primary(coverage,
+                candidateProjectsSkipped: candidateProjectsSkipped,
+                projectModelUnproven: projectModelUnproven);
+            EmitOpTelemetry("callers", incomplete ? "partial" : "exact",
+                telemetryReason,
                 ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs); // epuc.1
             return (results, coverage, skipped, projectModelUnproven, null);
@@ -111,8 +120,8 @@ public sealed partial class SemanticService
         }
     }
 
-    public async Task<(List<SemanticCallee>? Result, bool ProjectModelUnproven,
-        string? FailReason)> CalleesAsync(
+    public async Task<(List<SemanticCallee>? Result, ClusterCoverage? Coverage,
+        bool ProjectModelUnproven, string? FailReason)> CalleesAsync(
         string path, int line, int? column, string? nameHint, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
@@ -126,7 +135,7 @@ public sealed partial class SemanticService
             if (indexSnapshot is null)
             {
                 EmitOpTelemetry("callees", "unresolved", "index_snapshot_unavailable"); // epuc.1
-                return (null, false, "index_snapshot_unavailable");
+                return (null, null, false, "index_snapshot_unavailable");
             }
             var (solution, symbol, owningProject, coverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
@@ -136,7 +145,7 @@ public sealed partial class SemanticService
             if (symbol is null || solution is null)
             {
                 EmitOpTelemetry("callees", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
-                return (null, false, "symbol_not_resolved");
+                return (null, coverage, false, "symbol_not_resolved");
             }
 
             var byTarget = new Dictionary<ISymbol, List<int>>(SymbolEqualityComparer.Default);
@@ -166,10 +175,18 @@ public sealed partial class SemanticService
                 .ToList();
             bool projectModelUnproven = owningProject is not null && byTarget.Keys.Any(target =>
                 FriendAssemblyAuthorityUnproven(target, [owningProject], coverage));
-            EmitOpTelemetry("callees", projectModelUnproven ? "partial" : "exact",
-                projectModelUnproven ? "project_model_unproven" : null, ownerBox.Stats,
+            bool unsupportedLanguageSkipped = coverage is { SkippedProjects.Count: > 0 };
+            bool failedLoads = coverage is { FailedProjects.Count: > 0 };
+            bool coverageIncomplete = coverage is not null &&
+                coverage.LoadedProjects < coverage.RequestedProjects;
+            bool incomplete = unsupportedLanguageSkipped || failedLoads || coverageIncomplete ||
+                projectModelUnproven;
+            string? telemetryReason = SemanticCoverageReasons.Primary(coverage,
+                projectModelUnproven: projectModelUnproven);
+            EmitOpTelemetry("callees", incomplete ? "partial" : "exact",
+                telemetryReason, ownerBox.Stats,
                 clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs); // epuc.1
-            return (results, projectModelUnproven, null);
+            return (results, coverage, projectModelUnproven, null);
         }
         catch (OperationCanceledException)
         {
@@ -178,7 +195,7 @@ public sealed partial class SemanticService
             EmitOpTelemetry("callees", "degraded", reason, ownerBox.Stats,
                 clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
                 queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
-            return (null, false, reason);
+            return (null, null, false, reason);
         }
         catch (Exception ex)
         {
@@ -187,7 +204,7 @@ public sealed partial class SemanticService
             EmitOpTelemetry("callees", "error", ex.GetType().Name, ownerBox.Stats,
                 clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
                 queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
-            return (null, false, $"semantic_error:{ex.GetType().Name}");
+            return (null, null, false, $"semantic_error:{ex.GetType().Name}");
         }
     }
 
@@ -318,8 +335,17 @@ public sealed partial class SemanticService
                     down.Select(candidate => candidate.Assembly ?? ""), coverage);
             var payload = new SemanticTypeHierarchy(
                 Describe(type), baseTypes, interfaces, down, projectModelUnproven);
-            EmitOpTelemetry("type_hierarchy", projectModelUnproven ? "partial" : "exact",
-                projectModelUnproven ? "project_model_unproven" : null,
+            bool unsupportedLanguageSkipped = coverage.SkippedProjects.Count > 0;
+            bool candidateProjectsSkipped = skipped.Count > 0;
+            bool failedLoads = coverage.FailedProjects.Count > 0;
+            bool coverageIncomplete = coverage.LoadedProjects < coverage.RequestedProjects;
+            bool incomplete = unsupportedLanguageSkipped || candidateProjectsSkipped ||
+                failedLoads || coverageIncomplete || projectModelUnproven;
+            string? telemetryReason = SemanticCoverageReasons.Primary(coverage,
+                candidateProjectsSkipped: candidateProjectsSkipped,
+                projectModelUnproven: projectModelUnproven);
+            EmitOpTelemetry("type_hierarchy", incomplete ? "partial" : "exact",
+                telemetryReason,
                 ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs,
                 queryStages: queryStages); // epuc.1 + jj1q stages

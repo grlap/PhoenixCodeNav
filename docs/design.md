@@ -33,20 +33,27 @@ different front end. `CodeNav.Mcp` is a thin protocol/shaping layer over it.
 Agents use the cheapest layer that answers the question, preferring compiler-backed facts
 for code identifiers.
 
-1. **Indexed text** — `find_file`, `search_text`, `config_lookup`. SQLite FTS5 over file
+1. **Indexed text** — `find_file`, `search_text`, `config_lookup`. SQLite FTS5 over C# and F# file
    contents with workspace-aware ranking and byte/line offsets. `search_text` grades each
    line `precise` (contains all query tokens as whole tokens) vs `partial` (a token-covering
    lead), so a partial-token match is never presented as a full hit.
-2. **Syntax** — `outline`, `search_symbol`, `symbol_at`, `batch_outline`. Roslyn
+2. **Syntax (C#)** — `outline`, `search_symbol`, `symbol_at`, `batch_outline`. Roslyn
    *syntax-only* parsing (no compilation) extracts namespaces/types/members with spans,
    signatures, accessibility, partial flags, and generated/test classification. This is the
    token-saver: `outline` before any large-file read, then `source_context` for the spans.
-3. **Semantic** — `definition`, `references`, `implementations`, `callers`, `callees`,
+3. **Semantic (C#)** — `definition`, `references`, `implementations`, `callers`, `callees`,
    `type_hierarchy`. Roslyn *compilations* give compiler-exact answers with
    `documentationCommentId`s.
 
+F# deliberately stops at tier-a: `.fs/.fsi/.fsx` content and `.fsproj` ownership/reference
+graphs are indexed, while syntax and compiler-semantic requests disclose `unsupported_language`.
+Generic indexed search remains language-neutral. For the C#-syntax `search_symbol` surface, an
+explicit F#-only path scope is rejected and a mixed scope returns C# results with
+`unsupported_language_files_skipped`. This keeps cross-language graph holes visible without
+fabricating C# semantics for F# projects.
+
 Structural facts (`project_graph`, `projects_containing`, `dependency_path`,
-`repo_overview`) come from the csproj/sln parse. Composites (`context_pack`, `impact`,
+`repo_overview`) come from the physical project-file and optional solution parse. Composites (`context_pack`, `impact`,
 `related_tests`) synthesize the lower layers.
 
 ### Confidence model
@@ -72,21 +79,25 @@ followers never open a writer connection; explicitly live source/Git and compile
 evidence may use newer workspace bytes. Other platforms remain writer-only for now.
 
 **Build** (`IndexBuilder`): scan the tree (excluding `.git`, `bin`, `obj`, `packages`,
-`node_modules`, `.vs`, generated files, and symlink/junction targets); parse every `.csproj`
-directly, independent of solution membership; parse every `.cs` with Roslyn syntax on all cores,
-streaming symbol rows through a bounded channel to the single writer. Solution files are optional
-editor inventory only: they never select projects or provide build, dependency, ownership, or
-symbol-resolution authority. A cold build of a
+`node_modules`, `.vs`, generated files, and symlink/junction targets); parse every `.csproj` and
+`.fsproj` directly, independent of solution membership; index `.cs`, `.fs`, `.fsi`, and `.fsx`
+text, while parsing only `.cs` with Roslyn syntax on all cores. Symbol rows stream through a
+bounded channel to the single writer; F# remains text/project-graph only. Solution files are
+optional editor inventory: they never select projects or provide build, dependency, ownership,
+or symbol-resolution authority. A cold build of a
 multi-thousand-project workspace completes in minutes at most; live progress counters
 (phase, files, throughput) report the real numbers for any given machine.
 
 **Compile-item ownership**: legacy projects list `<Compile Include>` explicitly (exact,
-including linked files); SDK-style projects are approximated by longest-dir-prefix globbing.
+including linked files). C# SDK projects use longest-dir-prefix approximation for implicit `.cs`;
+F# stays ordered/explicit unless the project literally enables default items, whose SDK glob owns
+only `.fs` (not unlisted `.fsi` signatures or `.fsx` scripts).
 
 ### Project and symbol-resolution authority
 
-Each discovered `.csproj` is a physical project whose compile items and references are read
-from that project file. A side-by-side legacy project and SDK-style `.Net.csproj` remain
+Each discovered `.csproj` or `.fsproj` is a physical project whose compile items, language, and
+references are read from that project file. A side-by-side legacy project and SDK-style
+`.Net.csproj` remain
 separate physical projects under the established 0.11.7 model; their filename pairing alone
 is not evidence that they should be merged or expanded into a new variant model.
 
@@ -140,9 +151,10 @@ The index is kept live without rebuilding on every keystroke:
   pump. On Windows, compatible contenders attach as read-only followers with no writer
   connection, pump, watcher, build, or automatic promotion.
 - **`WorkspaceWatcher`** (a `FileSystemWatcher`) debounces working-tree changes (600 ms
-  quiet window) into batches. `DeltaRefresher` applies them: re-hash, re-parse changed
-  `.cs`, update FTS + symbols, mark deletes, and rebuild the authoritative project graph when a
-  `.csproj` changes. Solution changes can update non-authoritative editor inventory only.
+  quiet window) into batches. `DeltaRefresher` applies them: re-hash changed C# and F# source,
+  update FTS, re-parse C# symbols, mark deletes, and rebuild compile ownership plus the
+  authoritative project graph when a `.csproj` or `.fsproj` changes. Solution changes can update
+  non-authoritative editor inventory only.
   Directory-level changes (folder rename/move/delete) escalate to a full detect-all sweep, since
   the OS emits no per-child events for them.
 - **Startup sweep.** When an existing index is reopened by the writer, a detect-all sweep

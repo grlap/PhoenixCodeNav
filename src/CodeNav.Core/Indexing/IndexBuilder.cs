@@ -11,6 +11,7 @@ public sealed record BuildResult(
     int Projects,
     int Solutions,
     int CsFiles,
+    int FsFiles,
     int OtherFiles,
     long Symbols,
     long Lines,
@@ -21,6 +22,11 @@ public sealed record BuildResult(
     TimeSpan TotalTime,
     long DbBytes);
 
+internal sealed record FSharpPipelineTestHooks(
+    long BatchMemoryBudgetBytes,
+    Action<long, int>? ReadBatchPrepared = null,
+    Action<int, int>? BeforePersist = null);
+
 /// <summary>
 /// Owns: full index construction — scan, project/solution parsing, parallel syntax
 /// parsing, and single-writer persistence. v1 is full-rebuild; delta refresh arrives
@@ -30,6 +36,9 @@ public static class IndexBuilder
 {
     internal const int MaxStructuralFileBytes = 16 * 1024 * 1024;
     internal const int MaxOptionalSolutionSnapshotBytes = 128 * 1024 * 1024;
+    internal const int SourceWriteBatchSize = 2000;
+    internal const long FSharpBatchMemoryBudgetBytes = 32L * 1024 * 1024;
+    internal const int FSharpReadBatchMaxItems = 64;
     public static string DefaultDbPath(string workspaceRoot) =>
         Path.Combine(workspaceRoot, ".codenav", "index.db");
 
@@ -67,22 +76,34 @@ public static class IndexBuilder
     /// v13: tuple element labels no longer participate in persisted declaration identity; callable
     /// tuple element types and nesting remain identity-bearing.
     /// v14: checked operators and explicit-interface operator implementations have distinct
-    /// persisted names/declaration keys.</summary>
-    public const string SchemaVersion = "14";
+    /// persisted names/declaration keys.
+    /// v15: F# source files are persisted as lang='fs'; .fsproj inputs participate in project,
+    /// reference, and compile-ownership graphs; projects persist their source language.</summary>
+    public const string SchemaVersion = "15";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null) =>
         BuildCore(workspaceRoot, dbPath, progress, liveProgress,
-            TimeSpan.FromSeconds(30), waitingForReviewReaders: null);
+            TimeSpan.FromSeconds(30), waitingForReviewReaders: null, SourceWriteBatchSize,
+            fSharpPipelineTestHooks: null);
 
     internal static BuildResult BuildWithReviewWaitForTest(string workspaceRoot,
         string? dbPath, TimeSpan reviewWaitTimeout, Action? waitingForReviewReaders = null) =>
         BuildCore(workspaceRoot, dbPath, progress: null, liveProgress: null,
-            reviewWaitTimeout, waitingForReviewReaders);
+            reviewWaitTimeout, waitingForReviewReaders, SourceWriteBatchSize,
+            fSharpPipelineTestHooks: null);
+
+    internal static BuildResult BuildWithSourceBatchSizeForTest(string workspaceRoot,
+        int sourceWriteBatchSize, Action<string>? progress = null,
+        FSharpPipelineTestHooks? fSharpPipelineTestHooks = null) =>
+        BuildCore(workspaceRoot, dbPath: null, progress, liveProgress: null,
+            TimeSpan.FromSeconds(30), waitingForReviewReaders: null,
+            Math.Max(1, sourceWriteBatchSize), fSharpPipelineTestHooks);
 
     private static BuildResult BuildCore(string workspaceRoot, string? dbPath,
         Action<string>? progress, BuildProgress? liveProgress, TimeSpan reviewWaitTimeout,
-        Action? waitingForReviewReaders)
+        Action? waitingForReviewReaders, int sourceWriteBatchSize,
+        FSharpPipelineTestHooks? fSharpPipelineTestHooks)
     {
         string root = Path.GetFullPath(workspaceRoot);
         string database = Path.GetFullPath(dbPath ?? DefaultDbPath(root));
@@ -128,13 +149,16 @@ public static class IndexBuilder
                 }
 
                 using (rebuildLease)
-                    return BuildOwned(root, authority.DatabasePath, progress, liveProgress);
+                    return BuildOwned(root, authority.DatabasePath, progress, liveProgress,
+                        sourceWriteBatchSize, fSharpPipelineTestHooks);
             }
         }
     }
 
     internal static BuildResult BuildOwned(string workspaceRoot, string dbPath,
-        Action<string>? progress = null, BuildProgress? liveProgress = null)
+        Action<string>? progress = null, BuildProgress? liveProgress = null,
+        int sourceWriteBatchSize = SourceWriteBatchSize,
+        FSharpPipelineTestHooks? fSharpPipelineTestHooks = null)
     {
         var total = Stopwatch.StartNew();
         progress?.Invoke($"Scanning {workspaceRoot} ...");
@@ -142,9 +166,10 @@ public static class IndexBuilder
         var sw = Stopwatch.StartNew();
         var scan = WorkspaceScanner.Scan(workspaceRoot);
         var scanTime = sw.Elapsed;
-        progress?.Invoke($"Scanned: {scan.CsFiles.Count} .cs, {scan.ProjectFiles.Count} .csproj, {scan.SolutionFiles.Count} solutions");
+        progress?.Invoke($"Scanned: {scan.CsFiles.Count} C# source, {scan.FsFiles.Count} F# source, " +
+                         $"{scan.ProjectFiles.Count} project files, {scan.SolutionFiles.Count} solutions");
         // The scan fixes filesTotal — the point where "% done" becomes derivable (bead two).
-        liveProgress?.SetFilesTotal(scan.CsFiles.Count);
+        liveProgress?.SetFilesTotal(scan.CsFiles.Count + scan.FsFiles.Count);
         liveProgress?.SetPhase("parsing_projects");
 
         // Capture and parse every authoritative project independently through a bounded no-follow
@@ -215,7 +240,8 @@ public static class IndexBuilder
             foreach (var p in parsedProjects)
             {
                 ScannedFile projectFile = projectFilesByPath[p.RelPath];
-                PersistVerifiedStructuralFile(tx, projectFile, "csproj",
+                PersistVerifiedStructuralFile(tx, projectFile,
+                    p.Language == "fs" ? "fsproj" : "csproj",
                     requiredStructuralHashes[p.RelPath], required: true);
                 persistedStructuralPaths.Add(p.RelPath);
 
@@ -331,7 +357,7 @@ public static class IndexBuilder
                     csCount++;
 
                     liveProgress?.AddFileIndexed();
-                    if (++inTx >= 2000) // lf4p A/B: 400 → commits cost 2.9s/roslyn; WAL commit amortizes with width
+                    if (++inTx >= sourceWriteBatchSize) // lf4p A/B: 400 → commits cost 2.9s/roslyn; WAL commit amortizes with width
                     {
                         long tc0 = System.Diagnostics.Stopwatch.GetTimestamp(); // lf4p
                         tx.Commit();
@@ -358,6 +384,112 @@ public static class IndexBuilder
             tx.Dispose();
         }
         producer.GetAwaiter().GetResult();
+
+        // ---- persist F# source text (no compiler/syntax service in tier-a) ----
+        // Parallel reads are grouped by a conservative byte budget covering both the raw byte[]
+        // and decoded UTF-16 text. Every group
+        // joins before its single-writer phase begins, so a SQLite failure cannot leave channel
+        // producers blocked without a consumer. A source larger than the aggregate budget forms
+        // a one-item group: it is still accepted under the per-file cap, but never overlaps
+        // another retained F# document.
+        progress?.Invoke($"Indexing {scan.FsFiles.Count} F# files on {Environment.ProcessorCount} cores ...");
+        long fsBatchMemoryBudget = Math.Max(1,
+            fSharpPipelineTestHooks?.BatchMemoryBudgetBytes ?? FSharpBatchMemoryBudgetBytes);
+        int fsReadersInFlight = 0;
+        int fsCount = 0;
+        int fsWriteBatches = 0;
+        {
+            var tx = store.BeginTransaction();
+            int inTx = 0;
+            try
+            {
+                foreach (List<ScannedFile> readBatch in FSharpReadBatches(
+                             scan.FsFiles, fsBatchMemoryBudget))
+                {
+                    var prepared = new PreparedFSharpSource?[readBatch.Count];
+                    Parallel.For(0, readBatch.Count, i =>
+                    {
+                        Interlocked.Increment(ref fsReadersInFlight);
+                        try
+                        {
+                            ScannedFile scanned = readBatch[i];
+                            try
+                            {
+                                byte[]? bytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot,
+                                    scanned.RelPath, DeltaRefresher.MaxIndexedFileBytes);
+                                // The byte budget was calculated from the no-follow scan snapshot.
+                                // If the file changed size meanwhile, omit this incoherent row; the
+                                // post-build freshness sweep will attribute the current bytes.
+                                if (bytes is null || bytes.LongLength != scanned.Size)
+                                {
+                                    liveProgress?.AddFileSkipped();
+                                    return;
+                                }
+
+                                string content = DecodeUtf8(bytes);
+                                prepared[i] = new PreparedFSharpSource(scanned, content,
+                                    XxHash64.HashToUInt64(bytes), bytes.Length,
+                                    CountNewlines(content) + 1,
+                                    FileClassifier.LooksGenerated(scanned.RelPath, content));
+                            }
+                            catch (IOException) { liveProgress?.AddFileSkipped(); }
+                            catch (UnauthorizedAccessException) { liveProgress?.AddFileSkipped(); }
+                        }
+                        finally
+                        {
+                            Interlocked.Decrement(ref fsReadersInFlight);
+                        }
+                    });
+
+                    long batchMemoryBytes = prepared.Where(item => item is not null)
+                        .Sum(item => ActualFSharpBatchMemoryBytes(
+                            item!.ByteCount, item.Content.Length));
+                    int preparedCount = prepared.Count(item => item is not null);
+                    fSharpPipelineTestHooks?.ReadBatchPrepared?.Invoke(
+                        batchMemoryBytes, preparedCount);
+
+                    for (int i = 0; i < prepared.Length; i++)
+                    {
+                        PreparedFSharpSource? item = prepared[i];
+                        if (item is null) continue;
+                        fSharpPipelineTestHooks?.BeforePersist?.Invoke(
+                            fsCount, Volatile.Read(ref fsReadersInFlight));
+                        long id = store.InsertFile(tx, item.File.RelPath, item.ByteCount,
+                            item.File.MtimeTicks, item.Hash, "fs", item.LineCount,
+                            item.IsGenerated, hasTestAttrs: false);
+                        store.InsertContent(tx, id, item.Content);
+                        fileIds[item.File.RelPath] = id;
+                        fsCount++;
+                        lineCount += item.LineCount;
+                        liveProgress?.AddFileIndexed();
+                        prepared[i] = null; // release large strings as soon as the writer is done
+                        if (++inTx >= sourceWriteBatchSize)
+                        {
+                            long tc0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                            tx.Commit();
+                            commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tc0;
+                            fsWriteBatches++;
+                            tx.Dispose();
+                            tx = store.BeginTransaction();
+                            inTx = 0;
+                        }
+                    }
+                }
+                if (inTx > 0)
+                {
+                    long tc0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                    tx.Commit();
+                    commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tc0;
+                    fsWriteBatches++;
+                }
+            }
+            finally
+            {
+                tx.Dispose();
+            }
+        }
+        progress?.Invoke(
+            $"  indexed {fsCount}/{scan.FsFiles.Count} F# files in {fsWriteBatches} writer batches");
         liveProgress?.SetPhase("finalizing");
 
         // ---- remaining config files: find_file + config_lookup fodder ----
@@ -402,12 +534,12 @@ public static class IndexBuilder
         // ---- compile items: explicit for legacy, longest-dir-prefix for SDK ----
         using (var tx = store.BeginTransaction())
         {
-            var csFileIds = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
-            foreach (var f in scan.CsFiles)
+            var sourceFileIds = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
+            foreach (var f in scan.CsFiles.Concat(scan.FsFiles))
             {
-                if (fileIds.TryGetValue(f.RelPath, out long fid)) csFileIds[f.RelPath] = fid;
+                if (fileIds.TryGetValue(f.RelPath, out long fid)) sourceFileIds[f.RelPath] = fid;
             }
-            CompileItemResolver.Write(store, tx, parsedProjects, projectIds, csFileIds);
+            CompileItemResolver.Write(store, tx, parsedProjects, projectIds, sourceFileIds);
             // isTest R3 (custom-resolve-proof): compiled test attributes + graph-leaf promotion —
             // must run after BOTH compile attribution and ref insertion (leaf check).
             int promoted = store.PromoteTestProjectsByCompiledAttributes(tx);
@@ -441,10 +573,66 @@ public static class IndexBuilder
         long dbBytes = new FileInfo(dbPath).Length;
 
         return new BuildResult(
-            parsedProjects.Length, parsedSolutions.Count, csCount, otherCount,
+            parsedProjects.Length, parsedSolutions.Count, csCount, fsCount, otherCount,
             symbolCount, lineCount, unresolvedRefs,
             scanTime, projectTime, parseTime, total.Elapsed, dbBytes);
     }
+
+    private const long FSharpPreparedItemOverheadBytes = 256;
+
+    private sealed record PreparedFSharpSource(
+        ScannedFile File,
+        string Content,
+        ulong Hash,
+        int ByteCount,
+        int LineCount,
+        bool IsGenerated);
+
+    private static IEnumerable<List<ScannedFile>> FSharpReadBatches(
+        IReadOnlyList<ScannedFile> files, long batchMemoryBudgetBytes)
+    {
+        var batch = new List<ScannedFile>(Math.Min(FSharpReadBatchMaxItems, files.Count));
+        long retainedCharge = 0;
+        foreach (ScannedFile file in files)
+        {
+            long estimate = EstimatedFSharpBatchMemoryBytes(file.Size);
+            long charge = Math.Min(estimate, batchMemoryBudgetBytes);
+            if (batch.Count > 0 &&
+                (batch.Count >= FSharpReadBatchMaxItems ||
+                 charge > batchMemoryBudgetBytes - retainedCharge))
+            {
+                yield return batch;
+                batch = new List<ScannedFile>(Math.Min(FSharpReadBatchMaxItems, files.Count));
+                retainedCharge = 0;
+            }
+
+            batch.Add(file);
+            retainedCharge += charge;
+            if (estimate > batchMemoryBudgetBytes || batch.Count >= FSharpReadBatchMaxItems)
+            {
+                yield return batch;
+                batch = new List<ScannedFile>(Math.Min(FSharpReadBatchMaxItems, files.Count));
+                retainedCharge = 0;
+            }
+        }
+
+        if (batch.Count > 0) yield return batch;
+    }
+
+    private static long EstimatedFSharpBatchMemoryBytes(long rawByteCount)
+    {
+        long bounded = Math.Max(0, rawByteCount);
+        // The raw byte[] and decoded UTF-16 string can coexist until a read iteration
+        // completes, so charge both representations rather than only queued text.
+        return bounded > (long.MaxValue - FSharpPreparedItemOverheadBytes) / 3
+            ? long.MaxValue
+            : bounded * 3 + FSharpPreparedItemOverheadBytes;
+    }
+
+    private static long ActualFSharpBatchMemoryBytes(int byteCount, int characterCount) =>
+        Math.Max(0L, byteCount) +
+        (long)Math.Max(0, characterCount) * sizeof(char) +
+        FSharpPreparedItemOverheadBytes;
 
     private static string DecodeUtf8(byte[] bytes)
     {

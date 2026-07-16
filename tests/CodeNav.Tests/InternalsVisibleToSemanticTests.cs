@@ -205,8 +205,13 @@ public sealed class InternalsVisibleToSemanticTests
             if (!semantic.FrameworkRefsAvailable) return;
 
             var tools = new NavigationTools(manager, semantic);
-            JsonElement result = Parse(tools.Implementations(
-                name: "ISecretContract", arity: 0, timeoutMs: 60000));
+            JsonElement result = SemanticRetry.ParseWithRetry(
+                () => tools.Implementations(
+                    name: "ISecretContract", arity: 0, timeoutMs: 60000),
+                json => json.TryGetProperty("partialReason", out JsonElement reason) &&
+                        new[] { "no_semantic_implementers", "symbol_not_resolved" }
+                            .Contains(reason.GetString()),
+                "unsupported IVT shape denies compiler access");
 
             Assert.Equal("heuristic", result.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.Contains(result.GetProperty("partialReason").GetString(),
@@ -285,20 +290,26 @@ public sealed class InternalsVisibleToSemanticTests
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
 
-            JsonElement implementations = Parse(tools.Implementations(
+            JsonElement ParseUnproven(Func<string> call) => SemanticRetry.ParseWithRetry(
+                call,
+                json => json.TryGetProperty("partialReason", out JsonElement reason) &&
+                        reason.GetString() == "project_model_unproven",
+                "project_model_unproven semantic result");
+
+            JsonElement implementations = ParseUnproven(() => tools.Implementations(
                 name: "ISecretContract", arity: 0, timeoutMs: 60000));
-            JsonElement hierarchy = Parse(tools.TypeHierarchy(
+            JsonElement hierarchy = ParseUnproven(() => tools.TypeHierarchy(
                 name: "ISecretContract", arity: 0, timeoutMs: 60000));
-            JsonElement definition = Parse(tools.Definition(
+            JsonElement definition = ParseUnproven(() => tools.Definition(
                 name: "ISecretContract", path: "Consumer/SecretImplementation.cs", line: 2,
                 mode: "semantic", timeoutMs: 60000));
-            JsonElement references = Parse(tools.References(
+            JsonElement references = ParseUnproven(() => tools.References(
                 name: "ISecretContract", path: "Contracts/ISecretContract.cs", line: 2,
                 mode: "semantic", timeoutMs: 60000));
-            JsonElement callers = Parse(tools.Callers(
+            JsonElement callers = ParseUnproven(() => tools.Callers(
                 name: "Run", path: "Contracts/ISecretContract.cs", line: 4,
                 timeoutMs: 60000));
-            JsonElement callees = Parse(tools.Callees(
+            JsonElement callees = ParseUnproven(() => tools.Callees(
                 name: "Invoke", path: "Consumer/SecretImplementation.cs", line: 6,
                 timeoutMs: 60000));
 
@@ -323,6 +334,10 @@ public sealed class InternalsVisibleToSemanticTests
             AssertProjectModelUnproven(references);
             AssertProjectModelUnproven(callers);
             AssertProjectModelUnproven(callees);
+            Assert.False(references.TryGetProperty("totalIsLowerBound", out _));
+            string summary = references.GetProperty("summary").GetString()!;
+            Assert.False(summary.StartsWith("at least ", StringComparison.OrdinalIgnoreCase),
+                $"non-monotonic project-model uncertainty is not a lower bound: {summary}");
         }
         finally
         {

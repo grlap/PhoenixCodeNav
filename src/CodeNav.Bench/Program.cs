@@ -145,7 +145,9 @@ if (rebuild || !File.Exists(dbPath))
     Console.WriteLine();
     Console.WriteLine($"  projects          : {result.Projects} ({result.UnresolvedProjectRefs} unresolved refs)");
     Console.WriteLine($"  solutions         : {result.Solutions}");
-    Console.WriteLine($"  cs files          : {result.CsFiles:N0} ({result.Lines:N0} lines)");
+    Console.WriteLine($"  cs files          : {result.CsFiles:N0}");
+    Console.WriteLine($"  fs files          : {result.FsFiles:N0}");
+    Console.WriteLine($"  source lines      : {result.Lines:N0}");
     Console.WriteLine($"  other files       : {result.OtherFiles:N0}");
     Console.WriteLine($"  symbols           : {result.Symbols:N0}");
     Console.WriteLine($"  scan/projects     : {result.ScanTime.TotalSeconds:F1}s / {result.ProjectTime.TotalSeconds:F1}s");

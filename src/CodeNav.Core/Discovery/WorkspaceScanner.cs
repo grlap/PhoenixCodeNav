@@ -5,6 +5,7 @@ public sealed record ScannedFile(string RelPath, long Size, long MtimeTicks);
 public sealed record ScanResult(
     string Root,
     List<ScannedFile> CsFiles,
+    List<ScannedFile> FsFiles,
     List<ScannedFile> ProjectFiles,
     List<ScannedFile> SolutionFiles,
     List<ScannedFile> ConfigFiles);
@@ -49,6 +50,7 @@ public static class WorkspaceScanner
         var excluded = new HashSet<string>(DefaultExcludedDirs, StringComparer.OrdinalIgnoreCase);
 
         var cs = new List<ScannedFile>();
+        var fs = new List<ScannedFile>();
         var projects = new List<ScannedFile>();
         var solutions = new List<ScannedFile>();
         var configs = new List<ScannedFile>();
@@ -93,7 +95,14 @@ public static class WorkspaceScanner
                 {
                     cs.Add(scanned);
                 }
-                else if (ext.Equals(".csproj", StringComparison.OrdinalIgnoreCase))
+                else if (ext.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+                         ext.Equals(".fsi", StringComparison.OrdinalIgnoreCase) ||
+                         ext.Equals(".fsx", StringComparison.OrdinalIgnoreCase))
+                {
+                    fs.Add(scanned);
+                }
+                else if (ext.Equals(".csproj", StringComparison.OrdinalIgnoreCase) ||
+                         ext.Equals(".fsproj", StringComparison.OrdinalIgnoreCase))
                 {
                     projects.Add(scanned);
                 }
@@ -111,6 +120,6 @@ public static class WorkspaceScanner
             }
         }
 
-        return new ScanResult(root, cs, projects, solutions, configs);
+        return new ScanResult(root, cs, fs, projects, solutions, configs);
     }
 }

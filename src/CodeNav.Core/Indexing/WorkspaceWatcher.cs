@@ -17,7 +17,8 @@ public sealed class WorkspaceWatcher : IDisposable
 {
     private static readonly string[] WatchedExtensions =
     {
-        ".cs", ".csproj", ".sln", ".slnx", ".slnf", ".config", ".props", ".targets", ".json",
+        ".cs", ".fs", ".fsi", ".fsx", ".csproj", ".fsproj", ".sln", ".slnx", ".slnf",
+        ".config", ".props", ".targets", ".json",
     };
 
     private readonly string _root;
@@ -122,7 +123,7 @@ public sealed class WorkspaceWatcher : IDisposable
         }
     }
 
-    private static bool IsWatchedFile(string rel) =>
+    internal static bool IsWatchedFile(string rel) =>
         WatchedExtensions.Contains(Path.GetExtension(rel), StringComparer.OrdinalIgnoreCase);
 
     private static bool SafeDirectoryExists(string fullPath)

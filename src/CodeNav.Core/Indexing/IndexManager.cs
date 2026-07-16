@@ -611,7 +611,7 @@ public sealed class IndexManager : IDisposable
                             {
                                 var buildResult = IndexBuilder.BuildOwned(_workspaceRoot,
                                     _databaseIoPath, _log, startupBuildProgress);
-                                _log($"Index built: {buildResult.CsFiles} files, " +
+                                _log($"Index built: {buildResult.CsFiles} C# + {buildResult.FsFiles} F# files, " +
                                      $"{buildResult.Symbols} symbols in " +
                                      $"{buildResult.TotalTime.TotalSeconds:F0}s");
                                 // Review B1: drain the ticker BEFORE the terminal frame — a
@@ -1151,7 +1151,8 @@ public sealed class IndexManager : IDisposable
             _buildProgress = rebuildProgress;
             (buildId, progressTimer) = BeginBuildTelemetry("explicit_full", rebuildProgress); // x5ls.1.2
             var result = IndexBuilder.BuildOwned(_workspaceRoot, _databaseIoPath, _log, rebuildProgress);
-            _log($"Full rebuild done: {result.CsFiles} files, {result.Symbols} symbols in {result.TotalTime.TotalSeconds:F0}s");
+            _log($"Full rebuild done: {result.CsFiles} C# + {result.FsFiles} F# files, " +
+                 $"{result.Symbols} symbols in {result.TotalTime.TotalSeconds:F0}s");
             // Review B1: drain the ticker BEFORE the terminal frame (no progress after completed).
             DrainDisposeBuildTimer(progressTimer);
             EmitBuildCompleted(buildId, rebuildProgress, (long)result.TotalTime.TotalMilliseconds);

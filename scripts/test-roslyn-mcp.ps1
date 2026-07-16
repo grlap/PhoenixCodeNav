@@ -9,7 +9,8 @@ param(
     [string]$EvidencePath,
     [switch]$SelfTestProcessLifecycle,
     [switch]$SelfTestProcessHost,
-    [switch]$SelfTestProcessGrandchild
+    [switch]$SelfTestProcessGrandchild,
+    [switch]$SelfTestSemanticRetryContract
 )
 
 Set-StrictMode -Version 1.0
@@ -97,6 +98,20 @@ if ($AllowCandidatePhoenix) {
     }
     $expectations = $candidate
 }
+$supportsFSharpTierA = $expectations.PSObject.Properties.Name -contains "fsharpTierA" -and
+    [bool]$expectations.fsharpTierA
+$fsharpProbeText = if ($expectations.PSObject.Properties.Name -contains "fsharpProbeText") {
+    [string]$expectations.fsharpProbeText
+} else { [string]$baseline.fsharp.probeText }
+$expectedIndexSchema = if ($expectations.PSObject.Properties.Name -contains "indexSchema") {
+    [string]$expectations.indexSchema
+} else { [string]$baseline.indexSchema }
+$expectedIndexVersion = if ($expectations.PSObject.Properties.Name -contains "indexVersion") {
+    [string]$expectations.indexVersion
+} else { [string]$baseline.indexVersion }
+$expectedCounts = if ($expectations.PSObject.Properties.Name -contains "counts") {
+    $expectations.counts
+} else { $baseline.counts }
 if ([string]::IsNullOrWhiteSpace($Workspace)) {
     $Workspace = if ([string]::IsNullOrWhiteSpace($env:PHOENIX_ROSLYN_WORKSPACE)) {
         [string]$baseline.defaultWorkspace
@@ -452,18 +467,42 @@ if ($SelfTestProcessLifecycle) {
     exit 0
 }
 
+function Test-RetryableSemanticPayload($Payload) {
+    $reason = [string]$Payload.reason
+    $partialReason = [string]$Payload.partialReason
+    return $reason -match "cluster_cold_load|index_snapshot_unavailable" -or
+           $partialReason -match "cluster_cold_load|index_snapshot_unavailable"
+}
+
 function Invoke-SemanticWithRetry($Client, [string]$Name, [hashtable]$Arguments) {
     for ($attempt = 0; $attempt -lt 4; $attempt++) {
         $payload = Invoke-McpTool $Client $Name $Arguments 120000
-        $reason = [string]$payload.reason
-        $partialReason = [string]$payload.partialReason
-        $transient = $payload.error -eq "semantic_unavailable" -and
-            ($reason -match "cluster_cold_load|index_snapshot_unavailable" -or
-             $partialReason -match "cluster_cold_load|index_snapshot_unavailable")
-        if (-not $transient) { return $payload }
+        if (-not (Test-RetryableSemanticPayload $payload)) { return $payload }
         Start-Sleep -Milliseconds 500
     }
     return $payload
+}
+
+if ($SelfTestSemanticRetryContract) {
+    $indexedFallback = [pscustomobject]@{
+        error = $null
+        partialReason = "index_snapshot_unavailable"
+        meta = [pscustomobject]@{ confidence = "indexed" }
+    }
+    $coldError = [pscustomobject]@{
+        error = "semantic_unavailable"
+        reason = "cluster_cold_load: retry"
+    }
+    $stableIndexed = [pscustomobject]@{
+        error = $null
+        partialReason = "project_model_unproven"
+        meta = [pscustomobject]@{ confidence = "indexed" }
+    }
+    Assert-True (Test-RetryableSemanticPayload $indexedFallback) "Indexed auto fallback was not classified as transient"
+    Assert-True (Test-RetryableSemanticPayload $coldError) "Semantic-unavailable cold load was not classified as transient"
+    Assert-True (-not (Test-RetryableSemanticPayload $stableIndexed)) "Stable indexed partiality was misclassified as transient"
+    Write-Host "Semantic retry contract self-test passed"
+    exit 0
 }
 
 $phoenixHead = [string](@(Invoke-Git $repoRoot @("rev-parse", "HEAD"))[0])
@@ -540,19 +579,23 @@ try {
     Test-IntegrationCase "server identity and frozen index" {
         Assert-Equal ([string]$expectations.mcpVersion) ([string]$writerSession.Initialize.serverInfo.version) "MCP version changed"
         Assert-Equal 26 @($writerSession.Tools.tools).Count "MCP tool count changed"
-        Assert-Equal ([string]$baseline.indexSchema) ([string]$writerSession.Capabilities.build.indexSchema) "Index schema changed"
-        Assert-Equal ([string]$baseline.indexVersion) ([string]$writerSession.Capabilities.index.indexVersion) "Reusable index version changed"
+        Assert-Equal $expectedIndexSchema ([string]$writerSession.Capabilities.build.indexSchema) "Index schema changed"
+        Assert-Equal $expectedIndexVersion ([string]$writerSession.Capabilities.index.indexVersion) "Reusable index version changed"
         Assert-Equal ([string]$baseline.roslynCommit) ([string](Invoke-McpTool $writer "repo_overview" ([hashtable]::new())).git.indexedCommit) "Indexed commit changed"
     }
 
     $overview = Invoke-McpTool $writer "repo_overview" ([hashtable]::new())
     $evidence.results.repoOverview = $overview
     Test-IntegrationCase "repository counts" {
-        Assert-Equal ([int]$baseline.counts.projects) ([int]$overview.projects.total) "Project count changed"
-        Assert-Equal ([int]$baseline.counts.solutions) ([int]$overview.solutions) "Solution count changed"
-        Assert-Equal ([int]$baseline.counts.csFiles) ([int]$overview.csFiles) "C# file count changed"
-        Assert-Equal ([int]$baseline.counts.symbols) ([int]$overview.symbols) "Symbol count changed"
-        Assert-Equal ([int]$baseline.counts.orphanedFiles) ([int]$overview.orphanedFiles) "Orphaned-file count changed"
+        Assert-Equal ([int]$expectedCounts.projects) ([int]$overview.projects.total) "Project count changed"
+        Assert-Equal ([int]$expectedCounts.solutions) ([int]$overview.solutions) "Solution count changed"
+        Assert-Equal ([int]$expectedCounts.csFiles) ([int]$overview.csFiles) "C# file count changed"
+        Assert-Equal ([int]$expectedCounts.symbols) ([int]$overview.symbols) "Symbol count changed"
+        Assert-Equal ([int]$expectedCounts.orphanedFiles) ([int]$overview.orphanedFiles) "Orphaned-file count changed"
+        if ($supportsFSharpTierA) {
+            Assert-Equal ([int]$expectedCounts.fsFiles) ([int]$overview.fsFiles) "F# file count changed"
+            Assert-Equal ([int]$expectedCounts.fsProjects) ([int]$overview.projects.fsharp) "F# project count changed"
+        }
         Assert-True ([bool]$overview.git.headMatchesIndex) "Roslyn HEAD no longer matches the reusable index"
     }
 
@@ -778,14 +821,42 @@ try {
 
     $fsFile = Invoke-McpTool $writer "find_file" @{ nameOrGlob = "Library.fs"; limit = 10 }
     $fsProject = Invoke-McpTool $writer "find_file" @{ nameOrGlob = "*.fsproj"; limit = 10 }
-    $fsText = Invoke-McpTool $writer "search_text" @{ query = [string]$baseline.fsharp.probeText; limit = 10 }
+    $fsText = Invoke-McpTool $writer "search_text" @{
+        query = $fsharpProbeText
+        pathGlob = [string]$baseline.fsharp.sourcePath
+        limit = 10
+    }
     $fsOutline = Invoke-McpTool $writer "outline" @{ path = [string]$baseline.fsharp.sourcePath; depth = 2 }
-    $evidence.results.fsharpBaseline = [ordered]@{ findFile = $fsFile; findProject = $fsProject; searchText = $fsText; outline = $fsOutline }
-    Test-IntegrationCase "F# tier-a baseline remains explicitly absent before loui" {
-        Assert-Equal 0 @($fsFile.files).Count "Phoenix unexpectedly indexes .fs files; update the deliberate capability baseline"
-        Assert-Equal 0 @($fsProject.files).Count "Phoenix unexpectedly indexes .fsproj files; update the deliberate capability baseline"
-        Assert-Equal 0 @($fsText.hits).Count "Phoenix unexpectedly searches F# source; update the deliberate capability baseline"
-        Assert-Equal "file_not_indexed" ([string]$fsOutline.error) "F# outline baseline changed"
+    $fsOwners = if ($supportsFSharpTierA) {
+        Invoke-McpTool $writer "projects_containing" @{ path = [string]$baseline.fsharp.sourcePath }
+    } else { $null }
+    $fsGraph = if ($supportsFSharpTierA) {
+        Invoke-McpTool $writer "project_graph" @{ project = "csharplib"; depth = 1; direction = "downstream" }
+    } else { $null }
+    $evidence.results.fsharpTierA = [ordered]@{
+        supported = $supportsFSharpTierA
+        findFile = $fsFile
+        findProject = $fsProject
+        searchText = $fsText
+        outline = $fsOutline
+        owners = $fsOwners
+        graph = $fsGraph
+    }
+    Test-IntegrationCase "F# tier-a capability matches the locked build" {
+        if ($supportsFSharpTierA) {
+            Assert-True (@($fsFile.files | Where-Object { $_.path -eq [string]$baseline.fsharp.sourcePath -and $_.language -eq "fs" }).Count -eq 1) "F# source is not indexed with lang=fs"
+            Assert-True (@($fsProject.files | Where-Object { $_.path -eq [string]$baseline.fsharp.projectPath -and $_.language -eq "fsproj" }).Count -eq 1) "F# project is not indexed with lang=fsproj"
+            Assert-True (@($fsText.hits | Where-Object { $_.path -eq [string]$baseline.fsharp.sourcePath }).Count -gt 0) "F# source text is not searchable"
+            Assert-Equal "unsupported_language" ([string]$fsOutline.error) "F# outline did not disclose its language boundary"
+            Assert-Equal "fs" ([string]$fsOutline.language) "F# outline reported the wrong language"
+            Assert-True (@($fsOwners.projects | Where-Object { $_.name -eq "fsharplib" -and $_.language -eq "fs" }).Count -eq 1) "F# compile ownership is absent"
+            Assert-True (@($fsGraph.edges | Where-Object { $_.from -eq "csharplib" -and $_.fromLanguage -eq "cs" -and $_.to -eq "fsharplib" -and $_.toLanguage -eq "fs" }).Count -gt 0) "C# to F# project-reference edge is absent"
+        } else {
+            Assert-Equal 0 @($fsFile.files).Count "Released baseline unexpectedly indexes .fs files"
+            Assert-Equal 0 @($fsProject.files).Count "Released baseline unexpectedly indexes .fsproj files"
+            Assert-Equal 0 @($fsText.hits).Count "Released baseline unexpectedly searches F# source"
+            Assert-Equal "file_not_indexed" ([string]$fsOutline.error) "Released F# outline baseline changed"
+        }
     }
 
     $repeat = Invoke-SemanticWithRetry $writer "implementations" @{ symbolId = $targetHandle; maxProjects = 0; timeoutMs = 60000 }
@@ -802,7 +873,7 @@ try {
     $evidence.results.followerCapabilities = $followerSession.Capabilities
     Test-IntegrationCase "read-only follower attaches to the same epoch" {
         Assert-Equal ([string]$writerSession.Capabilities.index.indexVersion) ([string]$followerSession.Capabilities.index.indexVersion) "Follower attached to a different index epoch"
-        Assert-Equal ([string]$baseline.indexSchema) ([string]$followerSession.Capabilities.build.indexSchema) "Follower schema changed"
+        Assert-Equal $expectedIndexSchema ([string]$followerSession.Capabilities.build.indexSchema) "Follower schema changed"
     }
 
     $followerSearch = Invoke-McpTool $follower "search_symbol" @{ query = [string]$baseline.target.name; limit = 10 }

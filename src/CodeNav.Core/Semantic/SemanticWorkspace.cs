@@ -20,6 +20,30 @@ public sealed record ClusterCoverage(
     // exact facts from the real build.
     IReadOnlyList<string>? UnprovenFriendAssemblyProjects = null);
 
+/// <summary>Stable one-cause classification shared by semantic telemetry and MCP envelopes.
+/// Keeping this in Core prevents each protocol shaper from inventing a different token for the
+/// same incomplete compiler scan.</summary>
+public static class SemanticCoverageReasons
+{
+    public static string? Primary(
+        ClusterCoverage? coverage,
+        bool deadlineExhausted = false,
+        bool candidateProjectsSkipped = false,
+        bool outOfGraphCandidates = false,
+        bool projectModelUnproven = false)
+    {
+        if (deadlineExhausted) return "semantic_timeout";
+        if (coverage is { SkippedProjects.Count: > 0 })
+            return "unsupported_language_projects_skipped";
+        if (candidateProjectsSkipped) return "candidate_cluster_bounded";
+        if (coverage is { FailedProjects.Count: > 0 }) return "project_load_failed";
+        if (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects)
+            return "project_coverage_incomplete";
+        if (outOfGraphCandidates) return "out_of_graph_candidates";
+        return projectModelUnproven ? "project_model_unproven" : null;
+    }
+}
+
 /// <summary>
 /// Owns: an AdhocWorkspace populated lazily with per-project compilations built from
 /// parsed csproj facts (no MSBuild evaluation): documents from live files, framework
@@ -163,6 +187,10 @@ public sealed class SemanticWorkspace : IDisposable
 
             tFinger = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
             var toLoad = TopoOrder(q, requested.Where(n => !_loaded.ContainsKey(n)).ToList());
+            Dictionary<string, HashSet<string>> ensuredReferencesByProject =
+                ensureReferenceTo is { Count: > 0 }
+                    ? q.SemanticCSharpReachability(toLoad, ensureReferenceTo, ct)
+                    : new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
             tTopo = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
             var frameworkRefs = ReferenceAssemblyLocator.Net472References(out string? refDir);
             if (refDir is null)
@@ -173,10 +201,29 @@ public sealed class SemanticWorkspace : IDisposable
             foreach (var name in toLoad)
             {
                 ct.ThrowIfCancellationRequested();
+                // Tier-a F# support indexes source text and project topology but deliberately
+                // does not construct a fake C# Roslyn project for .fsproj inputs. Keeping the
+                // project in coverage as skipped makes a C# dependency closure honestly partial
+                // while preserving any real metadata boundary the caller supplied.
+                List<ProjectRow> projectRows = q.ProjectsByName(name);
+                ProjectRow? projectRow = projectRows.FirstOrDefault(row => row.Language == "cs");
+                if (projectRow is null && projectRows.Count > 0)
+                {
+                    skipped.Add(name);
+                    continue;
+                }
+                if (projectRow is null)
+                {
+                    failed.Add(name);
+                    continue;
+                }
                 try
                 {
                     var reuseId = reuseIds.TryGetValue(name, out var rid) ? rid : null;
-                    if (LoadProject(q, name, frameworkRefs, reuseId, ensureReferenceTo, phaseTicks) is { } lp)
+                    ensuredReferencesByProject.TryGetValue(name,
+                        out HashSet<string>? ensuredReferences);
+                    if (LoadProject(q, projectRow, name, frameworkRefs, reuseId,
+                            ensuredReferences, phaseTicks) is { } lp)
                     {
                         _loaded[name] = lp;
                     }
@@ -198,6 +245,20 @@ public sealed class SemanticWorkspace : IDisposable
             }
 
             EvictBeyondCap(requested);
+
+            // A logical target name can have both C# and F# physical rows. Loading the C# twin
+            // must not erase the fact that a particular source edge targets the unsupported F#
+            // row. F#-only requested projects already have their logical name in `skipped`; use
+            // the physical path only for the collision/unrequested cases so coverage is neither
+            // duplicated nor ambiguous.
+            var skippedSet = new HashSet<string>(skipped, StringComparer.OrdinalIgnoreCase);
+            foreach (SemanticProjectEdge edge in q.SemanticProjectEdges(requested))
+            {
+                if (!edge.ToLanguage.Equals("cs", StringComparison.OrdinalIgnoreCase) &&
+                    !skippedSet.Contains(edge.ToProject))
+                    skippedSet.Add(edge.ToPath);
+            }
+            skipped = skippedSet.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
 
             var coverage = new ClusterCoverage(
                 LoadedProjects: requested.Count(n => _loaded.ContainsKey(n)),
@@ -280,13 +341,11 @@ public sealed class SemanticWorkspace : IDisposable
     // ---------------------------------------------------------------- loading
 
     private LoadedProject? LoadProject(
-        IndexQueries q, string name, IReadOnlyList<MetadataReference> frameworkRefs,
-        ProjectId? reuseId, IReadOnlyCollection<string>? ensureReferenceTo,
+        IndexQueries q, ProjectRow row, string name,
+        IReadOnlyList<MetadataReference> frameworkRefs,
+        ProjectId? reuseId, IReadOnlyCollection<string>? ensuredReferences,
         LoadPhaseTicks? phaseTicks = null)
     {
-        var row = q.ProjectByName(name);
-        if (row is null) return null;
-
         // Preserve live load-time fidelity (assembly refs, hint paths), but capture through the
         // bounded no-follow reader so a project or packages.config FIFO/socket/link cannot block
         // semantic loading. The byte parser remains BOM/encoding aware.
@@ -436,8 +495,12 @@ public sealed class SemanticWorkspace : IDisposable
         using (var q2 = new IndexQueries(_dbPath, pinReadSnapshot: false,
                    pooling: _poolIndexConnections))
         {
-            foreach (var edge in q2.ProjectGraph(name, 1, "downstream"))
+            foreach (SemanticProjectEdge edge in q2.SemanticProjectEdges(name))
             {
+                if (!edge.ToLanguage.Equals("cs", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
                 if (_loaded.TryGetValue(edge.ToProject, out var dep) && !refIds.Contains(dep.Id) &&
                     !WouldCycle(dep.Id) && refIds.Add(dep.Id))
                 {
@@ -445,19 +508,23 @@ public sealed class SemanticWorkspace : IDisposable
                     refNames.Add(edge.ToProject);
                 }
             }
-        }
-        // Guarantee visibility of the symbol-declaring project even when the dependency
-        // path is transitive (SDK-style transitivity) — harmless when redundant.
-        if (ensureReferenceTo is not null)
-        {
-            foreach (var target in ensureReferenceTo)
+
+            // Guarantee visibility of the symbol-declaring project when a supported physical
+            // C# path proves SDK-style transitivity. The logical-name closure is not authority:
+            // a C# consumer can point at an F# physical row whose assembly name collides with an
+            // already-loaded C# row. Force-wiring that namesake would bind compiler results
+            // against the wrong project even though the direct edge loop correctly rejected it.
+            if (ensuredReferences is not null)
             {
-                if (!target.Equals(name, StringComparison.OrdinalIgnoreCase) &&
-                    _loaded.TryGetValue(target, out var dep) && !refIds.Contains(dep.Id) &&
-                    !WouldCycle(dep.Id) && refIds.Add(dep.Id))
+                foreach (var target in ensuredReferences)
                 {
-                    projectRefs.Add(new ProjectReference(dep.Id));
-                    refNames.Add(target);
+                    if (!target.Equals(name, StringComparison.OrdinalIgnoreCase) &&
+                        _loaded.TryGetValue(target, out var dep) && !refIds.Contains(dep.Id) &&
+                        !WouldCycle(dep.Id) && refIds.Add(dep.Id))
+                    {
+                        projectRefs.Add(new ProjectReference(dep.Id));
+                        refNames.Add(target);
+                    }
                 }
             }
         }
@@ -577,9 +644,10 @@ public sealed class SemanticWorkspace : IDisposable
             if (depth.TryGetValue(n, out int d)) return d;
             depth[n] = 0; // cycle guard
             int max = 0;
-            foreach (var e in q.ProjectGraph(n, 1, "downstream"))
+            foreach (SemanticProjectEdge e in q.SemanticProjectEdges(n))
             {
-                if (set.Contains(e.ToProject))
+                if (e.ToLanguage.Equals("cs", StringComparison.OrdinalIgnoreCase) &&
+                    set.Contains(e.ToProject))
                 {
                     max = Math.Max(max, Depth(e.ToProject, guard + 1) + 1);
                 }

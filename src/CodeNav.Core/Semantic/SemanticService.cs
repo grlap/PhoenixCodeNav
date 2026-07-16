@@ -33,9 +33,11 @@ public sealed record SemanticReferences(
     // 24n: the deadline fired MID-COUNT and the counts are a salvaged LOWER BOUND of the scanned
     // portion — previously seconds of completed compiler work were discarded into "semantic_timeout".
     bool DeadlineExhausted = false,
-    // kbn: textual candidates OUTSIDE the dependency closure (plugins, config-wired consumers) —
-    // previously dropped without a trace; capped at 20.
+    // kbn: bounded sample of textual candidates outside the dependency closure that were not
+    // pulled into the actual Roslyn solution (plugins, config-wired consumers).
     List<string>? OutOfGraphCandidates = null,
+    int OutOfGraphCandidateCount = 0,
+    bool OutOfGraphCandidatesTruncated = false,
     // t2b: where the deadline budget went — cluster load+resolve vs find+count. The field's
     // cold-cluster confusion ("first call after rebuild times out, second is instant") is
     // answerable from these two numbers without guessing.
@@ -295,7 +297,8 @@ public sealed partial class SemanticService : IDisposable
             if (symbolA is INamedTypeSymbol)
             {
                 implementerSeeds = indexSnapshot.Queries
-                    .ImplementationCandidateProjects(symbolA.Name, cts.Token);
+                    .ImplementationCandidateProjects(symbolA.Name, cts.Token,
+                        includeGenerated, includeTests);
             }
 
             // Phase 2: load the dependent scan set and re-resolve IN that snapshot, then
@@ -305,7 +308,8 @@ public sealed partial class SemanticService : IDisposable
             var (solution, symbol, coverage, skipped, outOfGraph) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds,
-                statsBox: scanBox).ConfigureAwait(false);
+                statsBox: scanBox, includeGenerated: includeGenerated,
+                includeTests: includeTests).ConfigureAwait(false);
             clusterLoadInProgress = false;
             clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find+count
             TestOnlyPhaseHook?.Invoke("afterScanSetLoad");
@@ -419,6 +423,10 @@ public sealed partial class SemanticService : IDisposable
 
             bool projectModelUnproven = FriendAssemblyAuthorityUnproven(symbol,
                 groups.Keys, coverage);
+            int outOfGraphCandidateCount = outOfGraph.Count;
+            List<string>? outOfGraphSample = outOfGraphCandidateCount > 0
+                ? outOfGraph.Take(20).ToList()
+                : null;
             var result = new SemanticReferences(
                 Describe(symbol),
                 total,
@@ -427,12 +435,26 @@ public sealed partial class SemanticService : IDisposable
                 skipped,
                 kindCounts,
                 deadlineExhausted,
-                outOfGraph.Count > 0 ? outOfGraph : null,
+                outOfGraphSample,
+                OutOfGraphCandidateCount: outOfGraphCandidateCount,
+                OutOfGraphCandidatesTruncated: outOfGraphCandidateCount >
+                    (outOfGraphSample?.Count ?? 0),
                 ClusterLoadMs: clusterLoadMs,
                 QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs,
                 ProjectModelUnproven: projectModelUnproven);
-            EmitOpTelemetry("references", projectModelUnproven ? "partial" : "exact",
-                projectModelUnproven ? "project_model_unproven" : null,
+            bool unsupportedLanguageSkipped = coverage.SkippedProjects.Count > 0;
+            bool candidateProjectsSkipped = skipped.Count > 0;
+            bool failedLoads = coverage.FailedProjects.Count > 0;
+            bool coverageIncomplete = coverage.LoadedProjects < coverage.RequestedProjects;
+            bool outOfGraphCandidates = outOfGraph.Count > 0;
+            bool incomplete = deadlineExhausted || unsupportedLanguageSkipped ||
+                candidateProjectsSkipped || failedLoads || coverageIncomplete ||
+                outOfGraphCandidates || projectModelUnproven;
+            string? telemetryReason = SemanticCoverageReasons.Primary(coverage,
+                deadlineExhausted, candidateProjectsSkipped, outOfGraphCandidates,
+                projectModelUnproven);
+            EmitOpTelemetry("references", incomplete ? "partial" : "exact",
+                telemetryReason,
                 ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
             return (result, null);
@@ -614,8 +636,18 @@ public sealed partial class SemanticService : IDisposable
                 ClusterLoadMs: clusterLoadMs,
                 QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs,
                 ProjectModelUnproven: projectModelUnproven);
-            EmitOpTelemetry("implementations", projectModelUnproven ? "partial" : "exact",
-                projectModelUnproven ? "project_model_unproven" : null,
+            bool unsupportedLanguageSkipped = coverage.SkippedProjects.Count > 0;
+            bool candidateProjectsSkipped = skipped.Count > 0;
+            bool failedLoads = coverage.FailedProjects.Count > 0;
+            bool coverageIncomplete = coverage.LoadedProjects < coverage.RequestedProjects;
+            bool incomplete = deadlineExhausted || unsupportedLanguageSkipped ||
+                candidateProjectsSkipped || failedLoads || coverageIncomplete ||
+                projectModelUnproven;
+            string? telemetryReason = SemanticCoverageReasons.Primary(coverage,
+                deadlineExhausted, candidateProjectsSkipped,
+                projectModelUnproven: projectModelUnproven);
+            EmitOpTelemetry("implementations", incomplete ? "partial" : "exact",
+                telemetryReason,
                 ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs,
                 queryStages); // epuc.1 + jj1q stages
@@ -812,10 +844,13 @@ public sealed partial class SemanticService : IDisposable
         string symbolName, string owningProject, string path, int line, int? column, string? nameHint,
         int maxProjects, IndexQueries q, CancellationToken ct,
         IReadOnlyList<string>? prioritySeeds = null, int? arityHint = null,
-        SemanticWorkspace.LoadStatsBox? statsBox = null)
+        SemanticWorkspace.LoadStatsBox? statsBox = null,
+        bool includeGenerated = true, bool includeTests = true)
     {
         List<string> skipped;
         var outOfGraph = new List<string>();
+        var outOfGraphSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var unsupportedCandidatePaths = new HashSet<string>(StringComparer.Ordinal);
         HashSet<string> scanSet;
         {
             var dependents = q.DependentClosure(owningProject);
@@ -840,6 +875,11 @@ public sealed partial class SemanticService : IDisposable
                 if (chosen.Count < budget && chosenSet.Add(project)) chosen.Add(project);
             }
 
+            void AddOutOfGraph(string project)
+            {
+                if (outOfGraphSet.Add(project)) outOfGraph.Add(project);
+            }
+
             // Graph-valid implementer seeds are strongest: they both name the type in a base list
             // and can legally reach its declaring project. Same-simple-name seeds outside the graph
             // are recovery candidates, but must not starve graph-valid textual consumers.
@@ -848,22 +888,31 @@ public sealed partial class SemanticService : IDisposable
             // kbn: textual candidates OUTSIDE the dependency closure (and not seed-chosen) were
             // dropped SILENTLY — not even in `skipped`. Post-lhg the closure covers assembly-ref
             // consumers, so this residue is reflection-loaded plugins / config-wired consumers:
-            // projects that mention the name but have no graph path to the declarer. Report them
-            // (capped) so a caller can see there was textual smoke beyond the graph.
+            // projects that mention the name but have no graph path to the declarer. Retain all of
+            // them until after the loaded-solution filter; only the public sample is capped.
             var candidates = new List<(string Project, int FileCount)>();
-            foreach (var c in q.CandidateProjectsForName(symbolName, ct))
+            foreach (var c in q.CandidateProjectsForName(symbolName, ct,
+                         includeGenerated, includeTests))
             {
-                if (dependents.Contains(c.Project)) candidates.Add(c);
-                else if (!chosenSet.Contains(c.Project) && outOfGraph.Count < 20) outOfGraph.Add(c.Project);
+                // Candidate ownership is a physical fact. An F# file that mentions the symbol
+                // must not nominate a same-logical-name C# project for Roslyn loading; that would
+                // turn an unscanned use into an apparently exact zero. Retain the physical path as
+                // explicit unsupported-language coverage instead.
+                if (!c.Language.Equals("cs", StringComparison.OrdinalIgnoreCase))
+                {
+                    unsupportedCandidatePaths.Add(c.ProjectPath);
+                    continue;
+                }
+                if (dependents.Contains(c.Project))
+                    candidates.Add((c.Project, c.FileCount));
+                else if (!chosenSet.Contains(c.Project)) AddOutOfGraph(c.Project);
             }
             foreach (var c in candidates)
                 Consider(c.Project);
             foreach (string project in orderedSeeds.Where(project => !dependents.Contains(project)))
             {
                 Consider(project);
-                if (outOfGraph.Count < 20 &&
-                    !outOfGraph.Contains(project, StringComparer.OrdinalIgnoreCase))
-                    outOfGraph.Add(project);
+                AddOutOfGraph(project);
             }
             scanSet = q.DependencyClosure(new[] { owningProject });
             foreach (var p in chosen) scanSet.Add(p);
@@ -877,6 +926,30 @@ public sealed partial class SemanticService : IDisposable
             .EnsureLoadedAsync(scanSet, ct, ensureReferenceTo: new[] { owningProject },
                 statsBox: statsBox)
             .ConfigureAwait(false);
+        if (unsupportedCandidatePaths.Count > 0)
+        {
+            coverage = coverage with
+            {
+                SkippedProjects = coverage.SkippedProjects
+                    .Concat(unsupportedCandidatePaths)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+            };
+        }
+        // `outOfGraph` is coverage evidence, not merely topology trivia: callers use it to
+        // decide whether the reference census is a lower bound. Loading one chosen project can
+        // pull in additional dependencies that were not explicit members of `scanSet`, so filter
+        // against the actual Roslyn solution rather than the requested names.
+        var loadedProjectNames = solution.Projects
+            .Select(project => project.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        outOfGraph.RemoveAll(project =>
+        {
+            if (!loadedProjectNames.Contains(project)) return false;
+            outOfGraphSet.Remove(project);
+            return true;
+        });
         var symbol = await ResolveInSolutionAsync(
             solution, owningProject, WorkspacePaths.Normalize(path), line, column, nameHint, ct,
             arityHint)
@@ -1132,7 +1205,7 @@ public sealed partial class SemanticService : IDisposable
     private Dictionary<string, bool> ProjectTestFlags()
     {
         using var q = _manager.OpenQueries();
-        return q.AllProjectTestFlags();
+        return q.AllProjectTestFlags("cs");
     }
 
     private string ToRelPath(string fullPath)

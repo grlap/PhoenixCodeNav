@@ -135,9 +135,18 @@ public class Batch37Tests
             if (!sem.FrameworkRefsAvailable) return; // env guard: no reference assemblies
             var tools = new NavigationTools(m, sem);
 
-            var refs = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
-                () => tools.References(name: "Zeta", timeoutMs: 90000));
-            Assert.Equal("exact", refs.GetProperty("meta").GetProperty("confidence").GetString());
+            // Mention.Tests contains only a config-style string mention and has no graph path to
+            // Lib. It remains visible as unscanned out-of-graph coverage, so the workspace-wide
+            // reference census is deliberately a lower bound even though the loaded projects are
+            // compiler-resolved. Retry only until that stable honesty-bearing shape arrives.
+            var refs = SemanticRetry.ParseWithRetry(
+                () => tools.References(name: "Zeta", timeoutMs: 90000),
+                json => json.TryGetProperty("partialReason", out JsonElement reason) &&
+                        (reason.GetString() ?? "").Contains(
+                            "out_of_graph_candidates", StringComparison.Ordinal),
+                "out-of-graph coverage with timing split");
+            Assert.Equal("indexed", refs.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.True(refs.GetProperty("totalIsLowerBound").GetBoolean());
             var timing = refs.GetProperty("timing");
             long load = timing.GetProperty("clusterLoadMs").GetInt64();
             long query = timing.GetProperty("queryMs").GetInt64();

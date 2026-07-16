@@ -61,6 +61,74 @@ internal static class Json
         return result.ToString();
     }
 
+    /// <summary>Returns the longest rune-safe prefix whose serialized JSON string (including
+    /// quotes and escapes) fits <paramref name="maxJsonBytes"/>. Raw UTF-8 bounds are insufficient
+    /// for hostile control characters because one input byte can become a six-byte \uXXXX escape.</summary>
+    public static string JsonStringPrefix(string value, int maxJsonBytes, out bool truncated)
+    {
+        if (maxJsonBytes < 2) throw new ArgumentOutOfRangeException(nameof(maxJsonBytes));
+        int originalBytes = Utf8Bytes(value);
+        if (Utf8Bytes(Serialize(value)) <= maxJsonBytes)
+        {
+            truncated = false;
+            return value;
+        }
+
+        int low = 0;
+        int high = originalBytes;
+        string best = "";
+        while (low <= high)
+        {
+            int candidateBytes = low + ((high - low) / 2);
+            string candidate = Utf8Prefix(value, candidateBytes, out _);
+            if (Utf8Bytes(Serialize(candidate)) <= maxJsonBytes)
+            {
+                best = candidate;
+                low = candidateBytes + 1;
+            }
+            else
+            {
+                high = candidateBytes - 1;
+            }
+        }
+        truncated = Utf8Bytes(best) < originalBytes;
+        return best;
+    }
+
+    /// <summary>Budgets one reflected string against the complete serialized envelope. The
+    /// preferred raw-byte cap remains observable through the builder's truncated argument, while
+    /// a binary search shrinks further when JSON escaping or fixed metadata requires it.</summary>
+    public static string WithStringBudget(string value, int preferredRawBytes,
+        Func<string, bool, object> build, int? maxBytes = null)
+    {
+        int cap = Math.Min(maxBytes ?? HardBudgetBytes, HardBudgetBytes);
+        int originalBytes = Utf8Bytes(value);
+        int low = 0;
+        int high = Math.Min(Math.Max(0, preferredRawBytes), originalBytes);
+        string emptyJson = Serialize(build("", originalBytes > 0));
+        if (Utf8Bytes(emptyJson) > cap)
+            throw new InvalidOperationException("Fixed string envelope exceeds the response budget.");
+        string bestJson = emptyJson;
+
+        while (low <= high)
+        {
+            int candidateBytes = low + ((high - low) / 2);
+            string candidate = Utf8Prefix(value, candidateBytes, out _);
+            bool truncated = Utf8Bytes(candidate) < originalBytes;
+            string json = Serialize(build(candidate, truncated));
+            if (Utf8Bytes(json) <= cap)
+            {
+                bestJson = json;
+                low = candidateBytes + 1;
+            }
+            else
+            {
+                high = candidateBytes - 1;
+            }
+        }
+        return bestJson;
+    }
+
     /// <summary>Hard-bounds the capability envelope while retaining every feature id. Longest
     /// non-review summaries are removed first, deterministically; review summaries are retained
     /// preferentially because they are the deploy-verification surface for the safety contract.
@@ -179,6 +247,55 @@ internal static class Json
             auxWork.RemoveRange(keep, auxWork.Count - keep);
             auxiliaryTruncated = true;
             json = Serialize(build(work, truncated, auxWork, auxiliaryTruncated));
+        }
+        return json;
+    }
+
+    /// <summary>Budgets a primary result list plus two independent diagnostic lists. Diagnostic
+    /// samples are reduced first so primary answers survive whenever possible; every reduction is
+    /// reported through its own truncation flag.</summary>
+    public static string WithAuxiliaryListsBudget<T, TAux, TSecondary>(
+        List<T> items,
+        List<TAux> auxiliary,
+        List<TSecondary> secondary,
+        Func<List<T>, bool, List<TAux>, bool, List<TSecondary>, bool, object> build,
+        int? maxBytes = null)
+    {
+        const int auxiliarySampleItems = 16;
+        const int secondarySampleItems = 20;
+        int cap = Math.Min(maxBytes ?? HardBudgetBytes, HardBudgetBytes);
+        var work = new List<T>(items);
+        var auxWork = auxiliary.Take(auxiliarySampleItems).ToList();
+        var secondaryWork = secondary.Take(secondarySampleItems).ToList();
+        bool truncated = false;
+        bool auxiliaryTruncated = auxiliary.Count > auxWork.Count;
+        bool secondaryTruncated = secondary.Count > secondaryWork.Count;
+        string json = Serialize(build(work, truncated, auxWork, auxiliaryTruncated,
+            secondaryWork, secondaryTruncated));
+
+        while (Utf8Bytes(json) > cap && secondaryWork.Count > 0)
+        {
+            int keep = secondaryWork.Count / 2;
+            secondaryWork.RemoveRange(keep, secondaryWork.Count - keep);
+            secondaryTruncated = true;
+            json = Serialize(build(work, truncated, auxWork, auxiliaryTruncated,
+                secondaryWork, secondaryTruncated));
+        }
+        while (Utf8Bytes(json) > cap && auxWork.Count > 0)
+        {
+            int keep = auxWork.Count / 2;
+            auxWork.RemoveRange(keep, auxWork.Count - keep);
+            auxiliaryTruncated = true;
+            json = Serialize(build(work, truncated, auxWork, auxiliaryTruncated,
+                secondaryWork, secondaryTruncated));
+        }
+        while (Utf8Bytes(json) > cap && work.Count > 0)
+        {
+            int keep = work.Count / 2;
+            work.RemoveRange(keep, work.Count - keep);
+            truncated = true;
+            json = Serialize(build(work, truncated, auxWork, auxiliaryTruncated,
+                secondaryWork, secondaryTruncated));
         }
         return json;
     }

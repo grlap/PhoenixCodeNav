@@ -201,14 +201,158 @@ public class Batch33Tests
                 if (!semantic.FrameworkRefsAvailable) return;
                 var tools = new NavigationTools(m, semantic);
 
-                var refs = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
-                    () => tools.References(name: "IContractD", timeoutMs: 90000));
-                Assert.Equal("exact", refs.GetProperty("meta").GetProperty("confidence").GetString());
+                var refs = SemanticRetry.ParseWithRetry(
+                    () => tools.References(name: "IContractD", timeoutMs: 90000),
+                    json => json.TryGetProperty("partialReason", out JsonElement reason) &&
+                            (reason.GetString() ?? "").Contains(
+                                "out_of_graph_candidates", StringComparison.Ordinal),
+                    "out-of-graph candidate honesty");
+                Assert.Equal("indexed", refs.GetProperty("meta")
+                    .GetProperty("confidence").GetString());
+                Assert.True(refs.GetProperty("partial").GetBoolean());
+                Assert.True(refs.GetProperty("totalIsLowerBound").GetBoolean());
                 var outOfGraph = refs.GetProperty("outOfGraphCandidates").EnumerateArray()
                     .Select(e => e.GetString()).ToList();
                 Assert.Contains("PluginD", outOfGraph);
             }
             finally { semantic.Dispose(); m.Dispose(); }
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void OutOfGraphCandidatesAreFilteredBeforeThePublicSampleIsCapped()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-kbn-filter-before-cap").FullName;
+        try
+        {
+            string api = Path.Combine(root, "Api");
+            Directory.CreateDirectory(api);
+            File.WriteAllText(Path.Combine(api, "Api.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(api, "IContract.cs"),
+                "namespace Contracts { public interface IContract { void Go(); } }");
+
+            string impl = Path.Combine(root, "Impl");
+            Directory.CreateDirectory(impl);
+            File.WriteAllText(Path.Combine(impl, "Impl.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>" +
+                "<ItemGroup><ProjectReference Include=\"../Api/Api.csproj\" /></ItemGroup></Project>");
+            File.WriteAllText(Path.Combine(impl, "Handler.cs"),
+                "namespace Impl { public sealed class Handler : Contracts.IContract { public void Go() { } } }");
+
+            var warmReferences = new List<string>();
+            for (int i = 0; i < 20; i++)
+            {
+                string name = $"Warm{i:00}";
+                string dir = Path.Combine(root, name);
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, $"{name}.csproj"),
+                    "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+                File.WriteAllText(Path.Combine(dir, "One.cs"),
+                    $"namespace {name} {{ public class One {{ public string Value = \"Contracts.IContract\"; }} }}");
+                File.WriteAllText(Path.Combine(dir, "Two.cs"),
+                    $"namespace {name} {{ public class Two {{ public string Value = \"Contracts.IContract\"; }} }}");
+                warmReferences.Add($"<ProjectReference Include=\"../{name}/{name}.csproj\" />");
+            }
+
+            string hub = Path.Combine(root, "WarmHub");
+            Directory.CreateDirectory(hub);
+            File.WriteAllText(Path.Combine(hub, "WarmHub.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>" +
+                $"<ItemGroup>{string.Join("", warmReferences)}</ItemGroup></Project>");
+            File.WriteAllText(Path.Combine(hub, "Hub.cs"),
+                "namespace WarmHub { public sealed class Hub { } }");
+
+            for (int i = 0; i < 21; i++)
+            {
+                string name = $"Tail{i:00}";
+                string tail = Path.Combine(root, name);
+                Directory.CreateDirectory(tail);
+                File.WriteAllText(Path.Combine(tail, $"{name}.csproj"),
+                    "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+                File.WriteAllText(Path.Combine(tail, "Tail.cs"),
+                    $"namespace {name} {{ public class Tail {{ public string Value = \"Contracts.IContract\"; }} }}");
+            }
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            using var semantic = new SemanticService(manager);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            if (!semantic.FrameworkRefsAvailable) return;
+            var tools = new NavigationTools(manager, semantic);
+
+            SemanticRetry.ParseExactWithRetry(() =>
+                tools.Definition(path: "WarmHub/Hub.cs", line: 1, timeoutMs: 90_000));
+            JsonElement refs = SemanticRetry.ParseWithRetry(
+                () => tools.References(name: "IContract", timeoutMs: 90_000),
+                json => json.TryGetProperty("partialReason", out JsonElement reason) &&
+                        (reason.GetString() ?? "").Contains("out_of_graph_candidates",
+                            StringComparison.Ordinal),
+                "post-filter out-of-graph candidate honesty");
+
+            Assert.True(refs.GetProperty("totalIsLowerBound").GetBoolean());
+            Assert.Equal(21, refs.GetProperty("outOfGraphCandidateCount").GetInt32());
+            Assert.True(refs.GetProperty("outOfGraphCandidatesTruncated").GetBoolean());
+            var sample = refs.GetProperty("outOfGraphCandidates").EnumerateArray()
+                .Select(candidate => candidate.GetString()).ToList();
+            Assert.Equal(20, sample.Count);
+            Assert.Contains("Tail00", sample);
+            Assert.DoesNotContain("Tail20", sample);
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void OutOfGraphCandidateDiagnosticsRespectTheHardByteBudget()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-kbn-byte-budget").FullName;
+        try
+        {
+            string api = Path.Combine(root, "Api");
+            Directory.CreateDirectory(api);
+            File.WriteAllText(Path.Combine(api, "Api.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(api, "IContract.cs"),
+                "namespace Contracts { public interface IContract { void Go(); } }");
+
+            for (int i = 0; i < 20; i++)
+            {
+                string directoryName = $"P{i:00}";
+                string directory = Path.Combine(root, directoryName);
+                Directory.CreateDirectory(directory);
+                string assemblyName = $"Plugin{i:00}_" + new string('界', 2_000);
+                File.WriteAllText(Path.Combine(directory, $"{directoryName}.csproj"),
+                    $"<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework><AssemblyName>{assemblyName}</AssemblyName></PropertyGroup></Project>");
+                File.WriteAllText(Path.Combine(directory, "Host.cs"),
+                    $"namespace P{i:00} {{ public sealed class Host {{ public string Wire = \"Contracts.IContract\"; }} }}");
+            }
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            using var semantic = new SemanticService(manager);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            if (!semantic.FrameworkRefsAvailable) return;
+            var tools = new NavigationTools(manager, semantic);
+            string response = "";
+            JsonElement references = SemanticRetry.ParseWithRetry(
+                () => response = tools.References(name: "IContract", timeoutMs: 90_000),
+                json => json.TryGetProperty("partialReason", out JsonElement reason) &&
+                        (reason.GetString() ?? "").Contains("out_of_graph_candidates",
+                            StringComparison.Ordinal),
+                "byte-bounded out-of-graph diagnostics");
+
+            Assert.True(Json.Utf8Bytes(response) <= Json.HardBudgetBytes,
+                $"references response used {Json.Utf8Bytes(response)} bytes");
+            Assert.Equal(20, references.GetProperty("outOfGraphCandidateCount").GetInt32());
+            Assert.Equal(20, references.GetProperty("outOfGraphCandidatesReturned").GetInt32());
+            Assert.True(references.GetProperty("outOfGraphCandidateItemsTruncated").GetBoolean());
+            Assert.All(references.GetProperty("outOfGraphCandidates").EnumerateArray(), item =>
+                Assert.True(Json.Utf8Bytes(Json.Serialize(item.GetString()!)) <= 512));
         }
         finally { Cleanup(root); }
     }
