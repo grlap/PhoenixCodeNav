@@ -137,7 +137,7 @@ public sealed partial class NavigationTools
     public string ReviewPack(
         [Description("Base to diff against: a commit sha or a ref name (strict charset; typically the merge-base). Default: the index's recorded commit, so diff evidence and indexed symbols share one baseline.")] string? baseRef = null,
         [Description("Comma-separated workspace-relative paths to review INSTEAD of a git diff (whole-file granularity; no git needed).")] string? paths = null,
-        [Description("Byte budget (default 16384, max 24576).")] int maxBytes = 16384,
+        [Description("Byte budget (default 16384, max 65536).")] int maxBytes = 16384,
         [Description("Max touched symbols digested (default 40, max 100).")] int maxSymbols = 40)
     {
         maxBytes = Math.Clamp(maxBytes, 2048, Json.HardBudgetBytes);

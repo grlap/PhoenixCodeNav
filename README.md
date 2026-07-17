@@ -20,7 +20,7 @@ how freshness (incl. git branch switch / pull) is handled ·
 
 At thousands of projects / millions of lines, text search returns too many weak matches, dependency
 direction is invisible, and agents burn context reading whole files. PhoenixCodeNav answers
-navigation questions in three layers, each labeled with how trustworthy it is:
+navigation questions in four layers, each labeled with how trustworthy it is:
 
 | Layer | Tools | Confidence |
 |---|---|---|
@@ -37,6 +37,10 @@ never select projects or contribute build, ownership, dependency, or symbol-reso
 Phoenix indexes `.fs`, `.fsi`, and `.fsx` text, parses `.fsproj` compile ownership and references,
 and preserves C#↔F# project edges. Project-owned `.fs` and `.fsi` files also have an on-demand,
 syntax-only `outline` backed by a pinned FSharp.Compiler.Service adapter; `.fsx` remains text-only.
+When the same file is owned by an exact legacy `Project.fsproj` plus dual-target
+`Project.Net.fsproj` migration pair, outline syntax defaults to the single-target legacy project
+and reports up to 64 available project/TFM contexts with total/returned/truncated coverage. A lone
+multi-target project uses its first declared TFM and reports that default as partial.
 F# compiler-semantic tools return `unsupported_language` instead of an empty or falsely exact
 result. Indexed searches stay language-neutral by default. An explicit F#-only `search_symbol`
 path scope is rejected, while a mixed C#/F# scope returns its C# symbols with

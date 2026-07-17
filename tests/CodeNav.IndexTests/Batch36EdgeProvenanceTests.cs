@@ -273,38 +273,44 @@ public class Batch36EdgeProvenanceTests
     }
 
     // Review F3: structuredPaths ~2.4x the dependency_path payload, and the tool serialized
-    // UNBUDGETED — a deep, wide monolith graph with 10 path variants measured ~35KB, past the
-    // 24KB HARD wire cap every other list-bearing tool enforces. Paths must trim as pairs.
+    // UNBUDGETED — a deep, wide monolith graph with 10 path variants exceeds the
+    // 64KB HARD wire cap every other list-bearing tool enforces. Paths must trim as pairs.
     [Fact]
     public void DependencyPathStaysWithinHardBudgetOnDeepWideGraphs()
     {
         string root = Directory.CreateTempSubdirectory("codenav-bxw-budget").FullName;
         try
         {
-            // 13-layer lattice, 3-wide in the middle, dotted ~90-char names — enough that ten
+            // 13-layer lattice, 3-wide in the middle, dotted ~390-char names — enough that ten
             // 13-hop structured paths cannot fit the hard cap untrimmed. Depth is deliberately
             // MODEST: DependencyPaths' BFS enumerates every equal-length partial path before
             // the first result, so path count grows 3^layers (a 17-layer cut of this fixture
             // ran 69 SECONDS; 13 layers runs in a few). The pre-existing exponential hazard is
             // filed separately — this test only pins the wire budget.
             static string Name(int layer, int c) =>
-                $"Acme.Monolith.Enterprise.Platform.Integration.Layer{layer:D2}.Component{c}.ServiceHostingModuleImpl";
+                $"Acme.Monolith.Enterprise.Platform.Integration.Layer{layer:D2}.Component{c}.ServiceHostingModuleImpl" +
+                new string('X', 300);
+            static string ProjectId(int layer, int c) => $"L{layer:D2}C{c}";
             static int Width(int layer) => layer is 0 or 12 ? 1 : 3;
             for (int layer = 0; layer <= 12; layer++)
             {
                 for (int c = 0; c < Width(layer); c++)
                 {
                     string name = Name(layer, c);
-                    string dir = Path.Combine(root, name);
+                    string projectId = ProjectId(layer, c);
+                    string dir = Path.Combine(root, projectId);
                     Directory.CreateDirectory(dir);
                     string refs = layer == 12
                         ? ""
                         : string.Join("\n", Enumerable.Range(0, Width(layer + 1)).Select(n =>
-                            $"    <ProjectReference Include=\"../{Name(layer + 1, n)}/{Name(layer + 1, n)}.csproj\" />"));
-                    File.WriteAllText(Path.Combine(dir, $"{name}.csproj"),
+                            $"    <ProjectReference Include=\"../{ProjectId(layer + 1, n)}/{ProjectId(layer + 1, n)}.csproj\" />"));
+                    File.WriteAllText(Path.Combine(dir, $"{projectId}.csproj"),
                         $"""
                         <Project Sdk="Microsoft.NET.Sdk">
-                          <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                          <PropertyGroup>
+                            <TargetFramework>net9.0</TargetFramework>
+                            <AssemblyName>{name}</AssemblyName>
+                          </PropertyGroup>
                           <ItemGroup>
                         {refs}
                           </ItemGroup>
@@ -349,7 +355,7 @@ public class Batch36EdgeProvenanceTests
         {
             static string Name(int i) =>
                 $"Acme.Monolith.Enterprise.Platform.Integration.Chain{i:D3}.Component.ServiceHostingModuleImpl";
-            const int len = 120; // one 120-node shortest chain: hops alone ~27KB > the 24KB cap
+            const int len = 300; // one 300-node shortest chain: hops alone exceed the 64KB cap
             for (int i = 0; i < len; i++)
             {
                 string name = Name(i);

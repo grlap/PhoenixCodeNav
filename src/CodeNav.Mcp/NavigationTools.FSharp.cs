@@ -5,6 +5,8 @@ namespace CodeNav.Mcp;
 
 public sealed partial class NavigationTools
 {
+    internal const int MaxFSharpOutlineContexts = 64;
+
     private string FSharpOutline(string path, string normalizedPath, FileHit file, int depth)
     {
         FSharpOutlineResult result = _semantic.FSharpOutline(normalizedPath);
@@ -17,8 +19,6 @@ public sealed partial class NavigationTools
                     "F# outline requires the file to be a compile item of an indexed .fsproj.",
                 "fsharp_project_options_unavailable" =>
                     "The indexed owning .fsproj is unavailable or cannot provide parser options.",
-                "fsharp_project_options_ambiguous" =>
-                    "The owning .fsproj targets multiple frameworks, so one authoritative syntax configuration cannot be selected.",
                 "fsharp_project_options_conflict" =>
                     "Multiple owning .fsproj files provide different F# parser options.",
                 "file_too_large" =>
@@ -65,6 +65,27 @@ public sealed partial class NavigationTools
             };
         }
 
+        object? selectedContext = result.SelectedProject is null
+            ? null
+            : new
+            {
+                project = result.SelectedProject,
+                targetFramework = result.SelectedTargetFramework,
+            };
+        var allAvailableContexts = result.AvailableContexts?
+            .Select(context => (object)new
+            {
+                project = context.Project,
+                targetFramework = context.TargetFramework,
+            })
+            .ToList() ?? [];
+        int availableContextsTotal = allAvailableContexts.Count;
+        var availableContexts = allAvailableContexts
+            .Take(MaxFSharpOutlineContexts)
+            .ToList();
+        bool availableContextsLimitTruncated =
+            availableContextsTotal > availableContexts.Count;
+
         string BuildNested(bool includeMembers, bool truncated) => Json.Serialize(new
         {
             path,
@@ -73,6 +94,11 @@ public sealed partial class NavigationTools
             truncated,
             partial = result.PartialReason is not null ? true : (bool?)null,
             partialReason = result.PartialReason,
+            selectedContext,
+            availableContexts,
+            availableContextsTotal,
+            availableContextsReturned = availableContexts.Count,
+            availableContextsTruncated = availableContextsLimitTruncated,
             meta,
         });
 
@@ -94,7 +120,8 @@ public sealed partial class NavigationTools
                 symbol.EndLine,
             })
             .ToList();
-        return Json.WithListBudget(flat, (items, _) => new
+        return Json.WithAuxiliaryListBudget(flat, availableContexts,
+            (items, _, contexts, contextsByteTruncated) => new
         {
             path,
             isGenerated = file.IsGenerated,
@@ -102,6 +129,12 @@ public sealed partial class NavigationTools
             truncated = true,
             partial = result.PartialReason is not null ? true : (bool?)null,
             partialReason = result.PartialReason,
+            selectedContext,
+            availableContexts = contexts,
+            availableContextsTotal,
+            availableContextsReturned = contexts.Count,
+            availableContextsTruncated =
+                availableContextsLimitTruncated || contextsByteTruncated,
             note = "File has too many declarations for a full outline; showing bounded top-level declarations.",
             meta,
         });

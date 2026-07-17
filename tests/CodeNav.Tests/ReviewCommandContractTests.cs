@@ -75,6 +75,14 @@ public class ReviewCommandContractTests
         Assert.Contains("If validation changed the identity, repeat Step 2 against the new identity and then restart all of Step 1 again", text);
         Assert.Contains("recompute the current parent identity", text);
         Assert.DoesNotContain("then invoke `/review-with-delegate` again", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Do not require another implementation review solely because", text);
+        Assert.Contains("exact byte prefix", text);
+        Assert.Contains("newline-terminated UTF-8 JSONL", text);
+        Assert.Contains("every appended `id` is non-empty and unique", text);
+        Assert.Contains("corresponds to an exact `bd` create, update, reopen, close, or dependency action", text);
+        Assert.Contains("Never broaden this exception to another `.beads` path", text);
+        Assert.Contains("Any non-append edit, malformed or duplicate record, unexplained issue record, change to another reviewed path", text);
+        Assert.DoesNotContain("If Beads export files or any other reviewed path changed", text);
 
         int pathInventory = text.IndexOf("git ls-files --others --exclude-standard", StringComparison.Ordinal);
         int containmentCheck = text.IndexOf("Before hashing, diffing, or opening target content", StringComparison.Ordinal);
@@ -180,6 +188,8 @@ public class ReviewCommandContractTests
         Assert.Contains("## Commit Discipline - NEVER check in without review", agents);
         Assert.Equal(claude[claude.IndexOf(marker, StringComparison.Ordinal)..],
             agents[agents.IndexOf(marker, StringComparison.Ordinal)..]);
+        Assert.Contains("mechanically validated append-only `.beads/interactions.jsonl` records", agents);
+        Assert.Contains("Pre-existing interaction bytes and every other path remain part", agents);
 
         string allReviewAssets = claude + "\n" + agents + "\n" + string.Join("\n",
             Directory.GetFiles(Path.Combine(Root(), ".claude"), "*.md", SearchOption.AllDirectories)

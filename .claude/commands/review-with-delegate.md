@@ -174,7 +174,17 @@ Use `bug` for correctness, security, data-loss, freshness, concurrency, protocol
 
 Do not modify source files during reconciliation. If no changes are required, state `Beads is up to date - no changes needed.`
 
-After reconciliation, rerun `git --no-optional-locks status --short` and the changed-file inventory. If Beads export files or any other reviewed path changed, the prior result no longer covers the complete diff: return NOT CLEAN and require another review round.
+Immediately before reconciliation, record the byte length and content hash of tracked `.beads/interactions.jsonl` when it exists. After reconciliation, rerun `git --no-optional-locks status --short`, the changed-file inventory, and the target-identity checks.
+
+Do not require another implementation review solely because the authorized Step 6 `bd` commands appended interaction records. This narrow exception applies only when every condition below is proven mechanically:
+
+- `.beads/interactions.jsonl` is the only reviewed path whose bytes changed during reconciliation;
+- its complete pre-reconciliation bytes remain an exact byte prefix of the post-reconciliation file, with no rewrite, deletion, or line-ending conversion;
+- the suffix is newline-terminated UTF-8 JSONL, every appended line parses as one object, and every appended `id` is non-empty and unique across the complete file;
+- every appended record names an issue reconciled in this Step 6 and corresponds to an exact `bd` create, update, reopen, close, or dependency action reported by the parent; and
+- read-only `bd show` confirms the resulting issue state.
+
+Treat those validated append-only records as tracker bookkeeping: report them, but preserve the review verdict and the reviewed implementation identity. Pre-existing `.beads/interactions.jsonl` bytes remain part of the ordinary review target. Any non-append edit, malformed or duplicate record, unexplained issue record, change to another reviewed path, or other target drift remains identity failure: return INCONCLUSIVE and do not claim that the review gate passed. Never broaden this exception to another `.beads` path or to hand-edited interaction records.
 
 ## Step 7: Hand off
 

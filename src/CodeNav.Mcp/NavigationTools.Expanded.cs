@@ -396,7 +396,7 @@ public sealed partial class NavigationTools
             kinds.TryGetValue((from.ToLowerInvariant(), to.ToLowerInvariant()), out var k)
                 ? EdgeKind(k) : EdgeKind("project");
         // Budget-bounded (review F3): structuredPaths ~2.4x the old payload, and deep monolith
-        // chains with several path variants measured PAST the 24KB hard wire cap under plain
+        // chains with several path variants measured past the hard wire cap under plain
         // Serialize. Paths trim as PAIRS — the display string and its hops stay in lockstep —
         // and shortest paths are first in, last dropped. found reflects the pre-trim truth.
         var pathItems = paths.Select(p => new
@@ -428,7 +428,7 @@ public sealed partial class NavigationTools
         });
         string json = BuildJson(dropStructured: false);
         // Lone-item overflow (review, verification round): a single very deep path's hops array
-        // ALONE can breach the hard cap (repro: a 120-hop chain with ~90-char names → ~27KB).
+        // ALONE can breach the hard cap (repro: a 300-hop chain with ~90-char names → over 64KB).
         // WithListBudget's floor moved from one item to ZERO (batch-43 envelope honesty for
         // worktrees), so the overflow no longer ships over-budget — it ships found=true with the
         // ANSWER trimmed away. Either symptom degrades the same way: drop the STRUCTURED
@@ -502,7 +502,7 @@ public sealed partial class NavigationTools
     public string ContextPack(
         [Description("Symbol name (class/interface/method).")] string name,
         [Description("Optional containing type/namespace fragment to disambiguate.")] string? container = null,
-        [Description("Byte budget (default 12288, max 24576).")] int maxBytes = 12288,
+        [Description("Byte budget (default 12288, max 65536).")] int maxBytes = 12288,
         [Description("Semantic definition deadline in ms (default 5000; indexed fallback after).")] int timeoutMs = 5000)
     {
         if (NotReady() is { } notReady) return notReady;

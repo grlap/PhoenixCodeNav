@@ -37,7 +37,7 @@ watchers keep exclusive workspaces and writer ownership.
 `CodeNav.Core` has no dependency on the MCP SDK — it is a plain library that could back a
 different front end. `CodeNav.Mcp` is a thin protocol/shaping layer over it.
 
-## The three navigation layers
+## The four navigation layers
 
 Agents use the cheapest layer that answers the question, preferring compiler-backed facts
 for code identifiers.
@@ -51,7 +51,11 @@ for code identifiers.
    signatures, accessibility, partial flags, and generated/test classification. This is the
    token-saver: `outline` before any large-file read, then `source_context` for the spans.
 3. **Syntax (F#)** — `outline` for compile-owned `.fs` and `.fsi`. A pinned, isolated
-   FSharp.Compiler.Service adapter parses on demand without type checking; `.fsx` stays text-only.
+    FSharp.Compiler.Service adapter parses on demand without type checking; `.fsx` stays text-only.
+    An exact same-directory legacy `Project.fsproj` + dual-target `Project.Net.fsproj` ownership
+    pair selects the single-target legacy context and discloses up to 64 alternatives with complete
+    coverage counts. Without that base owner, a multi-target project selects its first declared TFM
+    and marks the result partial.
 4. **Semantic (C#)** — `definition`, `references`, `implementations`, `callers`, `callees`,
    `type_hierarchy`. Roslyn *compilations* give compiler-exact answers with
    `documentationCommentId`s.
@@ -214,7 +218,7 @@ pull.
 
 ## Result discipline
 
-- **Budgets.** ~8 KB soft target, ~24 KB hard cap per response; oversized results shrink
+- **Budgets.** ~8 KB soft target, ~64 KB hard cap per response; oversized results shrink
   (precise-first) and set `truncated: true`.
 - **Cursors.** List tools return `nextCursor` for paging.
 - **Stable, line-addressable hits.** Every result carries enough path/line/span metadata

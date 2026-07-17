@@ -85,11 +85,13 @@ public sealed partial class NavigationTools
                 new { id = "implementer-completeness", summary = "Member fallback exposes implementerCount/omittedImplementers. When identity is compiler-resolved but implementers are indexed, symbolConfidence exact and implementationsConfidence heuristic remain separate; type_hierarchy fallback returns heuristic base-list candidates without compiler-only bases/interfaces" },
                 new { id = "generic-arity-resolution", summary = "v0.11.8 implementations/type_hierarchy select by arity or symbolId; mixed-arity names refuse; syntax fallback is arity-exact" },
                 new { id = "friend-assembly-semantics", summary = "v0.11.9 models literal local SDK InternalsVisibleTo grants; friend-only results disclose project_model_unproven when imports, package build assets, or Directory.Build authority can change the grant" },
-                new { id = "fsharp-text-indexing", summary = "v0.12.0 .fs/.fsi/.fsx text + FTS" },
-                new { id = "fsharp-project-graph", summary = "v0.12.0 .fsproj ownership/reference graph; excluded from Roslyn" },
-                new { id = "fsharp-outline", summary = "v0.12.1 compile-owned .fs/.fsi syntax outline (FCS)" },
-                new { id = "fsharp-unsupported-language-boundary", summary = "F# semantic tools error explicitly; mixed symbol scopes disclose skips" },
-                new { id = "review-fsharp-file-coverage", summary = "review_pack: unsupportedLanguageFiles covers F# changes" },
+                new { id = "fsharp-text-indexing", summary = "v0.12.0 F# FTS" },
+                new { id = "fsharp-project-graph", summary = "v0.12.0 .fsproj ownership/edges; no Roslyn" },
+                new { id = "fsharp-outline", summary = "v0.12.1 owned .fs/.fsi FCS outline" },
+                new { id = "fsharp-outline-context-selection", summary = "v0.12.2 base/.Net contexts" },
+                new { id = "fsharp-outline-context-budget", summary = "v0.12.3 max 64 project/TFM contexts with total/returned/truncated coverage; 64 KiB hard envelope" },
+                new { id = "fsharp-unsupported-language-boundary", summary = "F# semantic errors; mixed scopes disclose skips" },
+                new { id = "review-fsharp-file-coverage", summary = "review_pack: F# changes in unsupportedLanguageFiles" },
                 new { id = "compiled-awareness", summary = "search_symbol orphaned; repo_overview.orphanedFiles; compiled ownership guides semantic resolution, impact, and context_pack" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is LOGGED, never silent" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
@@ -771,7 +773,7 @@ public sealed partial class NavigationTools
         [Description("Workspace-relative file path. Optional when symbolId is given.")] string? path = null,
         [Description("Spans as 'start-end' or 'line', comma-separated (e.g. '42-88,120'). Optional when symbolId is given (defaults to the symbol's own declaration span).")] string spans = "",
         [Description("Extra context lines around each span (default 2).")] int contextLines = 2,
-        [Description("Byte budget for returned source (default 8192, max 24576).")] int maxBytes = 8192,
+        [Description("Byte budget for returned source (default 8192, max 65536).")] int maxBytes = 8192,
         [Description("Show one symbol's source by handle instead of path+spans: 'idx:NNN' from a prior result. Overrides path/spans with the symbol's declaration span. Note: 'idx:' handles are index-local and change on reindex.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;

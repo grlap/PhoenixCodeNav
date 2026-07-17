@@ -163,6 +163,11 @@ a durable fan-in.
   and never nests delegation or platform subagents.
 - Both commands are review-only. They never edit source, mutate Git, commit, push, or run
   Dolt remote sync. The parent may reconcile local Beads findings after fan-in.
+- Authorized post-fan-in Beads reconciliation does not trigger another implementation review
+  solely for mechanically validated append-only `.beads/interactions.jsonl` records generated
+  by those exact `bd` actions. Pre-existing interaction bytes and every other path remain part
+  of the exact-byte gate; rewrites, malformed records, unexplained records, or any other drift
+  still invalidate it.
 - A failed, missing, or dead reviewer makes the review INCONCLUSIVE, never CLEAN.
 - Changes to review commands, reviewer lenses, repository instructions, and their contract tests
   are reviewed as ordinary exact-byte targets; they do not disable the review gate.

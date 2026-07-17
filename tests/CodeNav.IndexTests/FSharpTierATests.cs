@@ -500,6 +500,8 @@ public class FSharpTierATests
             Assert.Contains("fsharp-text-indexing", featureIds);
             Assert.Contains("fsharp-project-graph", featureIds);
             Assert.Contains("fsharp-outline", featureIds);
+            Assert.Contains("fsharp-outline-context-selection", featureIds);
+            Assert.Contains("fsharp-outline-context-budget", featureIds);
             Assert.Contains("fsharp-unsupported-language-boundary", featureIds);
             Assert.Contains("review-fsharp-file-coverage", featureIds);
             Assert.Equal("text", capabilities.GetProperty("languageLayers")

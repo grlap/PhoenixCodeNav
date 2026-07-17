@@ -216,6 +216,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
+        Assert.Equal(64 * 1024,
+            json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
     }
 
     // The features manifest lets a caller CONFIRM a capability without triggering its silent-when-clean
@@ -232,6 +234,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("implementer-completeness", ids);
         Assert.Contains("generic-arity-resolution", ids);
         Assert.Contains("friend-assembly-semantics", ids);
+        Assert.Contains("fsharp-outline-context-budget", ids);
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
         Assert.Contains("semantic-large-repo-budget", ids);

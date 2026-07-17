@@ -48,7 +48,9 @@ public sealed record CompileMembershipOperation(bool Include, string Pattern,
 public sealed record FSharpParsingOptionsSnapshot(
     List<string> CommandLineArgs,
     string? PartialReason = null,
-    string? Error = null);
+    string? Error = null,
+    string? SelectedTargetFramework = null,
+    List<string>? AvailableTargetFrameworks = null);
 
 /// <summary>
 /// Owns: reading a single .csproj/.fsproj (legacy or SDK style) into a ParsedProject without
@@ -149,8 +151,9 @@ public static class ProjectFileParser
     /// <summary>
     /// Selects the F# parser switches that can change a syntax tree from the indexed .fsproj
     /// snapshot. This deliberately does not evaluate MSBuild. Literal project properties and the
-    /// single indexed target framework are authoritative; conditioned/imported shapes are exposed
-    /// as partial instead of silently parsing with filename-only defaults.
+    /// selected indexed target framework are authoritative; conditioned/imported shapes are exposed
+    /// as partial instead of silently parsing with filename-only defaults. Multi-target projects use
+    /// their first declared TFM and disclose the remaining syntax contexts to the caller.
     /// </summary>
     public static FSharpParsingOptionsSnapshot ParseFSharpParsingOptionsSnapshot(
         string relPath, string projectXml, string indexedTargetFrameworks)
@@ -185,8 +188,6 @@ public static class ProjectFileParser
             .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        if (tfms.Length > 1)
-            return new([], Error: "fsharp_project_options_ambiguous");
 
         string defines = "";
         string? languageVersion = null;
@@ -194,6 +195,8 @@ public static class ProjectFileParser
         string additionalArgs = "";
         bool disableImplicitFrameworkDefines = false;
         var partialReasons = new SortedSet<string>(StringComparer.Ordinal);
+        if (tfms.Length > 1)
+            partialReasons.Add("fsharp_target_framework_defaulted");
 
         foreach (XElement property in root.Descendants().Where(element =>
                      element.Name.LocalName is "DefineConstants" or "LangVersion" or
@@ -306,7 +309,9 @@ public static class ProjectFileParser
         string? partialReason = partialReasons.Count == 0
             ? null
             : string.Join(';', partialReasons);
-        return new(args, partialReason);
+        return new(args, partialReason,
+            SelectedTargetFramework: tfms.FirstOrDefault(),
+            AvailableTargetFrameworks: tfms.ToList());
     }
 
     private static XDocument LoadSnapshotXml(byte[] bytes)

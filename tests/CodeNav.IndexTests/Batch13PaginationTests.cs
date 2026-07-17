@@ -27,7 +27,7 @@ public class Batch13PaginationTests
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
 
     // e2q, end-to-end through the real tool: search_text with large context forces a page to exceed the
-    // 24KB hard cap, so WithListBudget shrinks it (truncated) mid-walk. The walk must still visit EVERY
+    // 64KB hard cap, so WithListBudget shrinks it (truncated) mid-walk. The walk must still visit EVERY
     // hit exactly once. With the pre-fix cursor (offset+limit), the shrunk-off tail is skipped and this
     // fails. (A prior version asserted an inline copy of the formula and could not catch a reversion.)
     [Fact]

@@ -181,8 +181,194 @@ public class FSharpOutlineStage1Tests
         FSharpParsingOptionsSnapshot multiTarget =
             ProjectFileParser.ParseFSharpParsingOptionsSnapshot(
                 "Core/Core.fsproj", projectXml, "net8.0;net9.0");
-        Assert.Equal("fsharp_project_options_ambiguous", multiTarget.Error);
-        Assert.Empty(multiTarget.CommandLineArgs);
+        Assert.Null(multiTarget.Error);
+        Assert.Equal("net8.0", multiTarget.SelectedTargetFramework);
+        Assert.Equal(["net8.0", "net9.0"], multiTarget.AvailableTargetFrameworks);
+        Assert.Contains("fsharp_target_framework_defaulted", multiTarget.PartialReason);
+        Assert.Contains("--define:NET8_0", multiTarget.CommandLineArgs);
+        Assert.DoesNotContain("--define:NET9_0", multiTarget.CommandLineArgs);
+    }
+
+    [Fact]
+    public void OutlinePrefersExactLegacyBaseOverDualTargetNetCompanion()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-fsharp-outline-pair").FullName;
+        try
+        {
+            string projectDirectory = Path.Combine(root, "Migration");
+            Directory.CreateDirectory(projectDirectory);
+            File.WriteAllText(Path.Combine(projectDirectory, "Project.fsproj"), """
+                <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+                  <PropertyGroup>
+                    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+                    <DefineConstants>LEGACY_BASE</DefineConstants>
+                    <LangVersion>preview</LangVersion>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Shared.fs" />
+                  </ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(projectDirectory, "Project.Net.fsproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFrameworks>net472;net8.0</TargetFrameworks>
+                    <DefineConstants>SDK_COMPANION</DefineConstants>
+                    <LangVersion>preview</LangVersion>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Shared.fs" />
+                  </ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(projectDirectory, "Shared.fs"), """
+                module Shared
+
+                #if LEGACY_BASE
+                let legacyBaseSelected = 1
+                #else
+                let companionSelected = 2
+                #endif
+                """);
+
+            using var fixture = OutlineFixture.Create(root);
+            JsonElement response = Parse(fixture.Tools.Outline("Migration/Shared.fs", depth: 2));
+            JsonElement module = Assert.Single(response.GetProperty("symbols").EnumerateArray());
+            Assert.Equal("legacyBaseSelected", NodeName(Assert.Single(Members(module))));
+
+            JsonElement selected = response.GetProperty("selectedContext");
+            Assert.Equal("Migration/Project.fsproj", selected.GetProperty("project").GetString());
+            Assert.Equal("net472", selected.GetProperty("targetFramework").GetString());
+            Assert.True(response.GetProperty("partial").GetBoolean());
+            Assert.Equal("fsharp_alternate_syntax_contexts",
+                response.GetProperty("partialReason").GetString());
+
+            var contexts = response.GetProperty("availableContexts").EnumerateArray()
+                .Select(context => (
+                    context.GetProperty("project").GetString(),
+                    context.GetProperty("targetFramework").GetString()))
+                .ToList();
+            Assert.Equal([
+                ("Migration/Project.fsproj", "net472"),
+                ("Migration/Project.Net.fsproj", "net472"),
+                ("Migration/Project.Net.fsproj", "net8.0"),
+            ], contexts);
+            Assert.Equal(3, response.GetProperty("availableContextsTotal").GetInt32());
+            Assert.Equal(3, response.GetProperty("availableContextsReturned").GetInt32());
+            Assert.False(response.GetProperty("availableContextsTruncated").GetBoolean());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void OutlineDefaultsCompanionOnlyProjectToFirstDeclaredTargetFramework()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-fsharp-outline-multitarget").FullName;
+        try
+        {
+            string projectDirectory = Path.Combine(root, "Migration");
+            Directory.CreateDirectory(projectDirectory);
+            File.WriteAllText(Path.Combine(projectDirectory, "Project.Net.fsproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFrameworks>net472;net8.0</TargetFrameworks>
+                    <LangVersion>preview</LangVersion>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Shared.fs" />
+                  </ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(projectDirectory, "Shared.fs"), """
+                module Shared
+
+                #if NET472
+                let netFrameworkSelected = 1
+                #else
+                let netEightSelected = 2
+                #endif
+                """);
+
+            using var fixture = OutlineFixture.Create(root);
+            JsonElement response = Parse(fixture.Tools.Outline("Migration/Shared.fs", depth: 2));
+            JsonElement module = Assert.Single(response.GetProperty("symbols").EnumerateArray());
+            Assert.Equal("netFrameworkSelected", NodeName(Assert.Single(Members(module))));
+
+            JsonElement selected = response.GetProperty("selectedContext");
+            Assert.Equal("Migration/Project.Net.fsproj",
+                selected.GetProperty("project").GetString());
+            Assert.Equal("net472", selected.GetProperty("targetFramework").GetString());
+            Assert.Contains("fsharp_target_framework_defaulted",
+                response.GetProperty("partialReason").GetString());
+            Assert.Equal(2, response.GetProperty("availableContexts").GetArrayLength());
+            Assert.Equal(2, response.GetProperty("availableContextsTotal").GetInt32());
+            Assert.Equal(2, response.GetProperty("availableContextsReturned").GetInt32());
+            Assert.False(response.GetProperty("availableContextsTruncated").GetBoolean());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Theory]
+    [InlineData(64, false)]
+    [InlineData(65, true)]
+    public void OutlineCapsAvailableProjectContextsAtSixtyFourAndReportsCoverage(
+        int ownerCount, bool expectedTruncated)
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-fsharp-outline-context-cap").FullName;
+        try
+        {
+            string sharedDirectory = Path.Combine(root, "Shared");
+            Directory.CreateDirectory(sharedDirectory);
+            File.WriteAllText(Path.Combine(sharedDirectory, "Shared.fs"),
+                "module Shared\nlet value = 1\n");
+
+            for (int i = 0; i < ownerCount; i++)
+            {
+                string ownerName = $"Owner{i:D2}";
+                string ownerDirectory = Path.Combine(root, ownerName);
+                Directory.CreateDirectory(ownerDirectory);
+                File.WriteAllText(Path.Combine(ownerDirectory, $"{ownerName}.fsproj"), """
+                    <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+                      <PropertyGroup>
+                        <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+                        <DefineConstants>SHARED_OWNER</DefineConstants>
+                      </PropertyGroup>
+                      <ItemGroup>
+                        <Compile Include="../Shared/Shared.fs" />
+                      </ItemGroup>
+                    </Project>
+                    """);
+            }
+
+            using var fixture = OutlineFixture.Create(root);
+            string json = fixture.Tools.Outline("Shared/Shared.fs", depth: 2);
+            JsonElement response = Parse(json);
+
+            Assert.Equal(64 * 1024, Json.HardBudgetBytes);
+            Assert.True(Json.Utf8Bytes(json) <= Json.HardBudgetBytes);
+            Assert.Equal(ownerCount,
+                response.GetProperty("availableContextsTotal").GetInt32());
+            int expectedReturned = Math.Min(ownerCount,
+                NavigationTools.MaxFSharpOutlineContexts);
+            Assert.Equal(expectedReturned,
+                response.GetProperty("availableContextsReturned").GetInt32());
+            Assert.Equal(expectedTruncated,
+                response.GetProperty("availableContextsTruncated").GetBoolean());
+            var contexts = response.GetProperty("availableContexts").EnumerateArray().ToList();
+            Assert.Equal(expectedReturned, contexts.Count);
+            Assert.Equal(response.GetProperty("selectedContext").GetProperty("project").GetString(),
+                contexts[0].GetProperty("project").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
     }
 
     [Fact]

@@ -644,7 +644,7 @@ Design notes:
   parsing/compile-item coverage may be partial.
 - Potentially large nested lists, including compile-item owners, use the usual
   total/returned/truncated shape rather than disappearing under the whole-response byte cap.
-- The whole response remains under Phoenix's existing ~24 KiB hard cap.
+- The whole response remains under Phoenix's existing ~64 KiB hard cap.
 - The existing response-meta factory currently has a fixed heuristic note; implementation must
   generalize it or add a concept-specific factory so the advertised learned-similarity note is not
   overwritten by text/naming wording.

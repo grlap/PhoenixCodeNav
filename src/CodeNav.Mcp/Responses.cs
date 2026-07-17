@@ -8,16 +8,16 @@ using CodeNav.Core.Indexing;
 namespace CodeNav.Mcp;
 
 /// <summary>
-/// Owns: JSON serialization policy, response budgets (8KB soft / 24KB hard), and the
+/// Owns: JSON serialization policy, response budgets (8KB soft / 64KB hard), and the
 /// index-metadata envelope every tool response carries.
 /// Does not own: tool logic (NavigationTools) or index queries (CodeNav.Core).
 /// </summary>
 internal static class Json
 {
-    // Hard cap kept under the brief's ~32KB so the JSON-RPC envelope + string
-    // escaping cannot push the wire message past it.
+    // Phoenix's response-size policy, not an MCP transport limit. The larger hard ceiling keeps
+    // bounded project/TFM context metadata useful without making ordinary responses less compact.
     public const int SoftBudgetBytes = 8 * 1024;
-    public const int HardBudgetBytes = 24 * 1024;
+    public const int HardBudgetBytes = 64 * 1024;
 
     public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
     {
