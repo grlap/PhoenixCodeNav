@@ -7,8 +7,8 @@ using CodeNav.Mcp;
 namespace CodeNav.Tests;
 
 /// <summary>
-/// Tier-a F# support is intentionally compiler-free: source text and project topology are indexed,
-/// while syntax/semantic calls fail explicitly instead of returning a false-complete empty result.
+/// F# support starts with indexed source/project topology and an FCS syntax outline. Operations that
+/// require compiler semantics still fail explicitly instead of returning false-complete empty results.
 /// These fixtures stay tiny so the language contract remains part of the fast unit-test loop.
 /// </summary>
 public class FSharpTierATests
@@ -499,10 +499,13 @@ public class FSharpTierATests
                 .Select(feature => feature.GetProperty("id").GetString()).ToHashSet();
             Assert.Contains("fsharp-text-indexing", featureIds);
             Assert.Contains("fsharp-project-graph", featureIds);
+            Assert.Contains("fsharp-outline", featureIds);
             Assert.Contains("fsharp-unsupported-language-boundary", featureIds);
             Assert.Contains("review-fsharp-file-coverage", featureIds);
             Assert.Equal("text", capabilities.GetProperty("languageLayers")
                 .GetProperty("fsharp")[0].GetString());
+            Assert.Equal("syntax", capabilities.GetProperty("languageLayers")
+                .GetProperty("fsharp")[1].GetString());
 
             JsonElement repo = Parse(tools.RepoOverview());
             Assert.Equal(2, repo.GetProperty("fsFiles").GetInt64());
@@ -518,9 +521,19 @@ public class FSharpTierATests
             Assert.Contains("fsharpTierAMarker",
                 tools.SourceContext("Core/Library.fs", "1-3", contextLines: 0));
 
-            JsonElement outline = Parse(tools.Outline("Core/Library.fs"));
-            Assert.Equal("unsupported_language", outline.GetProperty("error").GetString());
-            Assert.Equal("fs", outline.GetProperty("language").GetString());
+            string outlineJson = tools.Outline("Core/Library.fs");
+            JsonElement outline = Parse(outlineJson);
+            Assert.True(outline.TryGetProperty("symbols", out JsonElement outlineSymbols), outlineJson);
+            JsonElement module = Assert.Single(outlineSymbols.EnumerateArray());
+            Assert.Equal("Streams.Core", module.GetProperty("name").GetString());
+            Assert.Equal("module", module.GetProperty("kind").GetString());
+            Assert.Equal(1, module.GetProperty("startLine").GetInt32());
+            Assert.Equal(2, module.GetProperty("endLine").GetInt32());
+            JsonElement marker = Assert.Single(module.GetProperty("members").EnumerateArray());
+            Assert.Equal("fsharpTierAMarker", marker.GetProperty("name").GetString());
+            Assert.Equal(2, marker.GetProperty("startLine").GetInt32());
+            Assert.Equal("indexed", outline.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.Equal("syntax", outline.GetProperty("meta").GetProperty("navigationLayer").GetString());
             JsonElement symbols = Parse(tools.SearchSymbol("fsharpTierAMarker",
                 pathGlob: "Core/Library.fs"));
             Assert.Equal("unsupported_language", symbols.GetProperty("error").GetString());

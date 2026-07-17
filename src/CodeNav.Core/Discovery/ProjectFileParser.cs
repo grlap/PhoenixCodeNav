@@ -44,6 +44,12 @@ public sealed record CompileGlob(string Include, List<string>? Excludes);
 public sealed record CompileMembershipOperation(bool Include, string Pattern,
     List<string>? Excludes = null);
 
+/// <summary>Plain, FCS-free parsing inputs selected from one authoritative .fsproj snapshot.</summary>
+public sealed record FSharpParsingOptionsSnapshot(
+    List<string> CommandLineArgs,
+    string? PartialReason = null,
+    string? Error = null);
+
 /// <summary>
 /// Owns: reading a single .csproj/.fsproj (legacy or SDK style) into a ParsedProject without
 /// MSBuild evaluation — raw XML facts only, confidence "indexed" not "exact".
@@ -138,6 +144,169 @@ public static class ProjectFileParser
                 CompileOwnershipComplete: language == "cs",
                 Language: language);
         }
+    }
+
+    /// <summary>
+    /// Selects the F# parser switches that can change a syntax tree from the indexed .fsproj
+    /// snapshot. This deliberately does not evaluate MSBuild. Literal project properties and the
+    /// single indexed target framework are authoritative; conditioned/imported shapes are exposed
+    /// as partial instead of silently parsing with filename-only defaults.
+    /// </summary>
+    public static FSharpParsingOptionsSnapshot ParseFSharpParsingOptionsSnapshot(
+        string relPath, string projectXml, string indexedTargetFrameworks)
+    {
+        if (!relPath.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase))
+            return new([], Error: "fsharp_project_options_unavailable");
+        if (projectXml.Length > MaxSnapshotBytes)
+            return new([], Error: "fsharp_project_options_unavailable");
+
+        XDocument doc;
+        try
+        {
+            using var input = new StringReader(projectXml);
+            using XmlReader reader = XmlReader.Create(input, new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+                MaxCharactersInDocument = MaxSnapshotBytes,
+            });
+            doc = XDocument.Load(reader, LoadOptions.None);
+        }
+        catch
+        {
+            return new([], Error: "fsharp_project_options_unavailable");
+        }
+
+        XElement? root = doc.Root;
+        if (root is null)
+            return new([], Error: "fsharp_project_options_unavailable");
+
+        string[] tfms = indexedTargetFrameworks
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (tfms.Length > 1)
+            return new([], Error: "fsharp_project_options_ambiguous");
+
+        string defines = "";
+        string? languageVersion = null;
+        string otherFlags = "";
+        string additionalArgs = "";
+        bool disableImplicitFrameworkDefines = false;
+        var partialReasons = new SortedSet<string>(StringComparer.Ordinal);
+
+        foreach (XElement property in root.Descendants().Where(element =>
+                     element.Name.LocalName is "DefineConstants" or "LangVersion" or
+                         "OtherFlags" or "FscAdditionalArgs" or
+                         "DisableImplicitFrameworkDefines"))
+        {
+            string name = property.Name.LocalName;
+            if (property.Parent?.Name.LocalName != "PropertyGroup" ||
+                property.Parent.Parent != root ||
+                property.AncestorsAndSelf().Any(ancestor =>
+                    ancestor.Attribute("Condition") is not null ||
+                    ancestor.Name.LocalName is "Target" or "Choose" or "When" or "Otherwise"))
+            {
+                partialReasons.Add("fsharp_project_options_conditioned");
+                continue;
+            }
+
+            string value = property.Value.Trim();
+            switch (name)
+            {
+                case "DefineConstants":
+                    value = ExpandSelfReference(value, "DefineConstants", defines);
+                    if (ContainsMsBuildExpression(value))
+                    {
+                        partialReasons.Add("fsharp_project_options_unevaluated");
+                        break;
+                    }
+                    defines = value;
+                    break;
+                case "LangVersion":
+                    if (ContainsMsBuildExpression(value))
+                        partialReasons.Add("fsharp_project_options_unevaluated");
+                    else if (value.Length > 0)
+                        languageVersion = value;
+                    break;
+                case "OtherFlags":
+                    value = ExpandSelfReference(value, name, otherFlags);
+                    if (ContainsMsBuildExpression(value))
+                    {
+                        partialReasons.Add("fsharp_project_options_unevaluated");
+                        break;
+                    }
+                    otherFlags = value;
+                    break;
+                case "FscAdditionalArgs":
+                    value = ExpandSelfReference(value, name, additionalArgs);
+                    if (ContainsMsBuildExpression(value))
+                    {
+                        partialReasons.Add("fsharp_project_options_unevaluated");
+                        break;
+                    }
+                    additionalArgs = value;
+                    break;
+                case "DisableImplicitFrameworkDefines":
+                    if (ContainsMsBuildExpression(value) ||
+                        !bool.TryParse(value, out disableImplicitFrameworkDefines))
+                    {
+                        partialReasons.Add("fsharp_project_options_unevaluated");
+                    }
+                    break;
+            }
+        }
+
+        if (root.Attribute("Sdk") is not null ||
+            root.Elements().Any(element => element.Name.LocalName == "Sdk") ||
+            root.Descendants().Any(element => element.Name.LocalName == "Import"))
+            partialReasons.Add("fsharp_project_options_imported");
+
+        var args = new List<string>();
+        var seenDefines = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string define in SplitDefineConstants(defines)
+                     .OrderBy(value => value, StringComparer.Ordinal))
+        {
+            if (seenDefines.Add(define)) args.Add($"--define:{define}");
+        }
+
+        if (!disableImplicitFrameworkDefines)
+        {
+            if (tfms.Length == 0)
+            {
+                partialReasons.Add("fsharp_target_framework_unavailable");
+            }
+            else
+            {
+                foreach (string define in TargetFrameworkDefines(tfms[0]))
+                {
+                    if (seenDefines.Add(define)) args.Add($"--define:{define}");
+                }
+            }
+        }
+
+        if (languageVersion is not null)
+            args.Add($"--langversion:{languageVersion}");
+
+        if (otherFlags.Length > 0)
+        {
+            if (!TryTokenizeCompilerFlags(otherFlags, out List<string> tokens))
+                partialReasons.Add("fsharp_project_options_unevaluated");
+            else
+                AddSyntaxCompilerFlags(args, tokens, partialReasons);
+        }
+        if (additionalArgs.Length > 0)
+        {
+            if (!TryTokenizeCompilerFlags(additionalArgs, out List<string> tokens))
+                partialReasons.Add("fsharp_project_options_unevaluated");
+            else
+                AddSyntaxCompilerFlags(args, tokens, partialReasons);
+        }
+
+        string? partialReason = partialReasons.Count == 0
+            ? null
+            : string.Join(';', partialReasons);
+        return new(args, partialReason);
     }
 
     private static XDocument LoadSnapshotXml(byte[] bytes)
@@ -747,6 +916,116 @@ public static class ProjectFileParser
                !properties[0].AncestorsAndSelf().Any(ancestor =>
                    ancestor.Attribute("Condition") is not null ||
                    ancestor.Name.LocalName is "Target" or "Choose" or "When" or "Otherwise");
+    }
+
+    private static string ExpandSelfReference(string value, string propertyName,
+        string previousValue) =>
+        value.Replace($"$({propertyName})", previousValue, StringComparison.OrdinalIgnoreCase);
+
+    private static IEnumerable<string> SplitDefineConstants(string value) =>
+        value.Split([';', ',', ' ', '\t', '\r', '\n'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(define => define.All(character =>
+                char.IsLetterOrDigit(character) || character == '_' || character == '\''));
+
+    private static IEnumerable<string> TargetFrameworkDefines(string targetFramework)
+    {
+        string tfm = targetFramework.Trim().ToLowerInvariant();
+        if (tfm.Length == 0 || tfm.Contains('$')) yield break;
+
+        string baseTfm = tfm.Split('-', 2)[0];
+        string exact = new(baseTfm.Select(character =>
+            char.IsLetterOrDigit(character) ? char.ToUpperInvariant(character) : '_').ToArray());
+        if (exact.Length > 0) yield return exact;
+        if (!baseTfm.Equals(tfm, StringComparison.Ordinal))
+        {
+            string platformExact = new(tfm.Select(character =>
+                char.IsLetterOrDigit(character) ? char.ToUpperInvariant(character) : '_').ToArray());
+            if (platformExact.Length > 0) yield return platformExact;
+        }
+
+        if (baseTfm.StartsWith("netstandard", StringComparison.Ordinal))
+        {
+            yield return "NETSTANDARD";
+        }
+        else if (baseTfm.StartsWith("netcoreapp", StringComparison.Ordinal))
+        {
+            yield return "NETCOREAPP";
+        }
+        else if (baseTfm.StartsWith("net", StringComparison.Ordinal))
+        {
+            string version = baseTfm[3..];
+            if (version.Contains('.'))
+            {
+                yield return "NET";
+                string[] components = version.Split('.', StringSplitOptions.RemoveEmptyEntries);
+                if (components.Length > 0 && int.TryParse(components[0], out int major) && major >= 5)
+                {
+                    for (int candidate = 5; candidate <= major; candidate++)
+                        yield return $"NET{candidate}_0_OR_GREATER";
+                }
+            }
+            else
+            {
+                yield return "NETFRAMEWORK";
+            }
+        }
+    }
+
+    private static bool TryTokenizeCompilerFlags(string value, out List<string> tokens)
+    {
+        tokens = [];
+        var current = new System.Text.StringBuilder();
+        bool quoted = false;
+        foreach (char character in value)
+        {
+            if (character == '"')
+            {
+                quoted = !quoted;
+                continue;
+            }
+            if (!quoted && char.IsWhiteSpace(character))
+            {
+                if (current.Length > 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+                continue;
+            }
+            current.Append(character);
+        }
+        if (quoted)
+        {
+            tokens = [];
+            return false;
+        }
+        if (current.Length > 0) tokens.Add(current.ToString());
+        return true;
+    }
+
+    private static void AddSyntaxCompilerFlags(List<string> args, IEnumerable<string> tokens,
+        ISet<string> partialReasons)
+    {
+        foreach (string token in tokens)
+        {
+            if (token.StartsWith("--define:", StringComparison.Ordinal) ||
+                token.StartsWith("-d:", StringComparison.Ordinal) ||
+                token.StartsWith("--langversion:", StringComparison.Ordinal) ||
+                token is "--mlcompatibility" or "--strict-indentation+" or
+                    "--strict-indentation-" or "--indentation-aware-syntax+" or
+                    "--indentation-aware-syntax-")
+            {
+                args.Add(token);
+            }
+            else
+            {
+                // Project flags outside the syntax-affecting allowlist are intentionally not
+                // forwarded to FCS. In particular, response files and source/reference switches
+                // must not make an outline read additional project-authored paths.
+                partialReasons.Add("fsharp_project_options_unsupported");
+            }
+        }
     }
 
     /// <summary>Resolves an MSBuild relative include against the project dir into a workspace-relative path.</summary>

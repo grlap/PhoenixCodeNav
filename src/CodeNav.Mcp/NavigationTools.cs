@@ -71,7 +71,7 @@ public sealed partial class NavigationTools
             languageLayers = new
             {
                 csharp = new[] { "text", "syntax", "semantic" },
-                fsharp = new[] { "text", "projectGraph" },
+                fsharp = new[] { "text", "syntax", "projectGraph" },
             },
             navigationLayers = new[] { "text", "syntax", "semantic" },
             // Explicit capability manifest: lets a caller CONFIRM a feature is present without having to
@@ -85,9 +85,10 @@ public sealed partial class NavigationTools
                 new { id = "implementer-completeness", summary = "Member fallback exposes implementerCount/omittedImplementers. When identity is compiler-resolved but implementers are indexed, symbolConfidence exact and implementationsConfidence heuristic remain separate; type_hierarchy fallback returns heuristic base-list candidates without compiler-only bases/interfaces" },
                 new { id = "generic-arity-resolution", summary = "v0.11.8 implementations/type_hierarchy select by arity or symbolId; mixed-arity names refuse; syntax fallback is arity-exact" },
                 new { id = "friend-assembly-semantics", summary = "v0.11.9 models literal local SDK InternalsVisibleTo grants; friend-only results disclose project_model_unproven when imports, package build assets, or Directory.Build authority can change the grant" },
-                new { id = "fsharp-text-indexing", summary = "v0.12.0 indexes .fs/.fsi/.fsx text and FTS candidates" },
-                new { id = "fsharp-project-graph", summary = "v0.12.0 .fsproj compile ownership and reference graph; never loaded into Roslyn" },
-                new { id = "fsharp-unsupported-language-boundary", summary = "v0.12.0 rejects F# C#-syntax/compiler operations explicitly; mixed explicit symbol scopes disclose skipped F# files" },
+                new { id = "fsharp-text-indexing", summary = "v0.12.0 .fs/.fsi/.fsx text + FTS" },
+                new { id = "fsharp-project-graph", summary = "v0.12.0 .fsproj ownership/reference graph; excluded from Roslyn" },
+                new { id = "fsharp-outline", summary = "v0.12.1 compile-owned .fs/.fsi syntax outline (FCS)" },
+                new { id = "fsharp-unsupported-language-boundary", summary = "F# semantic tools error explicitly; mixed symbol scopes disclose skips" },
                 new { id = "review-fsharp-file-coverage", summary = "review_pack: unsupportedLanguageFiles covers F# changes" },
                 new { id = "compiled-awareness", summary = "search_symbol orphaned; repo_overview.orphanedFiles; compiled ownership guides semantic resolution, impact, and context_pack" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is LOGGED, never silent" },
@@ -639,6 +640,12 @@ public sealed partial class NavigationTools
         if (file is null)
         {
             return Json.Serialize(new { error = "file_not_indexed", path, meta = Meta.From(_manager.Health(), "indexed", "syntax") });
+        }
+        if (file.Language == "fs" &&
+            (Path.GetExtension(normPath).Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+             Path.GetExtension(normPath).Equals(".fsi", StringComparison.OrdinalIgnoreCase)))
+        {
+            return FSharpOutline(path, normPath, file, depth);
         }
         if (file.Language != "cs")
         {
@@ -2097,7 +2104,7 @@ public sealed partial class NavigationTools
             supportedLanguages = new[] { "cs" },
             availableForFile = new[] { "find_file", "search_text", "source_context", "projects_containing" },
             detail = language == "fs"
-                ? "F# is indexed for text and project-graph navigation; syntax outlines and compiler semantics are not available."
+                ? "F# supports text, project-graph navigation, and FCS outlines for project-owned .fs/.fsi files; compiler-semantic operations are not available yet."
                 : $"The indexed language '{language}' supports text navigation only; C# syntax and compiler semantics are not available.",
             meta = Meta.From(health, "indexed", "text"),
         });

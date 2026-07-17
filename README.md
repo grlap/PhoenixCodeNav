@@ -25,7 +25,8 @@ navigation questions in three layers, each labeled with how trustworthy it is:
 | Layer | Tools | Confidence |
 |---|---|---|
 | **Indexed text** (SQLite FTS5, C# + F#) | `find_file`, `search_text`, `config_lookup`, `references` (candidates) | `indexed` |
-| **Syntax** (Roslyn parse, C# only, no compile) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
+| **Syntax (C#)** (Roslyn parse, no compile) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
+| **Syntax (F#)** (FCS parse, no type check) | `outline` for project-owned `.fs` / `.fsi` | `indexed` |
 | **Semantic** (Roslyn compilations, C# only, lazy clusters) | `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy` | `exact` (falls back to `indexed` with `partialReason`) |
 
 Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`project_graph`,
@@ -33,12 +34,13 @@ Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`proje
 `impact`, `related_tests`). Solution files may be inventoried for editor context, but they
 never select projects or contribute build, ownership, dependency, or symbol-resolution authority.
 
-F# support is deliberately tier-a and compiler-free: Phoenix indexes `.fs`, `.fsi`, and `.fsx`
-text, parses `.fsproj` compile ownership and references, and preserves C#↔F# project edges. F#
-syntax and compiler-semantic tools return `unsupported_language` instead of an empty or falsely
-exact result; no FSharp.Compiler.Service dependency is required. Indexed searches stay
-language-neutral by default. An explicit F#-only `search_symbol` path scope is rejected, while a
-mixed C#/F# scope returns its C# symbols with `partialReason="unsupported_language_files_skipped"`.
+Phoenix indexes `.fs`, `.fsi`, and `.fsx` text, parses `.fsproj` compile ownership and references,
+and preserves C#↔F# project edges. Project-owned `.fs` and `.fsi` files also have an on-demand,
+syntax-only `outline` backed by a pinned FSharp.Compiler.Service adapter; `.fsx` remains text-only.
+F# compiler-semantic tools return `unsupported_language` instead of an empty or falsely exact
+result. Indexed searches stay language-neutral by default. An explicit F#-only `search_symbol`
+path scope is rejected, while a mixed C#/F# scope returns its C# symbols with
+`partialReason="unsupported_language_files_skipped"`.
 
 The dependency graph also sees what MSBuild's project view hides in large legacy codebases:
 binary `<Reference Include>` + HintPath couplings from **multi-staged builds** (phase one
@@ -193,8 +195,9 @@ dotnet run --project src/CodeNav.Bench -c Release -- --workspace C:/temp/acme-2k
 bash scripts/smoke-mcp.sh C:/temp/acme-2k                        # stdio protocol smoke test
 ```
 
-Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.Mcp` (server, ships as
-`PhoenixCodeNav.Mcp.exe`), `CodeNav.WorkspaceGen` (synthetic workspace generator),
+Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.FSharp` (isolated FCS syntax
+adapter), `CodeNav.Mcp` (server, ships as `PhoenixCodeNav.Mcp.exe`), `CodeNav.WorkspaceGen`
+(synthetic workspace generator),
 `CodeNav.Bench` (benchmarks vs the brief's latency targets), plus focused unit, index, Git,
 watcher, and lifecycle test projects under `tests/`.
 
@@ -206,9 +209,10 @@ watcher, and lifecycle test projects under `tests/`.
   globs, and MSBuild `Condition`s are not evaluated.
 - `search_text` regex mode (`regex:true`) is line-based .NET regex narrowed by FTS tokens —
   no multi-line patterns.
-- F# is text/project-graph only. Unscoped indexed search remains language-neutral; C# syntax
-  search with an explicit F#-only scope discloses `unsupported_language`, and a mixed scope marks
-  its C# results partial. File syntax and compiler-semantic operations on F# are unsupported.
+- F# `outline` is syntax-only and limited to compile-owned `.fs` / `.fsi`; `.fsx` is text-only.
+  Unscoped indexed search remains language-neutral; C# syntax search with an explicit F#-only
+  scope discloses `unsupported_language`, and a mixed scope marks its C# results partial. F#
+  compiler-semantic operations remain unsupported.
 - Indexed `references` are whole-identifier text candidates; use `mode="semantic"` (or the
   default auto-upgrade) for compiler-exact results.
 - Semantic scans load all matching candidate projects by default (`maxProjects:0`). A positive

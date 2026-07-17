@@ -21,4 +21,8 @@
     <PackageReference Include="System.IO.Hashing" Version="10.0.9" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\CodeNav.FSharp\CodeNav.FSharp.fsproj" />
+  </ItemGroup>
+
 </Project>

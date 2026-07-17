@@ -16,6 +16,7 @@ PhoenixCodeNav.sln
 │   │                          #   SemanticService(+.Graph) (definition/references/impls/callers/callees/hierarchy),
 │   │                          #   ReferenceAssemblyLocator
 │   └── WorkspacePaths.cs      # path-containment + reparse-point safety
+├── src/CodeNav.FSharp/        # isolated, pinned FCS syntax-outline adapter
 ├── src/CodeNav.Mcp/           # the server, published as PhoenixCodeNav.Mcp.exe
 │   ├── Program.cs             # host + stdio transport; starts indexing in the background
 │   ├── NavigationTools(.Expanded).cs   # the 23 MCP tools
@@ -49,16 +50,18 @@ for code identifiers.
    *syntax-only* parsing (no compilation) extracts namespaces/types/members with spans,
    signatures, accessibility, partial flags, and generated/test classification. This is the
    token-saver: `outline` before any large-file read, then `source_context` for the spans.
-3. **Semantic (C#)** — `definition`, `references`, `implementations`, `callers`, `callees`,
+3. **Syntax (F#)** — `outline` for compile-owned `.fs` and `.fsi`. A pinned, isolated
+   FSharp.Compiler.Service adapter parses on demand without type checking; `.fsx` stays text-only.
+4. **Semantic (C#)** — `definition`, `references`, `implementations`, `callers`, `callees`,
    `type_hierarchy`. Roslyn *compilations* give compiler-exact answers with
    `documentationCommentId`s.
 
-F# deliberately stops at tier-a: `.fs/.fsi/.fsx` content and `.fsproj` ownership/reference
-graphs are indexed, while syntax and compiler-semantic requests disclose `unsupported_language`.
-Generic indexed search remains language-neutral. For the C#-syntax `search_symbol` surface, an
-explicit F#-only path scope is rejected and a mixed scope returns C# results with
-`unsupported_language_files_skipped`. This keeps cross-language graph holes visible without
-fabricating C# semantics for F# projects.
+F# `.fs/.fsi/.fsx` content and `.fsproj` ownership/reference graphs are indexed. Only the
+project-owned `.fs/.fsi` outline crosses into FCS in this stage; compiler-semantic requests still
+disclose `unsupported_language`. Generic indexed search remains language-neutral. For the C#
+`search_symbol` surface, an explicit F#-only path scope is rejected and a mixed scope returns C#
+results with `unsupported_language_files_skipped`. This keeps cross-language graph holes visible
+without fabricating C# semantics for F# projects.
 
 Structural facts (`project_graph`, `projects_containing`, `dependency_path`,
 `repo_overview`) come from the physical project-file and optional solution parse. Composites (`context_pack`, `impact`,
@@ -89,8 +92,8 @@ evidence may use newer workspace bytes. Other platforms remain writer-only for n
 **Build** (`IndexBuilder`): scan the tree (excluding `.git`, `bin`, `obj`, `packages`,
 `node_modules`, `.vs`, generated files, and symlink/junction targets); parse every `.csproj` and
 `.fsproj` directly, independent of solution membership; index `.cs`, `.fs`, `.fsi`, and `.fsx`
-text, while parsing only `.cs` with Roslyn syntax on all cores. Symbol rows stream through a
-bounded channel to the single writer; F# remains text/project-graph only. Solution files are
+text, while parsing only `.cs` with Roslyn syntax during indexing. Symbol rows stream through a
+bounded channel to the single writer; F# outlines are parsed on demand and are not stored. Solution files are
 optional editor inventory: they never select projects or provide build, dependency, ownership,
 or symbol-resolution authority. A cold build of a
 multi-thousand-project workspace completes in minutes at most; live progress counters
