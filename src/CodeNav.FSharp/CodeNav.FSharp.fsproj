@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <Compile Include="FSharpOutline.fs" />
+    <Compile Include="FSharpSemantic.fs" />
   </ItemGroup>
 
   <ItemGroup>

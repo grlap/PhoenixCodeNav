@@ -1231,5 +1231,11 @@ public sealed partial class SemanticService : IDisposable
 
     private static string Truncate(string s) => s.Length <= 240 ? s : s[..240] + "…";
 
-    public void Dispose() => _workspace?.Dispose();
+    public void Dispose()
+    {
+        _workspace?.Dispose();
+        // SemaphoreSlim.Dispose may race an in-flight semantic request between WaitAsync and
+        // Release. It owns no unmanaged resource unless its WaitHandle is materialized (we never
+        // do that), so let it be collected with the service after outstanding calls drain.
+    }
 }

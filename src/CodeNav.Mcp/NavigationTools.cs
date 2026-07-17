@@ -71,7 +71,7 @@ public sealed partial class NavigationTools
             languageLayers = new
             {
                 csharp = new[] { "text", "syntax", "semantic" },
-                fsharp = new[] { "text", "syntax", "projectGraph" },
+                fsharp = new[] { "text", "syntax", "semantic", "projectGraph" },
             },
             navigationLayers = new[] { "text", "syntax", "semantic" },
             // Explicit capability manifest: lets a caller CONFIRM a feature is present without having to
@@ -90,7 +90,11 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-outline", summary = "v0.12.1 owned .fs/.fsi FCS outline" },
                 new { id = "fsharp-outline-parse-context-selection", summary = "v0.12.4 base/.Net project+TFM parse-context selection affects only F# parser options and #if symbols" },
                 new { id = "fsharp-outline-parse-context-budget", summary = "v0.12.4 max 64 project/TFM parse contexts with total/returned/truncated coverage; 64 KiB hard envelope" },
-                new { id = "fsharp-unsupported-language-boundary", summary = "F# semantic errors; mixed scopes disclose skips" },
+                new { id = "fsharp-symbol-at-semantic", summary = "v0.12.5 FCS position resolution for one explicit physical .fsproj + TFM type-check context" },
+                new { id = "fsharp-definition-same-project", summary = "v0.12.5 FCS signature/implementation declarations within the selected physical F# project" },
+                new { id = "fsharp-type-check-context-selection", summary = "v0.12.5 ambiguous owner/TFM sets fail closed and expose bounded selected/available F# type-check contexts" },
+                new { id = "fsharp-semantic-snapshot", summary = "v0.12.5 immutable source/project snapshot from one pinned index epoch plus request-private snapshots of verified workspace HintPath binaries; bounded deadline, inputs, checker cache, and concurrency" },
+                new { id = "fsharp-unsupported-language-boundary", summary = "F# name search, references, callers/callees, implementations, hierarchy, and dependency closure remain unsupported; mixed scopes disclose skips" },
                 new { id = "review-fsharp-file-coverage", summary = "review_pack: F# changes in unsupportedLanguageFiles" },
                 new { id = "compiled-awareness", summary = "search_symbol orphaned; repo_overview.orphanedFiles; compiled ownership guides semantic resolution, impact, and context_pack" },
                 new { id = "git-awareness", summary = "index tracks the workspace's indexed_commit; repo_overview.git reports indexed vs HEAD commit/branch and whether they match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is LOGGED, never silent" },
@@ -165,16 +169,19 @@ public sealed partial class NavigationTools
             budgets = new { softBytes = Json.SoftBudgetBytes, hardBytes = Json.HardBudgetBytes, defaultLimit = 20 },
             confidenceModel = new
             {
-                exact = "compiler-verified (Roslyn semantic resolution)",
-                indexed = "index/syntax-backed, not compiler-verified — confirm with source_context before edits",
+                exact = "compiler-verified Roslyn semantic resolution",
+                indexed = "index/syntax-backed evidence, including bounded FCS compiler checks that remain partial — inspect partialReason and confirm source before edits",
                 heuristic = "naming/text inference — a lead, verify before relying on it",
             },
             semantic = new
             {
-                engine = "roslyn-adhoc (no MSBuild dependency)",
+                engine = "Roslyn ad hoc for C#; bounded FCS Stage 2A for compile-owned .fs/.fsi",
                 frameworkRefsAvailable,
                 exactTools = new[] { "definition", "references", "implementations" },
-                note = "Exact results are scoped to loaded candidate clusters; coverage/partial fields report anything skipped.",
+                exactToolsLanguage = "cs",
+                csharpExactTools = new[] { "definition", "references", "implementations" },
+                fsharpIndexedTools = new[] { "symbol_at", "definition" },
+                note = "C# exact results are scoped to loaded candidate clusters. F# Stage 2A is compiler-checked but indexed/partial and limited to one proven physical project/TFM; coverage and partial fields report anything skipped.",
             },
             index = new
             {
@@ -327,7 +334,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Ranked full-text search over indexed C# and F# source plus project/solution/config files. WHOLE-WORD and token-based by default: 'Batch' does NOT match 'Batching'. For \\s / alternation / character classes set regex:true (.NET regex, line-based, scoped by pathGlob) — still not rust/ripgrep syntax; other file types need grep. Returns 'precise' hits (all query tokens on one line) by default; set partials='always' for weaker co-occurrence leads. Use context (or contextBefore/contextAfter) for surrounding lines, like grep -C/-B/-A. Best for literals, config keys, error messages, and comments; F# compiler semantics are not available.")]
+    [Description("Ranked full-text search over indexed C# and F# source plus project/solution/config files. WHOLE-WORD and token-based by default: 'Batch' does NOT match 'Batching'. For \\s / alternation / character classes set regex:true (.NET regex, line-based, scoped by pathGlob) — still not rust/ripgrep syntax; other file types need grep. Returns 'precise' hits (all query tokens on one line) by default; set partials='always' for weaker co-occurrence leads. Use context (or contextBefore/contextAfter) for surrounding lines, like grep -C/-B/-A. Best for literals, config keys, error messages, and comments; this text tool does not use F# compiler semantics.")]
     public string SearchText(
         [Description("Text to find. Multi-word queries are AND-ed by token; a line with all tokens is 'precise'.")] string query,
         [Description("Restrict to paths matching this glob (e.g. 'src/Billing/**').")] string? pathGlob = null,
@@ -1059,19 +1066,27 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "symbol_at")]
-    [Description("Reverse lookup: given a file + line (from a stack trace, build error, diff hunk, or grep hit), returns the smallest containing symbol and its enclosing chain plus owning projects.")]
+    [Description("Reverse lookup: given a file + line (from a stack trace, build error, diff hunk, or grep hit), returns the smallest containing symbol and its enclosing chain plus owning projects. F# uses an FCS type-check context; column is required when a line contains multiple symbol uses.")]
     public string SymbolAt(
         [Description("Workspace-relative file path.")] string path,
         [Description("1-based line number.")] int line,
-        [Description("Optional 1-based column (currently unused; line-level resolution).")] int column = 0)
+        [Description("Optional 1-based column. Used for F# semantic resolution; required when several symbols occur on the line.")] int column = 0,
+        [Description("F# only: workspace-relative physical .fsproj path. Required with targetFramework when the file has more than one type-check context.")] string? projectPath = null,
+        [Description("F# only: exact target framework (for example net472 or net8.0). Required with projectPath when the file has more than one type-check context.")] string? targetFramework = null,
+        [Description("F# semantic resolution deadline in ms (default 10000, max 60000).")] int timeoutMs = 10000)
     {
         if (NotReady() is { } notReady) return notReady;
         path = NormalizePath(path);
-        using var q = _manager.OpenQueries();
-        if (q.FileByPath(path) is { Language: not "cs" } unsupportedFile)
+        FileHit? indexedFile;
+        using (var languageQueries = _manager.OpenQueries())
+            indexedFile = languageQueries.FileByPath(path);
+        if (indexedFile is { Language: "fs" })
+            return FSharpSymbolAt(path, line, column, projectPath, targetFramework, timeoutMs);
+        if (indexedFile is { Language: not "cs" } unsupportedFile)
         {
             return UnsupportedLanguage(path, unsupportedFile.Language, "symbol_at");
         }
+        using var q = _manager.OpenQueries();
         var chain = q.SymbolAt(path, line);
         var projects = q.ProjectsContaining(path);
         return Json.Serialize(new
@@ -1093,7 +1108,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "definition")]
-    [Description("Declaration site(s) for a symbol — all partial declarations included. Target by exact name (optionally 'container' to disambiguate) OR by position (path+line[,column]) from a usage site. Tries compiler-exact resolution first (confidence 'exact' with documentationCommentId), falling back to the name index. includeBody=true also returns the primary declaration's source inline — no follow-up source_context needed.")]
+    [Description("Declaration site(s) for a symbol — all partial declarations included. Target by exact name (optionally 'container' to disambiguate) OR by position (path+line[,column]) from a usage site. C# tries compiler-exact resolution first and can fall back to the name index. F# Stage 2A is position-only and returns declarations inside one selected physical .fsproj + TFM; it never falls back to an indexed F# guess. includeBody is C# only.")]
     public string Definition(
         [Description("Exact symbol name (case-insensitive). Optional when path+line given.")] string? name = null,
         [Description("Optional containing type or namespace fragment to disambiguate.")] string? container = null,
@@ -1105,7 +1120,9 @@ public sealed partial class NavigationTools
         [Description("Semantic resolution deadline in ms (default 10000).")] int timeoutMs = 10000,
         [Description("Also return the primary declaration's source body (numbered lines, budget-bounded).")] bool includeBody = false,
         [Description("Byte budget for the inline body (default 12288, max 16384).")] int bodyMaxBytes = 12288,
-        [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex; a documentationCommentId is not yet accepted here.")] string? symbolId = null)
+        [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex; a documentationCommentId is not yet accepted here.")] string? symbolId = null,
+        [Description("F# position mode only: workspace-relative physical .fsproj path. Required with targetFramework when the file has more than one type-check context.")] string? projectPath = null,
+        [Description("F# position mode only: exact target framework. Required with projectPath when the file has more than one type-check context.")] string? targetFramework = null)
     {
         if (NotReady() is { } notReady) return notReady;
         if (symbolId is { Length: > 0 })
@@ -1116,6 +1133,47 @@ public sealed partial class NavigationTools
             // The handle already disambiguated the symbol — caller kinds/container filters exist to
             // narrow a bare name, so applying them here can only wrongly suppress the resolved hit.
             kinds = null; container = null;
+        }
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            path = NormalizePath(path);
+            FileHit? indexedFile;
+            using (var languageQueries = _manager.OpenQueries())
+                indexedFile = languageQueries.FileByPath(path);
+            if (indexedFile is { Language: "fs" })
+            {
+                if (line <= 0)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_semantic_position_required",
+                        operation = "definition",
+                        detail = "F# Stage 2A definition requires path + line; bare-name and idx handle resolution are not available yet.",
+                    });
+                }
+                if (mode == "indexed")
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_indexed_symbols_unavailable",
+                        operation = "definition",
+                        detail = "F# Stage 2A definition is compiler-semantic only; use mode='auto' or mode='semantic'.",
+                    });
+                }
+                if (mode is not ("auto" or "semantic"))
+                    return Json.Serialize(new { error = "bad_request", detail = "mode must be 'auto', 'semantic', or 'indexed'." });
+                if (includeBody)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_definition_body_unavailable",
+                        operation = "definition",
+                        detail = "F# Stage 2A does not inline a declaration body; use source_context on the returned declaration range.",
+                    });
+                }
+                return FSharpDefinition(path, line, column, projectPath, targetFramework,
+                    timeoutMs);
+            }
         }
         if (UnsupportedLanguageAtPath(path, "definition") is { } unsupportedLanguage)
             return unsupportedLanguage;
@@ -2090,12 +2148,29 @@ public sealed partial class NavigationTools
         frameworkRefsAvailable = c.FrameworkRefsAvailable,
     };
 
-    private string UnsupportedLanguage(string path, string language, string operation) =>
-        UnsupportedLanguageForTest(_manager.Health(), path, language, operation);
+    private string UnsupportedLanguage(string path, string language, string operation)
+    {
+        bool compileOwnedFSharp = false;
+        string extension = Path.GetExtension(path);
+        if (language == "fs" &&
+            (extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+             extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase)))
+        {
+            using var queries = _manager.OpenQueries();
+            compileOwnedFSharp = queries.ProjectsContaining(path)
+                .Any(project => project.Language == "fs");
+        }
+        return UnsupportedLanguageForTest(_manager.Health(), path, language, operation,
+            compileOwnedFSharp);
+    }
 
     internal static string UnsupportedLanguageForTest(IndexHealth health, string path,
-        string language, string operation)
+        string language, string operation, bool compileOwnedFSharp = false)
     {
+        string extension = Path.GetExtension(path);
+        bool fsharpSemanticEligible = language == "fs" && compileOwnedFSharp &&
+            (extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+             extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase));
         return Json.WithStringBudget(path, 4096, (boundedPath, pathTruncated) => new
         {
             error = "unsupported_language",
@@ -2103,11 +2178,17 @@ public sealed partial class NavigationTools
             path = boundedPath,
             pathTruncated = pathTruncated ? true : (bool?)null,
             language,
-            supportedLanguages = new[] { "cs" },
-            availableForFile = new[] { "find_file", "search_text", "source_context", "projects_containing" },
-            detail = language == "fs"
-                ? "F# supports text, project-graph navigation, and FCS outlines for project-owned .fs/.fsi files; compiler-semantic operations are not available yet."
-                : $"The indexed language '{language}' supports text navigation only; C# syntax and compiler semantics are not available.",
+            supportedLanguages = operation is "symbol_at" or "definition"
+                ? new[] { "cs", "fs" }
+                : new[] { "cs" },
+            availableForFile = fsharpSemanticEligible
+                ? new[] { "find_file", "search_text", "source_context", "projects_containing", "outline", "symbol_at", "definition" }
+                : new[] { "find_file", "search_text", "source_context", "projects_containing" },
+            detail = fsharpSemanticEligible
+                ? "F# supports text, project-graph navigation, FCS outlines, position-based symbol_at, and same-project definition for compile-owned .fs/.fsi files. Other compiler-semantic operations remain unavailable."
+                : language == "fs"
+                    ? "This F# file is not a compile-owned .fs/.fsi input, so only text and project-graph navigation are available."
+                    : $"The indexed language '{language}' supports text navigation only; C# syntax and compiler semantics are not available.",
             meta = Meta.From(health, "indexed", "text"),
         });
     }

@@ -27,7 +27,7 @@ navigation questions in four layers, each labeled with how trustworthy it is:
 | **Indexed text** (SQLite FTS5, C# + F#) | `find_file`, `search_text`, `config_lookup`, `references` (candidates) | `indexed` |
 | **Syntax (C#)** (Roslyn parse, no compile) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
 | **Syntax (F#)** (FCS parse, no type check) | `outline` for project-owned `.fs` / `.fsi` | `indexed` |
-| **Semantic** (Roslyn compilations, C# only, lazy clusters) | `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy` | `exact` (falls back to `indexed` with `partialReason`) |
+| **Semantic** (Roslyn for C#; bounded FCS type checks for F# Stage 2A) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at` and same-project `definition` | C# may be `exact`; bounded F# Stage 2A is `indexed` with explicit partial causes |
 
 Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`project_graph`,
 `projects_containing`, `dependency_path`, `repo_overview`) and composites (`context_pack`,
@@ -43,10 +43,19 @@ parse context and reports up to 64 available project/TFM parse contexts with
 total/returned/truncated coverage. A parse context controls only F# `#if` symbols and parser
 options; it does not select assemblies, builds, reference resolution, or semantic workspaces. A
 lone multi-target project uses its first declared TFM and reports that default as partial.
-F# compiler-semantic tools return `unsupported_language` instead of an empty or falsely exact
-result. Indexed searches stay language-neutral by default. An explicit F#-only `search_symbol`
-path scope is rejected, while a mixed C#/F# scope returns its C# symbols with
-`partialReason="unsupported_language_files_skipped"`.
+F# Stage 2A also supports position-based `symbol_at` and `definition` through a bounded FCS type
+check of one physical `.fsproj` and one target framework. A file with exactly one owner/TFM is
+selected automatically; every other shape requires explicit `projectPath` + `targetFramework` and
+returns bounded `selectedFSharpTypeCheckContext` / `availableFSharpTypeCheckContexts` coverage.
+This selection does not merge the legacy and `.Net.fsproj` migration projects. Stage 2A accepts
+only literal ordered compile items, bounded workspace-contained managed `HintPath` binaries copied
+into request-private immutable snapshots, and same-project declarations. A host-selected
+`FSharp.Core` asset is disclosed as partial rather than
+treated as project-evaluated authority. Package/project-reference closure, name-based F# search,
+references, implementations, callers/callees, and hierarchy remain
+unsupported instead of falling back to an empty or falsely exact result. Indexed searches stay
+language-neutral by default. An explicit F#-only `search_symbol` path scope is rejected, while a
+mixed C#/F# scope returns its C# symbols with `partialReason="unsupported_language_files_skipped"`.
 
 The dependency graph also sees what MSBuild's project view hides in large legacy codebases:
 binary `<Reference Include>` + HintPath couplings from **multi-staged builds** (phase one
@@ -105,7 +114,9 @@ dotnet publish src/CodeNav.Mcp -c Release -r win-x64 --self-contained \
   -p:IncludeNativeLibrariesForSelfExtract=true -o artifacts/win-x64
 ```
 
-Copy `artifacts/win-x64/PhoenixCodeNav.Mcp.exe` anywhere (e.g. `C:\tools\phoenix\`).
+Copy both `artifacts/win-x64/PhoenixCodeNav.Mcp.exe` and its adjacent `FSharp.Core.dll` to the
+same directory (e.g. `C:\tools\phoenix\`). The executable remains self-contained; the sidecar is
+the physical compiler reference asset used by bounded F# semantic navigation.
 (A framework-dependent build — `dotnet publish -c Release -o artifacts/portable` — is ~5 MB
 but requires the .NET 9 runtime.)
 
@@ -202,7 +213,7 @@ bash scripts/smoke-mcp.sh C:/temp/acme-2k                        # stdio protoco
 ```
 
 Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.FSharp` (isolated FCS syntax
-adapter), `CodeNav.Mcp` (server, ships as `PhoenixCodeNav.Mcp.exe`), `CodeNav.WorkspaceGen`
+and bounded semantic adapter), `CodeNav.Mcp` (server, ships as `PhoenixCodeNav.Mcp.exe`), `CodeNav.WorkspaceGen`
 (synthetic workspace generator),
 `CodeNav.Bench` (benchmarks vs the brief's latency targets), plus focused unit, index, Git,
 watcher, and lifecycle test projects under `tests/`.
@@ -216,9 +227,11 @@ watcher, and lifecycle test projects under `tests/`.
 - `search_text` regex mode (`regex:true`) is line-based .NET regex narrowed by FTS tokens —
   no multi-line patterns.
 - F# `outline` is syntax-only and limited to compile-owned `.fs` / `.fsi`; `.fsx` is text-only.
-  Unscoped indexed search remains language-neutral; C# syntax search with an explicit F#-only
-  scope discloses `unsupported_language`, and a mixed scope marks its C# results partial. F#
-  compiler-semantic operations remain unsupported.
+  F# semantic Stage 2A is position-only and limited to literal, same-project source closure for
+  `symbol_at` and `definition`. It does not yet evaluate package/project references or support
+  F# name search, references, implementations, callers/callees, or hierarchy. Unscoped indexed
+  search remains language-neutral; C# syntax search with an explicit F#-only scope discloses
+  `unsupported_language`, and a mixed scope marks its C# results partial.
 - Indexed `references` are whole-identifier text candidates; use `mode="semantic"` (or the
   default auto-upgrade) for compiler-exact results.
 - Semantic scans load all matching candidate projects by default (`maxProjects:0`). A positive

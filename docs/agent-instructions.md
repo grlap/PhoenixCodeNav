@@ -19,7 +19,9 @@ Default flow:
    `index_writer_required`.
    `unavailable` means this process has not attached to an index role.
 2. For anything that is a **code identifier** (type, method, property), use the symbol tools:
-   `search_symbol`, `definition`, `references`, `implementations` — not text search.
+   `search_symbol`, `definition`, `references`, `implementations` — not text search. F# semantic
+   Stage 2A is narrower: use position-based `symbol_at` / `definition`; name search, references,
+   implementations, callers/callees, and hierarchy are not available yet.
 3. Use `search_text` only for literals: config keys, route strings, error messages, log
    fragments, comments. Use `config_lookup` for configuration keys specifically.
 4. Starting from a **stack trace, build error, or diff hunk**: call
@@ -33,8 +35,9 @@ Default flow:
 8. For ownership and dependency direction use `project_graph`, `projects_containing`,
    and `dependency_path` — never guess from folder names.
 9. Trust `meta.confidence`:
-   - `exact` — compiler-verified (Roslyn); safe to act on.
-   - `indexed` — index/syntax-backed leads; verify with `source_context` before
+   - `exact` — compiler-verified by a closed Roslyn project model; safe to act on.
+   - `indexed` — index/syntax-backed leads, including bounded FCS Stage 2A results whose
+     `partialReason` names unevaluated project inputs; verify with `source_context` before
      large edits. `partial: true` or a `partialReason` means coverage was bounded —
       use `maxProjects: 0` after an explicitly bounded call, raise `timeoutMs`, or narrow the
       target if completeness matters; Phoenix does not impose a fixed project ceiling.

@@ -502,6 +502,10 @@ public class FSharpTierATests
             Assert.Contains("fsharp-outline", featureIds);
             Assert.Contains("fsharp-outline-parse-context-selection", featureIds);
             Assert.Contains("fsharp-outline-parse-context-budget", featureIds);
+            Assert.Contains("fsharp-symbol-at-semantic", featureIds);
+            Assert.Contains("fsharp-definition-same-project", featureIds);
+            Assert.Contains("fsharp-type-check-context-selection", featureIds);
+            Assert.Contains("fsharp-semantic-snapshot", featureIds);
             Assert.DoesNotContain("fsharp-outline-context-selection", featureIds);
             Assert.DoesNotContain("fsharp-outline-context-budget", featureIds);
             Assert.Contains("fsharp-unsupported-language-boundary", featureIds);
@@ -510,6 +514,8 @@ public class FSharpTierATests
                 .GetProperty("fsharp")[0].GetString());
             Assert.Equal("syntax", capabilities.GetProperty("languageLayers")
                 .GetProperty("fsharp")[1].GetString());
+            Assert.Equal("semantic", capabilities.GetProperty("languageLayers")
+                .GetProperty("fsharp")[2].GetString());
 
             JsonElement repo = Parse(tools.RepoOverview());
             Assert.Equal(2, repo.GetProperty("fsFiles").GetInt64());
@@ -567,10 +573,18 @@ public class FSharpTierATests
             Assert.Equal("fsproj", projectOutline.GetProperty("language").GetString());
             Assert.DoesNotContain("F# is indexed", projectOutline.GetProperty("detail").GetString(),
                 StringComparison.Ordinal);
+            JsonElement fsharpAt = Parse(tools.SymbolAt("Core/Library.fs", 2, 5,
+                timeoutMs: 60_000));
+            Assert.True(fsharpAt.GetProperty("found").GetBoolean());
+            Assert.Equal("fsharpTierAMarker",
+                fsharpAt.GetProperty("symbol").GetProperty("name").GetString());
+            JsonElement fsharpDefinition = Parse(tools.Definition(path: "Core/Library.fs",
+                line: 2, column: 5, mode: "semantic", timeoutMs: 60_000));
+            Assert.Contains(fsharpDefinition.GetProperty("declarations").EnumerateArray(), site =>
+                site.GetProperty("path").GetString() == "Core/Library.fs");
+
             var gatedOperations = new Dictionary<string, string>
             {
-                ["symbol_at"] = tools.SymbolAt("Core/Library.fs", 1),
-                ["definition"] = tools.Definition(path: "Core/Library.fs", line: 1),
                 ["references"] = tools.References(path: "Core/Library.fs", line: 1),
                 ["implementations"] = tools.Implementations(path: "Core/Library.fs", line: 1),
                 ["callers"] = tools.Callers(path: "Core/Library.fs", line: 1),

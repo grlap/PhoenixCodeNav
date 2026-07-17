@@ -13,6 +13,10 @@
     <AssemblyName>PhoenixCodeNav.Mcp</AssemblyName>
     <OutputType>Exe</OutputType>
     <TargetFramework>net9.0</TargetFramework>
+    <!-- The production single-file contract test publishes win-x64 without restoring. Ensure the
+         ordinary repository restore gate prepares that RID instead of letting the test contact
+         package sources or mutate project.assets.json mid-suite. -->
+    <RuntimeIdentifiers Condition="$([MSBuild]::IsOSPlatform('Windows'))">win-x64</RuntimeIdentifiers>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <!-- The .NET SDK's source-control integration appends "+<git-sha>" to AssemblyInformationalVersion
@@ -28,5 +32,23 @@
     <InternalsVisibleTo Include="CodeNav.GitTests" />
     <InternalsVisibleTo Include="CodeNav.LifecycleTests" />
   </ItemGroup>
+
+  <!-- Stage 2A needs a physical FSharp.Core reference asset at runtime. Keep this one managed
+       dependency beside a single-file executable while the rest of the application stays bundled. -->
+  <Target Name="KeepFSharpCoreBesideSingleFile"
+          BeforeTargets="_ComputeFilesToBundle"
+          Condition="'$(PublishSingleFile)' == 'true'">
+    <ItemGroup>
+      <_FSharpCoreSingleFileSidecar Include="@(ResolvedFileToPublish)"
+                                     Condition="'%(ResolvedFileToPublish.FileName)%(ResolvedFileToPublish.Extension)' == 'FSharp.Core.dll'" />
+      <ResolvedFileToPublish Update="@(ResolvedFileToPublish)"
+                             Condition="'%(ResolvedFileToPublish.FileName)%(ResolvedFileToPublish.Extension)' == 'FSharp.Core.dll'">
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+    <Error Condition="'@(_FSharpCoreSingleFileSidecar->Count())' != '1'"
+           Text="A single-file Phoenix publish requires exactly one adjacent FSharp.Core.dll reference sidecar." />
+  </Target>
 
 </Project>

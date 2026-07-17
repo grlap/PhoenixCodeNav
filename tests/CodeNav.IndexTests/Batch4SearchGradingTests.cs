@@ -197,7 +197,16 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         // confidenceModel is an object mapping each tier to its meaning (r2o steering).
         var model = json.GetProperty("confidenceModel");
         Assert.False(string.IsNullOrEmpty(model.GetProperty("heuristic").GetString()));
-        Assert.Contains("not compiler-verified", model.GetProperty("indexed").GetString());
+        string indexed = model.GetProperty("indexed").GetString()!;
+        Assert.Contains("bounded FCS compiler checks", indexed);
+        Assert.Contains("remain partial", indexed);
+        Assert.Contains("Roslyn", model.GetProperty("exact").GetString());
+        JsonElement semantic = json.GetProperty("semantic");
+        Assert.Equal("cs", semantic.GetProperty("exactToolsLanguage").GetString());
+        Assert.Contains("definition", semantic.GetProperty("csharpExactTools")
+            .EnumerateArray().Select(tool => tool.GetString()));
+        Assert.Contains("definition", semantic.GetProperty("fsharpIndexedTools")
+            .EnumerateArray().Select(tool => tool.GetString()));
     }
 
     // Deploy-verifiability (field feedback: an agent could not confirm a deploy because the version
@@ -235,6 +244,10 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("generic-arity-resolution", ids);
         Assert.Contains("friend-assembly-semantics", ids);
         Assert.Contains("fsharp-outline-parse-context-budget", ids);
+        Assert.Contains("fsharp-symbol-at-semantic", ids);
+        Assert.Contains("fsharp-definition-same-project", ids);
+        Assert.Contains("fsharp-type-check-context-selection", ids);
+        Assert.Contains("fsharp-semantic-snapshot", ids);
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
         Assert.Contains("semantic-large-repo-budget", ids);

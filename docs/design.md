@@ -58,16 +58,25 @@ for code identifiers.
     parser options; it does not select assemblies, builds, reference resolution, or semantic
     workspaces. Without that base owner, a multi-target project selects its first declared TFM and
     marks the result partial.
-4. **Semantic (C#)** — `definition`, `references`, `implementations`, `callers`, `callees`,
-   `type_hierarchy`. Roslyn *compilations* give compiler-exact answers with
-   `documentationCommentId`s.
+4. **Semantic** — C# uses lazy Roslyn compilations for `definition`, `references`,
+   `implementations`, `callers`, `callees`, and `type_hierarchy`. F# Stage 2A uses a bounded FCS
+   type check for position-based `symbol_at` and same-physical-project `definition`. An F# type-check
+   context is exactly one physical `.fsproj` plus one target framework; ambiguous files require
+   explicit selection, and the selection never changes or merges ownership/reference graph facts.
 
-F# `.fs/.fsi/.fsx` content and `.fsproj` ownership/reference graphs are indexed. Only the
-project-owned `.fs/.fsi` outline crosses into FCS in this stage; compiler-semantic requests still
-disclose `unsupported_language`. Generic indexed search remains language-neutral. For the C#
-`search_symbol` surface, an explicit F#-only path scope is rejected and a mixed scope returns C#
-results with `unsupported_language_files_skipped`. This keeps cross-language graph holes visible
-without fabricating C# semantics for F# projects.
+F# `.fs/.fsi/.fsx` content and `.fsproj` ownership/reference graphs are indexed. The FCS semantic
+adapter consumes one immutable source/project snapshot captured from a pinned index epoch, copies
+workspace `HintPath` assemblies through verified open handles into request-private snapshots, releases
+SQLite before type checking, and bounds source count/bytes, references, concurrency, cache size,
+deadline, diagnostics, contexts, and response bytes. Stage 2A deliberately accepts only literal
+ordered compile items, workspace-contained managed `HintPath` snapshots whose original identity is
+verified after the check, and same-project declarations. The host's target-compatible
+`FSharp.Core` fallback is always disclosed as partial because it was not selected by evaluated
+project authority. Package/project-reference closure and the
+remaining semantic operations still disclose stable unsupported boundaries. Generic indexed search
+remains language-neutral. For the C# `search_symbol` surface, an explicit F#-only path scope is
+rejected and a mixed scope returns C# results with `unsupported_language_files_skipped`. This keeps
+cross-language graph holes visible without fabricating semantics for unsupported F# project shapes.
 
 Structural facts (`project_graph`, `projects_containing`, `dependency_path`,
 `repo_overview`) come from the physical project-file and optional solution parse. Composites (`context_pack`, `impact`,
@@ -77,8 +86,9 @@ Structural facts (`project_graph`, `projects_containing`, `dependency_path`,
 
 Every response carries a `confidence`:
 
-- `exact` — compiler/Roslyn verified.
-- `indexed` — from the persisted index or syntax parse; trustworthy but not compiler-checked.
+- `exact` — compiler-verified by a closed Roslyn project model.
+- `indexed` — trustworthy indexed/syntax evidence, including bounded FCS compiler checks
+  whose deliberately incomplete Stage 2A project model remains partial.
 - `heuristic` — inferred from naming, base-list text, or project relationships
   (`implementations` fallback, `related_tests`) — leads, not facts.
 - degradation flags: `partial` (a deadline/coverage limit was hit), `stale` (index older
@@ -228,7 +238,8 @@ pull.
 
 ## Deployment
 
-Published as a self-contained single-file `PhoenixCodeNav.Mcp.exe` (no prerequisites) or a
+Published as a self-contained `PhoenixCodeNav.Mcp.exe` plus adjacent `FSharp.Core.dll` reference
+sidecar (no installed runtime prerequisite), or a
 framework-dependent build (needs .NET 9). Attach over MCP (`.mcp.json` for Claude Code,
 `config.toml` for Codex). First run builds the index in the background; it lives in
 `<workspace>/.codenav/index.db`. See [`../README.md`](../README.md) for exact commands.

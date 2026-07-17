@@ -259,10 +259,12 @@ internal static class Json
         List<TAux> auxiliary,
         List<TSecondary> secondary,
         Func<List<T>, bool, List<TAux>, bool, List<TSecondary>, bool, object> build,
-        int? maxBytes = null)
+        int? maxBytes = null,
+        int auxiliarySampleItems = 16,
+        int secondarySampleItems = 20)
     {
-        const int auxiliarySampleItems = 16;
-        const int secondarySampleItems = 20;
+        auxiliarySampleItems = Math.Max(0, auxiliarySampleItems);
+        secondarySampleItems = Math.Max(0, secondarySampleItems);
         int cap = Math.Min(maxBytes ?? HardBudgetBytes, HardBudgetBytes);
         var work = new List<T>(items);
         var auxWork = auxiliary.Take(auxiliarySampleItems).ToList();

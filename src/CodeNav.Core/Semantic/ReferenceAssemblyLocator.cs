@@ -1,4 +1,7 @@
 using Microsoft.CodeAnalysis;
+using System.Diagnostics;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 
 namespace CodeNav.Core.Semantic;
 
@@ -12,6 +15,8 @@ public static class ReferenceAssemblyLocator
     private static readonly object Gate = new();
     private static IReadOnlyList<MetadataReference>? _net472Cache;
     private static string? _net472Dir;
+    private static readonly Dictionary<string, (IReadOnlyList<string> Paths, string? Directory)>
+        FrameworkPathCache = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Framework reference assemblies for net472 (+ facades). Cached process-wide.</summary>
     public static IReadOnlyList<MetadataReference> Net472References(out string? sourceDir)
@@ -124,5 +129,147 @@ public static class ReferenceAssemblyLocator
             if (dll is not null) return dll;
         }
         return null;
+    }
+
+    /// <summary>Exact compiler reference paths for the bounded F# semantic targets supported by
+    /// Stage 2A. Unlike Roslyn MetadataReference objects, FCS consumes command-line paths.</summary>
+    public static IReadOnlyList<string> FrameworkReferencePaths(string targetFramework,
+        out string? sourceDir)
+    {
+        lock (Gate)
+        {
+            if (FrameworkPathCache.TryGetValue(targetFramework, out var cached))
+            {
+                sourceDir = cached.Directory;
+                return cached.Paths;
+            }
+
+            string? dir = targetFramework.Equals("net472", StringComparison.OrdinalIgnoreCase)
+                ? ProbeStrictNet472Dir()
+                : ProbeNetCoreReferenceDir(targetFramework);
+            IReadOnlyList<string> paths = dir is null
+                ? []
+                : EnumerateRefDlls(dir)
+                    .Where(IsManagedAssemblyPath)
+                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            FrameworkPathCache[targetFramework] = (paths, dir);
+            sourceDir = dir;
+            return paths;
+        }
+    }
+
+    /// <summary>Resolve the target-compatible asset for the same pinned FSharp.Core package loaded
+    /// by CodeNav.FSharp. ProductVersion carries the package version even when the assembly has been
+    /// copied to the application output directory.</summary>
+    public static string? FSharpCoreReferencePath(string targetFramework, out bool targetAssetExact)
+    {
+        targetAssetExact = false;
+        string runtimePath = Path.Combine(AppContext.BaseDirectory, "FSharp.Core.dll");
+        if (!File.Exists(runtimePath)) return null;
+
+        string? productVersion = FileVersionInfo.GetVersionInfo(runtimePath).ProductVersion;
+        string packageVersion = (productVersion ?? "")
+            .Split(['-', '+'], 2, StringSplitOptions.RemoveEmptyEntries)[0];
+        string targetAsset = targetFramework.Equals("net472", StringComparison.OrdinalIgnoreCase)
+            ? "netstandard2.0"
+            : "netstandard2.1";
+        if (packageVersion.Length > 0)
+        {
+            string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+                { Length: > 0 } configuredPackages
+                ? configuredPackages
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget", "packages");
+            string candidate = Path.Combine(packagesRoot, "fsharp.core", packageVersion,
+                "lib", targetAsset, "FSharp.Core.dll");
+            if (File.Exists(candidate))
+            {
+                targetAssetExact = true;
+                return candidate;
+            }
+        }
+
+        return runtimePath;
+    }
+
+    private static string? ProbeNetCoreReferenceDir(string targetFramework)
+    {
+        if (targetFramework is not ("net8.0" or "net9.0")) return null;
+        int major = targetFramework == "net8.0" ? 8 : 9;
+        foreach (string root in DotNetRoots())
+        {
+            string pack = Path.Combine(root, "packs", "Microsoft.NETCore.App.Ref");
+            if (!Directory.Exists(pack)) continue;
+            foreach (var versionDir in Directory.EnumerateDirectories(pack)
+                         .Select(path => (Path: path, Version: ParseVersion(Path.GetFileName(path))))
+                         .Where(item => item.Version?.Major == major)
+                         .OrderByDescending(item => item.Version))
+            {
+                string candidate = Path.Combine(versionDir.Path, "ref", targetFramework);
+                if (Directory.Exists(candidate)) return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static string? ProbeStrictNet472Dir()
+    {
+        if (Environment.GetEnvironmentVariable("CODENAV_NET472_REFS") is { Length: > 0 } env &&
+            Directory.Exists(env))
+            return env;
+
+        foreach (string programFiles in new[]
+                 {
+                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                 })
+        {
+            if (string.IsNullOrEmpty(programFiles)) continue;
+            string candidate = Path.Combine(programFiles, "Reference Assemblies", "Microsoft",
+                "Framework", ".NETFramework", "v4.7.2");
+            if (Directory.Exists(candidate)) return candidate;
+        }
+
+        string packageRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".nuget", "packages", "microsoft.netframework.referenceassemblies.net472");
+        if (!Directory.Exists(packageRoot)) return null;
+        return Directory.EnumerateDirectories(packageRoot)
+            .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(path => Path.Combine(path, "build", ".NETFramework", "v4.7.2"))
+            .FirstOrDefault(Directory.Exists);
+    }
+
+    private static Version? ParseVersion(string value) =>
+        Version.TryParse(value.Split('-', 2)[0], out Version? version) ? version : null;
+
+    internal static bool IsManagedAssemblyPath(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = new PEReader(stream);
+            return reader.HasMetadata && reader.GetMetadataReader().IsAssembly;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static IEnumerable<string> DotNetRoots()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string? root in new[]
+                 {
+                     Environment.GetEnvironmentVariable("DOTNET_ROOT"),
+                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet"),
+                     Path.GetDirectoryName(Environment.ProcessPath),
+                 })
+        {
+            if (!string.IsNullOrWhiteSpace(root) && Directory.Exists(root) && seen.Add(root))
+                yield return root;
+        }
     }
 }

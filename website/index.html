@@ -357,7 +357,7 @@
             <div class="setup-step__copy">
               <p class="setup-step__eyebrow">Build it</p>
               <h3>Create the local server.</h3>
-              <p>Clone the repository and publish the self-contained <code>win-x64</code> executable. Building from source requires the .NET 9 SDK.</p>
+              <p>Clone the repository and publish the self-contained <code>win-x64</code> executable plus its adjacent <code>FSharp.Core.dll</code> reference sidecar. Building from source requires the .NET 9 SDK.</p>
             </div>
             <div class="code-window">
               <header><span>PowerShell</span><button class="copy-button" type="button" data-copy="build-code"><span>Copy</span><i aria-hidden="true">□</i></button></header>
@@ -367,7 +367,7 @@ cd PhoenixCodeNav
 dotnet publish src/CodeNav.Mcp -c Release -r win-x64 --self-contained `
   -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true `
   -p:IncludeNativeLibrariesForSelfExtract=true -o artifacts/win-x64</code></pre>
-              <footer><span>Output</span><b>artifacts/win-x64/PhoenixCodeNav.Mcp.exe</b></footer>
+              <footer><span>Copy together</span><b>PhoenixCodeNav.Mcp.exe + FSharp.Core.dll</b></footer>
             </div>
           </li>
 
