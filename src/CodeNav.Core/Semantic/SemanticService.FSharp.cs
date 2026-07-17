@@ -15,7 +15,7 @@ public sealed record FSharpOutlineItem(
     string? Accessors,
     List<FSharpOutlineItem> Members);
 
-public sealed record FSharpOutlineContext(
+public sealed record FSharpOutlineParseContext(
     string Project,
     string? TargetFramework);
 
@@ -27,7 +27,7 @@ public sealed record FSharpOutlineResult(
     string? PartialReason = null,
     string? SelectedProject = null,
     string? SelectedTargetFramework = null,
-    List<FSharpOutlineContext>? AvailableContexts = null);
+    List<FSharpOutlineParseContext>? AvailableParseContexts = null);
 
 public sealed partial class SemanticService
 {
@@ -81,23 +81,23 @@ public sealed partial class SemanticService
             ownerOptions.Add(new(owner, options));
         }
 
-        var availableContexts = new List<FSharpOutlineContext>();
+        var availableParseContexts = new List<FSharpOutlineParseContext>();
         foreach (FSharpOwnerOptions owner in ownerOptions)
         {
             if (owner.Options.AvailableTargetFrameworks is { Count: > 0 } frameworks)
             {
-                availableContexts.AddRange(frameworks.Select(framework =>
-                    new FSharpOutlineContext(owner.Owner.Path, framework)));
+                availableParseContexts.AddRange(frameworks.Select(framework =>
+                    new FSharpOutlineParseContext(owner.Owner.Path, framework)));
             }
             else
             {
-                availableContexts.Add(new(owner.Owner.Path, null));
+                availableParseContexts.Add(new(owner.Owner.Path, null));
             }
         }
 
         FSharpOwnerOptions? pairedBase = SelectPairedBaseProject(ownerOptions);
         FSharpOwnerOptions selected = pairedBase ?? ownerOptions[0];
-        availableContexts = availableContexts
+        availableParseContexts = availableParseContexts
             .OrderBy(context => context.Project.Equals(selected.Owner.Path,
                 StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .ToList();
@@ -117,7 +117,7 @@ public sealed partial class SemanticService
         else
         {
             AddPartialReasons(partialReasons, selected.Options.PartialReason);
-            partialReasons.Add("fsharp_alternate_syntax_contexts");
+            partialReasons.Add("fsharp_alternate_parse_contexts");
         }
 
         if (file.Size > MaxFSharpOutlineBytes)
@@ -147,7 +147,7 @@ public sealed partial class SemanticService
                 : string.Join(';', partialReasons),
                 SelectedProject: selected.Owner.Path,
                 SelectedTargetFramework: selected.Options.SelectedTargetFramework,
-                AvailableContexts: availableContexts);
+                AvailableParseContexts: availableParseContexts);
         }
         catch (Exception ex)
         {

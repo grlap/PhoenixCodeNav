@@ -153,7 +153,7 @@ public static class ProjectFileParser
     /// snapshot. This deliberately does not evaluate MSBuild. Literal project properties and the
     /// selected indexed target framework are authoritative; conditioned/imported shapes are exposed
     /// as partial instead of silently parsing with filename-only defaults. Multi-target projects use
-    /// their first declared TFM and disclose the remaining syntax contexts to the caller.
+    /// their first declared TFM and disclose the remaining parse contexts to the caller.
     /// </summary>
     public static FSharpParsingOptionsSnapshot ParseFSharpParsingOptionsSnapshot(
         string relPath, string projectXml, string indexedTargetFrameworks)

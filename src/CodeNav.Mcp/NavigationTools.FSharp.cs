@@ -5,7 +5,7 @@ namespace CodeNav.Mcp;
 
 public sealed partial class NavigationTools
 {
-    internal const int MaxFSharpOutlineContexts = 64;
+    internal const int MaxFSharpOutlineParseContexts = 64;
 
     private string FSharpOutline(string path, string normalizedPath, FileHit file, int depth)
     {
@@ -65,26 +65,26 @@ public sealed partial class NavigationTools
             };
         }
 
-        object? selectedContext = result.SelectedProject is null
+        object? selectedParseContext = result.SelectedProject is null
             ? null
             : new
             {
                 project = result.SelectedProject,
                 targetFramework = result.SelectedTargetFramework,
             };
-        var allAvailableContexts = result.AvailableContexts?
+        var allAvailableParseContexts = result.AvailableParseContexts?
             .Select(context => (object)new
             {
                 project = context.Project,
                 targetFramework = context.TargetFramework,
             })
             .ToList() ?? [];
-        int availableContextsTotal = allAvailableContexts.Count;
-        var availableContexts = allAvailableContexts
-            .Take(MaxFSharpOutlineContexts)
+        int availableParseContextsTotal = allAvailableParseContexts.Count;
+        var availableParseContexts = allAvailableParseContexts
+            .Take(MaxFSharpOutlineParseContexts)
             .ToList();
-        bool availableContextsLimitTruncated =
-            availableContextsTotal > availableContexts.Count;
+        bool availableParseContextsLimitTruncated =
+            availableParseContextsTotal > availableParseContexts.Count;
 
         string BuildNested(bool includeMembers, bool truncated) => Json.Serialize(new
         {
@@ -94,11 +94,11 @@ public sealed partial class NavigationTools
             truncated,
             partial = result.PartialReason is not null ? true : (bool?)null,
             partialReason = result.PartialReason,
-            selectedContext,
-            availableContexts,
-            availableContextsTotal,
-            availableContextsReturned = availableContexts.Count,
-            availableContextsTruncated = availableContextsLimitTruncated,
+            selectedParseContext,
+            availableParseContexts,
+            availableParseContextsTotal,
+            availableParseContextsReturned = availableParseContexts.Count,
+            availableParseContextsTruncated = availableParseContextsLimitTruncated,
             meta,
         });
 
@@ -120,8 +120,8 @@ public sealed partial class NavigationTools
                 symbol.EndLine,
             })
             .ToList();
-        return Json.WithAuxiliaryListBudget(flat, availableContexts,
-            (items, _, contexts, contextsByteTruncated) => new
+        return Json.WithAuxiliaryListBudget(flat, availableParseContexts,
+            (items, _, parseContexts, parseContextsByteTruncated) => new
         {
             path,
             isGenerated = file.IsGenerated,
@@ -129,12 +129,12 @@ public sealed partial class NavigationTools
             truncated = true,
             partial = result.PartialReason is not null ? true : (bool?)null,
             partialReason = result.PartialReason,
-            selectedContext,
-            availableContexts = contexts,
-            availableContextsTotal,
-            availableContextsReturned = contexts.Count,
-            availableContextsTruncated =
-                availableContextsLimitTruncated || contextsByteTruncated,
+            selectedParseContext,
+            availableParseContexts = parseContexts,
+            availableParseContextsTotal,
+            availableParseContextsReturned = parseContexts.Count,
+            availableParseContextsTruncated =
+                availableParseContextsLimitTruncated || parseContextsByteTruncated,
             note = "File has too many declarations for a full outline; showing bounded top-level declarations.",
             meta,
         });

@@ -236,14 +236,14 @@ public class FSharpOutlineStage1Tests
             JsonElement module = Assert.Single(response.GetProperty("symbols").EnumerateArray());
             Assert.Equal("legacyBaseSelected", NodeName(Assert.Single(Members(module))));
 
-            JsonElement selected = response.GetProperty("selectedContext");
+            JsonElement selected = response.GetProperty("selectedParseContext");
             Assert.Equal("Migration/Project.fsproj", selected.GetProperty("project").GetString());
             Assert.Equal("net472", selected.GetProperty("targetFramework").GetString());
             Assert.True(response.GetProperty("partial").GetBoolean());
-            Assert.Equal("fsharp_alternate_syntax_contexts",
+            Assert.Equal("fsharp_alternate_parse_contexts",
                 response.GetProperty("partialReason").GetString());
 
-            var contexts = response.GetProperty("availableContexts").EnumerateArray()
+            var contexts = response.GetProperty("availableParseContexts").EnumerateArray()
                 .Select(context => (
                     context.GetProperty("project").GetString(),
                     context.GetProperty("targetFramework").GetString()))
@@ -253,9 +253,14 @@ public class FSharpOutlineStage1Tests
                 ("Migration/Project.Net.fsproj", "net472"),
                 ("Migration/Project.Net.fsproj", "net8.0"),
             ], contexts);
-            Assert.Equal(3, response.GetProperty("availableContextsTotal").GetInt32());
-            Assert.Equal(3, response.GetProperty("availableContextsReturned").GetInt32());
-            Assert.False(response.GetProperty("availableContextsTruncated").GetBoolean());
+            Assert.Equal(3, response.GetProperty("availableParseContextsTotal").GetInt32());
+            Assert.Equal(3, response.GetProperty("availableParseContextsReturned").GetInt32());
+            Assert.False(response.GetProperty("availableParseContextsTruncated").GetBoolean());
+            Assert.False(response.TryGetProperty("selectedContext", out _));
+            Assert.False(response.TryGetProperty("availableContexts", out _));
+            Assert.False(response.TryGetProperty("availableContextsTotal", out _));
+            Assert.False(response.TryGetProperty("availableContextsReturned", out _));
+            Assert.False(response.TryGetProperty("availableContextsTruncated", out _));
         }
         finally
         {
@@ -297,16 +302,16 @@ public class FSharpOutlineStage1Tests
             JsonElement module = Assert.Single(response.GetProperty("symbols").EnumerateArray());
             Assert.Equal("netFrameworkSelected", NodeName(Assert.Single(Members(module))));
 
-            JsonElement selected = response.GetProperty("selectedContext");
+            JsonElement selected = response.GetProperty("selectedParseContext");
             Assert.Equal("Migration/Project.Net.fsproj",
                 selected.GetProperty("project").GetString());
             Assert.Equal("net472", selected.GetProperty("targetFramework").GetString());
             Assert.Contains("fsharp_target_framework_defaulted",
                 response.GetProperty("partialReason").GetString());
-            Assert.Equal(2, response.GetProperty("availableContexts").GetArrayLength());
-            Assert.Equal(2, response.GetProperty("availableContextsTotal").GetInt32());
-            Assert.Equal(2, response.GetProperty("availableContextsReturned").GetInt32());
-            Assert.False(response.GetProperty("availableContextsTruncated").GetBoolean());
+            Assert.Equal(2, response.GetProperty("availableParseContexts").GetArrayLength());
+            Assert.Equal(2, response.GetProperty("availableParseContextsTotal").GetInt32());
+            Assert.Equal(2, response.GetProperty("availableParseContextsReturned").GetInt32());
+            Assert.False(response.GetProperty("availableParseContextsTruncated").GetBoolean());
         }
         finally
         {
@@ -317,7 +322,7 @@ public class FSharpOutlineStage1Tests
     [Theory]
     [InlineData(64, false)]
     [InlineData(65, true)]
-    public void OutlineCapsAvailableProjectContextsAtSixtyFourAndReportsCoverage(
+    public void OutlineCapsAvailableParseContextsAtSixtyFourAndReportsCoverage(
         int ownerCount, bool expectedTruncated)
     {
         string root = Directory.CreateTempSubdirectory("codenav-fsharp-outline-context-cap").FullName;
@@ -353,16 +358,16 @@ public class FSharpOutlineStage1Tests
             Assert.Equal(64 * 1024, Json.HardBudgetBytes);
             Assert.True(Json.Utf8Bytes(json) <= Json.HardBudgetBytes);
             Assert.Equal(ownerCount,
-                response.GetProperty("availableContextsTotal").GetInt32());
+                response.GetProperty("availableParseContextsTotal").GetInt32());
             int expectedReturned = Math.Min(ownerCount,
-                NavigationTools.MaxFSharpOutlineContexts);
+                NavigationTools.MaxFSharpOutlineParseContexts);
             Assert.Equal(expectedReturned,
-                response.GetProperty("availableContextsReturned").GetInt32());
+                response.GetProperty("availableParseContextsReturned").GetInt32());
             Assert.Equal(expectedTruncated,
-                response.GetProperty("availableContextsTruncated").GetBoolean());
-            var contexts = response.GetProperty("availableContexts").EnumerateArray().ToList();
+                response.GetProperty("availableParseContextsTruncated").GetBoolean());
+            var contexts = response.GetProperty("availableParseContexts").EnumerateArray().ToList();
             Assert.Equal(expectedReturned, contexts.Count);
-            Assert.Equal(response.GetProperty("selectedContext").GetProperty("project").GetString(),
+            Assert.Equal(response.GetProperty("selectedParseContext").GetProperty("project").GetString(),
                 contexts[0].GetProperty("project").GetString());
         }
         finally

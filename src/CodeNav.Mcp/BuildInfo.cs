@@ -19,7 +19,7 @@ public static class BuildInfo
 {
     /// <summary>Bump when the tool surface or a user-visible capability changes. Pair with the
     /// features manifest in server_capabilities so a caller can confirm capabilities, not just a number.</summary>
-    public const string Version = "0.12.3";
+    public const string Version = "0.12.4";
 
     /// <summary>"version+shortsha" — the inline deploy check every result's meta carries (ddp),
     /// so a caller never has to guess which build produced a result. Expression-bodied ON PURPOSE:

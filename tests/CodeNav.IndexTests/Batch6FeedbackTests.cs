@@ -152,7 +152,10 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
         // Directly pins the copy fix: a build whose serialized size forces a shrink, called
         // twice on the SAME input list, must return an identical result and leave the input
         // untouched. Before the copy, the 2nd call operated on the already-gutted list.
-        var items = Enumerable.Range(0, 200).Select(i => $"item-{i}-{new string('x', 200)}").ToList();
+        int payloadChars = Json.HardBudgetBytes / 100; // 200 items serialize to roughly 2x the cap.
+        var items = Enumerable.Range(0, 200)
+            .Select(i => $"item-{i}-{new string('x', payloadChars)}")
+            .ToList();
         object Build(List<string> its, bool trunc) => new { data = its, truncated = trunc };
 
         string first = Json.WithListBudget(items, Build);

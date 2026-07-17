@@ -53,9 +53,11 @@ for code identifiers.
 3. **Syntax (F#)** — `outline` for compile-owned `.fs` and `.fsi`. A pinned, isolated
     FSharp.Compiler.Service adapter parses on demand without type checking; `.fsx` stays text-only.
     An exact same-directory legacy `Project.fsproj` + dual-target `Project.Net.fsproj` ownership
-    pair selects the single-target legacy context and discloses up to 64 alternatives with complete
-    coverage counts. Without that base owner, a multi-target project selects its first declared TFM
-    and marks the result partial.
+    pair selects the single-target legacy parse context and discloses up to 64 project/TFM parse
+    contexts with complete coverage counts. A parse context controls only F# `#if` symbols and
+    parser options; it does not select assemblies, builds, reference resolution, or semantic
+    workspaces. Without that base owner, a multi-target project selects its first declared TFM and
+    marks the result partial.
 4. **Semantic (C#)** — `definition`, `references`, `implementations`, `callers`, `callees`,
    `type_hierarchy`. Roslyn *compilations* give compiler-exact answers with
    `documentationCommentId`s.

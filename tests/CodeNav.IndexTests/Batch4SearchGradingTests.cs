@@ -234,7 +234,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("implementer-completeness", ids);
         Assert.Contains("generic-arity-resolution", ids);
         Assert.Contains("friend-assembly-semantics", ids);
-        Assert.Contains("fsharp-outline-context-budget", ids);
+        Assert.Contains("fsharp-outline-parse-context-budget", ids);
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
         Assert.Contains("semantic-large-repo-budget", ids);

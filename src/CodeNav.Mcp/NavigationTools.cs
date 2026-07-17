@@ -88,8 +88,8 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-text-indexing", summary = "v0.12.0 F# FTS" },
                 new { id = "fsharp-project-graph", summary = "v0.12.0 .fsproj ownership/edges; no Roslyn" },
                 new { id = "fsharp-outline", summary = "v0.12.1 owned .fs/.fsi FCS outline" },
-                new { id = "fsharp-outline-context-selection", summary = "v0.12.2 base/.Net contexts" },
-                new { id = "fsharp-outline-context-budget", summary = "v0.12.3 max 64 project/TFM contexts with total/returned/truncated coverage; 64 KiB hard envelope" },
+                new { id = "fsharp-outline-parse-context-selection", summary = "v0.12.4 base/.Net project+TFM parse-context selection affects only F# parser options and #if symbols" },
+                new { id = "fsharp-outline-parse-context-budget", summary = "v0.12.4 max 64 project/TFM parse contexts with total/returned/truncated coverage; 64 KiB hard envelope" },
                 new { id = "fsharp-unsupported-language-boundary", summary = "F# semantic errors; mixed scopes disclose skips" },
                 new { id = "review-fsharp-file-coverage", summary = "review_pack: F# changes in unsupportedLanguageFiles" },
                 new { id = "compiled-awareness", summary = "search_symbol orphaned; repo_overview.orphanedFiles; compiled ownership guides semantic resolution, impact, and context_pack" },
@@ -630,7 +630,7 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- outline / source
 
     [McpServerTool(Name = "outline")]
-    [Description("Syntactic map of a file (namespaces, types, members with line spans) without reading the body. ALWAYS call this before reading a large file, then fetch only needed spans via source_context.")]
+    [Description("Syntactic map of a file (namespaces, types, members with line spans) without reading the body. ALWAYS call this before reading a large file, then fetch only needed spans via source_context. For F# files, selectedParseContext and availableParseContexts identify only the .fsproj/target-framework parser options used for #if and syntax; they do not select assemblies, builds, reference resolution, or semantic workspaces.")]
     public string Outline(
         [Description("Workspace-relative file path (forward slashes).")] string path,
         [Description("1 = namespaces + types, 2 = + members (default), 3 = reserved (currently same as 2).")] int depth = 2)

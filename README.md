@@ -38,9 +38,11 @@ Phoenix indexes `.fs`, `.fsi`, and `.fsx` text, parses `.fsproj` compile ownersh
 and preserves C#↔F# project edges. Project-owned `.fs` and `.fsi` files also have an on-demand,
 syntax-only `outline` backed by a pinned FSharp.Compiler.Service adapter; `.fsx` remains text-only.
 When the same file is owned by an exact legacy `Project.fsproj` plus dual-target
-`Project.Net.fsproj` migration pair, outline syntax defaults to the single-target legacy project
-and reports up to 64 available project/TFM contexts with total/returned/truncated coverage. A lone
-multi-target project uses its first declared TFM and reports that default as partial.
+`Project.Net.fsproj` migration pair, outline syntax defaults to the single-target legacy project's
+parse context and reports up to 64 available project/TFM parse contexts with
+total/returned/truncated coverage. A parse context controls only F# `#if` symbols and parser
+options; it does not select assemblies, builds, reference resolution, or semantic workspaces. A
+lone multi-target project uses its first declared TFM and reports that default as partial.
 F# compiler-semantic tools return `unsupported_language` instead of an empty or falsely exact
 result. Indexed searches stay language-neutral by default. An explicit F#-only `search_symbol`
 path scope is rejected, while a mixed C#/F# scope returns its C# symbols with
