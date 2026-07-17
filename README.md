@@ -48,8 +48,19 @@ check of one physical `.fsproj` and one target framework. A file with exactly on
 selected automatically; every other shape requires explicit `projectPath` + `targetFramework` and
 returns bounded `selectedFSharpTypeCheckContext` / `availableFSharpTypeCheckContexts` coverage.
 This selection does not merge the legacy and `.Net.fsproj` migration projects. Stage 2A accepts
-only literal ordered compile items, bounded workspace-contained managed `HintPath` binaries copied
-into request-private immutable snapshots, and same-project declarations. A host-selected
+literal ordered compile items plus a bounded evaluation-lite subset used by legacy projects:
+simple properties that precede semantic items, comparisons/boolean/`Exists` conditions, `Choose`, and literal
+workspace-local `.props` imports. Recognized compiler target imports are terminal boundaries; Phoenix
+never executes targets/tasks, property functions, or item transforms. Conventional self-default
+properties are evaluated as unset; other unresolved ambient/global condition properties fail closed.
+Import paths are selected only from canonical paths in the pinned index using the host path policy;
+semantic evaluation never walks the mutable live filesystem to resolve casing.
+The standard `Microsoft.NET.Sdk` and recognized compiler-toolchain implicit authority are disclosed
+as partial; custom/child/qualified SDK authority and indexed in-workspace
+`Directory.Build.props` / `Directory.Build.targets` fail closed. Toolchain disclosure also covers
+unobservable `Directory.Build.*` authority above the workspace root.
+Workspace-contained managed
+`HintPath` binaries are copied into request-private immutable snapshots. A host-selected
 `FSharp.Core` asset is disclosed as partial rather than
 treated as project-evaluated authority. Package/project-reference closure, name-based F# search,
 references, implementations, callers/callees, and hierarchy remain
@@ -227,8 +238,13 @@ watcher, and lifecycle test projects under `tests/`.
 - `search_text` regex mode (`regex:true`) is line-based .NET regex narrowed by FTS tokens —
   no multi-line patterns.
 - F# `outline` is syntax-only and limited to compile-owned `.fs` / `.fsi`; `.fsx` is text-only.
-  F# semantic Stage 2A is position-only and limited to literal, same-project source closure for
-  `symbol_at` and `definition`. It does not yet evaluate package/project references or support
+  F# semantic Stage 2A is position-only and limited to bounded, same-project source closure for
+  `symbol_at` and `definition`. It evaluates simple properties/conditions/`Choose` and literal
+  workspace-local `.props`, but not targets/tasks, property functions, imported compile/reference
+  items, property reassignment after semantic items, custom SDK or in-workspace
+  `Directory.Build.*` authority,
+  unresolved ambient/global condition inputs, package/project references, or arbitrary
+  MSBuild. It also does not support
   F# name search, references, implementations, callers/callees, or hierarchy. Unscoped indexed
   search remains language-neutral; C# syntax search with an explicit F#-only scope discloses
   `unsupported_language`, and a mixed scope marks its C# results partial.

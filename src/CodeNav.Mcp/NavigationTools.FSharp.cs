@@ -206,9 +206,56 @@ public sealed partial class NavigationTools
                 "fsharp_semantic_project_references_unsupported" =>
                 "This Stage 2A type-check context requires reference closure scheduled for Stage 2B.",
             "fsharp_semantic_compile_order_unavailable" =>
-                "F# semantic checking requires literal, unconditional Compile items in compiler order.",
-            "fsharp_semantic_items_conditioned" or "fsharp_semantic_import_unsupported" =>
-                "This project requires MSBuild condition/import evaluation outside the bounded Stage 2A model.",
+                "F# semantic checking requires deterministic literal Compile membership in compiler order; wildcards, defaults, exclusions, and unevaluated membership are unsupported.",
+            "fsharp_semantic_items_conditioned" =>
+                "This project uses conditioned semantic items outside the bounded Stage 2A project model.",
+            "fsharp_semantic_import_unsupported" =>
+                "Stage 2A evaluates only literal workspace-local .props imports and recognized compiler target imports.",
+            "fsharp_semantic_sdk_unsupported" =>
+                "The selected project uses SDK authority outside the bounded Stage 2A project model.",
+            "fsharp_semantic_directory_build_unsupported" =>
+                "An applicable Directory.Build.props or Directory.Build.targets can change F# semantic inputs outside the bounded Stage 2A project model.",
+            "fsharp_semantic_import_items_unsupported" =>
+                "An imported .props file contributes active Compile/reference items; imported semantic items remain outside Stage 2A.",
+            "fsharp_semantic_import_path_outside_workspace" =>
+                "A project import escapes the selected workspace and was not opened.",
+            "fsharp_semantic_import_unavailable" =>
+                "A literal workspace .props import is missing, unindexed, unreadable, or invalid XML.",
+            "fsharp_semantic_import_cycle" =>
+                "The selected project contains a cycle of workspace .props imports.",
+            "fsharp_semantic_import_count_limit" =>
+                "The selected project exceeds the bounded number of inspected workspace .props imports.",
+            "fsharp_semantic_import_occurrence_limit" =>
+                "The selected project exceeds the bounded number of active workspace .props import occurrences.",
+            "fsharp_semantic_import_depth_limit" =>
+                "The selected project exceeds the bounded workspace .props import depth.",
+            "fsharp_semantic_import_bytes_limit" =>
+                "The selected project's workspace .props imports exceed the bounded aggregate UTF-8 byte limit.",
+            "fsharp_semantic_condition_unsupported" =>
+                "The selected project uses an MSBuild condition outside the bounded Stage 2A grammar.",
+            "fsharp_semantic_condition_limit" =>
+                "An MSBuild condition exceeds the bounded Stage 2A character limit.",
+            "fsharp_semantic_condition_depth_limit" =>
+                "An MSBuild condition exceeds the bounded Stage 2A expression depth.",
+            "fsharp_semantic_condition_property_unresolved" =>
+                "An MSBuild condition depends on an unresolved property that may be supplied by the build environment.",
+            "fsharp_semantic_evaluation_depth_limit" =>
+                "The selected project exceeds the bounded Stage 2A project-evaluation nesting depth.",
+            "fsharp_semantic_evaluation_order_unsupported" =>
+                "A property assignment appears after semantic items; Stage 2A cannot reproduce MSBuild's property-before-item evaluation phases for this project.",
+            "fsharp_semantic_property_function_unsupported" =>
+                "The selected project uses an MSBuild property function or item transform; Stage 2A expands simple properties only.",
+            "fsharp_semantic_property_unsupported" or
+                "fsharp_semantic_property_unresolved" =>
+                "A compiler-affecting project property could not be resolved by the bounded Stage 2A model.",
+            "fsharp_semantic_property_limit" =>
+                "The selected project exceeds the bounded number of property assignments.",
+            "fsharp_semantic_property_value_limit" =>
+                "A project property value exceeds the bounded Stage 2A character limit.",
+            "fsharp_semantic_target_evaluation_unsupported" =>
+                "An active MSBuild Target mutates F# semantic inputs; Stage 2A never executes targets or tasks.",
+            "fsharp_semantic_item_definition_unsupported" =>
+                "An active ItemDefinitionGroup changes F# semantic items outside the bounded Stage 2A model.",
             "fsharp_semantic_reference_unresolved" or
                 "fsharp_semantic_reference_unavailable" =>
                 "A literal assembly reference for the selected project context could not be resolved safely.",

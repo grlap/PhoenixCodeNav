@@ -248,6 +248,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("fsharp-definition-same-project", ids);
         Assert.Contains("fsharp-type-check-context-selection", ids);
         Assert.Contains("fsharp-semantic-snapshot", ids);
+        Assert.Contains("fsharp-semantic-bounded-project-evaluation", ids);
+        Assert.Contains("workspace-msbuild-config-indexing", ids);
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
         Assert.Contains("semantic-large-repo-budget", ids);

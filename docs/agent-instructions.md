@@ -21,7 +21,13 @@ Default flow:
 2. For anything that is a **code identifier** (type, method, property), use the symbol tools:
    `search_symbol`, `definition`, `references`, `implementations` — not text search. F# semantic
    Stage 2A is narrower: use position-based `symbol_at` / `definition`; name search, references,
-   implementations, callers/callees, and hierarchy are not available yet.
+   implementations, callers/callees, and hierarchy are not available yet. Stage 2A evaluates a
+   bounded subset of simple project properties/conditions/`Choose` and local `.props`; an explicit
+   `fsharp_semantic_*_unsupported` cause means the project crossed that boundary, not that the symbol
+   is absent. An unresolved condition-property cause means the result depends on an ambient/global
+   build input that the selected project/TFM context does not claim to know. Standard SDK/toolchain
+   implicit authority is disclosed as partial; custom SDK and indexed in-workspace
+   `Directory.Build.*` authority fail closed.
 3. Use `search_text` only for literals: config keys, route strings, error messages, log
    fragments, comments. Use `config_lookup` for configuration keys specifically.
 4. Starting from a **stack trace, build error, or diff hunk**: call

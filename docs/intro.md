@@ -39,7 +39,10 @@ carries `confidence` + index-freshness metadata.
 
 F# source text, `.fsproj` compile ownership, and C#↔F# project edges are indexed. Compile-owned
 `.fs` / `.fsi` files support FCS outlines plus position-based `symbol_at` and same-project
-`definition` in a selected physical-project/TFM type-check context. Package/project-reference
+`definition` in a selected physical-project/TFM type-check context. The semantic path evaluates a
+bounded legacy-project subset (simple properties and conditions, `Choose`, and literal local
+`.props`) without executing MSBuild. Standard SDK/toolchain implicit authority is partial; custom SDK
+and indexed in-workspace `Directory.Build.*` authority fail closed. Package/project-reference
 closure and broader F# semantic operations still return explicit unsupported boundaries rather
 than misleading empty answers. Indexed search is language-neutral unless the caller supplies a file
 scope; a mixed C#/F# symbol scope returns the available C# symbols and marks the skipped portion

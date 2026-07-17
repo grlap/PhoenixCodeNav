@@ -53,6 +53,11 @@ public class FSharpTierATests
             File.WriteAllText(Path.Combine(root, "Core", "Prelude.fsi"), "module Core.Prelude");
             File.WriteAllText(Path.Combine(root, "Core", "Library.fs"), "module Core.Library");
             File.WriteAllText(Path.Combine(root, "Core", "Scratch.fsx"), "printfn \"scratch\"");
+            Directory.CreateDirectory(Path.Combine(root, "Build"));
+            File.WriteAllText(Path.Combine(root, "Build", "PackagePaths.props"),
+                "<Project><PropertyGroup><Packages>lib</Packages></PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(root, "Build", "Custom.targets"),
+                "<Project />");
             File.WriteAllText(Path.Combine(root, "Core", "Core.fsproj"),
                 """
                 <Project Sdk="Microsoft.NET.Sdk">
@@ -69,6 +74,8 @@ public class FSharpTierATests
             ScanResult scan = WorkspaceScanner.Scan(root);
             Assert.Equal(3, scan.FsFiles.Count);
             Assert.Contains(scan.ProjectFiles, file => file.RelPath == "Core/Core.fsproj");
+            Assert.Contains(scan.ConfigFiles, file => file.RelPath == "Build/PackagePaths.props");
+            Assert.Contains(scan.ConfigFiles, file => file.RelPath == "Build/Custom.targets");
 
             ParsedProject project = ProjectFileParser.Parse(root, "Core/Core.fsproj");
             Assert.Equal("fs", project.Language);
@@ -506,6 +513,8 @@ public class FSharpTierATests
             Assert.Contains("fsharp-definition-same-project", featureIds);
             Assert.Contains("fsharp-type-check-context-selection", featureIds);
             Assert.Contains("fsharp-semantic-snapshot", featureIds);
+            Assert.Contains("fsharp-semantic-bounded-project-evaluation", featureIds);
+            Assert.Contains("workspace-msbuild-config-indexing", featureIds);
             Assert.DoesNotContain("fsharp-outline-context-selection", featureIds);
             Assert.DoesNotContain("fsharp-outline-context-budget", featureIds);
             Assert.Contains("fsharp-unsupported-language-boundary", featureIds);
@@ -523,6 +532,9 @@ public class FSharpTierATests
 
             JsonElement files = Parse(tools.FindFile("*.fs"));
             Assert.Equal("fs", files.GetProperty("files")[0].GetProperty("language").GetString());
+            JsonElement config = Parse(tools.ConfigLookup("PhoenixFSharpEvalMarker"));
+            Assert.Contains(config.GetProperty("hits").EnumerateArray(), hit =>
+                hit.GetProperty("path").GetString() == "Build/Stage2.props");
             Assert.Contains("fsharpTierAMarker", tools.SearchText("fsharpTierAMarker", lang: "fs"));
             JsonElement regex = Parse(tools.SearchText("\\d{2}", regex: true,
                 pathGlob: "Core/Library.fs"));
@@ -1477,6 +1489,10 @@ public class FSharpTierATests
 
     private static void WriteMixedWorkspace(string root)
     {
+        Directory.CreateDirectory(Path.Combine(root, "Build"));
+        File.WriteAllText(Path.Combine(root, "Build", "Stage2.props"),
+            "<Project><PropertyGroup><PhoenixFSharpEvalMarker>bounded</PhoenixFSharpEvalMarker></PropertyGroup></Project>");
+
         WriteProject(root, "Core", "Core.fsproj",
             """
             <Project Sdk="Microsoft.NET.Sdk">

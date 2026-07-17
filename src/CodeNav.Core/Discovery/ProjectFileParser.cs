@@ -71,7 +71,7 @@ public sealed record FSharpSemanticOptionsSnapshot(
 /// MSBuild evaluation — raw XML facts only, confidence "indexed" not "exact".
 /// Does not own: file discovery, storage, or semantic project loading (M3).
 /// </summary>
-public static class ProjectFileParser
+public static partial class ProjectFileParser
 {
     private const int MaxSnapshotBytes = 16 * 1024 * 1024;
 
@@ -288,6 +288,21 @@ public static class ProjectFileParser
             root.Descendants().Any(element => element.Name.LocalName == "Import"))
             partialReasons.Add("fsharp_project_options_imported");
 
+        return BuildFSharpParsingOptionsSnapshot(tfms, selectedTfm, defines,
+            languageVersion, otherFlags, additionalArgs,
+            disableImplicitFrameworkDefines, partialReasons);
+    }
+
+    private static FSharpParsingOptionsSnapshot BuildFSharpParsingOptionsSnapshot(
+        string[] tfms,
+        string? selectedTfm,
+        string defines,
+        string? languageVersion,
+        string otherFlags,
+        string additionalArgs,
+        bool disableImplicitFrameworkDefines,
+        SortedSet<string> partialReasons)
+    {
         var args = new List<string>();
         var seenDefines = new HashSet<string>(StringComparer.Ordinal);
         foreach (string define in SplitDefineConstants(defines)
@@ -338,23 +353,30 @@ public static class ProjectFileParser
     }
 
     /// <summary>
-    /// Captures the deliberately small Stage-2A semantic project shape. It accepts only literal,
-    /// unconditional, ordered F# Compile items and resolvable HintPath references. Package and
-    /// project-reference closure require evaluated target-specific assets and are handled by the
-    /// separate Stage-2B work; returning a stable error here prevents a compiler-backed result from
-    /// overstating an incomplete project model.
+    /// Captures the deliberately small Stage-2A semantic project shape. It evaluates bounded,
+    /// document-ordered simple properties, conditions, Choose branches, workspace-local .props,
+    /// ordered F# Compile items, and resolvable HintPath references. Package and project-reference
+    /// closure require evaluated target-specific assets and are handled by the separate Stage-2B
+    /// work; returning a stable error here prevents a compiler-backed result from overstating an
+    /// incomplete project model.
     /// </summary>
     public static FSharpSemanticOptionsSnapshot ParseFSharpSemanticOptionsSnapshot(
         string relPath, string projectXml, string indexedTargetFrameworks,
-        string selectedTargetFramework)
+        string selectedTargetFramework,
+        Func<string, string?>? importResolver = null,
+        Func<string, long?>? importSizeResolver = null,
+        bool hasImplicitDirectoryBuildAuthority = false,
+        CancellationToken cancellationToken = default)
     {
-        FSharpParsingOptionsSnapshot parsing = ParseFSharpParsingOptionsSnapshot(
+        cancellationToken.ThrowIfCancellationRequested();
+        FSharpParsingOptionsSnapshot selection = ParseFSharpParsingOptionsSnapshot(
             relPath, projectXml, indexedTargetFrameworks, selectedTargetFramework);
-        if (parsing.Error is not null || parsing.SelectedTargetFramework is null)
+        cancellationToken.ThrowIfCancellationRequested();
+        if (selection.Error is not null || selection.SelectedTargetFramework is null)
         {
             return new([], [], [], Path.GetFileNameWithoutExtension(relPath),
-                selectedTargetFramework, parsing.PartialReason,
-                parsing.Error ?? "fsharp_project_options_unavailable");
+                selectedTargetFramework, selection.PartialReason,
+                selection.Error ?? "fsharp_project_options_unavailable");
         }
 
         XDocument doc;
@@ -370,11 +392,16 @@ public static class ProjectFileParser
                 MaxCharactersInDocument = MaxSnapshotBytes,
             });
             doc = XDocument.Load(reader, LoadOptions.None);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch
         {
             return new([], [], [], Path.GetFileNameWithoutExtension(relPath),
-                selectedTargetFramework, parsing.PartialReason,
+                selectedTargetFramework, selection.PartialReason,
                 "fsharp_project_options_unavailable");
         }
 
@@ -382,207 +409,45 @@ public static class ProjectFileParser
         if (root is null)
         {
             return new([], [], [], Path.GetFileNameWithoutExtension(relPath),
-                selectedTargetFramework, parsing.PartialReason,
+                selectedTargetFramework, selection.PartialReason,
                 "fsharp_project_options_unavailable");
         }
 
-        if (!TrySemanticAssemblyName(root, relPath, out string assemblyName))
+        if (hasImplicitDirectoryBuildAuthority)
         {
-            return new([], parsing.CommandLineArgs, [],
-                Path.GetFileNameWithoutExtension(relPath), selectedTargetFramework,
-                parsing.PartialReason, "fsharp_semantic_assembly_name_unavailable");
+            return new([], [], [], Path.GetFileNameWithoutExtension(relPath),
+                selection.SelectedTargetFramework, selection.PartialReason,
+                "fsharp_semantic_directory_build_unsupported");
         }
 
-        string projectDir = WorkspacePaths.ToGitPath(Path.GetDirectoryName(relPath) ?? "");
-        var sources = new List<string>();
-        var sourceSet = new HashSet<string>(WorkspacePaths.FileSystemPathComparer);
-        var hintPaths = new List<string>();
-        var bareReferences = new List<string>();
-
-        foreach (XElement import in root.Descendants().Where(element =>
-                     element.Name.LocalName == "Import"))
+        var evaluator = new FSharpSemanticProjectEvaluator(relPath,
+            selection.SelectedTargetFramework,
+            selection.AvailableTargetFrameworks?.ToArray() ?? [], importResolver,
+            importSizeResolver, cancellationToken);
+        FSharpSemanticEvaluation evaluation = evaluator.Evaluate(root);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (evaluation.Error is not null)
         {
-            string project = import.Attribute("Project")?.Value.Trim() ?? "";
-            if (!IsKnownFSharpSemanticImport(project))
-            {
-                return new([], parsing.CommandLineArgs, [],
-                    assemblyName, selectedTargetFramework,
-                    parsing.PartialReason, "fsharp_semantic_import_unsupported");
-            }
+            return new([], evaluation.CommandLineArgs, evaluation.HintPathReferences,
+                evaluation.AssemblyName, selection.SelectedTargetFramework,
+                evaluation.PartialReason ?? selection.PartialReason, evaluation.Error,
+                evaluation.BareReferences);
         }
 
-        foreach (XElement item in root.Descendants().Where(element =>
-                     element.Name.LocalName is "Compile" or "ProjectReference" or
-                         "PackageReference" or "Reference"))
-        {
-            if (item.AncestorsAndSelf().Any(ancestor =>
-                    ancestor.Attribute("Condition") is not null ||
-                    ancestor.Name.LocalName is "Target" or "Choose" or "When" or "Otherwise") ||
-                item.Parent?.Name.LocalName != "ItemGroup" || item.Parent.Parent != root)
-            {
-                return new([], parsing.CommandLineArgs, [],
-                    assemblyName, selectedTargetFramework,
-                    parsing.PartialReason, "fsharp_semantic_items_conditioned");
-            }
-
-            string? include = item.Attribute("Include")?.Value.Trim();
-            switch (item.Name.LocalName)
-            {
-                case "ProjectReference":
-                    return new([], parsing.CommandLineArgs, [],
-                        assemblyName, selectedTargetFramework,
-                        parsing.PartialReason, "fsharp_semantic_project_references_unsupported");
-                case "PackageReference":
-                    return new([], parsing.CommandLineArgs, [],
-                        assemblyName, selectedTargetFramework,
-                        parsing.PartialReason, "fsharp_semantic_package_references_unsupported");
-                case "Compile":
-                    if (include is null || item.Attribute("Remove") is not null ||
-                        item.Attribute("Update") is not null || item.Attribute("Exclude") is not null ||
-                        ContainsMsBuildExpression(include))
-                    {
-                        return new([], parsing.CommandLineArgs, [],
-                            assemblyName, selectedTargetFramework,
-                            parsing.PartialReason, "fsharp_semantic_compile_order_unavailable");
-                    }
-                    foreach (string spec in include.Split(';',
-                                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                    {
-                        if (spec.Contains('*') || spec.Contains('?'))
-                        {
-                            return new([], parsing.CommandLineArgs, [],
-                                assemblyName, selectedTargetFramework,
-                                parsing.PartialReason, "fsharp_semantic_compile_order_unavailable");
-                        }
-                        if (!TryNormalizeSemanticRelative(projectDir, spec, out string source))
-                        {
-                            return new([], parsing.CommandLineArgs, [],
-                                assemblyName, selectedTargetFramework,
-                                parsing.PartialReason, "fsharp_semantic_path_outside_workspace");
-                        }
-                        if (!source.EndsWith(".fs", StringComparison.OrdinalIgnoreCase) &&
-                            !source.EndsWith(".fsi", StringComparison.OrdinalIgnoreCase))
-                        {
-                            return new([], parsing.CommandLineArgs, [],
-                                assemblyName, selectedTargetFramework,
-                                parsing.PartialReason, "fsharp_semantic_compile_item_unsupported");
-                        }
-                        if (sourceSet.Add(source)) sources.Add(source);
-                    }
-                    break;
-                case "Reference":
-                    string simpleName = (include ?? "").Split(',')[0].Trim();
-                    List<XElement> hints = item.Elements().Where(element =>
-                        element.Name.LocalName == "HintPath").ToList();
-                    if (hints.Count > 0)
-                    {
-                        // HintPath is authority for the exact live binary passed to FCS. Do not
-                        // guess between conditional or duplicate alternatives without MSBuild.
-                        if (hints.Count != 1 || hints[0].HasAttributes || hints[0].HasElements)
-                        {
-                            return new([], parsing.CommandLineArgs, [],
-                                assemblyName, selectedTargetFramework,
-                                parsing.PartialReason, "fsharp_semantic_reference_unresolved");
-                        }
-                        XElement hint = hints[0];
-                        string value = hint.Value.Trim();
-                        if (value.Length == 0 || ContainsMsBuildExpression(value))
-                        {
-                            return new([], parsing.CommandLineArgs, [],
-                                assemblyName, selectedTargetFramework,
-                                parsing.PartialReason, "fsharp_semantic_reference_unresolved");
-                        }
-                        if (!TryNormalizeSemanticRelative(projectDir, value, out string hintPath))
-                        {
-                            return new([], parsing.CommandLineArgs, [],
-                                assemblyName, selectedTargetFramework,
-                                parsing.PartialReason, "fsharp_semantic_path_outside_workspace");
-                        }
-                        hintPaths.Add(hintPath);
-                    }
-                    else if (simpleName.Length == 0 || ContainsMsBuildExpression(simpleName))
-                    {
-                        return new([], parsing.CommandLineArgs, [],
-                            assemblyName, selectedTargetFramework,
-                            parsing.PartialReason, "fsharp_semantic_reference_unresolved");
-                    }
-                    else
-                    {
-                        bareReferences.Add(simpleName);
-                    }
-                    break;
-            }
-        }
-
-        if (sources.Count == 0 || !HasSafeFSharpSemanticDefaultCompileMembership(root))
-        {
-            return new([], parsing.CommandLineArgs, hintPaths,
-                assemblyName, selectedTargetFramework,
-                parsing.PartialReason, "fsharp_semantic_compile_order_unavailable");
-        }
-
-        return new(sources, parsing.CommandLineArgs,
-            hintPaths.Distinct(WorkspacePaths.FileSystemPathComparer).ToList(),
-            assemblyName, selectedTargetFramework,
-            parsing.PartialReason,
-            BareReferences: bareReferences.Distinct(StringComparer.OrdinalIgnoreCase).ToList());
-    }
-
-    private static bool HasSafeFSharpSemanticDefaultCompileMembership(XElement root)
-    {
-        List<XElement> properties = root.Descendants().Where(element =>
-            element.Name.LocalName == "EnableDefaultCompileItems").ToList();
-        if (properties.Count == 0) return true;
-        if (properties.Count != 1) return false;
-
-        XElement property = properties[0];
-        return property.Parent?.Name.LocalName == "PropertyGroup" &&
-               property.Parent.Parent == root &&
-               property.Value.Trim().Equals("false", StringComparison.OrdinalIgnoreCase) &&
-               !ContainsMsBuildExpression(property.Value) &&
-               !property.AncestorsAndSelf().Any(ancestor =>
-                   ancestor.Attribute("Condition") is not null ||
-                   ancestor.Name.LocalName is "Target" or "Choose" or "When" or "Otherwise");
-    }
-
-    private static bool TrySemanticAssemblyName(XElement root, string relPath,
-        out string assemblyName)
-    {
-        List<XElement> properties = root.Descendants()
-            .Where(element => element.Name.LocalName == "AssemblyName")
-            .ToList();
-        if (properties.Count == 0)
-        {
-            assemblyName = Path.GetFileNameWithoutExtension(relPath);
-            return true;
-        }
-        if (properties.Count != 1 ||
-            properties[0].Parent?.Name.LocalName != "PropertyGroup" ||
-            properties[0].Parent?.Parent != root ||
-            properties[0].AncestorsAndSelf().Any(ancestor =>
-                ancestor.Attribute("Condition") is not null ||
-                ancestor.Name.LocalName is "Target" or "Choose" or "When" or "Otherwise"))
-        {
-            assemblyName = "";
-            return false;
-        }
-        string value = properties[0].Value.Trim();
-        if (value.Length == 0 || ContainsMsBuildExpression(value))
-        {
-            assemblyName = "";
-            return false;
-        }
-        assemblyName = value;
-        return true;
+        return new(evaluation.SourceFiles, evaluation.CommandLineArgs,
+            evaluation.HintPathReferences, evaluation.AssemblyName,
+            selection.SelectedTargetFramework, evaluation.PartialReason,
+            BareReferences: evaluation.BareReferences);
     }
 
     private static bool IsKnownFSharpSemanticImport(string project)
     {
         string normalized = project.Replace('\\', '/').Trim();
         return normalized.Equals("$(FSharpTargetsPath)", StringComparison.OrdinalIgnoreCase) ||
-               normalized.EndsWith("/Microsoft.FSharp.Targets",
+               normalized.Equals("$(MSBuildToolsPath)/Microsoft.FSharp.Targets",
                    StringComparison.OrdinalIgnoreCase) ||
-               normalized.EndsWith("/FSharp.Targets", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Equals("$(MSBuildBinPath)/Microsoft.FSharp.Targets",
+                   StringComparison.OrdinalIgnoreCase) ||
                normalized.Equals("$(MSBuildToolsPath)/Microsoft.Common.props",
                    StringComparison.OrdinalIgnoreCase) ||
                normalized.Equals("$(MSBuildBinPath)/Microsoft.Common.props",

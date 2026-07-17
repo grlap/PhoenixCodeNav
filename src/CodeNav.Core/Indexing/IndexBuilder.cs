@@ -78,8 +78,10 @@ public static class IndexBuilder
     /// v14: checked operators and explicit-interface operator implementations have distinct
     /// persisted names/declaration keys.
     /// v15: F# source files are persisted as lang='fs'; .fsproj inputs participate in project,
-    /// reference, and compile-ownership graphs; projects persist their source language.</summary>
-    public const string SchemaVersion = "15";
+    /// reference, and compile-ownership graphs; projects persist their source language.
+    /// v16: arbitrary workspace .props/.targets files are persisted as config inputs so cold builds
+    /// match delta refresh classification and pinned F# project evaluation can resolve local props.</summary>
+    public const string SchemaVersion = "16";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null) =>

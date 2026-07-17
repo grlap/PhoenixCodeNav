@@ -6,7 +6,7 @@ using CodeNav.Mcp;
 
 namespace CodeNav.Tests;
 
-public class FSharpSemanticStage2Tests
+public partial class FSharpSemanticStage2Tests
 {
     [Fact]
     public void SymbolAtAndDefinitionUseFcsAndReturnSignatureAndImplementation()
@@ -117,9 +117,14 @@ public class FSharpSemanticStage2Tests
     [Fact]
     public void PairedMigrationProjectsRequireAnExplicitPhysicalTypeCheckContext()
     {
-        string root = Directory.CreateTempSubdirectory("codenav-fsharp-semantic-context").FullName;
+        string container = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-context").FullName;
+        string root = Path.Combine(container, "Workspace");
         try
         {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(Path.Combine(container, "Directory.Build.props"),
+                "<Project><PropertyGroup><ExternalAuthority>true</ExternalAuthority></PropertyGroup></Project>");
             WriteProject(root, "Paired/Shared.fs", "module Shared\nlet value = 1\n");
             string? fsharpCore = ReferenceAssemblyLocator.FSharpCoreReferencePath("net472", out _);
             Assert.NotNull(fsharpCore);
@@ -175,7 +180,9 @@ public class FSharpSemanticStage2Tests
                 .GetProperty("targetFramework").GetString());
             Assert.Contains("fsharp_binary_references_snapshotted",
                 legacy.GetProperty("partialReason").GetString());
-            Assert.Contains("fsharp_project_options_imported",
+            Assert.Contains("fsharp_semantic_toolchain_implicit_authority",
+                legacy.GetProperty("partialReason").GetString());
+            Assert.DoesNotContain("fsharp_project_options_imported",
                 legacy.GetProperty("partialReason").GetString());
             Assert.NotNull(snapshotPath);
             Assert.False(File.Exists(snapshotPath));
@@ -183,7 +190,7 @@ public class FSharpSemanticStage2Tests
         }
         finally
         {
-            Cleanup(root);
+            Cleanup(container);
         }
     }
 
@@ -1017,7 +1024,7 @@ public class FSharpSemanticStage2Tests
     }
 
     [Fact]
-    public void SemanticProjectCaptureFailsClosedForUnevaluatedInputs()
+    public void SemanticProjectCaptureEvaluatesBoundedInputsAndFailsClosedForUnsupportedOnes()
     {
         const string prefix = """
             <Project Sdk="Microsoft.NET.Sdk">
@@ -1039,7 +1046,8 @@ public class FSharpSemanticStage2Tests
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
                 prefix + "<ItemGroup Condition=\"'$(TargetFramework)' == 'net9.0'\"><Compile Include=\"Core.fs\" /></ItemGroup></Project>",
                 "net9.0", "net9.0");
-        Assert.Equal("fsharp_semantic_items_conditioned", conditioned.Error);
+        Assert.Null(conditioned.Error);
+        Assert.Equal(["Core/Core.fs"], conditioned.SourceFiles);
 
         FSharpSemanticOptionsSnapshot imported =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
@@ -1075,7 +1083,8 @@ public class FSharpSemanticStage2Tests
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
                 prefix + "<PropertyGroup Condition=\"'$(TargetFramework)' == 'net9.0'\"><AssemblyName>Wrong</AssemblyName></PropertyGroup><ItemGroup><Compile Include=\"Core.fs\" /></ItemGroup></Project>",
                 "net9.0", "net9.0");
-        Assert.Equal("fsharp_semantic_assembly_name_unavailable", conditionedAssembly.Error);
+        Assert.Null(conditionedAssembly.Error);
+        Assert.Equal("Wrong", conditionedAssembly.AssemblyName);
 
         FSharpSemanticOptionsSnapshot unevaluatedAssembly =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
@@ -1087,13 +1096,15 @@ public class FSharpSemanticStage2Tests
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
                 prefix + "<PropertyGroup><AssemblyName>First</AssemblyName><AssemblyName>Second</AssemblyName></PropertyGroup><ItemGroup><Compile Include=\"Core.fs\" /></ItemGroup></Project>",
                 "net9.0", "net9.0");
-        Assert.Equal("fsharp_semantic_assembly_name_unavailable", duplicateAssembly.Error);
+        Assert.Null(duplicateAssembly.Error);
+        Assert.Equal("Second", duplicateAssembly.AssemblyName);
 
         FSharpSemanticOptionsSnapshot conditionedHint =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
                 prefix + "<ItemGroup><Compile Include=\"Core.fs\" /><Reference Include=\"Dependency\"><HintPath Condition=\"'$(TargetFramework)' == 'net9.0'\">../Lib/Dependency.dll</HintPath></Reference></ItemGroup></Project>",
                 "net9.0", "net9.0");
-        Assert.Equal("fsharp_semantic_reference_unresolved", conditionedHint.Error);
+        Assert.Null(conditionedHint.Error);
+        Assert.Equal(["Lib/Dependency.dll"], conditionedHint.HintPathReferences);
 
         FSharpSemanticOptionsSnapshot duplicateHint =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
@@ -1103,9 +1114,7 @@ public class FSharpSemanticStage2Tests
 
         foreach (string unsafeDefaultMembership in new[]
                  {
-                     "<PropertyGroup Condition=\"'$(TargetFramework)' == 'net9.0'\"><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>",
                      "<PropertyGroup><EnableDefaultCompileItems>$(UseDefaults)</EnableDefaultCompileItems></PropertyGroup>",
-                     "<PropertyGroup><EnableDefaultCompileItems>false</EnableDefaultCompileItems><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>",
                      "<PropertyGroup><EnableDefaultCompileItems>true</EnableDefaultCompileItems></PropertyGroup>",
                      "<PropertyGroup><EnableDefaultCompileItems>maybe</EnableDefaultCompileItems></PropertyGroup>",
                  })
@@ -1116,6 +1125,21 @@ public class FSharpSemanticStage2Tests
                     "<ItemGroup><Compile Include=\"Core.fs\" /></ItemGroup></Project>",
                     "net9.0", "net9.0");
             Assert.Equal("fsharp_semantic_compile_order_unavailable", unsafeDefaults.Error);
+        }
+
+        foreach (string evaluatedDefaultMembership in new[]
+                 {
+                     "<PropertyGroup Condition=\"'$(TargetFramework)' == 'net9.0'\"><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>",
+                     "<PropertyGroup><EnableDefaultCompileItems>true</EnableDefaultCompileItems><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup>",
+                 })
+        {
+            FSharpSemanticOptionsSnapshot evaluatedDefaults =
+                ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
+                    prefix + evaluatedDefaultMembership +
+                    "<ItemGroup><Compile Include=\"Core.fs\" /></ItemGroup></Project>",
+                    "net9.0", "net9.0");
+            Assert.Null(evaluatedDefaults.Error);
+            Assert.Equal(["Core/Core.fs"], evaluatedDefaults.SourceFiles);
         }
 
         FSharpSemanticOptionsSnapshot safeDefaults =
@@ -1231,6 +1255,7 @@ public class FSharpSemanticStage2Tests
 
         public NavigationTools Tools { get; }
         public SemanticService Semantic => _semantic;
+        public IndexManager Manager => _manager;
 
         public static Fixture Create(string root)
         {

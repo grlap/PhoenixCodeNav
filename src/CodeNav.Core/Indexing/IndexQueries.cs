@@ -1548,14 +1548,15 @@ public sealed partial class IndexQueries : IDisposable
     /// <summary>Whether an implicit Directory.Build.props/targets file can participate in this
     /// project's MSBuild evaluation. This is an authority-boundary check, not an evaluator: the
     /// semantic layer uses it to disclose that locally modeled generated attributes may differ
-    /// from the real build. Unix remains case-sensitive; Windows follows its filesystem.</summary>
+    /// from the real build. Unix lookup is case-sensitive; Windows uses the pinned index's
+    /// case-insensitive host-path policy.</summary>
     public bool HasApplicableDirectoryBuildAuthority(string projectPath)
     {
         projectPath = WorkspacePaths.Normalize(projectPath);
         int slash = projectPath.LastIndexOf('/');
         string directory = slash < 0 ? "" : projectPath[..slash];
         var candidates = new List<string>();
-        for (int depth = 0; depth < 128; depth++)
+        while (true)
         {
             string prefix = directory.Length == 0 ? "" : directory + "/";
             candidates.Add(prefix + "Directory.Build.props");
@@ -2065,6 +2066,27 @@ public sealed partial class IndexQueries : IDisposable
             r => new FileHit(r.GetInt64(0), r.GetString(1), r.GetInt64(2), r.GetInt32(3),
                 r.GetBoolean(4), r.GetString(5)), ("$p", filePath));
         return rows.Count > 0 ? rows[0] : null;
+    }
+
+    /// <summary>Looks up a pinned-index path using this host's repository path policy without
+    /// consulting the mutable live filesystem. Exact lookup is universal; Windows additionally
+    /// permits one unambiguous ASCII-case-equivalent indexed path. Non-ASCII aliases that SQLite's
+    /// bounded NOCASE index cannot prove fail closed.</summary>
+    public FileHit? FileByPathForHost(string filePath)
+    {
+        FileHit? exact = FileByPath(filePath);
+        if (exact is not null || !OperatingSystem.IsWindows()) return exact;
+
+        var rows = Query(
+            "SELECT id, path, size, line_count, is_generated, lang FROM files " +
+            "WHERE path = $p COLLATE NOCASE LIMIT 2",
+            r => new FileHit(r.GetInt64(0), r.GetString(1), r.GetInt64(2), r.GetInt32(3),
+                r.GetBoolean(4), r.GetString(5)), ("$p", filePath));
+        FileHit[] matches = rows
+            .Where(row => WorkspacePaths.FileSystemPathComparer.Equals(row.Path, filePath))
+            .Take(2)
+            .ToArray();
+        return matches.Length == 1 ? matches[0] : null;
     }
 
     public string? ContentByPathBounded(string filePath, int maxChars)

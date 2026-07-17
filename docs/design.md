@@ -69,8 +69,21 @@ adapter consumes one immutable source/project snapshot captured from a pinned in
 workspace `HintPath` assemblies through verified open handles into request-private snapshots, releases
 SQLite before type checking, and bounds source count/bytes, references, concurrency, cache size,
 deadline, diagnostics, contexts, and response bytes. Stage 2A deliberately accepts only literal
-ordered compile items, workspace-contained managed `HintPath` snapshots whose original identity is
-verified after the check, and same-project declarations. The host's target-compatible
+ordered compile items and a bounded evaluation-lite project subset: simple property
+assignment/expansion before semantic items, comparisons and boolean/`Exists` conditions, `Choose`, and recursively loaded
+literal workspace-local `.props` imports with count/depth/aggregate-byte limits and cycle detection.
+Unique imported files, active import occurrences, condition depth, and evaluator nesting are bounded
+separately. Only the conventional self-default property idiom may treat an unset property as empty;
+other unresolved ambient/global condition inputs fail closed.
+Import paths are selected only from canonical paths in the pinned index using the host path policy;
+semantic evaluation never walks the mutable live filesystem to resolve casing.
+Known compiler target imports are terminal boundaries. It never runs MSBuild, targets, or tasks and
+rejects property functions, item transforms, imported semantic items, and unsupported conditions
+with stable causes. Standard `Microsoft.NET.Sdk` and recognized toolchain implicit authority are
+partial, including unobservable build authority above the workspace root; custom/child/qualified SDK
+declarations, indexed in-workspace `Directory.Build.*`, and property assignment after semantic items
+fail closed. Workspace-contained managed `HintPath` snapshots have their original identity
+verified after the check; declarations remain same-project only. The host's target-compatible
 `FSharp.Core` fallback is always disclosed as partial because it was not selected by evaluated
 project authority. Package/project-reference closure and the
 remaining semantic operations still disclose stable unsupported boundaries. Generic indexed search

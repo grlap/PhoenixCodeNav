@@ -113,6 +113,8 @@ public static class WorkspaceScanner
                     solutions.Add(scanned);
                 }
                 else if (ConfigFileNames.Contains(fi.Name) ||
+                         ext.Equals(".props", StringComparison.OrdinalIgnoreCase) ||
+                         ext.Equals(".targets", StringComparison.OrdinalIgnoreCase) ||
                          ext.Equals(".json", StringComparison.OrdinalIgnoreCase) && fi.Name.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase))
                 {
                     configs.Add(scanned);

@@ -459,7 +459,21 @@ public sealed partial class SemanticService
 
         FSharpSemanticOptionsSnapshot options =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(owner.Path, projectXml,
-                owner.Tfms, selected.TargetFramework);
+                owner.Tfms, selected.TargetFramework, importPath =>
+                {
+                    FileHit? imported = ResolveIndexedFSharpImport(queries, importPath);
+                    return imported is { Language: "config" } &&
+                           imported.Size <= ProjectFileParser.MaxFSharpSemanticImportBytes
+                        ? queries.ContentByPathBounded(imported.Path,
+                            ProjectFileParser.MaxFSharpSemanticImportBytes)
+                        : null;
+                }, importPath =>
+                {
+                    FileHit? imported = ResolveIndexedFSharpImport(queries, importPath);
+                    return imported is { Language: "config" } ? imported.Size : null;
+                }, hasImplicitDirectoryBuildAuthority:
+                queries.HasApplicableDirectoryBuildAuthority(owner.Path),
+                cancellationToken: cancellationToken);
         if (options.Error is { } optionError)
         {
             failure = new(null, optionError, selected, contexts, options.PartialReason,
@@ -676,6 +690,11 @@ public sealed partial class SemanticService
             if (!referenceSnapshotOwnershipTransferred)
                 CleanupFSharpReferenceSnapshots(referenceSnapshotDirectory, binaryReferences);
         }
+    }
+
+    private FileHit? ResolveIndexedFSharpImport(IndexQueries queries, string importPath)
+    {
+        return queries.FileByPathForHost(importPath);
     }
 
     private bool TryWorkspaceAbsolutePath(string relativePath, out string? fullPath,

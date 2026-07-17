@@ -131,6 +131,7 @@ public sealed class IndexStore : IDisposable
               has_test_attrs INTEGER NOT NULL DEFAULT 0,
               stale INTEGER NOT NULL DEFAULT 0
             );
+            CREATE INDEX idx_files_path_nocase ON files(path COLLATE NOCASE);
 
             CREATE TABLE file_contents(
               file_id INTEGER PRIMARY KEY,
