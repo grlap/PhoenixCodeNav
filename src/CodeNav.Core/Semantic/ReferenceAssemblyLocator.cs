@@ -195,8 +195,13 @@ public static class ReferenceAssemblyLocator
 
     private static string? ProbeNetCoreReferenceDir(string targetFramework)
     {
-        if (targetFramework is not ("net8.0" or "net9.0")) return null;
-        int major = targetFramework == "net8.0" ? 8 : 9;
+        if (targetFramework is not ("net8.0" or "net9.0" or "net10.0")) return null;
+        int major = targetFramework switch
+        {
+            "net8.0" => 8,
+            "net9.0" => 9,
+            _ => 10,
+        };
         foreach (string root in DotNetRoots())
         {
             string pack = Path.Combine(root, "packs", "Microsoft.NETCore.App.Ref");

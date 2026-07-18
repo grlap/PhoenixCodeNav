@@ -7,11 +7,11 @@ metadata:
       strategy: default
 ---
 
-Review the current staged, unstaged, and untracked changes by running `/review-local` in one Codex and one Claude TermAl reviewer session.
+Review the current staged, unstaged, and untracked implementation changes by running `/review-local` in one Codex and one Claude TermAl reviewer session.
 
-**IMPORTANT: This is a review-only command. Do not modify source files, stage, stash, checkout, reset, commit, push, run `bd dolt push`, or run any other mutating Git/remote-sync operation. Parent validation may create normal ignored build/test artifacts; parent-session local Beads reconciliation is the only permitted tracked/project workflow mutation. This command grants no commit authority; after a CLEAN result the outer workflow must still follow `CLAUDE.md` / `AGENTS.md`. Push always requires explicit per-changeset approval.**
+**IMPORTANT: This is a review-only command. Do not modify source files, stage, stash, checkout, reset, commit, push, run `bd dolt push`, or run any other mutating Git/remote-sync operation. Parent validation may create normal ignored build/test artifacts; parent-session local Beads reconciliation is the only permitted tracked/project workflow mutation. This command grants no commit authority; after the review gate passes the outer workflow must still follow `CLAUDE.md` / `AGENTS.md`. Push always requires explicit per-changeset approval.**
 
-**IMPORTANT: Beads (`bd`) is the canonical tracker for findings. Do not create markdown bug lists. Delegated read-only reviewers propose Beads actions; this parent command performs deduplicated reconciliation after fan-in.**
+**IMPORTANT: Beads (`bd`) is the canonical tracker for findings. Do not create markdown bug lists. Delegated read-only reviewers propose Beads actions; this parent command performs deduplicated reconciliation after fan-in. Generated `.beads/interactions.jsonl`, `.beads/issues.jsonl`, and `.beads/events.jsonl` ledgers are workflow bookkeeping, not part of the implementation review target, and their mutation never invalidates an otherwise completed implementation review. Other tracked `.beads` configuration, metadata, and hooks remain ordinary review targets.**
 
 **IMPORTANT: Attempt exactly two reviewer spawns through the TermAl MCP bridge: one Codex and one Claude. Do not use platform subagents, Claude Task agents, Codex collaboration agents, shell-launched agents, raw HTTP, synchronous shell polling, or nested TermAl delegation for this command. `/review-local` is deliberately non-nesting. If the TermAl delegation tools are unavailable, stop and report that the bridge is required.**
 
@@ -22,42 +22,33 @@ Required TermAl MCP tools:
 - `termal_get_session_result`
 - `termal_resume_after_delegations`
 
-## Step 1: Confirm the review target
+## Step 1: Confirm the implementation review target
 
-Run this path-only inventory from the repository root. Do not emit patch content or run diff checks yet:
+Run this path-only inventory from the repository root. Exclude only the generated Beads JSONL ledgers from every inventory. Do not emit patch content yet:
 
 ```text
-git --no-optional-locks status --short
-git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only
-git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only
-git ls-files --others --exclude-standard
+git --no-optional-locks status --short -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
+git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
+git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
+git ls-files --others --exclude-standard -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
 ```
 
 If any inventory command fails or its path output is truncated or malformed, return INCONCLUSIVE before reading content or spawning reviewers.
 
-The review target is the union of staged, unstaged, and ordinary untracked files. If that target is empty, tell the user there is nothing to review and stop. Review-policy and instruction files are ordinary review targets: do not exclude or short-circuit them; include their exact dirty bytes in validation, identity, and both delegated reviews.
+The implementation review target is the sorted union of staged, unstaged, and ordinary untracked paths after those three generated ledgers are removed. If that target is empty, tell the user there is nothing to review and stop. Review-policy, instruction, and tracked Beads configuration files are ordinary review targets: do not exclude or short-circuit them; include their changed paths and content in validation and both delegated reviews.
 
 Record the absolute repository root from `git rev-parse --show-toplevel`; pass it as `cwd` to both TermAl sessions so the local slash command resolves from this repository.
 
-Before hashing, diffing, or opening target content, inspect changed-entry metadata without following links or reparse points. Require every path and traversed ancestor to remain inside the repository root. Treat tracked symlinks as Git link metadata and never dereference them; if an untracked symlink/junction/reparse point or any resolved path can escape the root, return INCONCLUSIVE without reading it.
+Before diffing or opening target content, inspect changed-entry metadata without following links or reparse points. Require every path and traversed ancestor to remain inside the repository root. Treat tracked symlinks as Git link metadata and never dereference them; if an untracked symlink/junction/reparse point or any resolved path can escape the root, return INCONCLUSIVE without reading it.
 
 Only after the containment checks pass, run:
 
 ```text
-git --no-pager diff --no-ext-diff --no-textconv --no-color --check
-git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --check
+git --no-pager diff --no-ext-diff --no-textconv --no-color --check -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
+git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --check -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
 ```
 
-If either diff check reports an error, stop and report it before delegation.
-
-Record a deterministic target identity containing:
-
-- `HEAD` from `git rev-parse HEAD` (or the explicit unborn-HEAD state);
-- a hash of `git --no-pager diff --binary --no-ext-diff --no-textconv --no-color`;
-- a hash of the equivalent `--cached` patch;
-- a sorted manifest of every untracked path plus its read-only `git hash-object --no-filters -- <path>` content hash.
-
-Use a binary-safe direct native pipe into `git hash-object --stdin` for each deterministic patch stream so patch bytes are not emitted into the conversation; do not pass `-w`. Preserve this identity for comparison with both children and the post-fan-in worktree.
+If either diff check reports an error, stop and report it before delegation. Preserve the sorted implementation path inventory for comparison after validation and fan-in. Do not calculate or require Git-object, patch, or content hashes from either reviewer.
 
 ## Step 2: Validate before delegation
 
@@ -69,7 +60,7 @@ Validation belongs in the writable parent, not in read-only reviewer children.
 
 If build or tests fail, stop and report the output. The sole documented exception is `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep`: when it is the only failure, rerun that exact test in isolation. Continue only if the isolated rerun passes, and carry the flake note into the final review. Do not silently bless any other intermittent failure.
 
-After validation, restart all of Step 1 from its path-only inventories. Reapply no-follow containment before any diff check, content hash, or spawn; scan reviewable untracked text files for conflict markers and whitespace errors only after those checks pass. Recompute the target identity. If validation changed the identity, repeat Step 2 against the new identity and then restart all of Step 1 again. Never validate one byte set and send another to reviewers.
+After validation, restart all of Step 1 from its path-only inventories. Reapply no-follow containment before any diff check, content read, or spawn; scan reviewable untracked text files for conflict markers and whitespace errors only after those checks pass. If the sorted implementation path inventory changed, repeat Step 2 against the new inventory and restart Step 1. If it changes again, return INCONCLUSIVE. Never validate one implementation path set and send a different one to reviewers.
 
 ## Step 3: Attempt exactly two delegated reviewers
 
@@ -90,7 +81,7 @@ Attempt exactly two reviewer session spawns. Call `termal_spawn_session` exactly
    - `title`: `Claude /review-local`
    - `cwd`: the same repository root
 
-Read-only shared-worktree sessions are intentional: both reviewers must see the exact staged, unstaged, and untracked state. Do not request an isolated worktree.
+Read-only shared-worktree sessions are intentional: both reviewers must see the current staged, unstaged, and untracked implementation state. Do not request an isolated worktree.
 
 Record each successful delegation id and each failed spawn. If neither spawn succeeds, report an INCONCLUSIVE review and stop.
 
@@ -112,9 +103,9 @@ For each successful delegation id:
 
 TermAl lifecycle status and review verdict are different fields. A healthy child packet uses lifecycle `Status: completed`; derive the review verdict from `Review verdict: CLEAN|NOT CLEAN|INCONCLUSIVE` in its `Summary:` section plus its structured findings. Never interpret lifecycle `completed` as review CLEAN.
 
-Before accepting either packet, compare both child-reported target identities with the pre-spawn identity, then recompute the current parent identity. Any mismatch means validation/review covered different bytes: return INCONCLUSIVE and do not claim a review gate.
+Require both requested reviewers to return complete non-truncated packets that list the reviewed implementation paths. Do not require reviewer-computed hashes or identities. Before accepting the packets, rerun the Step 1 path-only inventories in the parent. If the sorted implementation path inventory differs from the pre-spawn inventory, return INCONCLUSIVE. Changes confined to the three generated Beads JSONL ledgers do not count as implementation drift.
 
-Deduplicate findings without erasing independent agreement. If both reviewers found the same root issue, merge it and state that both caught it. Resolve severity disagreements explicitly.
+Deduplicate findings without erasing independent agreement. If both reviewers found the same root issue, merge it and state that both caught it. Resolve severity disagreements explicitly. Owner severity decisions govern the consolidated severity.
 
 Use this shape:
 
@@ -149,7 +140,7 @@ Use this shape:
 - CLEAN | NOT CLEAN | INCONCLUSIVE
 ```
 
-`CLEAN` requires both requested reviewers to complete successfully, return complete non-truncated packets, leave no unresolved serious risk, and report no actionable finding at any severity. Note-only observations may remain. A missing/dead reviewer or incomplete packet makes the result `INCONCLUSIVE`, never CLEAN.
+`CLEAN` requires both requested reviewers to complete successfully, return complete non-truncated packets, and leave no unresolved Critical or High finding. Medium and Low findings are allowed when they are reconciled in Beads and reported in the final packet. A missing/dead reviewer, incomplete packet, or serious unverified risk makes the result `INCONCLUSIVE`, never CLEAN. `NOT CLEAN` is reserved for unresolved Critical or High findings.
 
 ## Step 6: Reconcile Beads in the parent
 
@@ -161,7 +152,7 @@ For every consolidated actionable finding:
 2. Update an existing open issue with `bd update <id> --append-notes "<review evidence>"` when it tracks the same root cause.
 3. Reopen a regressed closed issue or create a `discovered-from:<active-id>` follow-up when history should remain intact.
 4. Create a new issue only when no existing Bead covers it. Include literal `## Problem`, `## Steps to Reproduce`, and `## Acceptance Criteria` sections, design guidance, and use `bd create --validate`.
-5. Close an open issue only when the reviewed diff actually satisfies its acceptance criteria.
+5. Close an open issue only when the reviewed implementation satisfies its acceptance criteria or the owner explicitly accepts or defers the finding.
 
 Severity mapping:
 
@@ -174,22 +165,14 @@ Use `bug` for correctness, security, data-loss, freshness, concurrency, protocol
 
 Do not modify source files during reconciliation. If no changes are required, state `Beads is up to date - no changes needed.`
 
-Immediately before reconciliation, record the byte length and content hash of tracked `.beads/interactions.jsonl` when it exists. After reconciliation, rerun `git --no-optional-locks status --short`, the changed-file inventory, and the target-identity checks.
+Generated `.beads/interactions.jsonl`, `.beads/issues.jsonl`, and `.beads/events.jsonl` changes are tracker bookkeeping outside the implementation review target. Report every Beads action and confirm the resulting issue state with read-only `bd show`, but do not hash, prefix-validate, parse, or compare those generated ledgers as a condition of the implementation review verdict.
 
-Do not require another implementation review solely because the authorized Step 6 `bd` commands appended interaction records. This narrow exception applies only when every condition below is proven mechanically:
-
-- `.beads/interactions.jsonl` is the only reviewed path whose bytes changed during reconciliation;
-- its complete pre-reconciliation bytes remain an exact byte prefix of the post-reconciliation file, with no rewrite, deletion, or line-ending conversion;
-- the suffix is newline-terminated UTF-8 JSONL, every appended line parses as one object, and every appended `id` is non-empty and unique across the complete file;
-- every appended record names an issue reconciled in this Step 6 and corresponds to an exact `bd` create, update, reopen, close, or dependency action reported by the parent; and
-- read-only `bd show` confirms the resulting issue state.
-
-Treat those validated append-only records as tracker bookkeeping: report them, but preserve the review verdict and the reviewed implementation identity. Pre-existing `.beads/interactions.jsonl` bytes remain part of the ordinary review target. Any non-append edit, malformed or duplicate record, unexplained issue record, change to another reviewed path, or other target drift remains identity failure: return INCONCLUSIVE and do not claim that the review gate passed. Never broaden this exception to another `.beads` path or to hand-edited interaction records.
+After reconciliation, rerun the Step 1 implementation path inventory. If another implementation path was added, removed, staged, or unstaged during reconciliation, return INCONCLUSIVE. Generated-ledger-only changes preserve the review verdict.
 
 ## Step 7: Hand off
 
-- `NOT CLEAN`: list blocking Beads ids and tell the implementer to fix, re-run focused tests and quality gates, then request verification from the original Codex and Claude child sessions through the TermAl UI. If those sessions cannot be continued, stop and ask for explicit direction; a fresh `/review-with-delegate` run is additional evidence but does not satisfy literal same-session verification.
-- `INCONCLUSIVE`: report the missing reviewer/tool condition. It does not satisfy the commit discipline.
-- `CLEAN`: state that the review gate passed. Do not commit or push inside this command; return control to the outer workflow.
+- `NOT CLEAN`: list blocking Critical/High Beads ids and tell the implementer to fix, re-run focused tests and quality gates, then request verification from the original Codex and Claude child sessions through the TermAl UI. If those sessions cannot be continued, stop and ask for explicit direction; a fresh review is additional evidence but does not satisfy literal same-session verification.
+- `INCONCLUSIVE`: report the missing reviewer/tool/packet condition. It does not satisfy the commit discipline.
+- `CLEAN`: state that the review gate passed, including any reconciled Medium/Low Beads. Do not commit or push inside this command; return control to the outer workflow.
 
-Current TermAl MCP does not expose a follow-up call to an existing child session. Re-running this command creates fresh Codex/Claude reviewer sessions and therefore cannot claim literal same-session verification. Continue with the original child sessions through the TermAl UI or stop and ask for direction; do not silently claim compliance.
+Current TermAl MCP does not expose a follow-up call to an existing child session. Re-running this command creates fresh Codex/Claude reviewer sessions and therefore cannot claim literal same-session verification of a fixed Critical/High finding. Continue with the original child sessions through the TermAl UI or stop and ask for direction; do not silently claim compliance.

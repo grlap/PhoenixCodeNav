@@ -2,7 +2,7 @@ namespace CodeNav.Tests;
 
 /// <summary>
 /// Pins the cross-agent TermAl review contract. These are intentionally content-level tests:
-/// the command bodies are executable agent policy, and a wording drift can remove an exact
+/// the command bodies are executable agent policy, and a wording drift can remove an
 /// orchestration guarantee just as surely as a code change can remove a branch.
 /// </summary>
 public class ReviewCommandContractTests
@@ -40,14 +40,14 @@ public class ReviewCommandContractTests
     }
 
     [Fact]
-    public void ParentPinsExactDualSpawnAndDurableFanIn()
+    public void ParentPinsDualSpawnAndDurableFanInWithoutHashIdentity()
     {
         string text = Read(".claude", "commands", "review-with-delegate.md");
 
         Assert.Contains("Attempt exactly two reviewer session spawns", text);
         Assert.Contains("Call `termal_spawn_session` exactly twice", text);
         Assert.Contains("Never retry either slot", text);
-        Assert.Contains("Review-policy and instruction files are ordinary review targets", text);
+        Assert.Contains("Review-policy, instruction, and tracked Beads configuration files are ordinary review targets", text);
         Assert.DoesNotContain("this self-hosted gate cannot certify", text);
         Assert.Contains("git --no-optional-locks status --short", text);
         Assert.DoesNotContain("git ls-files --others --ignored --exclude-standard", text);
@@ -67,30 +67,30 @@ public class ReviewCommandContractTests
         Assert.Contains("complete non-truncated packets", text);
         Assert.DoesNotContain("Confirm reintroduction-test evidence", text);
         Assert.Contains("Run `dotnet build PhoenixCodeNav.sln -c Release --no-restore`", text);
-        Assert.Contains("target identity", text, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("git --no-pager diff --binary --no-ext-diff --no-textconv --no-color", text);
+        Assert.Contains(":(exclude).beads/interactions.jsonl", text);
+        Assert.Contains(":(exclude).beads/issues.jsonl", text);
+        Assert.Contains(":(exclude).beads/events.jsonl", text);
+        Assert.DoesNotContain("target identity", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("git hash-object", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("patch hashes", text, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --check", text);
         Assert.Contains("After validation, restart all of Step 1 from its path-only inventories", text);
-        Assert.Contains("Reapply no-follow containment before any diff check, content hash, or spawn", text);
-        Assert.Contains("If validation changed the identity, repeat Step 2 against the new identity and then restart all of Step 1 again", text);
-        Assert.Contains("recompute the current parent identity", text);
+        Assert.Contains("Reapply no-follow containment before any diff check, content read, or spawn", text);
+        Assert.Contains("If the sorted implementation path inventory changed, repeat Step 2 against the new inventory", text);
+        Assert.Contains("Do not require reviewer-computed hashes or identities", text);
         Assert.DoesNotContain("then invoke `/review-with-delegate` again", text, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Do not require another implementation review solely because", text);
-        Assert.Contains("exact byte prefix", text);
-        Assert.Contains("newline-terminated UTF-8 JSONL", text);
-        Assert.Contains("every appended `id` is non-empty and unique", text);
-        Assert.Contains("corresponds to an exact `bd` create, update, reopen, close, or dependency action", text);
-        Assert.Contains("Never broaden this exception to another `.beads` path", text);
-        Assert.Contains("Any non-append edit, malformed or duplicate record, unexplained issue record, change to another reviewed path", text);
-        Assert.DoesNotContain("If Beads export files or any other reviewed path changed", text);
+        Assert.Contains("Generated `.beads/interactions.jsonl`, `.beads/issues.jsonl`, and `.beads/events.jsonl` changes are tracker bookkeeping", text);
+        Assert.Contains("do not hash, prefix-validate, parse, or compare those generated ledgers", text);
+        Assert.Contains("Generated-ledger-only changes preserve the review verdict", text);
+        Assert.Contains("Medium and Low findings are allowed when they are reconciled in Beads", text);
+        Assert.Contains("`NOT CLEAN` is reserved for unresolved Critical or High findings", text);
 
         int pathInventory = text.IndexOf("git ls-files --others --exclude-standard", StringComparison.Ordinal);
-        int containmentCheck = text.IndexOf("Before hashing, diffing, or opening target content", StringComparison.Ordinal);
+        int containmentCheck = text.IndexOf("Before diffing or opening target content", StringComparison.Ordinal);
         int diffCheck = text.IndexOf("git --no-pager diff --no-ext-diff --no-textconv --no-color --check", StringComparison.Ordinal);
-        int contentHash = text.IndexOf("a hash of `git --no-pager diff --binary --no-ext-diff --no-textconv --no-color`", StringComparison.Ordinal);
         Assert.True(pathInventory >= 0 && pathInventory < containmentCheck &&
-            containmentCheck < diffCheck && containmentCheck < contentHash,
-            "The parent inventory and containment boundaries must run before content-bearing diff checks or hashing.");
+            containmentCheck < diffCheck,
+            "The parent inventory and containment boundaries must run before content-bearing diff checks.");
     }
 
     [Fact]
@@ -99,8 +99,8 @@ public class ReviewCommandContractTests
         string text = Read(".claude", "commands", "review-local.md");
 
         Assert.Contains("You are a delegated child session for TermAl delegation", text);
-        Assert.Contains("Review-policy and instruction files are ordinary review targets", text);
-        Assert.Contains("inspect their exact dirty bytes instead of refusing the review", text);
+        Assert.Contains("Review-policy, instruction, and tracked Beads configuration files are ordinary review targets", text);
+        Assert.Contains("inspect their changed content instead of refusing the review", text);
         Assert.DoesNotContain("this dirty command/lens set is reviewing its own trust policy", text);
         Assert.Contains("git --no-optional-locks status --short", text);
         Assert.DoesNotContain("git ls-files --others --ignored --exclude-standard", text);
@@ -126,9 +126,17 @@ public class ReviewCommandContractTests
         Assert.Contains("Regression and contract tests structurally exercise the changed behavior", text);
         Assert.Contains("git --no-pager diff --binary --no-ext-diff --no-textconv --no-color", text);
         Assert.Contains("git --no-pager diff --cached --binary --no-ext-diff --no-textconv --no-color", text);
+        Assert.Contains(":(exclude).beads/interactions.jsonl", text);
+        Assert.Contains(":(exclude).beads/issues.jsonl", text);
+        Assert.Contains(":(exclude).beads/events.jsonl", text);
+        Assert.Contains("Reviewed paths: ...", text);
+        Assert.Contains("CLEAN when there is no actionable Critical or High finding", text);
+        Assert.Contains("Medium and Low findings are allowed", text);
+        Assert.DoesNotContain("Target identity:", text);
+        Assert.DoesNotContain("git hash-object", text, StringComparison.OrdinalIgnoreCase);
 
         int pathInventory = text.IndexOf("git ls-files --others --exclude-standard", StringComparison.Ordinal);
-        int containmentCheck = text.IndexOf("Before hashing, diffing, or opening target content", StringComparison.Ordinal);
+        int containmentCheck = text.IndexOf("Before diffing or opening target content", StringComparison.Ordinal);
         int contentDiff = text.IndexOf("git --no-pager diff --binary --no-ext-diff --no-textconv --no-color", StringComparison.Ordinal);
         int instructionRead = text.IndexOf("Read the current `CLAUDE.md` and `AGENTS.md`", StringComparison.Ordinal);
         Assert.True(pathInventory >= 0 && pathInventory < containmentCheck &&
@@ -188,8 +196,12 @@ public class ReviewCommandContractTests
         Assert.Contains("## Commit Discipline - NEVER check in without review", agents);
         Assert.Equal(claude[claude.IndexOf(marker, StringComparison.Ordinal)..],
             agents[agents.IndexOf(marker, StringComparison.Ordinal)..]);
-        Assert.Contains("mechanically validated append-only `.beads/interactions.jsonl` records", agents);
-        Assert.Contains("Pre-existing interaction bytes and every other path remain part", agents);
+        Assert.Contains("Generated `.beads/interactions.jsonl`, `.beads/issues.jsonl`, and `.beads/events.jsonl`", agents);
+        Assert.Contains("Other tracked `.beads`", agents);
+        Assert.Contains("Reviewers do not compute or report Git-object, patch, or content hashes", agents);
+        Assert.Contains("Critical and High findings block check-in", agents);
+        Assert.Contains("Medium and Low findings must be reconciled in", agents);
+        Assert.Contains("Beads but do not block check-in", agents);
 
         string allReviewAssets = claude + "\n" + agents + "\n" + string.Join("\n",
             Directory.GetFiles(Path.Combine(Root(), ".claude"), "*.md", SearchOption.AllDirectories)

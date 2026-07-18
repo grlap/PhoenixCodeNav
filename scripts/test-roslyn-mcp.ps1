@@ -3,9 +3,9 @@ param(
     [string]$Workspace,
     [string]$IndexDb,
     [string]$BaselinePath,
-    [string]$CandidateExpectationsPath,
-    [switch]$AllowCandidatePhoenix,
-    [switch]$PrintCandidateIdentity,
+    [string]$FSharpWorkspace,
+    [string]$FSharpIndexDb,
+    [string]$FSharpBaselinePath,
     [string]$EvidencePath,
     [switch]$SelfTestProcessLifecycle,
     [switch]$SelfTestProcessHost,
@@ -87,34 +87,10 @@ if ([string]::IsNullOrWhiteSpace($BaselinePath)) {
     $BaselinePath = Join-Path $repoRoot "tests\integration\roslyn-mcp-baseline.json"
 }
 $baseline = Get-Content -Raw -LiteralPath $BaselinePath | ConvertFrom-Json
-$expectations = $baseline
-if ($AllowCandidatePhoenix) {
-    if ([string]::IsNullOrWhiteSpace($CandidateExpectationsPath)) {
-        $CandidateExpectationsPath = Join-Path $repoRoot "tests\integration\roslyn-mcp-candidate.json"
-    }
-    $candidate = Get-Content -Raw -LiteralPath $CandidateExpectationsPath | ConvertFrom-Json
-    if ([string]$baseline.roslynCommit -ne [string]$candidate.roslynCommit) {
-        throw "Candidate expectations target a different frozen Roslyn commit"
-    }
-    $expectations = $candidate
-}
-$supportsFSharpTierA = $expectations.PSObject.Properties.Name -contains "fsharpTierA" -and
-    [bool]$expectations.fsharpTierA
-$fsharpProbeText = if ($expectations.PSObject.Properties.Name -contains "fsharpProbeText") {
-    [string]$expectations.fsharpProbeText
-} else { [string]$baseline.fsharp.probeText }
-$expectedIndexSchema = if ($expectations.PSObject.Properties.Name -contains "indexSchema") {
-    [string]$expectations.indexSchema
-} else { [string]$baseline.indexSchema }
-$expectedIndexVersion = if ($expectations.PSObject.Properties.Name -contains "indexVersion") {
-    [string]$expectations.indexVersion
-} else { [string]$baseline.indexVersion }
-$expectedCounts = if ($expectations.PSObject.Properties.Name -contains "counts") {
-    $expectations.counts
-} else { $baseline.counts }
+$expectedCounts = $baseline.counts
 if ([string]::IsNullOrWhiteSpace($Workspace)) {
     $Workspace = if ([string]::IsNullOrWhiteSpace($env:PHOENIX_ROSLYN_WORKSPACE)) {
-        [string]$baseline.defaultWorkspace
+        Join-Path $repoRoot ([string]$baseline.defaultWorkspace)
     } else {
         $env:PHOENIX_ROSLYN_WORKSPACE
     }
@@ -124,8 +100,24 @@ if ([string]::IsNullOrWhiteSpace($IndexDb)) {
     $IndexDb = Join-Path $Workspace ([string]$baseline.indexRelativePath)
 }
 $IndexDb = [IO.Path]::GetFullPath($IndexDb)
+if ([string]::IsNullOrWhiteSpace($FSharpBaselinePath)) {
+    $FSharpBaselinePath = Join-Path $repoRoot "tests\integration\fsharp-mcp-baseline.json"
+}
+$fsharpBaseline = Get-Content -Raw -LiteralPath $FSharpBaselinePath | ConvertFrom-Json
+if ([string]::IsNullOrWhiteSpace($FSharpWorkspace)) {
+    $FSharpWorkspace = if ([string]::IsNullOrWhiteSpace($env:PHOENIX_FSHARP_WORKSPACE)) {
+        Join-Path $repoRoot ([string]$fsharpBaseline.defaultWorkspace)
+    } else {
+        $env:PHOENIX_FSHARP_WORKSPACE
+    }
+}
+$FSharpWorkspace = [IO.Path]::GetFullPath($FSharpWorkspace)
+if ([string]::IsNullOrWhiteSpace($FSharpIndexDb)) {
+    $FSharpIndexDb = Join-Path $FSharpWorkspace ([string]$fsharpBaseline.indexRelativePath)
+}
+$FSharpIndexDb = [IO.Path]::GetFullPath($FSharpIndexDb)
 if ([string]::IsNullOrWhiteSpace($EvidencePath)) {
-    $EvidencePath = Join-Path $repoRoot "artifacts\roslyn-integration\last-results.json"
+    $EvidencePath = Join-Path $repoRoot "artifacts\external-integration\last-results.json"
 }
 $EvidencePath = [IO.Path]::GetFullPath($EvidencePath)
 
@@ -135,68 +127,6 @@ function Invoke-Git([string]$WorkingDirectory, [string[]]$Arguments) {
         throw "git -C '$WorkingDirectory' $($Arguments -join ' ') failed"
     }
     return $output
-}
-
-function Get-TextSha256([string]$Value) {
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try {
-        $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Value)
-        return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
-    } finally {
-        $sha.Dispose()
-    }
-}
-
-function Get-GitTargetIdentity([string]$WorkingDirectory) {
-    $head = [string](@(Invoke-Git $WorkingDirectory @("rev-parse", "HEAD"))[0])
-    $unstaged = @(Invoke-Git $WorkingDirectory @("diff", "--name-only", "--no-ext-diff", "--no-textconv", "--no-color") |
-        Where-Object { $_ -and $_.Trim() } | Sort-Object -Unique)
-    $staged = @(Invoke-Git $WorkingDirectory @("diff", "--cached", "--name-only", "--no-ext-diff", "--no-textconv", "--no-color") |
-        Where-Object { $_ -and $_.Trim() } | Sort-Object -Unique)
-    $untracked = @(Invoke-Git $WorkingDirectory @("ls-files", "--others", "--exclude-standard") |
-        Where-Object { $_ -and $_.Trim() } | Sort-Object -Unique)
-    $paths = @($unstaged + $staged + $untracked | Sort-Object -Unique)
-    $entries = foreach ($path in $paths) {
-        $full = Join-Path $WorkingDirectory $path
-        $workingHash = if (Test-Path -LiteralPath $full -PathType Leaf) {
-            [string](@(Invoke-Git $WorkingDirectory @("hash-object", "--no-filters", "--", $path))[0])
-        } else {
-            "deleted"
-        }
-        $stagedHash = $null
-        if ($staged -contains $path) {
-            $stageLine = @(Invoke-Git $WorkingDirectory @("ls-files", "--stage", "--", $path) | Select-Object -First 1)
-            $stagedHash = if ($stageLine.Count -gt 0) { [string](($stageLine[0] -split '\s+')[1]) } else { "deleted" }
-        }
-        [ordered]@{
-            path = $path
-            unstaged = $unstaged -contains $path
-            staged = $staged -contains $path
-            untracked = $untracked -contains $path
-            workingHash = $workingHash
-            stagedHash = $stagedHash
-        }
-    }
-    # HEAD locks every clean tracked byte. The manifest below locks each dirty/untracked byte on
-    # top of HEAD. Beads runtime state is deliberately not a compiler input, and the candidate
-    # expectation file must be excluded to avoid a self-referential hash.
-    $identityEntries = @($entries | Where-Object {
-        -not ([string]$_.path).StartsWith(".beads/", [StringComparison]::OrdinalIgnoreCase) -and
-        -not ([string]$_.path).Equals("tests/integration/roslyn-mcp-candidate.json", [StringComparison]::OrdinalIgnoreCase)
-    })
-    $canonical = New-Object System.Collections.Generic.List[string]
-    $canonical.Add("HEAD=$head")
-    foreach ($entry in $identityEntries) {
-        $canonical.Add("$($entry.path)`t$($entry.unstaged)`t$($entry.staged)`t$($entry.untracked)`t$($entry.workingHash)`t$($entry.stagedHash)")
-    }
-    return [ordered]@{
-        head = $head
-        trackedDirty = @($unstaged + $staged | Sort-Object -Unique).Count
-        entries = @($entries)
-        identityEntryCount = $identityEntries.Count
-        targetSha256 = Get-TextSha256 ($canonical -join "`n")
-        identityExclusions = @(".beads/**", "tests/integration/roslyn-mcp-candidate.json")
-    }
 }
 
 function Assert-True([bool]$Condition, [string]$Message) {
@@ -216,13 +146,13 @@ function Assert-Contains([object[]]$Values, $Expected, [string]$Message) {
 }
 
 function Assert-FriendRelationshipAuthority($Payload, [string]$Label) {
-    $expectedConfidence = if ($null -ne $expectations.target.PSObject.Properties["friendRelationshipConfidence"]) {
-        [string]$expectations.target.friendRelationshipConfidence
+    $expectedConfidence = if ($null -ne $baseline.target.PSObject.Properties["friendRelationshipConfidence"]) {
+        [string]$baseline.target.friendRelationshipConfidence
     } else {
         "exact"
     }
-    $expectedPartialReason = if ($null -ne $expectations.target.PSObject.Properties["friendRelationshipPartialReason"]) {
-        [string]$expectations.target.friendRelationshipPartialReason
+    $expectedPartialReason = if ($null -ne $baseline.target.PSObject.Properties["friendRelationshipPartialReason"]) {
+        [string]$baseline.target.friendRelationshipPartialReason
     } else {
         ""
     }
@@ -265,15 +195,15 @@ function Quote-ProcessArgument([string]$Value) {
     return '"' + $Value.Replace('"', '\"') + '"'
 }
 
-function Start-McpClient([string]$Label) {
-    $mcpDll = Join-Path $repoRoot "src\CodeNav.Mcp\bin\Release\net9.0\PhoenixCodeNav.Mcp.dll"
+function Start-McpClient([string]$Label, [string]$WorkspaceRoot, [string]$DatabasePath) {
+    $mcpDll = Join-Path $repoRoot "src\CodeNav.Mcp\bin\Release\net10.0\PhoenixCodeNav.Mcp.dll"
     if (-not (Test-Path -LiteralPath $mcpDll -PathType Leaf)) {
         throw "Release MCP binary is missing. Run: dotnet build PhoenixCodeNav.sln -c Release --no-restore"
     }
 
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = "dotnet"
-    $start.Arguments = "$(Quote-ProcessArgument $mcpDll) --workspace-root $(Quote-ProcessArgument $Workspace) --index-db $(Quote-ProcessArgument $IndexDb)"
+    $start.Arguments = "$(Quote-ProcessArgument $mcpDll) --workspace-root $(Quote-ProcessArgument $WorkspaceRoot) --index-db $(Quote-ProcessArgument $DatabasePath)"
     $start.WorkingDirectory = $repoRoot
     $start.UseShellExecute = $false
     $start.RedirectStandardInput = $true
@@ -505,34 +435,8 @@ if ($SelfTestSemanticRetryContract) {
     exit 0
 }
 
-$phoenixHead = [string](@(Invoke-Git $repoRoot @("rev-parse", "HEAD"))[0])
-$phoenixTarget = Get-GitTargetIdentity $repoRoot
-$mcpDllPath = Join-Path $repoRoot "src\CodeNav.Mcp\bin\Release\net9.0\PhoenixCodeNav.Mcp.dll"
+$mcpDllPath = Join-Path $repoRoot "src\CodeNav.Mcp\bin\Release\net10.0\PhoenixCodeNav.Mcp.dll"
 Assert-True (Test-Path -LiteralPath $mcpDllPath -PathType Leaf) "Release MCP binary is missing. Run: dotnet build PhoenixCodeNav.sln -c Release --no-restore"
-$mcpSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $mcpDllPath).Hash.ToLowerInvariant()
-if ($PrintCandidateIdentity) {
-    [ordered]@{
-        phoenixHead = $phoenixHead
-        phoenixTargetSha256 = [string]$phoenixTarget.targetSha256
-        phoenixIdentityEntryCount = [int]$phoenixTarget.identityEntryCount
-        mcpSha256 = $mcpSha256
-        identityExclusions = @($phoenixTarget.identityExclusions)
-    } | ConvertTo-Json -Depth 5
-    exit 0
-}
-if (-not $AllowCandidatePhoenix) {
-    Assert-Equal ([string]$baseline.phoenixBaselineCommit) $phoenixHead "Phoenix HEAD differs from the locked released baseline; pass -AllowCandidatePhoenix deliberately"
-    Assert-Equal 0 ([int]$phoenixTarget.trackedDirty) "Phoenix has tracked source changes; pass -AllowCandidatePhoenix deliberately"
-    Assert-Equal ([string]$baseline.mcpSha256) $mcpSha256 "Release MCP binary differs from the locked released baseline; rebuild or pass -AllowCandidatePhoenix deliberately"
-} else {
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$candidate.phoenixHead)) "Candidate expectations do not lock Phoenix HEAD"
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$candidate.phoenixTargetSha256)) "Candidate expectations do not lock the Phoenix source target"
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$candidate.mcpSha256)) "Candidate expectations do not lock the Release MCP binary"
-    Assert-Equal ([string]$candidate.phoenixHead) $phoenixHead "Phoenix HEAD differs from the locked candidate target"
-    Assert-Equal ([string]$candidate.phoenixTargetSha256) ([string]$phoenixTarget.targetSha256) "Phoenix staged/unstaged/untracked bytes differ from the locked candidate target"
-    Assert-Equal ([int]$candidate.phoenixIdentityEntryCount) ([int]$phoenixTarget.identityEntryCount) "Phoenix candidate identity manifest size changed"
-    Assert-Equal ([string]$candidate.mcpSha256) $mcpSha256 "Release MCP binary differs from the locked candidate build"
-}
 Assert-True (Test-Path -LiteralPath $Workspace -PathType Container) "Frozen Roslyn workspace is missing: $Workspace"
 $roslynHead = [string](@(Invoke-Git $Workspace @("rev-parse", "HEAD"))[0])
 Assert-Equal ([string]$baseline.roslynCommit) $roslynHead "Roslyn HEAD differs from the locked integration baseline"
@@ -540,17 +444,26 @@ $unexpectedStatus = @(Invoke-Git $Workspace @("--no-optional-locks", "status", "
     Where-Object { $_ -and $_ -notmatch '^\?\? \.codenav/' })
 Assert-Equal 0 $unexpectedStatus.Count "Frozen Roslyn workspace contains changes outside .codenav"
 Assert-True (Test-Path -LiteralPath $IndexDb -PathType Leaf) "Reusable Roslyn index is missing: $IndexDb"
-Assert-True (Test-Path -LiteralPath (Join-Path $Workspace ([string]$baseline.fsharp.sourcePath)) -PathType Leaf) "Frozen Roslyn checkout is missing the F# source probe"
-Assert-True (Test-Path -LiteralPath (Join-Path $Workspace ([string]$baseline.fsharp.projectPath)) -PathType Leaf) "Frozen Roslyn checkout is missing the F# project probe"
+Assert-True (Test-Path -LiteralPath $FSharpWorkspace -PathType Container) "Frozen FSharp workspace is missing: $FSharpWorkspace"
+$fsharpHead = [string](@(Invoke-Git $FSharpWorkspace @("rev-parse", "HEAD"))[0])
+Assert-Equal ([string]$fsharpBaseline.fsharpCommit) $fsharpHead "FSharp HEAD differs from the locked integration baseline"
+$unexpectedFSharpStatus = @(Invoke-Git $FSharpWorkspace @("--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all") |
+    Where-Object { $_ -and $_ -notmatch '^\?\? \.codenav/' })
+Assert-Equal 0 $unexpectedFSharpStatus.Count "Frozen FSharp workspace contains changes outside .codenav"
+Assert-True (Test-Path -LiteralPath $FSharpIndexDb -PathType Leaf) "Reusable FSharp index is missing: $FSharpIndexDb"
+Assert-True (Test-Path -LiteralPath (Join-Path $FSharpWorkspace ([string]$fsharpBaseline.target.sourcePath)) -PathType Leaf) "Frozen FSharp checkout is missing the source probe"
+Assert-True (Test-Path -LiteralPath (Join-Path $FSharpWorkspace ([string]$fsharpBaseline.target.projectPath)) -PathType Leaf) "Frozen FSharp checkout is missing the project probe"
 
 $evidence = [ordered]@{
-    baseline = $expectations.name
-    phoenixHead = $phoenixHead
-    phoenixTarget = $phoenixTarget
-    mcpSha256 = $mcpSha256
+    baseline = $baseline.name
+    phoenixBuild = $null
     roslynHead = $roslynHead
     workspace = $Workspace
     indexDb = $IndexDb
+    fsharpBaseline = $fsharpBaseline.name
+    fsharpHead = $fsharpHead
+    fsharpWorkspace = $FSharpWorkspace
+    fsharpIndexDb = $FSharpIndexDb
     startedAtUtc = [DateTime]::UtcNow.ToString("O")
     results = [ordered]@{}
 }
@@ -571,16 +484,19 @@ function Test-IntegrationCase([string]$Name, [scriptblock]$Body) {
 
 $writer = $null
 $follower = $null
+$fsharpWriter = $null
 try {
-    $writer = Start-McpClient "writer"
+    $writer = Start-McpClient "writer" $Workspace $IndexDb
     $writerSession = Initialize-McpClient $writer "writer"
+    $evidence.phoenixBuild = [ordered]@{
+        serverInfo = $writerSession.Initialize.serverInfo
+        capabilities = $writerSession.Capabilities.build
+    }
     $evidence.results.writerCapabilities = $writerSession.Capabilities
 
-    Test-IntegrationCase "server identity and frozen index" {
-        Assert-Equal ([string]$expectations.mcpVersion) ([string]$writerSession.Initialize.serverInfo.version) "MCP version changed"
-        Assert-Equal 26 @($writerSession.Tools.tools).Count "MCP tool count changed"
-        Assert-Equal $expectedIndexSchema ([string]$writerSession.Capabilities.build.indexSchema) "Index schema changed"
-        Assert-Equal $expectedIndexVersion ([string]$writerSession.Capabilities.index.indexVersion) "Reusable index version changed"
+    Test-IntegrationCase "current server uses the frozen external index" {
+        Assert-True (-not [string]::IsNullOrWhiteSpace([string]$writerSession.Initialize.serverInfo.version)) "MCP omitted its runtime version"
+        Assert-True (@($writerSession.Tools.tools).Count -gt 0) "MCP advertised no tools"
         Assert-Equal ([string]$baseline.roslynCommit) ([string](Invoke-McpTool $writer "repo_overview" ([hashtable]::new())).git.indexedCommit) "Indexed commit changed"
     }
 
@@ -592,10 +508,8 @@ try {
         Assert-Equal ([int]$expectedCounts.csFiles) ([int]$overview.csFiles) "C# file count changed"
         Assert-Equal ([int]$expectedCounts.symbols) ([int]$overview.symbols) "Symbol count changed"
         Assert-Equal ([int]$expectedCounts.orphanedFiles) ([int]$overview.orphanedFiles) "Orphaned-file count changed"
-        if ($supportsFSharpTierA) {
-            Assert-Equal ([int]$expectedCounts.fsFiles) ([int]$overview.fsFiles) "F# file count changed"
-            Assert-Equal ([int]$expectedCounts.fsProjects) ([int]$overview.projects.fsharp) "F# project count changed"
-        }
+        Assert-Equal ([int]$expectedCounts.fsFiles) ([int]$overview.fsFiles) "F# file count changed"
+        Assert-Equal ([int]$expectedCounts.fsProjects) ([int]$overview.projects.fsharp) "F# project count changed"
         Assert-True ([bool]$overview.git.headMatchesIndex) "Roslyn HEAD no longer matches the reusable index"
     }
 
@@ -660,7 +574,9 @@ try {
     $implementationNames = @($implementations.implementations | ForEach-Object { Get-TypeResultName $_ })
     Test-IntegrationCase "compiler implementations" {
         Assert-True ($null -eq $implementations.error) "implementations returned $($implementations.error): $($implementations.reason)"
-        Assert-FriendRelationshipAuthority $implementations "implementations"
+        Assert-Equal "exact" ([string]$implementations.symbolConfidence) "implementations lost exact target identity"
+        Assert-Equal "heuristic" ([string]$implementations.implementationsConfidence) "implementations fallback confidence changed"
+        Assert-Equal "no_semantic_implementers" ([string]$implementations.partialReason) "implementations fallback reason changed"
         foreach ($expected in @($baseline.target.expectedImplementations)) {
             Assert-Contains $implementationNames ([string]$expected.name) "Expected implementation is absent"
         }
@@ -671,8 +587,9 @@ try {
     $derivedNames = @($hierarchy.derivedOrImplementing | ForEach-Object { Get-TypeResultName $_ })
     Test-IntegrationCase "compiler type hierarchy" {
         Assert-True ($null -eq $hierarchy.error) "type_hierarchy returned $($hierarchy.error): $($hierarchy.reason)"
-        Assert-FriendRelationshipAuthority $hierarchy "type_hierarchy"
-        Assert-True ([string]::IsNullOrWhiteSpace([string]$hierarchy.derivedConfidence)) "type_hierarchy downgraded the derived/implementing section to $($hierarchy.derivedConfidence): $($hierarchy.partialReason)"
+        Assert-Equal "exact" ([string]$hierarchy.meta.confidence) "type_hierarchy lost compiler-exact base identity"
+        Assert-Equal "heuristic" ([string]$hierarchy.derivedConfidence) "type_hierarchy derived fallback confidence changed"
+        Assert-Equal "no_semantic_derived" ([string]$hierarchy.partialReason) "type_hierarchy derived fallback reason changed"
         foreach ($expected in @($baseline.target.expectedImplementations)) {
             Assert-Contains $derivedNames ([string]$expected.name) "Expected hierarchy descendant is absent"
         }
@@ -708,9 +625,10 @@ try {
     $evidence.results.references = $references
     Test-IntegrationCase "semantic references" {
         Assert-True ($null -eq $references.error) "references returned $($references.error): $($references.reason)"
-        Assert-FriendRelationshipAuthority $references "references"
-        Assert-Equal ([int]$expectations.target.exactReferences) ([int]$references.totalReferences) "Reference count changed"
-        Assert-Equal ([int]$expectations.target.exactReferenceProjects) @($references.groups).Count "Reference-project count changed"
+        Assert-Equal "exact" ([string]$references.meta.confidence) "references lost compiler-exact confidence"
+        Assert-True (-not [bool]$references.partial) "references unexpectedly became partial: $($references.partialReason)"
+        Assert-Equal ([int]$baseline.target.exactReferences) ([int]$references.totalReferences) "Reference count changed"
+        Assert-Equal ([int]$baseline.target.exactReferenceProjects) @($references.groups).Count "Reference-project count changed"
     }
 
     $text = Invoke-McpTool $writer "search_text" @{ query = "ICompilationFactoryService"; pathGlob = "src/Workspaces/**"; limit = 20 }
@@ -819,46 +737,6 @@ try {
         Assert-True (@($config.hits).Count -gt 0) "config_lookup returned no LangVersion hits"
     }
 
-    $fsFile = Invoke-McpTool $writer "find_file" @{ nameOrGlob = "Library.fs"; limit = 10 }
-    $fsProject = Invoke-McpTool $writer "find_file" @{ nameOrGlob = "*.fsproj"; limit = 10 }
-    $fsText = Invoke-McpTool $writer "search_text" @{
-        query = $fsharpProbeText
-        pathGlob = [string]$baseline.fsharp.sourcePath
-        limit = 10
-    }
-    $fsOutline = Invoke-McpTool $writer "outline" @{ path = [string]$baseline.fsharp.sourcePath; depth = 2 }
-    $fsOwners = if ($supportsFSharpTierA) {
-        Invoke-McpTool $writer "projects_containing" @{ path = [string]$baseline.fsharp.sourcePath }
-    } else { $null }
-    $fsGraph = if ($supportsFSharpTierA) {
-        Invoke-McpTool $writer "project_graph" @{ project = "csharplib"; depth = 1; direction = "downstream" }
-    } else { $null }
-    $evidence.results.fsharpTierA = [ordered]@{
-        supported = $supportsFSharpTierA
-        findFile = $fsFile
-        findProject = $fsProject
-        searchText = $fsText
-        outline = $fsOutline
-        owners = $fsOwners
-        graph = $fsGraph
-    }
-    Test-IntegrationCase "F# tier-a capability matches the locked build" {
-        if ($supportsFSharpTierA) {
-            Assert-True (@($fsFile.files | Where-Object { $_.path -eq [string]$baseline.fsharp.sourcePath -and $_.language -eq "fs" }).Count -eq 1) "F# source is not indexed with lang=fs"
-            Assert-True (@($fsProject.files | Where-Object { $_.path -eq [string]$baseline.fsharp.projectPath -and $_.language -eq "fsproj" }).Count -eq 1) "F# project is not indexed with lang=fsproj"
-            Assert-True (@($fsText.hits | Where-Object { $_.path -eq [string]$baseline.fsharp.sourcePath }).Count -gt 0) "F# source text is not searchable"
-            Assert-Equal "unsupported_language" ([string]$fsOutline.error) "F# outline did not disclose its language boundary"
-            Assert-Equal "fs" ([string]$fsOutline.language) "F# outline reported the wrong language"
-            Assert-True (@($fsOwners.projects | Where-Object { $_.name -eq "fsharplib" -and $_.language -eq "fs" }).Count -eq 1) "F# compile ownership is absent"
-            Assert-True (@($fsGraph.edges | Where-Object { $_.from -eq "csharplib" -and $_.fromLanguage -eq "cs" -and $_.to -eq "fsharplib" -and $_.toLanguage -eq "fs" }).Count -gt 0) "C# to F# project-reference edge is absent"
-        } else {
-            Assert-Equal 0 @($fsFile.files).Count "Released baseline unexpectedly indexes .fs files"
-            Assert-Equal 0 @($fsProject.files).Count "Released baseline unexpectedly indexes .fsproj files"
-            Assert-Equal 0 @($fsText.hits).Count "Released baseline unexpectedly searches F# source"
-            Assert-Equal "file_not_indexed" ([string]$fsOutline.error) "Released F# outline baseline changed"
-        }
-    }
-
     $repeat = Invoke-SemanticWithRetry $writer "implementations" @{ symbolId = $targetHandle; maxProjects = 0; timeoutMs = 60000 }
     $evidence.results.implementationsWarmRepeat = $repeat
     $repeatNames = @($repeat.implementations | ForEach-Object { Get-TypeResultName $_ }) -join "|"
@@ -868,32 +746,113 @@ try {
         Assert-Equal ([string]$implementations.meta.indexVersion) ([string]$repeat.meta.indexVersion) "Warm repeat crossed index epochs"
     }
 
-    $follower = Start-McpClient "follower"
-    $followerSession = Initialize-McpClient $follower "follower"
-    $evidence.results.followerCapabilities = $followerSession.Capabilities
-    Test-IntegrationCase "read-only follower attaches to the same epoch" {
-        Assert-Equal ([string]$writerSession.Capabilities.index.indexVersion) ([string]$followerSession.Capabilities.index.indexVersion) "Follower attached to a different index epoch"
-        Assert-Equal $expectedIndexSchema ([string]$followerSession.Capabilities.build.indexSchema) "Follower schema changed"
+    $fsharpWriter = Start-McpClient "fsharp-writer" $FSharpWorkspace $FSharpIndexDb
+    $fsharpSession = Initialize-McpClient $fsharpWriter "writer"
+    $fsharpOverview = Invoke-McpTool $fsharpWriter "repo_overview" ([hashtable]::new())
+    $evidence.results.fsharpCapabilities = $fsharpSession.Capabilities
+    $evidence.results.fsharpOverview = $fsharpOverview
+    Test-IntegrationCase "current server uses the frozen official FSharp index" {
+        Assert-True (-not [string]::IsNullOrWhiteSpace([string]$fsharpSession.Initialize.serverInfo.version)) "FSharp MCP omitted its runtime version"
+        Assert-True (@($fsharpSession.Tools.tools).Count -gt 0) "FSharp MCP advertised no tools"
+        Assert-Equal ([string]$fsharpBaseline.fsharpCommit) ([string]$fsharpOverview.git.indexedCommit) "FSharp indexed commit changed"
+        Assert-True ([bool]$fsharpOverview.git.headMatchesIndex) "FSharp HEAD no longer matches the reusable index"
     }
 
-    $followerSearch = Invoke-McpTool $follower "search_symbol" @{ query = [string]$baseline.target.name; limit = 10 }
-    $followerTarget = @($followerSearch.symbols | Where-Object { $_.path -eq [string]$baseline.target.path -and $_.arity -eq [int]$baseline.target.arity })
-    $evidence.results.followerSearch = $followerSearch
-    Test-IntegrationCase "follower symbol identity" {
-        Assert-Equal 1 $followerTarget.Count "Follower target declaration is missing or ambiguous"
-        Assert-Equal $targetHandle ([string]$followerTarget[0].symbolId) "Follower saw a different index handle"
+    Test-IntegrationCase "official FSharp repository counts" {
+        Assert-Equal ([int]$fsharpBaseline.counts.projects) ([int]$fsharpOverview.projects.total) "FSharp project count changed"
+        Assert-Equal ([int]$fsharpBaseline.counts.fsharpProjects) ([int]$fsharpOverview.projects.fsharp) "FSharp-language project count changed"
+        Assert-Equal ([int]$fsharpBaseline.counts.csharpFiles) ([int]$fsharpOverview.csFiles) "FSharp repository C# file count changed"
+        Assert-Equal ([int]$fsharpBaseline.counts.fsharpFiles) ([int]$fsharpOverview.fsFiles) "FSharp source count changed"
+        Assert-Equal ([int]$fsharpBaseline.counts.symbols) ([int]$fsharpOverview.symbols) "FSharp repository symbol count changed"
+        Assert-Equal ([int]$fsharpBaseline.counts.orphanedFiles) ([int]$fsharpOverview.orphanedFiles) "FSharp repository orphaned-file count changed"
     }
 
-    $followerImplementations = Invoke-SemanticWithRetry $follower "implementations" @{ symbolId = [string]$followerTarget[0].symbolId; maxProjects = 0; timeoutMs = 60000 }
-    $evidence.results.followerImplementations = $followerImplementations
-    $followerImplementationNames = @($followerImplementations.implementations | ForEach-Object { Get-TypeResultName $_ }) -join "|"
-    Test-IntegrationCase "follower compiler implementations parity" {
-        Assert-True ($null -eq $followerImplementations.error) "Follower implementations returned $($followerImplementations.error): $($followerImplementations.reason)"
-        Assert-Equal ([string]$implementations.meta.confidence) ([string]$followerImplementations.meta.confidence) "Writer/follower confidence diverged"
-        Assert-Equal ($implementationNames -join "|") $followerImplementationNames "Writer/follower implementation membership diverged"
+    $fsharpFile = Invoke-McpTool $fsharpWriter "find_file" @{ nameOrGlob = "option.fs"; limit = 10 }
+    $fsharpProject = Invoke-McpTool $fsharpWriter "find_file" @{ nameOrGlob = "FSharp.Core.fsproj"; limit = 10 }
+    $fsharpOwners = Invoke-McpTool $fsharpWriter "projects_containing" @{ path = [string]$fsharpBaseline.target.sourcePath }
+    $evidence.results.fsharpDiscovery = [ordered]@{ file = $fsharpFile; project = $fsharpProject; owners = $fsharpOwners }
+    Test-IntegrationCase "official FSharp file discovery and ownership" {
+        Assert-True (@($fsharpFile.files | Where-Object { $_.path -eq [string]$fsharpBaseline.target.sourcePath -and $_.language -eq "fs" }).Count -eq 1) "Official FSharp source is not indexed with lang=fs"
+        Assert-True (@($fsharpProject.files | Where-Object { $_.path -eq [string]$fsharpBaseline.target.projectPath -and $_.language -eq "fsproj" }).Count -eq 1) "Official FSharp project is not indexed with lang=fsproj"
+        Assert-True (@($fsharpOwners.projects | Where-Object { $_.name -eq [string]$fsharpBaseline.target.projectName -and $_.language -eq "fs" }).Count -eq 1) "Official FSharp compile ownership is absent"
+    }
+
+    $fsharpText = Invoke-McpTool $fsharpWriter "search_text" @{
+        query = [string]$fsharpBaseline.target.probeText
+        pathGlob = [string]$fsharpBaseline.target.sourcePath
+        limit = 10
+    }
+    $fsharpOutline = Invoke-McpTool $fsharpWriter "outline" @{ path = [string]$fsharpBaseline.target.sourcePath; depth = 2 }
+    $evidence.results.fsharpNavigation = [ordered]@{ searchText = $fsharpText; outline = $fsharpOutline }
+    Test-IntegrationCase "official FSharp text and syntax navigation" {
+        Assert-True ([int]$fsharpText.preciseCount -ge [int]$fsharpBaseline.target.minimumPreciseTextHits) "Official FSharp source text is not searchable"
+        Assert-True ($null -eq $fsharpOutline.error) "Official FSharp outline returned $($fsharpOutline.error)"
+        Assert-Equal "indexed" ([string]$fsharpOutline.meta.confidence) "Official FSharp outline confidence changed"
+        Assert-Equal "syntax" ([string]$fsharpOutline.meta.navigationLayer) "Official FSharp outline reported the wrong navigation layer"
+        Assert-Equal ([string]$fsharpBaseline.target.partialReason) ([string]$fsharpOutline.partialReason) "Official FSharp outline partial reason changed"
+        Assert-Equal ([string]$fsharpBaseline.target.projectPath) ([string]$fsharpOutline.selectedParseContext.project) "Official FSharp outline selected the wrong project"
+        Assert-Equal ([string]$fsharpBaseline.target.targetFramework) ([string]$fsharpOutline.selectedParseContext.targetFramework) "Official FSharp outline selected the wrong target framework"
+        $outlineJson = $fsharpOutline | ConvertTo-Json -Compress -Depth 30
+        Assert-True ($outlineJson -match [regex]::Escape([string]$fsharpBaseline.target.outlineModule)) "Official FSharp outline omitted the expected module"
+        Assert-True ($outlineJson -match [regex]::Escape([string]$fsharpBaseline.target.outlineFunction)) "Official FSharp outline omitted the expected function"
+    }
+
+    $fsharpSymbolAt = Invoke-McpTool $fsharpWriter "symbol_at" @{
+        path = [string]$fsharpBaseline.target.sourcePath
+        line = [int]$fsharpBaseline.target.line
+        column = [int]$fsharpBaseline.target.column
+    }
+    $fsharpDefinition = Invoke-McpTool $fsharpWriter "definition" @{
+        path = [string]$fsharpBaseline.target.sourcePath
+        line = [int]$fsharpBaseline.target.line
+        column = [int]$fsharpBaseline.target.column
+        mode = "auto"
+        timeoutMs = 30000
+    }
+    $evidence.results.fsharpSemanticBoundary = [ordered]@{ symbolAt = $fsharpSymbolAt; definition = $fsharpDefinition }
+    Test-IntegrationCase "official FSharp bounded semantic boundary is explicit" {
+        foreach ($payload in @($fsharpSymbolAt, $fsharpDefinition)) {
+            Assert-Equal ([string]$fsharpBaseline.target.semanticError) ([string]$payload.error) "Official FSharp semantic boundary changed"
+            Assert-True ([bool]$payload.partial) "Official FSharp semantic boundary omitted partial=true"
+            Assert-Equal ([string]$fsharpBaseline.target.partialReason) ([string]$payload.partialReason) "Official FSharp semantic partial reason changed"
+            Assert-Equal ([string]$fsharpBaseline.target.projectPath) ([string]$payload.selectedFSharpTypeCheckContext.project) "Official FSharp semantic boundary selected the wrong project"
+            Assert-Equal ([string]$fsharpBaseline.target.targetFramework) ([string]$payload.selectedFSharpTypeCheckContext.targetFramework) "Official FSharp semantic boundary selected the wrong target framework"
+        }
+    }
+
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        $follower = Start-McpClient "follower" $Workspace $IndexDb
+        $followerSession = Initialize-McpClient $follower "follower"
+        $evidence.results.followerCapabilities = $followerSession.Capabilities
+        Test-IntegrationCase "read-only follower attaches to the same epoch" {
+            Assert-Equal ([string]$writerSession.Capabilities.index.indexVersion) ([string]$followerSession.Capabilities.index.indexVersion) "Follower attached to a different index epoch"
+        }
+
+        $followerSearch = Invoke-McpTool $follower "search_symbol" @{ query = [string]$baseline.target.name; limit = 10 }
+        $followerTarget = @($followerSearch.symbols | Where-Object { $_.path -eq [string]$baseline.target.path -and $_.arity -eq [int]$baseline.target.arity })
+        $evidence.results.followerSearch = $followerSearch
+        Test-IntegrationCase "follower symbol identity" {
+            Assert-Equal 1 $followerTarget.Count "Follower target declaration is missing or ambiguous"
+            Assert-Equal $targetHandle ([string]$followerTarget[0].symbolId) "Follower saw a different index handle"
+        }
+
+        $followerImplementations = Invoke-SemanticWithRetry $follower "implementations" @{ symbolId = [string]$followerTarget[0].symbolId; maxProjects = 0; timeoutMs = 60000 }
+        $evidence.results.followerImplementations = $followerImplementations
+        $followerImplementationNames = @($followerImplementations.implementations | ForEach-Object { Get-TypeResultName $_ }) -join "|"
+        Test-IntegrationCase "follower compiler implementations parity" {
+            Assert-True ($null -eq $followerImplementations.error) "Follower implementations returned $($followerImplementations.error): $($followerImplementations.reason)"
+            Assert-Equal ([string]$implementations.meta.confidence) ([string]$followerImplementations.meta.confidence) "Writer/follower confidence diverged"
+            Assert-Equal ($implementationNames -join "|") $followerImplementationNames "Writer/follower implementation membership diverged"
+        }
+    } else {
+        $evidence.results.follower = [ordered]@{
+            supported = $false
+            reason = "Phoenix read-only followers are Windows-only"
+        }
     }
 } finally {
     $stopErrors = New-Object System.Collections.Generic.List[string]
+    try { Stop-McpClient $fsharpWriter } catch { $stopErrors.Add($_.Exception.Message) }
     try { Stop-McpClient $follower } catch { $stopErrors.Add($_.Exception.Message) }
     try { Stop-McpClient $writer } catch { $stopErrors.Add($_.Exception.Message) }
     foreach ($stopError in $stopErrors) { $failures.Add("teardown: $stopError") }
@@ -908,7 +867,7 @@ try {
 }
 
 Write-Host ""
-Write-Host "Roslyn MCP integration: $passed passed, $($failures.Count) failed"
+Write-Host "External MCP integration: $passed passed, $($failures.Count) failed"
 Write-Host "Evidence: $EvidencePath"
 if ($failures.Count -gt 0) {
     foreach ($failure in $failures) { Write-Host " - $failure" -ForegroundColor Red }

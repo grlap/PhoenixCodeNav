@@ -271,7 +271,7 @@ public partial class FSharpSemanticStage2Tests
 
         const string project = """
             <Project>
-              <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
               <Import Project="../Build/One.props" />
               <Import Project="../Build/Two.props" />
               <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
@@ -281,7 +281,7 @@ public partial class FSharpSemanticStage2Tests
         int resolverCalls = 0;
         Assert.Throws<OperationCanceledException>(() =>
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(
-                "Core/Core.fsproj", project, "net9.0", "net9.0",
+                "Core/Core.fsproj", project, "net10.0", "net10.0",
                 importResolver: _ =>
                 {
                     resolverCalls++;
@@ -340,7 +340,7 @@ public partial class FSharpSemanticStage2Tests
                 <Project Sdk="Microsoft.NET.Sdk">
                   <Import Project="../Build/Large.props" />
                   <PropertyGroup>
-                    <TargetFramework>net9.0</TargetFramework>
+                    <TargetFramework>net10.0</TargetFramework>
                     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
                   </PropertyGroup>
                   <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
@@ -381,7 +381,7 @@ public partial class FSharpSemanticStage2Tests
                 <Project Sdk="Microsoft.NET.Sdk">
                   <Import Project="../Build/External.props" />
                   <PropertyGroup>
-                    <TargetFramework>net9.0</TargetFramework>
+                    <TargetFramework>net10.0</TargetFramework>
                     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
                   </PropertyGroup>
                   <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
@@ -544,7 +544,7 @@ public partial class FSharpSemanticStage2Tests
     {
         const string explicitItems = """
             <PropertyGroup>
-              <TargetFramework>net9.0</TargetFramework>
+              <TargetFramework>net10.0</TargetFramework>
               <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
             </PropertyGroup>
             <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
@@ -553,33 +553,33 @@ public partial class FSharpSemanticStage2Tests
         FSharpSemanticOptionsSnapshot standard =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
                 $"<Project Sdk=\"Microsoft.NET.Sdk\">{explicitItems}</Project>",
-                "net9.0", "net9.0");
+                "net10.0", "net10.0");
         Assert.Null(standard.Error);
         Assert.Contains("fsharp_semantic_sdk_implicit_authority", standard.PartialReason);
 
         FSharpSemanticOptionsSnapshot qualified =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
                 $"<Project Sdk=\"Microsoft.NET.Sdk/9.0.100\">{explicitItems}</Project>",
-                "net9.0", "net9.0");
+                "net10.0", "net10.0");
         Assert.Equal("fsharp_semantic_sdk_unsupported", qualified.Error);
 
         FSharpSemanticOptionsSnapshot custom =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
                 $"<Project Sdk=\"Custom.FSharp.Sdk\">{explicitItems}</Project>",
-                "net9.0", "net9.0");
+                "net10.0", "net10.0");
         Assert.Equal("fsharp_semantic_sdk_unsupported", custom.Error);
 
         FSharpSemanticOptionsSnapshot child =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
                 $"<Project><Sdk Name=\"Custom.FSharp.Sdk\" />{explicitItems}</Project>",
-                "net9.0", "net9.0");
+                "net10.0", "net10.0");
         Assert.Equal("fsharp_semantic_sdk_unsupported", child.Error);
 
         bool importResolverCalled = false;
         FSharpSemanticOptionsSnapshot sdkImport =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
                 $"<Project>{explicitItems}<Import Project=\"../Build/Sdk.props\" Sdk=\"Custom.FSharp.Sdk\" /></Project>",
-                "net9.0", "net9.0", _ =>
+                "net10.0", "net10.0", _ =>
                 {
                     importResolverCalled = true;
                     return "<Project />";
@@ -620,7 +620,7 @@ public partial class FSharpSemanticStage2Tests
             WriteProject(root, "Core/Core.fsproj", """
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup>
-                    <TargetFramework>net9.0</TargetFramework>
+                    <TargetFramework>net10.0</TargetFramework>
                     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
                   </PropertyGroup>
                   <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
@@ -666,7 +666,7 @@ public partial class FSharpSemanticStage2Tests
                 <Project Sdk="Microsoft.NET.Sdk">
                   <Import Project="../build/defines.props" />
                   <PropertyGroup>
-                    <TargetFramework>net9.0</TargetFramework>
+                    <TargetFramework>net10.0</TargetFramework>
                     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
                     <DefineConstants>$(ImportedDefine)</DefineConstants>
                   </PropertyGroup>
@@ -795,7 +795,7 @@ public partial class FSharpSemanticStage2Tests
             WriteProject(root, "Core/Core.fsproj", """
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup>
-                    <TargetFramework>net9.0</TargetFramework>
+                    <TargetFramework>net10.0</TargetFramework>
                     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
                   </PropertyGroup>
                   <ItemGroup><Compile Include="*.fs" /></ItemGroup>
@@ -847,7 +847,7 @@ public partial class FSharpSemanticStage2Tests
                 <Project Sdk="Microsoft.NET.Sdk">
                   <Import Project="../Build/Defines.props" />
                   <PropertyGroup>
-                    <TargetFramework>net9.0</TargetFramework>
+                    <TargetFramework>net10.0</TargetFramework>
                     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
                     <DefineConstants>$(ImportedDefine)</DefineConstants>
                   </PropertyGroup>
@@ -890,13 +890,13 @@ public partial class FSharpSemanticStage2Tests
     {
         string project = $$"""
             <Project>
-              <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
               {{body}}
               <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
             </Project>
             """;
         return ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(
-            "Core/Core.fsproj", project, "net9.0", "net9.0",
+            "Core/Core.fsproj", project, "net10.0", "net10.0",
             path => imports is not null && imports.TryGetValue(path, out string? content)
                 ? content
                 : null,

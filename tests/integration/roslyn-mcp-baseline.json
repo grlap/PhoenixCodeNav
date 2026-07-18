@@ -1,25 +1,24 @@
 {
-  "name": "roslyn-e7680f-0.11.8-released",
-  "phoenixBaselineCommit": "1b3d9ef3a591dc31f347f94a09323908b04f46e0",
-  "mcpSha256": "3a84f1b276d5eaa954adacc5086becba636a66e0e4566bbbfdda29bdf813c2fa",
-  "mcpVersion": "0.11.8",
-  "indexSchema": "14",
+  "name": "roslyn-e7680f",
   "roslynCommit": "e7680f251b8fc52a0ba7108906c0e40ff3263a32",
-  "defaultWorkspace": "C:\\prx\\roslyn",
-  "indexRelativePath": ".codenav\\index.db",
-  "indexVersion": "1f99ce61dc82471b87eed1e5ac469703",
+  "defaultWorkspace": "external/roslyn",
+  "indexRelativePath": ".codenav/index.db",
   "counts": {
-    "projects": 350,
+    "projects": 351,
     "solutions": 38,
     "csFiles": 17098,
+    "fsFiles": 2,
+    "fsProjects": 1,
     "symbols": 354186,
-    "orphanedFiles": 2221
+    "orphanedFiles": 2222
   },
   "target": {
     "name": "ICompilationFactoryService",
     "arity": 0,
     "path": "src/Workspaces/Core/Portable/Workspace/Host/CompilationFactory/ICompilationFactoryService.cs",
     "line": 12,
+    "friendRelationshipConfidence": "indexed",
+    "friendRelationshipPartialReason": "project_model_unproven",
     "exactReferences": 10,
     "exactReferenceProjects": 1,
     "indexedReferenceCandidates": 49,
@@ -45,10 +44,5 @@
     "path": "src/Workspaces/Core/Portable/Workspace/Solution/SolutionCompilationState.RegularCompilationTracker.cs",
     "line": 216,
     "container": "RegularCompilationTracker"
-  },
-  "fsharp": {
-    "sourcePath": "src/Workspaces/MSBuild/Test/Resources/NetCoreMultiTFM_ProjectReferenceToFSharp/fsharplib/Library.fs",
-    "projectPath": "src/Workspaces/MSBuild/Test/Resources/NetCoreMultiTFM_ProjectReferenceToFSharp/fsharplib/fsharplib.fsproj",
-    "probeText": "MyFSharpClass"
   }
 }

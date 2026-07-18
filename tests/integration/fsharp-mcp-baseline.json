@@ -1,0 +1,28 @@
+{
+  "name": "fsharp-5928e91",
+  "fsharpCommit": "5928e91b5f701586690562ce10bd639357fff50b",
+  "defaultWorkspace": "external/fsharp",
+  "indexRelativePath": ".codenav/index.db",
+  "counts": {
+    "projects": 112,
+    "fsharpProjects": 72,
+    "csharpFiles": 243,
+    "fsharpFiles": 6432,
+    "symbols": 8696,
+    "orphanedFiles": 4174
+  },
+  "target": {
+    "sourcePath": "src/FSharp.Core/option.fs",
+    "projectPath": "src/FSharp.Core/FSharp.Core.fsproj",
+    "projectName": "FSharp.Core",
+    "targetFramework": "netstandard2.0",
+    "probeText": "let inline map",
+    "minimumPreciseTextHits": 2,
+    "outlineModule": "Option",
+    "outlineFunction": "map",
+    "line": 95,
+    "column": 16,
+    "semanticError": "fsharp_semantic_directory_build_unsupported",
+    "partialReason": "fsharp_project_options_conditioned;fsharp_project_options_imported;fsharp_project_options_unsupported"
+  }
+}

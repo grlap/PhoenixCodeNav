@@ -1497,7 +1497,7 @@ public class FSharpTierATests
             """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net9.0</TargetFramework>
+                <TargetFramework>net10.0</TargetFramework>
                 <AssemblyName>Streams.Core</AssemblyName>
               </PropertyGroup>
               <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
@@ -1510,7 +1510,7 @@ public class FSharpTierATests
             """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net9.0</TargetFramework>
+                <TargetFramework>net10.0</TargetFramework>
                 <AssemblyName>Streams.CSharp</AssemblyName>
               </PropertyGroup>
               <ItemGroup><ProjectReference Include="../Core/Core.fsproj" /></ItemGroup>
@@ -1522,7 +1522,7 @@ public class FSharpTierATests
             """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net9.0</TargetFramework>
+                <TargetFramework>net10.0</TargetFramework>
                 <AssemblyName>Streams.App</AssemblyName>
               </PropertyGroup>
               <ItemGroup><ProjectReference Include="../Wrapper/Wrapper.csproj" /></ItemGroup>

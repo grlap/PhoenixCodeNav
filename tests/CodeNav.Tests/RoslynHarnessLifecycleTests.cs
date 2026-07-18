@@ -5,10 +5,101 @@ namespace CodeNav.Tests;
 public sealed class RoslynHarnessLifecycleTests
 {
     [Fact]
+    public void HarnessPinsExternalRepositoriesButNeverPhoenixBuild()
+    {
+        string root = FindRepositoryRoot();
+        string script = File.ReadAllText(
+            Path.Combine(root, "scripts", "test-roslyn-mcp.ps1"));
+        string baselinePath = Path.Combine(
+            root, "tests", "integration", "roslyn-mcp-baseline.json");
+        string baseline = File.ReadAllText(baselinePath);
+        string fsharpBaseline = File.ReadAllText(Path.Combine(
+            root, "tests", "integration", "fsharp-mcp-baseline.json"));
+        string submodules = File.ReadAllText(Path.Combine(root, ".gitmodules"));
+
+        Assert.Contains(
+            "Assert-Equal ([string]$baseline.roslynCommit) $roslynHead",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Frozen Roslyn workspace contains changes outside .codenav",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Assert-Equal ([string]$fsharpBaseline.fsharpCommit) $fsharpHead",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Frozen FSharp workspace contains changes outside .codenav",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("phoenixBuild = $null", script, StringComparison.Ordinal);
+
+        foreach (string forbidden in new[]
+                 {
+                     "AllowCandidatePhoenix",
+                     "PrintCandidateIdentity",
+                     "CandidateExpectationsPath",
+                     "Get-GitTargetIdentity",
+                     "phoenixBaselineCommit",
+                     "phoenixTargetSha256",
+                     "phoenixIdentityEntryCount",
+                     "mcpSha256",
+                     "MCP version changed",
+                     "MCP tool count changed",
+                     "Index schema changed",
+                     "Reusable index version changed",
+                     "Follower schema changed",
+                 })
+        {
+            Assert.DoesNotContain(forbidden, script, StringComparison.Ordinal);
+        }
+
+        using var roslynDocument = System.Text.Json.JsonDocument.Parse(baseline);
+        using var fsharpDocument = System.Text.Json.JsonDocument.Parse(fsharpBaseline);
+        System.Text.Json.JsonElement fixture = roslynDocument.RootElement;
+        System.Text.Json.JsonElement fsharpFixture = fsharpDocument.RootElement;
+        Assert.True(fixture.TryGetProperty("roslynCommit", out _));
+        Assert.True(fsharpFixture.TryGetProperty("fsharpCommit", out _));
+        Assert.False(fixture.TryGetProperty("fsharp", out _));
+        Assert.Equal("external/roslyn",
+            fixture.GetProperty("defaultWorkspace").GetString());
+        Assert.Equal("external/fsharp",
+            fsharpFixture.GetProperty("defaultWorkspace").GetString());
+        Assert.Equal("src/FSharp.Core/option.fs",
+            fsharpFixture.GetProperty("target").GetProperty("sourcePath").GetString());
+        Assert.Contains("path = external/roslyn", submodules, StringComparison.Ordinal);
+        Assert.Contains(
+            "url = https://github.com/dotnet/roslyn",
+            submodules,
+            StringComparison.Ordinal);
+        Assert.Contains("path = external/fsharp", submodules, StringComparison.Ordinal);
+        Assert.Contains(
+            "url = https://github.com/dotnet/fsharp",
+            submodules,
+            StringComparison.Ordinal);
+        foreach (string forbidden in new[]
+                 {
+                     "phoenixBaselineCommit",
+                     "mcpSha256",
+                     "mcpVersion",
+                     "indexSchema",
+                     "indexVersion",
+                 })
+        {
+            Assert.False(fixture.TryGetProperty(forbidden, out _),
+                $"External fixture must not lock Phoenix field '{forbidden}'.");
+            Assert.False(fsharpFixture.TryGetProperty(forbidden, out _),
+                $"FSharp fixture must not lock Phoenix field '{forbidden}'.");
+        }
+
+        Assert.False(File.Exists(Path.Combine(
+            root, "tests", "integration", "roslyn-mcp-candidate.json")));
+    }
+
+    [Fact]
     public async Task SemanticRetryIncludesIndexedAutoFallbacks()
     {
-        if (!OperatingSystem.IsWindows()) return;
-
         string output = await RunSelfTest("-SelfTestSemanticRetryContract", TimeSpan.FromSeconds(15));
         Assert.Contains("Semantic retry contract self-test passed", output, StringComparison.Ordinal);
     }
@@ -16,8 +107,6 @@ public sealed class RoslynHarnessLifecycleTests
     [Fact]
     public async Task TeardownBoundsStderrAndKillsDescendantProcessTree()
     {
-        if (!OperatingSystem.IsWindows()) return;
-
         string output = await RunSelfTest("-SelfTestProcessLifecycle", TimeSpan.FromSeconds(20));
         Assert.Contains("Process lifecycle self-test passed", output, StringComparison.Ordinal);
     }
@@ -26,7 +115,8 @@ public sealed class RoslynHarnessLifecycleTests
     {
         string root = FindRepositoryRoot();
         string script = Path.Combine(root, "scripts", "test-roslyn-mcp.ps1");
-        var start = new ProcessStartInfo("powershell.exe")
+        string powerShell = OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh";
+        var start = new ProcessStartInfo(powerShell)
         {
             WorkingDirectory = root,
             UseShellExecute = false,

@@ -60,8 +60,8 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Commit Discipline — NEVER check in without review
 
-**Every commit requires an adversarial review round FIRST. No exceptions, no self-granted
-risk-tier exemptions.** "Just docs", "just tests", "trivial cleanup" do not qualify for a
+**Every commit requires an adversarial review round FIRST. No exceptions and no review
+exemptions.** "Just docs", "just tests", "trivial cleanup" do not qualify for a
 skip — this session's history is the proof: batches that looked safe repeatedly carried real
 defects (a recovery path that silently dropped the file watcher; a diagnostic note giving
 wrong advice on filtered zeros; a test seam added to the hottest loop in the codebase). The
@@ -75,9 +75,11 @@ The loop, in order — no step skipped or reordered:
 3. `dotnet build` at **0 warnings**; `dotnet test` green. Known flake:
    `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` (watcher timing) — if it fires
    in a full run, verify it passes isolated and note it.
-4. **Adversarial subagent review of the full uncommitted diff**, with empirical reproduction
-   required for findings. Findings → fix → verification round (same reviewer) until CLEAN.
-5. Only after CLEAN: commit. (Autonomous commit on a clean review was EXPLICITLY
+4. **Adversarial subagent review of the full uncommitted implementation diff**, with empirical
+   reproduction required for findings. Critical/High findings → fix → verification round with
+   the same reviewer. Medium/Low findings → reconcile in Beads; they do not block check-in.
+5. Only after both reviewers complete and no Critical or High finding remains: commit.
+   (Autonomous commit after the gate passes was EXPLICITLY
    pre-authorized by Greg for this repository's batch loop — "when review is clean, check-in
    and let me know", reaffirmed 2026-07-09 — which is what lets it override the global
    do-not-commit rule here; in any session where Greg has not affirmed this workflow, the
@@ -118,17 +120,19 @@ a durable fan-in.
   and never nests delegation or platform subagents.
 - Both commands are review-only. They never edit source, mutate Git, commit, push, or run
   Dolt remote sync. The parent may reconcile local Beads findings after fan-in.
-- Authorized post-fan-in Beads reconciliation does not trigger another implementation review
-  solely for mechanically validated append-only `.beads/interactions.jsonl` records generated
-  by those exact `bd` actions. Pre-existing interaction bytes and every other path remain part
-  of the exact-byte gate; rewrites, malformed records, unexplained records, or any other drift
-  still invalidate it.
-- A failed, missing, or dead reviewer makes the review INCONCLUSIVE, never CLEAN.
+- Generated `.beads/interactions.jsonl`, `.beads/issues.jsonl`, and `.beads/events.jsonl`
+  are tracker bookkeeping outside the implementation review target. Beads actions that only
+  update those ledgers never invalidate an otherwise completed review. Other tracked `.beads`
+  configuration, metadata, and hooks remain ordinary review targets.
+- The parent compares implementation path inventories around validation, delegation, and
+  fan-in. Reviewers do not compute or report Git-object, patch, or content hashes.
+- A failed, missing, or dead reviewer or an incomplete packet makes the review INCONCLUSIVE.
+- Critical and High findings block check-in. Medium and Low findings must be reconciled in
+  Beads but do not block check-in.
 - Changes to review commands, reviewer lenses, repository instructions, and their contract tests
-  are reviewed as ordinary exact-byte targets; they do not disable the review gate.
+  are ordinary implementation review targets; they do not disable the review gate.
 - If the TermAl MCP bridge is unavailable, stop and report it; a self-review does not
   substitute for the required independent review round.
 - The current TermAl MCP surface cannot send a follow-up turn to an existing child. When
-  literal same-session verification is required after fixes, continue through the original
-  child session UI or ask for direction; rerunning creates fresh reviewers and must not be
-  described as same-session verification.
+  same-session verification is required after fixing a Critical or High finding, continue
+  through the original child session UI or ask for direction.

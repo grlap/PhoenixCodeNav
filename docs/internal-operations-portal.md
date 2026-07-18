@@ -440,7 +440,7 @@ uses the frozen telemetry contract fixtures and therefore does not wait for live
 
 Recommended stack for a polished but maintainable UI:
 
-- backend: a separate .NET 9 ASP.NET Core minimal-API executable;
+- backend: a separate .NET 10 ASP.NET Core minimal-API executable;
 - frontend: a small TypeScript SPA built as static assets and embedded/copied into the portal
   output;
 - component and animation dependencies kept intentionally small and pinned;

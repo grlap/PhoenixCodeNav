@@ -129,7 +129,7 @@ Copy both `artifacts/win-x64/PhoenixCodeNav.Mcp.exe` and its adjacent `FSharp.Co
 same directory (e.g. `C:\tools\phoenix\`). The executable remains self-contained; the sidecar is
 the physical compiler reference asset used by bounded F# semantic navigation.
 (A framework-dependent build — `dotnet publish -c Release -o artifacts/portable` — is ~5 MB
-but requires the .NET 9 runtime.)
+but requires the .NET 10 runtime.)
 
 ### Attach to Claude Code
 

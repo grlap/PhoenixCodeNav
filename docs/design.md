@@ -253,6 +253,6 @@ pull.
 
 Published as a self-contained `PhoenixCodeNav.Mcp.exe` plus adjacent `FSharp.Core.dll` reference
 sidecar (no installed runtime prerequisite), or a
-framework-dependent build (needs .NET 9). Attach over MCP (`.mcp.json` for Claude Code,
+framework-dependent build (needs .NET 10). Attach over MCP (`.mcp.json` for Claude Code,
 `config.toml` for Codex). First run builds the index in the background; it lives in
 `<workspace>/.codenav/index.db`. See [`../README.md`](../README.md) for exact commands.

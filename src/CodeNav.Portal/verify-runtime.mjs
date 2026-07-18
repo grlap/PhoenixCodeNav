@@ -6,7 +6,7 @@ import { request } from "node:http";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const dll = process.env.PHOENIX_PORTAL_DLL
-  ?? join(root, "bin", "Release", "net9.0", "PhoenixCodeNav.Portal.dll");
+  ?? join(root, "bin", "Release", "net10.0", "PhoenixCodeNav.Portal.dll");
 
 await access(dll);
 

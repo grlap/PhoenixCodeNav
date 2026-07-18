@@ -1,0 +1,8 @@
+[submodule "external/roslyn"]
+	path = external/roslyn
+	url = https://github.com/dotnet/roslyn
+	ignore = untracked
+[submodule "external/fsharp"]
+	path = external/fsharp
+	url = https://github.com/dotnet/fsharp
+	ignore = untracked
