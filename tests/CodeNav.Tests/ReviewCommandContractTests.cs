@@ -67,6 +67,8 @@ public class ReviewCommandContractTests
         Assert.Contains("complete non-truncated packets", text);
         Assert.DoesNotContain("Confirm reintroduction-test evidence", text);
         Assert.Contains("Run `dotnet build PhoenixCodeNav.sln -c Release --no-restore`", text);
+        Assert.Contains("Run `pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1`", text);
+        Assert.Contains("Missing submodules, mismatched external commits, missing reusable indexes, or any harness failure stop the review gate", text);
         Assert.Contains(":(exclude).beads/interactions.jsonl", text);
         Assert.Contains(":(exclude).beads/issues.jsonl", text);
         Assert.Contains(":(exclude).beads/events.jsonl", text);
@@ -84,6 +86,19 @@ public class ReviewCommandContractTests
         Assert.Contains("Generated-ledger-only changes preserve the review verdict", text);
         Assert.Contains("Medium and Low findings are allowed when they are reconciled in Beads", text);
         Assert.Contains("`NOT CLEAN` is reserved for unresolved Critical or High findings", text);
+
+        int solutionTests = text.IndexOf(
+            "Run `dotnet test PhoenixCodeNav.sln -c Release --no-build --no-restore`",
+            StringComparison.Ordinal);
+        int externalIntegration = text.IndexOf(
+            "Run `pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1`",
+            StringComparison.Ordinal);
+        int postValidationInventory = text.IndexOf(
+            "After validation, restart all of Step 1 from its path-only inventories",
+            StringComparison.Ordinal);
+        Assert.True(solutionTests >= 0 && solutionTests < externalIntegration &&
+            externalIntegration < postValidationInventory,
+            "The external MCP integration harness must run after solution tests and before delegation inventories restart.");
 
         int pathInventory = text.IndexOf("git ls-files --others --exclude-standard", StringComparison.Ordinal);
         int containmentCheck = text.IndexOf("Before diffing or opening target content", StringComparison.Ordinal);
@@ -202,6 +217,9 @@ public class ReviewCommandContractTests
         Assert.Contains("Critical and High findings block check-in", agents);
         Assert.Contains("Medium and Low findings must be reconciled in", agents);
         Assert.Contains("Beads but do not block check-in", agents);
+        const string externalIntegration = "pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1";
+        Assert.Contains(externalIntegration, agents);
+        Assert.Contains(externalIntegration, claude);
 
         string allReviewAssets = claude + "\n" + agents + "\n" + string.Join("\n",
             Directory.GetFiles(Path.Combine(Root(), ".claude"), "*.md", SearchOption.AllDirectories)

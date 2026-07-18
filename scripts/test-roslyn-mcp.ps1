@@ -283,17 +283,26 @@ function Initialize-McpClient($Client, [string]$ExpectedMode) {
     $tools = Send-McpRequest $Client "tools/list" @{}
 
     $capabilities = $null
+    $stableReadyObservations = 0
     # Every writer startup deliberately runs a detect-all freshness sweep. The frozen Roslyn
     # checkout has 17k C# files, and a cold post-reboot sweep can take several minutes even
     # though the reusable index is already valid. Keep this integration gate bounded, but size
     # the bound for the repository it intentionally exercises rather than a tiny unit fixture.
-    for ($attempt = 0; $attempt -lt 2400; $attempt++) {
+    # A writer can briefly report ready before a queued refresh starts, so require readiness to
+    # remain stable across two observations one second apart before issuing semantic probes.
+    for ($attempt = 0; $attempt -lt 600; $attempt++) {
         $capabilities = Invoke-McpTool $Client "server_capabilities" ([hashtable]::new())
-        if ($capabilities.index.state -eq "ready" -and $capabilities.index.mode -eq $ExpectedMode) { break }
-        Start-Sleep -Milliseconds 250
+        if ($capabilities.index.state -eq "ready" -and $capabilities.index.mode -eq $ExpectedMode) {
+            $stableReadyObservations++
+            if ($stableReadyObservations -ge 2) { break }
+        } else {
+            $stableReadyObservations = 0
+        }
+        Start-Sleep -Seconds 1
     }
     Assert-Equal "ready" $capabilities.index.state "$($Client.Label): index did not become ready"
     Assert-Equal $ExpectedMode $capabilities.index.mode "$($Client.Label): unexpected index access mode"
+    Assert-Equal 2 $stableReadyObservations "$($Client.Label): index readiness did not remain stable"
     return [pscustomobject]@{
         Initialize = $initialize
         Tools = $tools

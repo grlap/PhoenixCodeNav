@@ -72,7 +72,10 @@ The loop, in order — no step skipped or reordered:
 1. Implement.
 2. Add focused regression or contract tests for changed behavior. Tests must exercise the
    decisive behavior and assertions, not merely prove that the code does not throw.
-3. `dotnet build` at **0 warnings**; `dotnet test` green. Known flake:
+3. `dotnet build` at **0 warnings**; `dotnet test` green; and
+   `pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1` green against the pinned Roslyn/F#
+   submodules and reusable indexes. Missing external prerequisites or any integration-harness
+   failure block check-in. Known solution-test flake:
    `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` (watcher timing) — if it fires
    in a full run, verify it passes isolated and note it.
 4. **Adversarial subagent review of the full uncommitted implementation diff**, with empirical
@@ -98,6 +101,7 @@ on a self-performed probe run; wait for capacity or ask Greg.
 ```bash
 dotnet build          # must be 0 warnings
 dotnet test           # full suite; see known flake above
+pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1  # external Roslyn/F# MCP gate
 ```
 
 ## Architecture Overview

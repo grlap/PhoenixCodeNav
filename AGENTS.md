@@ -135,9 +135,13 @@ documentation-only, test-only, and apparently trivial changes still follow the f
 1. Implement the tracked Beads work.
 2. Add focused regression or contract tests for changed behavior. Tests must exercise the
    decisive behavior and assertions, not merely prove that the code does not throw.
-3. Run a Release build with literal zero warnings and the complete test suite green. The
-   documented `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` timing flake may be
-   noted only when it is the sole failure and passes in isolation.
+3. Run a Release build with literal zero warnings, the complete test suite green, and the
+   external Roslyn/F# MCP integration gate with
+   `pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1`. The external harness must pass
+   against the pinned submodules and reusable indexes; missing prerequisites or any harness
+   failure block check-in. The documented
+   `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` timing flake may be noted only
+   when it is the sole solution-test failure and passes in isolation.
 4. Run an adversarial review of the full uncommitted staged, unstaged, and untracked
    implementation change set. Critical and High findings are fixed and verified by the same
    reviewer. Medium and Low findings are reconciled in Beads and do not block check-in. If a

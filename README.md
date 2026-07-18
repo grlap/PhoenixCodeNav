@@ -215,7 +215,8 @@ dotnet test tests/CodeNav.IndexTests                             # index + seman
 dotnet test tests/CodeNav.GitTests                               # Git/worktree manipulation
 dotnet test tests/CodeNav.WatcherTests                           # watcher timing
 dotnet test tests/CodeNav.LifecycleTests                         # leases, followers, process lifecycle
-dotnet test PhoenixCodeNav.sln                                   # complete gate
+dotnet test PhoenixCodeNav.sln                                   # complete solution suite
+pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1              # external Roslyn/F# MCP gate
 dotnet run --project src/CodeNav.WorkspaceGen -- --out C:/temp/acme-2k \
     --projects 2000 --density 6 --clean                          # synthetic enterprise repo
 dotnet run --project src/CodeNav.Bench -c Release -- --workspace C:/temp/acme-2k --rebuild

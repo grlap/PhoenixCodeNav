@@ -57,8 +57,10 @@ Validation belongs in the writable parent, not in read-only reviewer children.
 1. Run `dotnet build PhoenixCodeNav.sln -c Release --no-restore`. Validation must use the dependency graph already restored by the implementation session; it must not unexpectedly download packages. If assets are missing or stale, stop and ask the implementer to restore explicitly before review.
 2. Require a successful build with literal `0 Warning(s)` and `0 Error(s)`.
 3. Run `dotnet test PhoenixCodeNav.sln -c Release --no-build --no-restore`.
+4. Run `pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1` against the pinned Roslyn and F# submodules and their reusable indexes.
+5. Require the external MCP integration harness to exit successfully with zero failed cases. Missing submodules, mismatched external commits, missing reusable indexes, or any harness failure stop the review gate; do not restore, rebuild, mutate, or refresh external fixtures implicitly.
 
-If build or tests fail, stop and report the output. The sole documented exception is `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep`: when it is the only failure, rerun that exact test in isolation. Continue only if the isolated rerun passes, and carry the flake note into the final review. Do not silently bless any other intermittent failure.
+If the build, solution tests, or external MCP integration harness fail, stop and report the output. The sole documented exception is `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep`: when it is the only solution-test failure, rerun that exact test in isolation. Continue only if the isolated rerun passes, and carry the flake note into the final review. Do not silently bless any other intermittent failure.
 
 After validation, restart all of Step 1 from its path-only inventories. Reapply no-follow containment before any diff check, content read, or spawn; scan reviewable untracked text files for conflict markers and whitespace errors only after those checks pass. If the sorted implementation path inventory changed, repeat Step 2 against the new inventory and restart Step 1. If it changes again, return INCONCLUSIVE. Never validate one implementation path set and send a different one to reviewers.
 
@@ -115,6 +117,7 @@ Use this shape:
 ## Validation
 - Release build: ...
 - Full suite: ...
+- External MCP integration: ...
 - Known flake note: ...
 
 ## Codex /review-local

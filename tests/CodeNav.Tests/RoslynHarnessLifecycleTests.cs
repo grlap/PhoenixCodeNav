@@ -98,6 +98,26 @@ public sealed class RoslynHarnessLifecycleTests
     }
 
     [Fact]
+    public void HarnessRequiresStableReadyObservationsBeforeSemanticProbes()
+    {
+        string root = FindRepositoryRoot();
+        string script = File.ReadAllText(
+            Path.Combine(root, "scripts", "test-roslyn-mcp.ps1"));
+
+        Assert.Contains("$stableReadyObservations = 0", script, StringComparison.Ordinal);
+        Assert.Contains("for ($attempt = 0; $attempt -lt 600; $attempt++)", script,
+            StringComparison.Ordinal);
+        Assert.Contains("$stableReadyObservations++", script, StringComparison.Ordinal);
+        Assert.Contains("if ($stableReadyObservations -ge 2) { break }", script,
+            StringComparison.Ordinal);
+        Assert.Contains("Start-Sleep -Seconds 1", script, StringComparison.Ordinal);
+        Assert.Contains("Assert-Equal 2 $stableReadyObservations", script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Start-Sleep -Milliseconds 250", script,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task SemanticRetryIncludesIndexedAutoFallbacks()
     {
         string output = await RunSelfTest("-SelfTestSemanticRetryContract", TimeSpan.FromSeconds(15));
