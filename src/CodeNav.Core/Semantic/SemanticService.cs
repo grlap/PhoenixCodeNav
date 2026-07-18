@@ -355,63 +355,63 @@ public sealed partial class SemanticService : IDisposable
             // the outer catch — there is genuinely nothing to salvage there.
             try
             {
-            foreach (var referenced in found)
-            {
-                foreach (var loc in referenced.Locations)
+                foreach (var referenced in found)
                 {
-                    if (loc.Location.SourceTree is null) continue;
-                    var doc = loc.Document;
-                    string project = doc.Project.Name;
-                    var lineSpan = loc.Location.GetLineSpan();
-                    int refLine = lineSpan.StartLinePosition.Line + 1;
-                    string relPath = ToRelPath(doc.FilePath ?? doc.Name);
-                    if (generatedPaths is not null && generatedPaths.Contains(relPath)) continue;
-                    // includeTests filters BEFORE counting (wu1) — same discipline as
-                    // includeGenerated/usageKinds, so TotalLocations, KindCounts, and the group
-                    // list all describe the same filtered set. Previously the tool dropped test
-                    // GROUPS after the fact while summary/kinds still counted their locations.
-                    bool isTest = testFlags.TryGetValue(project, out bool t) && t;
-                    if (!includeTests && isTest) continue;
-                    // publicConsumersOnly: API blast-radius view — drop usages from the DECLARING
-                    // project itself, before counting, so totals reflect external consumers only.
-                    if (publicConsumersOnly && string.Equals(project, declaringProject, StringComparison.OrdinalIgnoreCase)) continue;
+                    foreach (var loc in referenced.Locations)
+                    {
+                        if (loc.Location.SourceTree is null) continue;
+                        var doc = loc.Document;
+                        string project = doc.Project.Name;
+                        var lineSpan = loc.Location.GetLineSpan();
+                        int refLine = lineSpan.StartLinePosition.Line + 1;
+                        string relPath = ToRelPath(doc.FilePath ?? doc.Name);
+                        if (generatedPaths is not null && generatedPaths.Contains(relPath)) continue;
+                        // includeTests filters BEFORE counting (wu1) — same discipline as
+                        // includeGenerated/usageKinds, so TotalLocations, KindCounts, and the group
+                        // list all describe the same filtered set. Previously the tool dropped test
+                        // GROUPS after the fact while summary/kinds still counted their locations.
+                        bool isTest = testFlags.TryGetValue(project, out bool t) && t;
+                        if (!includeTests && isTest) continue;
+                        // publicConsumersOnly: API blast-radius view — drop usages from the DECLARING
+                        // project itself, before counting, so totals reflect external consumers only.
+                        if (publicConsumersOnly && string.Equals(project, declaringProject, StringComparison.OrdinalIgnoreCase)) continue;
 
-                    // Classify HOW the symbol is used (call vs xmldoc mention vs ...); filter before
-                    // counting so totals honor usageKinds (same discipline as includeGenerated).
-                    if (!rootCache.TryGetValue(loc.Location.SourceTree, out var rootNode))
-                    {
-                        rootNode = await loc.Location.SourceTree.GetRootAsync(cts.Token).ConfigureAwait(false);
-                        rootCache[loc.Location.SourceTree] = rootNode;
-                    }
-                    string kind = SemanticReferenceKinds.Classify(rootNode, loc.Location.SourceSpan.Start, symbolIsType);
-                    if (usageKinds is not null && !usageKinds.Contains(kind)) continue;
-                    if (!seenSites.Add((project, relPath, refLine, kind))) continue; // field P1: idempotent site counting
+                        // Classify HOW the symbol is used (call vs xmldoc mention vs ...); filter before
+                        // counting so totals honor usageKinds (same discipline as includeGenerated).
+                        if (!rootCache.TryGetValue(loc.Location.SourceTree, out var rootNode))
+                        {
+                            rootNode = await loc.Location.SourceTree.GetRootAsync(cts.Token).ConfigureAwait(false);
+                            rootCache[loc.Location.SourceTree] = rootNode;
+                        }
+                        string kind = SemanticReferenceKinds.Classify(rootNode, loc.Location.SourceSpan.Start, symbolIsType);
+                        if (usageKinds is not null && !usageKinds.Contains(kind)) continue;
+                        if (!seenSites.Add((project, relPath, refLine, kind))) continue; // field P1: idempotent site counting
 
-                    // ALL bookkeeping commits before the awaitable sample fetch (review, 24n): with
-                    // the group commit trailing GetTextAsync, a deadline OCE on that await salvaged
-                    // a response whose total/kinds included the location but whose groups did not —
-                    // worst case "at least 1 exact references across 0 projects". The with-copy
-                    // shares the Samples List instance, so samples added below still land in the
-                    // stored group; a sample lost to the OCE costs a sample line, never a count.
-                    total++;
-                    kindCounts[kind] = kindCounts.GetValueOrDefault(kind) + 1;
-                    if (!groups.TryGetValue(project, out var g))
-                    {
-                        g = new SemanticRefGroup(project, isTest, 0, new List<SemanticLocation>());
-                    }
-                    groups[project] = g with { Count = g.Count + 1 };
-                    // Placed AFTER the bookkeeping commit, matching where a real deadline OCE is
-                    // survivable (the awaitable sample fetch below) — counted state is consistent.
-                    TestOnlyPerLocationCounted?.Invoke(total);
-                    var samples = g.Samples;
-                    if (samples.Count < samplesPerGroup)
-                    {
-                        string text = (await loc.Location.SourceTree.GetTextAsync(cts.Token).ConfigureAwait(false))
-                            .Lines[lineSpan.StartLinePosition.Line].ToString().Trim();
-                        samples.Add(new SemanticLocation(relPath, refLine, Truncate(text), project, isTest, kind));
+                        // ALL bookkeeping commits before the awaitable sample fetch (review, 24n): with
+                        // the group commit trailing GetTextAsync, a deadline OCE on that await salvaged
+                        // a response whose total/kinds included the location but whose groups did not —
+                        // worst case "at least 1 exact references across 0 projects". The with-copy
+                        // shares the Samples List instance, so samples added below still land in the
+                        // stored group; a sample lost to the OCE costs a sample line, never a count.
+                        total++;
+                        kindCounts[kind] = kindCounts.GetValueOrDefault(kind) + 1;
+                        if (!groups.TryGetValue(project, out var g))
+                        {
+                            g = new SemanticRefGroup(project, isTest, 0, new List<SemanticLocation>());
+                        }
+                        groups[project] = g with { Count = g.Count + 1 };
+                        // Placed AFTER the bookkeeping commit, matching where a real deadline OCE is
+                        // survivable (the awaitable sample fetch below) — counted state is consistent.
+                        TestOnlyPerLocationCounted?.Invoke(total);
+                        var samples = g.Samples;
+                        if (samples.Count < samplesPerGroup)
+                        {
+                            string text = (await loc.Location.SourceTree.GetTextAsync(cts.Token).ConfigureAwait(false))
+                                .Lines[lineSpan.StartLinePosition.Line].ToString().Trim();
+                            samples.Add(new SemanticLocation(relPath, refLine, Truncate(text), project, isTest, kind));
+                        }
                     }
                 }
-            }
             }
             catch (OperationCanceledException) when (total > 0)
             {

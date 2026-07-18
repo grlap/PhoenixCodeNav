@@ -59,23 +59,23 @@ public sealed partial class NavigationTools
                 var skippedProjects = skippedCandidateProjects ?? new List<string>();
                 return Json.WithAuxiliaryListBudget(result, skippedProjects,
                     (items, truncated, skippedItems, skippedTruncated) => new
-                {
-                    callers = items.Select(c => new
                     {
-                        caller = SemanticSymbolJson(c.Caller),
-                        callSites = c.CallSites.Select(s => new { s.Path, s.Line, text = s.LineText }),
-                    }),
-                    coverage = coverage is null ? null : CoverageJson(coverage),
-                    skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
-                    skippedCandidateProjectCount = skippedProjects.Count > 0
+                        callers = items.Select(c => new
+                        {
+                            caller = SemanticSymbolJson(c.Caller),
+                            callSites = c.CallSites.Select(s => new { s.Path, s.Line, text = s.LineText }),
+                        }),
+                        coverage = coverage is null ? null : CoverageJson(coverage),
+                        skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
+                        skippedCandidateProjectCount = skippedProjects.Count > 0
                         ? skippedProjects.Count
                         : (int?)null,
-                    skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
-                    partial = partial ? true : (bool?)null,
-                    partialReason = partialCause,
-                    truncated,
-                    meta,
-                });
+                        skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+                        partial = partial ? true : (bool?)null,
+                        partialReason = partialCause,
+                        truncated,
+                        meta,
+                    });
             }
             return IndexedReferencesFallback(name ?? hint, reason);
         }
@@ -278,55 +278,55 @@ public sealed partial class NavigationTools
             {
                 return Json.WithAuxiliaryListBudget(heuristic, skippedProjects,
                     (items, truncated, skippedItems, skippedTruncated) => new
-                {
-                    symbol = SemanticSymbolJson(result.Symbol),
-                    baseTypes = result.BaseTypes.Select(SemanticSymbolJson),
-                    interfaces = result.Interfaces.Select(SemanticSymbolJson),
-                    derivedOrImplementing = items.Select(SymbolJson),
-                    derivedConfidence = "heuristic",
-                    noteId = NoteIds.HierarchyHeuristicFallback, // a0b: stable, machine-matchable
-                    skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
-                    skippedCandidateProjectCount = skippedProjects.Count > 0
+                    {
+                        symbol = SemanticSymbolJson(result.Symbol),
+                        baseTypes = result.BaseTypes.Select(SemanticSymbolJson),
+                        interfaces = result.Interfaces.Select(SemanticSymbolJson),
+                        derivedOrImplementing = items.Select(SymbolJson),
+                        derivedConfidence = "heuristic",
+                        noteId = NoteIds.HierarchyHeuristicFallback, // a0b: stable, machine-matchable
+                        skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
+                        skippedCandidateProjectCount = skippedProjects.Count > 0
                         ? skippedProjects.Count
                         : (int?)null,
-                    skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
-                    partial = coverageBounded ? true : (bool?)null,
-                    partialReason = SemanticCoverageReasons.Primary(coverage,
+                        skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+                        partial = coverageBounded ? true : (bool?)null,
+                        partialReason = SemanticCoverageReasons.Primary(coverage,
                         candidateProjectsSkipped: candidateBounded,
                         projectModelUnproven: result.ProjectModelUnproven)
                         ?? "no_semantic_derived",
-                    // Field (lhg): stale "generated twin" wording replaced — key on the causes we
-                    // can actually still hit post-edge-recovery, with the remediation inline.
-                    note = "Compiler resolution found no derived/implementing types, but these name it in their base list (derivedOrImplementing is heuristic here). Implementer projects were likely not loaded into the semantic cluster (raise maxProjects, or scope with pathGlob), the implementers bind the name to a declaration outside the workspace, or imported project authority can change a friend grant (see partialReason). baseTypes/interfaces are compiler-resolved; verify with source_context.",
-                    coverage = coverage is null ? null : CoverageJson(coverage),
-                    timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
-                    truncated = truncated || heuristic.Count >= 50,
-                    meta = meta1,
-                });
+                        // Field (lhg): stale "generated twin" wording replaced — key on the causes we
+                        // can actually still hit post-edge-recovery, with the remediation inline.
+                        note = "Compiler resolution found no derived/implementing types, but these name it in their base list (derivedOrImplementing is heuristic here). Implementer projects were likely not loaded into the semantic cluster (raise maxProjects, or scope with pathGlob), the implementers bind the name to a declaration outside the workspace, or imported project authority can change a friend grant (see partialReason). baseTypes/interfaces are compiler-resolved; verify with source_context.",
+                        coverage = coverage is null ? null : CoverageJson(coverage),
+                        timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
+                        truncated = truncated || heuristic.Count >= 50,
+                        meta = meta1,
+                    });
             }
         }
 
         return Json.WithAuxiliaryListBudget(down, skippedProjects,
             (items, truncated, skippedItems, skippedTruncated) => new
-        {
-            symbol = SemanticSymbolJson(result.Symbol),
-            baseTypes = result.BaseTypes.Select(SemanticSymbolJson),
-            interfaces = result.Interfaces.Select(SemanticSymbolJson),
-            derivedOrImplementing = items.Select(SemanticSymbolJson),
-            coverage = coverage is null ? null : CoverageJson(coverage),
-            skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
-            skippedCandidateProjectCount = skippedProjects.Count > 0
+            {
+                symbol = SemanticSymbolJson(result.Symbol),
+                baseTypes = result.BaseTypes.Select(SemanticSymbolJson),
+                interfaces = result.Interfaces.Select(SemanticSymbolJson),
+                derivedOrImplementing = items.Select(SemanticSymbolJson),
+                coverage = coverage is null ? null : CoverageJson(coverage),
+                skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
+                skippedCandidateProjectCount = skippedProjects.Count > 0
                 ? skippedProjects.Count
                 : (int?)null,
-            skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
-            partial = coverageBounded ? true : (bool?)null,
-            partialReason = SemanticCoverageReasons.Primary(coverage,
+                skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+                partial = coverageBounded ? true : (bool?)null,
+                partialReason = SemanticCoverageReasons.Primary(coverage,
                 candidateProjectsSkipped: candidateBounded,
                 projectModelUnproven: result.ProjectModelUnproven),
-            timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
-            truncated,
-            meta = meta1,
-        });
+                timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
+                truncated,
+                meta = meta1,
+            });
     }
 
     // ---------------------------------------------------------------- tests / graph / config

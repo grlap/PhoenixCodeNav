@@ -827,7 +827,9 @@ public sealed partial class NavigationTools
                 referenceCandidatesCoverage = ReferenceCoverage(referenceCandidates),
                 relatedTests = tests.Count == 0 ? null : tests.Select(t => new
                 {
-                    project = t.TestProject, t.Reason, signal = t.Signal,
+                    project = t.TestProject,
+                    t.Reason,
+                    signal = t.Signal,
                 }),
                 risks = risks.Count > 0 ? risks : null,
             };
@@ -1095,9 +1097,9 @@ public sealed partial class NavigationTools
         {
             List<ReviewNote> emittedNotes = compactNoteText
                 ? responseNotes.Select(note => note with
-                    {
-                        Text = "Detail trimmed for maxBytes; use the structured coverage fields.",
-                    }).ToList()
+                {
+                    Text = "Detail trimmed for maxBytes; use the structured coverage fields.",
+                }).ToList()
                 : responseNotes.ToList();
             if (symbolItems.Count < touchedSymbolsTotal)
             {
@@ -1238,7 +1240,7 @@ public sealed partial class NavigationTools
                                                    excludedUntrackedRepositories.Count
                                     ? true
                                      : (bool?)null,
-                             },
+                            },
                         untrackedLinks = excludedUntrackedLinks is null
                             ? null
                             : new

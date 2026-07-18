@@ -123,22 +123,22 @@ public sealed partial class NavigationTools
             .ToList();
         return Json.WithAuxiliaryListBudget(flat, availableParseContexts,
             (items, _, parseContexts, parseContextsByteTruncated) => new
-        {
-            path,
-            isGenerated = file.IsGenerated,
-            symbols = items,
-            truncated = true,
-            partial = result.PartialReason is not null ? true : (bool?)null,
-            partialReason = result.PartialReason,
-            selectedParseContext,
-            availableParseContexts = parseContexts,
-            availableParseContextsTotal,
-            availableParseContextsReturned = parseContexts.Count,
-            availableParseContextsTruncated =
+            {
+                path,
+                isGenerated = file.IsGenerated,
+                symbols = items,
+                truncated = true,
+                partial = result.PartialReason is not null ? true : (bool?)null,
+                partialReason = result.PartialReason,
+                selectedParseContext,
+                availableParseContexts = parseContexts,
+                availableParseContextsTotal,
+                availableParseContextsReturned = parseContexts.Count,
+                availableParseContextsTruncated =
                 availableParseContextsLimitTruncated || parseContextsByteTruncated,
-            note = "File has too many declarations for a full outline; showing bounded top-level declarations.",
-            meta,
-        });
+                note = "File has too many declarations for a full outline; showing bounded top-level declarations.",
+                meta,
+            });
     }
 
     private string FSharpSymbolAt(string path, int line, int column,
@@ -306,43 +306,43 @@ public sealed partial class NavigationTools
         string shaped = Json.WithAuxiliaryListsBudget(declarations, contexts, diagnostics,
             (shownDeclarations, declarationsTruncated, shownContexts, contextsByteTruncated,
                 shownDiagnostics, diagnosticsTruncated) => new
-            {
-                error,
-                operation,
-                path,
-                line,
-                column = column > 0 ? column : (int?)null,
-                found = error is null ? result.Symbol is not null : (bool?)null,
-                symbol,
-                declarations = shownDeclarations.Select(declaration => new
                 {
-                    declaration.Role,
-                    declaration.Path,
-                    declaration.StartLine,
-                    declaration.StartColumn,
-                    declaration.EndLine,
-                    declaration.EndColumn,
-                }),
-                declarationsTotal = result.Symbol?.DeclarationCount,
-                declarationsOutsideSelectedProjectCount = result.Symbol is null
+                    error,
+                    operation,
+                    path,
+                    line,
+                    column = column > 0 ? column : (int?)null,
+                    found = error is null ? result.Symbol is not null : (bool?)null,
+                    symbol,
+                    declarations = shownDeclarations.Select(declaration => new
+                    {
+                        declaration.Role,
+                        declaration.Path,
+                        declaration.StartLine,
+                        declaration.StartColumn,
+                        declaration.EndLine,
+                        declaration.EndColumn,
+                    }),
+                    declarationsTotal = result.Symbol?.DeclarationCount,
+                    declarationsOutsideSelectedProjectCount = result.Symbol is null
                     ? (int?)null
                     : declarationsOutsideSelectedProject > 0
                         ? declarationsOutsideSelectedProject
                         : (int?)null,
-                declarationsTruncated = declarationsTruncated ? true : (bool?)null,
-                partial = result.PartialReason is not null ? true : (bool?)null,
-                partialReason = result.PartialReason,
-                detail,
-                selectedFSharpTypeCheckContext = selected,
-                availableFSharpTypeCheckContexts = shownContexts,
-                fsharpTypeCheckContextsTotal = contextTotal,
-                fsharpTypeCheckContextsReturned = shownContexts.Count,
-                fsharpTypeCheckContextsTruncated =
+                    declarationsTruncated = declarationsTruncated ? true : (bool?)null,
+                    partial = result.PartialReason is not null ? true : (bool?)null,
+                    partialReason = result.PartialReason,
+                    detail,
+                    selectedFSharpTypeCheckContext = selected,
+                    availableFSharpTypeCheckContexts = shownContexts,
+                    fsharpTypeCheckContextsTotal = contextTotal,
+                    fsharpTypeCheckContextsReturned = shownContexts.Count,
+                    fsharpTypeCheckContextsTruncated =
                     contextLimitTruncated || contextsByteTruncated,
-                diagnosticCount = result.DiagnosticCount > 0
+                    diagnosticCount = result.DiagnosticCount > 0
                     ? result.DiagnosticCount
                     : (int?)null,
-                diagnostics = shownDiagnostics.Count > 0
+                    diagnostics = shownDiagnostics.Count > 0
                     ? shownDiagnostics.Select(diagnostic => new
                     {
                         severity = diagnostic.Severity,
@@ -355,19 +355,19 @@ public sealed partial class NavigationTools
                         endColumn = diagnostic.EndColumn,
                     })
                     : null,
-                diagnosticsTruncated = diagnosticLimitTruncated || diagnosticsTruncated
+                    diagnosticsTruncated = diagnosticLimitTruncated || diagnosticsTruncated
                     ? true
                     : (bool?)null,
-                limit = result.LimitActual is not null && result.LimitMaximum is not null
+                    limit = result.LimitActual is not null && result.LimitMaximum is not null
                     ? new { actual = result.LimitActual, maximum = result.LimitMaximum, unit = "characters" }
                     : null,
-                timing = new
-                {
-                    deadlineMs,
-                    elapsedMs,
-                },
-                meta,
-            }, auxiliarySampleItems: MaxFSharpTypeCheckContexts);
+                    timing = new
+                    {
+                        deadlineMs,
+                        elapsedMs,
+                    },
+                    meta,
+                }, auxiliarySampleItems: MaxFSharpTypeCheckContexts);
         if (Json.Utf8Bytes(shaped) <= Json.HardBudgetBytes) return shaped;
 
         // Lists can be reduced to zero, but FCS-derived symbol names are fixed members of the

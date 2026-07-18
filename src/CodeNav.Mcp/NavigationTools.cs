@@ -1445,40 +1445,40 @@ public sealed partial class NavigationTools
                 long elapsedMs = swSem.ElapsedMilliseconds;
                 return Json.WithAuxiliaryListBudget(impls, result.SkippedCandidateProjects,
                     (items, truncated, skippedItems, skippedTruncated) => new
-                {
-                    symbol = SemanticSymbolJson(result.Symbol),
-                    implementations = items.Select(r => new
                     {
-                        symbol = SemanticSymbolJson(r.Declaration),
-                        isAbstract = r.Declaration.IsAbstract ? true : (bool?)null, // omitted when concrete
-                        rank = r.Declaration.IsAbstract ? "abstract" : "concrete", // make the ranking legible to the model
-                        via = r.Via, // the base type that introduces the interface, when implemented indirectly
-                    }),
-                    concreteCount,
-                    // High-signal case: exactly one instantiable implementation is very likely THE
-                    // runtime type; anything else is abstract scaffolding. Never claimed when the
-                    // deadline cut the search short — the "one" may just be the one found in time.
-                    likelyImplementation = concreteCount == 1 && !partial
+                        symbol = SemanticSymbolJson(result.Symbol),
+                        implementations = items.Select(r => new
+                        {
+                            symbol = SemanticSymbolJson(r.Declaration),
+                            isAbstract = r.Declaration.IsAbstract ? true : (bool?)null, // omitted when concrete
+                            rank = r.Declaration.IsAbstract ? "abstract" : "concrete", // make the ranking legible to the model
+                            via = r.Via, // the base type that introduces the interface, when implemented indirectly
+                        }),
+                        concreteCount,
+                        // High-signal case: exactly one instantiable implementation is very likely THE
+                        // runtime type; anything else is abstract scaffolding. Never claimed when the
+                        // deadline cut the search short — the "one" may just be the one found in time.
+                        likelyImplementation = concreteCount == 1 && !partial
                         ? impls.First(r => !r.Declaration.IsAbstract).Declaration.SymbolDisplay
                         : null,
-                    coverage = CoverageJson(result.Coverage),
-                    skippedCandidateProjects = skippedItems.Count > 0
+                        coverage = CoverageJson(result.Coverage),
+                        skippedCandidateProjects = skippedItems.Count > 0
                         ? skippedItems
                         : null,
-                    skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
+                        skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
                         ? result.SkippedCandidateProjects.Count
                         : (int?)null,
-                    skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
-                    partial = partial ? true : (bool?)null,
-                    partialReason = partialCause,
-                    // t2b: where the budget went — cluster load+resolve vs the finder passes.
-                    timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
-                    truncated,
-                    hint = concreteCount == 1 && !partial
+                        skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+                        partial = partial ? true : (bool?)null,
+                        partialReason = partialCause,
+                        // t2b: where the budget went — cluster load+resolve vs the finder passes.
+                        timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
+                        truncated,
+                        hint = concreteCount == 1 && !partial
                         ? "One concrete implementation — likely the runtime target. Ranked concrete-first; isAbstract/rank mark non-instantiable scaffolding."
                         : null,
-                    meta = meta0,
-                });
+                        meta = meta0,
+                    });
             }
             // Semantic RESOLVED the symbol but found no implementers, OR it could not resolve. Be
             // honest about which: bounded coverage (raising maxProjects may help) vs genuinely none.
@@ -1764,57 +1764,57 @@ public sealed partial class NavigationTools
                         result.SkippedCandidateProjects, boundedOutOfGraph,
                         (items, truncated, skippedItems, skippedTruncated,
                             outOfGraphItems, outOfGraphBudgetTruncated) => new
-                    {
-                        symbol = SemanticSymbolJson(result.Symbol),
-                        summary = $"{atLeast}{result.TotalLocations} {(indexedConfidence ? "compiler-resolved candidate" : "exact")} references across {groups0.Count} projects ({mix0}).",
-                        totalReferences = result.TotalLocations,
-                        totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
-                        // HOW the symbol is used, e.g. {"call":20,"xmldoc":480} — the anti-"500 refs
-                        // that are mostly doc mentions" signal. Filter with usageKinds.
-                        kinds = result.KindCounts is { Count: > 0 } ? result.KindCounts : null,
-                        groupBy = "project",
-                        groups = items.Select(g => new
-                        {
-                            project = g.Project,
-                            isTest = g.IsTestProject,
-                            count = g.Count,
-                            samples = g.Samples.Select(s => new { s.Path, s.Line, text = s.LineText, kind = s.Kind }),
-                        }),
-                        coverage = CoverageJson(result.Coverage),
-                        partial,
-                        partialReason,
-                        skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
-                        skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
+                            {
+                                symbol = SemanticSymbolJson(result.Symbol),
+                                summary = $"{atLeast}{result.TotalLocations} {(indexedConfidence ? "compiler-resolved candidate" : "exact")} references across {groups0.Count} projects ({mix0}).",
+                                totalReferences = result.TotalLocations,
+                                totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
+                                // HOW the symbol is used, e.g. {"call":20,"xmldoc":480} — the anti-"500 refs
+                                // that are mostly doc mentions" signal. Filter with usageKinds.
+                                kinds = result.KindCounts is { Count: > 0 } ? result.KindCounts : null,
+                                groupBy = "project",
+                                groups = items.Select(g => new
+                                {
+                                    project = g.Project,
+                                    isTest = g.IsTestProject,
+                                    count = g.Count,
+                                    samples = g.Samples.Select(s => new { s.Path, s.Line, text = s.LineText, kind = s.Kind }),
+                                }),
+                                coverage = CoverageJson(result.Coverage),
+                                partial,
+                                partialReason,
+                                skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
+                                skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
                             ? result.SkippedCandidateProjects.Count
                             : (int?)null,
-                        skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
-                        // kbn: unscanned projects that textually mention the symbol but have no
-                        // graph path to its declarer (plugins, config-wired consumers). Scope with
-                        // pathGlob or run indexed mode to see their candidate lines.
-                        outOfGraphCandidates = outOfGraphItems.Count > 0
+                                skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+                                // kbn: unscanned projects that textually mention the symbol but have no
+                                // graph path to its declarer (plugins, config-wired consumers). Scope with
+                                // pathGlob or run indexed mode to see their candidate lines.
+                                outOfGraphCandidates = outOfGraphItems.Count > 0
                             ? outOfGraphItems.Select(item => item.Value).ToList()
                             : null,
-                        outOfGraphCandidateCount = result.OutOfGraphCandidateCount > 0
+                                outOfGraphCandidateCount = result.OutOfGraphCandidateCount > 0
                             ? result.OutOfGraphCandidateCount
                             : (int?)null,
-                        outOfGraphCandidatesReturned = result.OutOfGraphCandidateCount > 0
+                                outOfGraphCandidatesReturned = result.OutOfGraphCandidateCount > 0
                             ? outOfGraphItems.Count
                             : (int?)null,
-                        outOfGraphCandidatesTruncated = result.OutOfGraphCandidatesTruncated ||
+                                outOfGraphCandidatesTruncated = result.OutOfGraphCandidatesTruncated ||
                                                         outOfGraphBudgetTruncated
                             ? true
                             : (bool?)null,
-                        outOfGraphCandidateItemsTruncated = outOfGraphItems.Any(item =>
-                            item.Truncated)
+                                outOfGraphCandidateItemsTruncated = outOfGraphItems.Any(item =>
+                                    item.Truncated)
                             ? true
                             : (bool?)null,
-                        note = zeroNote,
-                        noteId = zeroNote is not null ? NoteIds.ReferencesZeroLoadingGap : null, // a0b: stable, machine-matchable
-                        // t2b: where the budget went — cluster load+resolve vs find+count.
-                        timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
-                        truncated,
-                        meta = meta0,
-                    });
+                                note = zeroNote,
+                                noteId = zeroNote is not null ? NoteIds.ReferencesZeroLoadingGap : null, // a0b: stable, machine-matchable
+                                                                                                         // t2b: where the budget went — cluster load+resolve vs find+count.
+                                timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
+                                truncated,
+                                meta = meta0,
+                            });
                 }
                 failReason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
             }

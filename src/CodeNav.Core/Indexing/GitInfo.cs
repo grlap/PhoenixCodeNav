@@ -2811,7 +2811,8 @@ public static class GitInfo
                 {
                     try { attributes?.StandardInput.Close(); } catch { /* pipe torn down */ }
                 }
-            }) { IsBackground = true };
+            })
+            { IsBackground = true };
             Thread? attributeReader = null;
             if (attributes is not null)
             {
@@ -2823,7 +2824,8 @@ public static class GitInfo
                             attributes.StandardOutput.BaseStream, executableDrivers, unsafePaths);
                     }
                     catch (Exception ex) { attributeFailure = ex; }
-                }) { IsBackground = true };
+                })
+                { IsBackground = true };
             }
             var indexError = DrainThread(index.StandardError.BaseStream);
             Thread? attributeError = attributes is null
@@ -3131,7 +3133,8 @@ public static class GitInfo
     {
         try { DrainToEof(stream); }
         catch { /* pipe torn down */ }
-    }) { IsBackground = true };
+    })
+    { IsBackground = true };
 
     private static void KillAndCut(Process process)
     {
@@ -3519,12 +3522,14 @@ public static class GitInfo
                             p.StandardOutput.BaseStream, maxOutputChars);
                 }
                 catch (Exception ex) { stdoutFailure = ex; }
-            }) { IsBackground = true };
+            })
+            { IsBackground = true };
             var errReader = new Thread(() =>
             {
                 try { DrainToEof(p.StandardError.BaseStream); }
                 catch { /* pipe torn down */ }
-            }) { IsBackground = true };
+            })
+            { IsBackground = true };
             outReader.Start();
             errReader.Start();
 
@@ -3544,7 +3549,8 @@ public static class GitInfo
                     {
                         try { p.StandardInput.Close(); } catch { /* pipe torn down */ }
                     }
-                }) { IsBackground = true };
+                })
+                { IsBackground = true };
                 inWriter.Start();
             }
 

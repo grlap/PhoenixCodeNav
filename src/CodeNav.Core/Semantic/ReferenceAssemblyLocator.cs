@@ -177,7 +177,7 @@ public static class ReferenceAssemblyLocator
         if (packageVersion.Length > 0)
         {
             string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
-                { Length: > 0 } configuredPackages
+            { Length: > 0 } configuredPackages
                 ? configuredPackages
                 : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     ".nuget", "packages");

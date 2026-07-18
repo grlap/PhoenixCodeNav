@@ -108,10 +108,10 @@ internal sealed class CodeEmitter
     {
         var usings = new SortedSet<string>(StringComparer.Ordinal) { "System" };
         foreach (var d in dtos)
-        foreach (var (t, _) in d.Props)
-        {
-            AddUsing(usings, t, p.Ns);
-        }
+            foreach (var (t, _) in d.Props)
+            {
+                AddUsing(usings, t, p.Ns);
+            }
 
         var w = new Writer();
         w.Header(usings, p.Ns);

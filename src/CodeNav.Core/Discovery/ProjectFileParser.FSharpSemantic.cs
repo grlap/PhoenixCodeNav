@@ -246,9 +246,9 @@ public static partial class ProjectFileParser
                             if (processDefinitions)
                                 _error = "fsharp_semantic_item_definition_unsupported";
                             break;
-                        // SDK declarations, UsingTask registrations, ProjectExtensions, and
-                        // unrelated item kinds do not contribute facts to this bounded projection.
-                        // They are never executed.
+                            // SDK declarations, UsingTask registrations, ProjectExtensions, and
+                            // unrelated item kinds do not contribute facts to this bounded projection.
+                            // They are never executed.
                     }
                 }
             }

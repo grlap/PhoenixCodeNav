@@ -38,14 +38,14 @@ public static class RegexLiterals
                 case '*': return (true, p + 1);
                 case '+': return (false, p + 1);
                 case '{':
-                {
-                    int j = p + 1;
-                    var num = new System.Text.StringBuilder();
-                    while (j < n && char.IsDigit(pattern[j])) num.Append(pattern[j++]);
-                    bool mz = num.Length > 0 && long.TryParse(num.ToString(), out long m) && m == 0;
-                    while (j < n && pattern[j] != '}') j++;
-                    return (mz, j < n ? j + 1 : j);
-                }
+                    {
+                        int j = p + 1;
+                        var num = new System.Text.StringBuilder();
+                        while (j < n && char.IsDigit(pattern[j])) num.Append(pattern[j++]);
+                        bool mz = num.Length > 0 && long.TryParse(num.ToString(), out long m) && m == 0;
+                        while (j < n && pattern[j] != '}') j++;
+                        return (mz, j < n ? j + 1 : j);
+                    }
                 default: return (false, p);
             }
         }
@@ -93,47 +93,47 @@ public static class RegexLiterals
             {
                 case '(': EndRun(false); depth++; runPrecededByBoundary = false; i++; continue;
                 case '[':
-                {
-                    EndRun(false);
-                    int j = i + 1;
-                    while (j < n && pattern[j] != ']') { if (pattern[j] == '\\') j++; j++; }
-                    var (_, nxt) = Quant(j < n ? j + 1 : j);
-                    runPrecededByBoundary = false;
-                    i = nxt;
-                    continue;
-                }
+                    {
+                        EndRun(false);
+                        int j = i + 1;
+                        while (j < n && pattern[j] != ']') { if (pattern[j] == '\\') j++; j++; }
+                        var (_, nxt) = Quant(j < n ? j + 1 : j);
+                        runPrecededByBoundary = false;
+                        i = nxt;
+                        continue;
+                    }
                 case '|': EndRun(false); topLevelAlt = true; runPrecededByBoundary = false; i++; continue;
                 case '.':
-                {
-                    EndRun(false);
-                    var (_, nxt) = Quant(i + 1);
-                    runPrecededByBoundary = false;
-                    i = nxt;
-                    continue;
-                }
+                    {
+                        EndRun(false);
+                        var (_, nxt) = Quant(i + 1);
+                        runPrecededByBoundary = false;
+                        i = nxt;
+                        continue;
+                    }
                 case '^':
                 case '$': EndRun(false); runPrecededByBoundary = false; i++; continue; // anchors line position, not a token boundary
                 case '\\':
-                {
-                    char e = i + 1 < n ? pattern[i + 1] : '\0';
-                    var (mz, nxt) = Quant(i + 2);
-                    bool boundary = EscapeIsBoundary(e) && !mz; // \s+ is a boundary; \s* is not (may be absent)
-                    EndRun(boundary);
-                    runPrecededByBoundary = boundary;
-                    i = nxt;
-                    continue;
-                }
+                    {
+                        char e = i + 1 < n ? pattern[i + 1] : '\0';
+                        var (mz, nxt) = Quant(i + 2);
+                        bool boundary = EscapeIsBoundary(e) && !mz; // \s+ is a boundary; \s* is not (may be absent)
+                        EndRun(boundary);
+                        runPrecededByBoundary = boundary;
+                        i = nxt;
+                        continue;
+                    }
                 default:
-                {
-                    // A literal non-word char in the pattern (space, ',', ';', ':', '/', '-', ...): a
-                    // required occurrence is a hard boundary; an optional one (`,?`) is not.
-                    var (mz, nxt) = Quant(i + 1);
-                    bool boundary = !mz;
-                    EndRun(boundary);
-                    runPrecededByBoundary = boundary;
-                    i = nxt;
-                    continue;
-                }
+                    {
+                        // A literal non-word char in the pattern (space, ',', ';', ':', '/', '-', ...): a
+                        // required occurrence is a hard boundary; an optional one (`,?`) is not.
+                        var (mz, nxt) = Quant(i + 1);
+                        bool boundary = !mz;
+                        EndRun(boundary);
+                        runPrecededByBoundary = boundary;
+                        i = nxt;
+                        continue;
+                    }
             }
         }
         EndRun(false); // pattern end is NOT a subject boundary — an unanchored match can extend into more word chars

@@ -15,13 +15,13 @@ public sealed record ParsedProject(
     List<string>? ExplicitCompileItems, // workspace-relative EXACT paths; null => SDK-style project
     List<(string Assembly, string? HintPath)> AssemblyRefs, // legacy <Reference> items; hint paths workspace-relative
     string LoadStatus,                  // "parsed" | "failed:<reason>"
-    // Compile-graph fidelity (3tz): a file must only count as compiled when the project REALLY
-    // compiles it. Include globs (with their per-item Exclude=) cover legacy wildcard <Compile>
-    // (previously skipped -> whole live projects looked orphaned) and SDK explicit <Compile Include>
-    // (incl. linked ../ files); Remove globs cover unconditioned, project-level <Compile Remove>
-    // (previously ignored -> excluded files looked compiled — the dead-twin bug). Condition
-    // attributes on INCLUDES are deliberately ignored (over-inclusion is safe); a conditioned or
-    // <Target>-scoped REMOVE is skipped (honoring it would falsely orphan live files).
+                                        // Compile-graph fidelity (3tz): a file must only count as compiled when the project REALLY
+                                        // compiles it. Include globs (with their per-item Exclude=) cover legacy wildcard <Compile>
+                                        // (previously skipped -> whole live projects looked orphaned) and SDK explicit <Compile Include>
+                                        // (incl. linked ../ files); Remove globs cover unconditioned, project-level <Compile Remove>
+                                        // (previously ignored -> excluded files looked compiled — the dead-twin bug). Condition
+                                        // attributes on INCLUDES are deliberately ignored (over-inclusion is safe); a conditioned or
+                                        // <Target>-scoped REMOVE is skipped (honoring it would falsely orphan live files).
     List<CompileGlob>? CompileIncludeGlobs = null,  // workspace-relative patterns (may contain * ? **)
     List<string>? CompileRemoveGlobs = null,        // workspace-relative patterns
     bool DefaultCompileItems = true,                // SDK **/*.cs default; false when EnableDefaultCompileItems=false (always false for legacy)
