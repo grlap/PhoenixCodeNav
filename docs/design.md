@@ -212,34 +212,108 @@ The index is kept live without rebuilding on every keystroke:
   drains the shared handles, and only then replaces the database. Its queued request remains pending
   and resumes automatically after readers release; new readers cannot barge ahead of it.
 
+### Filesystem notification and refresh serialization
+
+The writer detects workspace edits through a recursive `.NET FileSystemWatcher`. It observes file
+and directory names, last-write changes, and size changes; create/change/delete events record one
+canonical workspace-relative path, while rename records both the old and new path. A concurrent
+set deduplicates paths during a 600 ms quiet window. A directory-level operation, incomplete
+directory classification, or watcher-buffer error supersedes the path batch with a detect-all
+sweep because the operating system may not emit one event per affected child.
+
+After debounce, the watcher removes the collected paths from its pending set and publishes one
+`RefreshRequest` to the `IndexManager` channel. Git reconciliation, explicit refresh requests, and
+the post-startup sweep use the same channel. Exactly one refresh pump consumes it, so all SQLite
+mutations are serialized and each delta is applied in one transaction. A detect-all sweep still
+uses `DeltaRefresher`; it is not a destructive rebuild. Full rebuild is reserved for a missing,
+incompatible, corrupt, or explicitly rebuilt index.
+
+The index writer lease is per database destination. Only the process holding that lease owns the
+watcher, queue, build, and refresh pump. On Windows, additional processes may attach to committed
+WAL state as read-only followers; followers never watch, enqueue, refresh, or rebuild. On macOS and
+Linux, a contender currently remains unavailable rather than attaching as a follower. Processes
+configured with different index database paths own independent leases and refresh pipelines.
+
+### Proposed unavailable source capture and retry contract
+
+> **Status: planned, not implemented.** This is the approved design for
+> `PhoenixCodeNav-0thv`, not a description of current runtime behavior. Today the reader has only
+> four dispositions (`Success`, `Missing`, `DefinitelyNonRegular`, and `Unavailable`); oversized
+> regular files are folded into `Unavailable`. Ordinary unavailable source files can still be
+> skipped, failed refresh requests are not requeued, and strict worktree reconciliation can install
+> an index after removing an unavailable source row. Until this design ships, `ready`, `inSync`,
+> and exact-looking semantic results do not prove that every regular source was captured.
+
+The implementation for `PhoenixCodeNav-0thv` will keep these outcomes distinct:
+
+- `Success`: complete bounded bytes from one held regular-file handle.
+- `Missing`: the path is authoritatively absent, so an existing row may be deleted.
+- `DefinitelyNonRegular`: the leaf is a directory, link/reparse point, device, FIFO, or another
+  refused file type; it must never be opened as source evidence.
+- `Unavailable`: a regular file could not be captured completely because of a transient open/read,
+  sharing, permission, replacement, or length-stability failure.
+- `Oversized`: a regular file exceeds the configured source-byte limit; retry cannot repair it.
+
+On Unix, source capture walks from an anchored directory with relative `openat` calls using
+read-only, no-follow, non-blocking, close-on-exec, and no-controlling-terminal flags; directory
+components also require directory-only opens. The leaf must pass regular-file `fstat`, remain under
+the byte limit, and produce exactly its measured bytes with no extra byte. Windows uses relative
+`NtCreateFile` calls with `FILE_OPEN` semantics, read-data/read-attributes access,
+read/write/delete sharing, reparse-point refusal, and a non-directory leaf requirement. These
+flags avoid following workspace-controlled links and avoid blocking on special files, but they
+cannot eliminate an editor save/rename race.
+
+Under the proposed contract, `Unavailable` is a refresh failure, not a skipped file.
+`DeltaRefresher` will throw a typed failure so its complete SQLite transaction rolls back. The
+single pump will retain that request ahead of later refreshes and retry the complete transaction
+after short bounded delays (100 ms, 250 ms, then 1 second); it must not sleep while a SQLite
+transaction is open. A retry success may publish the rows and commit metadata normally. While
+retries are pending, health will report a known incomplete refresh and must not publish `ready`,
+advance `indexed_commit`, report worktree `inSync`, or allow semantic coverage to claim
+exact/current source evidence.
+
+If the proposed quick retries are exhausted, the writer will keep a stable
+`refresh_input_unavailable` cause, coalesce subsequently queued paths into a detect-all recovery
+request, and remain stale or failed until that recovery succeeds or an explicit refresh is
+requested. It will never rely on the operating system producing a second notification. A fresh
+watcher signal may start a new bounded retry budget, but cannot clear the incomplete-freshness
+latch by itself.
+
+The proposed `Oversized` outcome is persistent rather than transient and receives no rapid retry
+loop. The result will identify the skipped regular source and propagate partial coverage through
+refresh health, worktree-index results, and semantic responses. It cannot advance the Git baseline
+or earn `inSync`/exact claims. Strict worktree reconciliation will follow the same rule and must not
+install a staged database as `created` or `refreshed` when a regular source was unavailable. Tests
+must cover transient failure followed by success, retry exhaustion, oversize behavior,
+Git-baseline preservation, queued-request ordering, normal writer refresh, and strict worktree
+refresh.
+
 ### `git checkout <branch>` / `git pull` / `merge` / `rebase`
 
-These are **bulk working-tree mutations**, and today they are handled *indirectly*:
+These are **bulk working-tree mutations** handled by two complementary signals:
 
 - Git rewrites the affected working-tree files, which the watcher sees as ordinary
   create/change/delete events → a (possibly large) delta batch. If enough events arrive at
   once to overflow the FSW buffer, the watcher's overflow handler triggers a full detect-all
   sweep. Directory add/remove on a branch also escalates to a sweep. The startup sweep is a
   final backstop after any restart.
+- `GitWatcher` observes repository HEAD changes explicitly. `IndexManager` diffs the stored
+  `indexed_commit` against the new HEAD and enqueues that changed-file set through the same
+  serialized refresh channel. If Git cannot provide the diff or it exceeds the configured cap,
+  the manager enqueues a detect-all sweep. The new commit baseline is recorded only in the same
+  successful reconcile that applies the corresponding rows.
 - `.git/` itself is excluded, so git's internal churn never pollutes the index.
 
-**So switching branches or pulling *does* converge the index to the new tree** — but with
-two honest caveats:
+**So switching branches or pulling *does* converge the index to the new tree** — with two honest
+caveats:
 
 1. **Brief staleness window.** For the ~600 ms debounce + refresh duration the index lags
    the new branch; during it, responses report `indexStatus: refreshing`/`stale` and
    non-zero `pendingChanges`. An agent that ignores that signal could act on a stale result.
-2. **No explicit git-awareness.** The index tracks *files*, not the current commit/branch.
-   Convergence relies on the watcher catching every file event (or overflowing into a
-   sweep). This is robust in practice but not *guaranteed* for every git plumbing path.
-
-**Planned hardening (git-aware refresh):** watch `.git/HEAD` (+ `MERGE_HEAD`, packed-refs)
-and, on any HEAD change, deterministically enqueue a `git diff`-scoped refresh — replacing
-"infer a branch switch from thousands of file events" with "the branch changed, reconcile
-now." This also lets `repo_overview` report the commit the index reflects. Full design in
-[`git-refresh-design.md`](./git-refresh-design.md). Until it ships, a manual
-`refresh_index()` (full sweep) is the workaround if you ever suspect drift right after a big
-pull.
+2. **Git can be unavailable.** If the configured Git executable cannot be resolved or a Git query
+   fails, Phoenix retains watcher-only convergence and logs the degraded mode. A watcher overflow
+   still escalates to a detect-all sweep; `refresh_index()` remains the manual recovery hatch when
+   the reported commit/freshness state is uncertain.
 
 ## Result discipline
 
