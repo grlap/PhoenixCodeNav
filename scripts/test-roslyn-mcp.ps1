@@ -798,7 +798,7 @@ try {
         Assert-True ($null -eq $fsharpOutline.error) "Official FSharp outline returned $($fsharpOutline.error)"
         Assert-Equal "indexed" ([string]$fsharpOutline.meta.confidence) "Official FSharp outline confidence changed"
         Assert-Equal "syntax" ([string]$fsharpOutline.meta.navigationLayer) "Official FSharp outline reported the wrong navigation layer"
-        Assert-Equal ([string]$fsharpBaseline.target.partialReason) ([string]$fsharpOutline.partialReason) "Official FSharp outline partial reason changed"
+        Assert-Equal ([string]$fsharpBaseline.target.outlinePartialReason) ([string]$fsharpOutline.partialReason) "Official FSharp outline partial reason changed"
         Assert-Equal ([string]$fsharpBaseline.target.projectPath) ([string]$fsharpOutline.selectedParseContext.project) "Official FSharp outline selected the wrong project"
         Assert-Equal ([string]$fsharpBaseline.target.targetFramework) ([string]$fsharpOutline.selectedParseContext.targetFramework) "Official FSharp outline selected the wrong target framework"
         $outlineJson = $fsharpOutline | ConvertTo-Json -Compress -Depth 30
@@ -823,7 +823,7 @@ try {
         foreach ($payload in @($fsharpSymbolAt, $fsharpDefinition)) {
             Assert-Equal ([string]$fsharpBaseline.target.semanticError) ([string]$payload.error) "Official FSharp semantic boundary changed"
             Assert-True ([bool]$payload.partial) "Official FSharp semantic boundary omitted partial=true"
-            Assert-Equal ([string]$fsharpBaseline.target.partialReason) ([string]$payload.partialReason) "Official FSharp semantic partial reason changed"
+            Assert-Equal ([string]$fsharpBaseline.target.semanticPartialReason) ([string]$payload.partialReason) "Official FSharp semantic partial reason changed"
             Assert-Equal ([string]$fsharpBaseline.target.projectPath) ([string]$payload.selectedFSharpTypeCheckContext.project) "Official FSharp semantic boundary selected the wrong project"
             Assert-Equal ([string]$fsharpBaseline.target.targetFramework) ([string]$payload.selectedFSharpTypeCheckContext.targetFramework) "Official FSharp semantic boundary selected the wrong target framework"
         }

@@ -75,14 +75,21 @@ literal workspace-local `.props` imports with count/depth/aggregate-byte limits 
 Unique imported files, active import occurrences, condition depth, and evaluator nesting are bounded
 separately. Only the conventional self-default property idiom may treat an unset property as empty;
 other unresolved ambient/global condition inputs fail closed.
+The same projection discovers the nearest indexed ancestor `Directory.Build.props` and
+`Directory.Build.targets` independently, evaluates props before the project and targets afterward,
+and applies bounded metadata-free reference input lists plus top-level `Reference Include`/`Remove`.
+Local chained `.props`/`.targets` files are inspected without executing targets: unrelated target
+logic is ignored, but a target or task that can mutate compile/reference/compiler facts remains a
+hard boundary.
 Import paths are selected only from canonical paths in the pinned index using the host path policy;
-semantic evaluation never walks the mutable live filesystem to resolve casing.
+ambiguous Windows case aliases fail closed, and semantic evaluation never walks the mutable live
+filesystem to resolve casing.
 Known compiler target imports are terminal boundaries. It never runs MSBuild, targets, or tasks and
-rejects property functions, item transforms, imported semantic items, and unsupported conditions
+rejects property functions, item transforms/metadata, imported compile items, and unsupported conditions
 with stable causes. Standard `Microsoft.NET.Sdk` and recognized toolchain implicit authority are
 partial, including unobservable build authority above the workspace root; custom/child/qualified SDK
-declarations, indexed in-workspace `Directory.Build.*`, and property assignment after semantic items
-fail closed. Workspace-contained managed `HintPath` snapshots have their original identity
+declarations, Directory.Build mutations outside the bounded reference projection, and ordinary
+project/import property assignment after semantic items fail closed. Workspace-contained managed `HintPath` snapshots have their original identity
 verified after the check; declarations remain same-project only. The host's target-compatible
 `FSharp.Core` fallback is always disclosed as partial because it was not selected by evaluated
 project authority. Package/project-reference closure and the

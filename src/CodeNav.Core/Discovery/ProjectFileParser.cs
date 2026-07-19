@@ -355,7 +355,8 @@ public static partial class ProjectFileParser
     /// <summary>
     /// Captures the deliberately small Stage-2A semantic project shape. It evaluates bounded,
     /// document-ordered simple properties, conditions, Choose branches, workspace-local .props,
-    /// ordered F# Compile items, and resolvable HintPath references. Package and project-reference
+    /// the nearest indexed ancestor Directory.Build props/targets reference projection, ordered F#
+    /// Compile items, and resolvable HintPath references. Package and project-reference
     /// closure require evaluated target-specific assets and are handled by the separate Stage-2B
     /// work; returning a stable error here prevents a compiler-backed result from overstating an
     /// incomplete project model.
@@ -365,8 +366,10 @@ public static partial class ProjectFileParser
         string selectedTargetFramework,
         Func<string, string?>? importResolver = null,
         Func<string, long?>? importSizeResolver = null,
-        bool hasImplicitDirectoryBuildAuthority = false,
-        CancellationToken cancellationToken = default)
+        string? directoryBuildPropsPath = null,
+        string? directoryBuildTargetsPath = null,
+        CancellationToken cancellationToken = default,
+        bool hasAmbiguousDirectoryBuildAuthority = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         FSharpParsingOptionsSnapshot selection = ParseFSharpParsingOptionsSnapshot(
@@ -377,6 +380,12 @@ public static partial class ProjectFileParser
             return new([], [], [], Path.GetFileNameWithoutExtension(relPath),
                 selectedTargetFramework, selection.PartialReason,
                 selection.Error ?? "fsharp_project_options_unavailable");
+        }
+        if (hasAmbiguousDirectoryBuildAuthority)
+        {
+            return new([], [], [], Path.GetFileNameWithoutExtension(relPath),
+                selection.SelectedTargetFramework, selection.PartialReason,
+                "fsharp_semantic_directory_build_ambiguous");
         }
 
         XDocument doc;
@@ -413,17 +422,11 @@ public static partial class ProjectFileParser
                 "fsharp_project_options_unavailable");
         }
 
-        if (hasImplicitDirectoryBuildAuthority)
-        {
-            return new([], [], [], Path.GetFileNameWithoutExtension(relPath),
-                selection.SelectedTargetFramework, selection.PartialReason,
-                "fsharp_semantic_directory_build_unsupported");
-        }
-
         var evaluator = new FSharpSemanticProjectEvaluator(relPath,
             selection.SelectedTargetFramework,
             selection.AvailableTargetFrameworks?.ToArray() ?? [], importResolver,
-            importSizeResolver, cancellationToken);
+            importSizeResolver, directoryBuildPropsPath, directoryBuildTargetsPath,
+            cancellationToken);
         FSharpSemanticEvaluation evaluation = evaluator.Evaluate(root);
         cancellationToken.ThrowIfCancellationRequested();
         if (evaluation.Error is not null)

@@ -50,15 +50,21 @@ returns bounded `selectedFSharpTypeCheckContext` / `availableFSharpTypeCheckCont
 This selection does not merge the legacy and `.Net.fsproj` migration projects. Stage 2A accepts
 literal ordered compile items plus a bounded evaluation-lite subset used by legacy projects:
 simple properties that precede semantic items, comparisons/boolean/`Exists` conditions, `Choose`, and literal
-workspace-local `.props` imports. Recognized compiler target imports are terminal boundaries; Phoenix
-never executes targets/tasks, property functions, or item transforms. Conventional self-default
+workspace-local `.props` imports. For each selected F# project, Phoenix also discovers the nearest
+indexed ancestor `Directory.Build.props` and `Directory.Build.targets`, evaluates them before and
+after the project respectively, and supports bounded `Reference Include` / `Remove` mutations whose
+item-list inputs are literal and metadata-free. Chained local `.props`/`.targets` files are inspected;
+irrelevant targets are ignored, while any active target/task that can mutate semantic inputs still
+fails closed. Recognized compiler target imports are terminal boundaries; Phoenix never executes
+targets/tasks, property functions, item transforms, or item metadata inheritance. Conventional self-default
 properties are evaluated as unset; other unresolved ambient/global condition properties fail closed.
 Import paths are selected only from canonical paths in the pinned index using the host path policy;
-semantic evaluation never walks the mutable live filesystem to resolve casing.
+ambiguous Windows case aliases fail closed, and semantic evaluation never walks the mutable live
+filesystem to resolve casing.
 The standard `Microsoft.NET.Sdk` and recognized compiler-toolchain implicit authority are disclosed
-as partial; custom/child/qualified SDK authority and indexed in-workspace
-`Directory.Build.props` / `Directory.Build.targets` fail closed. Toolchain disclosure also covers
-unobservable `Directory.Build.*` authority above the workspace root.
+as partial; custom/child/qualified SDK authority and Directory.Build mutations outside the bounded
+property/condition/reference projection fail closed. Toolchain disclosure also covers unobservable
+build authority above the workspace root.
 Workspace-contained managed
 `HintPath` binaries are copied into request-private immutable snapshots. A host-selected
 `FSharp.Core` asset is disclosed as partial rather than
@@ -240,10 +246,11 @@ watcher, and lifecycle test projects under `tests/`.
   no multi-line patterns.
 - F# `outline` is syntax-only and limited to compile-owned `.fs` / `.fsi`; `.fsx` is text-only.
   F# semantic Stage 2A is position-only and limited to bounded, same-project source closure for
-  `symbol_at` and `definition`. It evaluates simple properties/conditions/`Choose` and literal
-  workspace-local `.props`, but not targets/tasks, property functions, imported compile/reference
-  items, property reassignment after semantic items, custom SDK or in-workspace
-  `Directory.Build.*` authority,
+  `symbol_at` and `definition`. It evaluates simple properties/conditions/`Choose`, literal
+  workspace-local `.props`, and the nearest indexed ancestor `Directory.Build.props`/`.targets`
+  for bounded metadata-free reference lists and exact `Reference Include`/`Remove` operations.
+  It does not evaluate active targets/tasks, property functions, wildcard reference operations,
+  imported compile items, property reassignment after semantic items, custom SDK authority,
   unresolved ambient/global condition inputs, package/project references, or arbitrary
   MSBuild. It also does not support
   F# name search, references, implementations, callers/callees, or hierarchy. Unscoped indexed

@@ -210,27 +210,33 @@ public sealed partial class NavigationTools
             "fsharp_semantic_items_conditioned" =>
                 "This project uses conditioned semantic items outside the bounded Stage 2A project model.",
             "fsharp_semantic_import_unsupported" =>
-                "Stage 2A evaluates only literal workspace-local .props imports and recognized compiler target imports.",
+                "Stage 2A evaluates literal workspace-local .props imports, bounded Directory.Build reference-only .targets chains, and recognized compiler target imports.",
             "fsharp_semantic_sdk_unsupported" =>
                 "The selected project uses SDK authority outside the bounded Stage 2A project model.",
             "fsharp_semantic_directory_build_unsupported" =>
-                "An applicable Directory.Build.props or Directory.Build.targets can change F# semantic inputs outside the bounded Stage 2A project model.",
+                "An applicable Directory.Build file changes F# inputs outside the bounded property/condition/reference projection.",
+            "fsharp_semantic_directory_build_ambiguous" =>
+                "Applicable Directory.Build authority is ambiguous under the Windows host-case policy; F# semantic checking stopped instead of selecting a different indexed file.",
             "fsharp_semantic_import_items_unsupported" =>
                 "An imported .props file contributes active Compile/reference items; imported semantic items remain outside Stage 2A.",
             "fsharp_semantic_import_path_outside_workspace" =>
                 "A project import escapes the selected workspace and was not opened.",
             "fsharp_semantic_import_unavailable" =>
-                "A literal workspace .props import is missing, unindexed, unreadable, or invalid XML.",
+                "A required literal workspace project import is missing, unindexed, unreadable, or invalid XML.",
             "fsharp_semantic_import_cycle" =>
-                "The selected project contains a cycle of workspace .props imports.",
+                "The selected project contains a cycle of bounded workspace project imports.",
             "fsharp_semantic_import_count_limit" =>
-                "The selected project exceeds the bounded number of inspected workspace .props imports.",
+                "The selected project exceeds the bounded number of inspected workspace project imports.",
             "fsharp_semantic_import_occurrence_limit" =>
-                "The selected project exceeds the bounded number of active workspace .props import occurrences.",
+                "The selected project exceeds the bounded number of active workspace project-import occurrences.",
             "fsharp_semantic_import_depth_limit" =>
-                "The selected project exceeds the bounded workspace .props import depth.",
+                "The selected project exceeds the bounded workspace project-import depth.",
             "fsharp_semantic_import_bytes_limit" =>
-                "The selected project's workspace .props imports exceed the bounded aggregate UTF-8 byte limit.",
+                "The selected project's workspace project imports/inputs exceed the bounded aggregate UTF-8 byte limit.",
+            "fsharp_semantic_item_list_limit" =>
+                "Directory.Build reference input lists exceed the bounded Stage 2A item count.",
+            "fsharp_semantic_dependency_limit" =>
+                "Directory.Build reference property/item dependencies exceed the bounded Stage 2A graph size.",
             "fsharp_semantic_condition_unsupported" =>
                 "The selected project uses an MSBuild condition outside the bounded Stage 2A grammar.",
             "fsharp_semantic_condition_limit" =>

@@ -22,7 +22,8 @@
     "outlineFunction": "map",
     "line": 95,
     "column": 16,
-    "semanticError": "fsharp_semantic_directory_build_unsupported",
-    "partialReason": "fsharp_project_options_conditioned;fsharp_project_options_imported;fsharp_project_options_unsupported"
+    "semanticError": "fsharp_semantic_property_function_unsupported",
+    "outlinePartialReason": "fsharp_project_options_conditioned;fsharp_project_options_imported;fsharp_project_options_unsupported",
+    "semanticPartialReason": "fsharp_semantic_sdk_implicit_authority"
   }
 }

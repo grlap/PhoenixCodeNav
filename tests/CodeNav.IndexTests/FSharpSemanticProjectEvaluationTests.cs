@@ -158,6 +158,472 @@ public partial class FSharpSemanticStage2Tests
         Assert.Equal(["Core/Core.fs"], result.SourceFiles);
     }
 
+    [Fact]
+    public void DirectoryBuildConditionsAndReferenceListsAreEvaluatedInOrder()
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.props"] = """
+                <Project>
+                  <PropertyGroup>
+                    <ReferenceFlavor Condition="'$(ReferenceFlavor)' == ''">Monolith</ReferenceFlavor>
+                  </PropertyGroup>
+                  <ItemGroup Condition="'$(ReferenceFlavor)' == 'Monolith'">
+                    <ReferencesToRemove Include="Missing.Reference" />
+                    <ReferencesToAdd Include="System.Xml.Linq;System.Runtime" />
+                    <InactiveReferences Include="Still.Missing" Condition="false" />
+                  </ItemGroup>
+                </Project>
+                """,
+            ["Directory.Build.targets"] = """
+                <Project>
+                  <ItemGroup>
+                    <Reference Remove="@(ReferencesToRemove)" />
+                    <Reference Include="@(ReferencesToAdd)" />
+                    <Reference Include="@(InactiveReferences)" />
+                  </ItemGroup>
+                </Project>
+                """,
+        };
+
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject(
+            "<ItemGroup><Reference Include=\"Missing.Reference\" /></ItemGroup>",
+            imports, directoryBuildPropsPath: "Directory.Build.props",
+            directoryBuildTargetsPath: "Directory.Build.targets");
+
+        Assert.Null(result.Error);
+        Assert.Equal(["System.Runtime", "System.Xml.Linq"],
+            result.BareReferences!.OrderBy(reference => reference,
+                StringComparer.Ordinal).ToArray());
+    }
+
+    [Theory]
+    [InlineData("true", "false")]
+    [InlineData("false", "true")]
+    public void DirectoryBuildTargetsCannotRetargetEarlierReferenceConditions(
+        string initialValue, string finalValue)
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.props"] =
+                $"<Project><PropertyGroup><UseGhost>{initialValue}</UseGhost></PropertyGroup></Project>",
+            ["Directory.Build.targets"] =
+                $"<Project><PropertyGroup><UseGhost>{finalValue}</UseGhost></PropertyGroup></Project>",
+        };
+
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("""
+            <ItemGroup>
+              <Reference Include="Ghost.Reference"
+                         Condition="'$(UseGhost)' == 'true'" />
+            </ItemGroup>
+            """, imports, directoryBuildPropsPath: "Directory.Build.props",
+            directoryBuildTargetsPath: "Directory.Build.targets");
+
+        Assert.Equal("fsharp_semantic_evaluation_order_unsupported", result.Error);
+    }
+
+    [Theory]
+    [InlineData("true", "false")]
+    [InlineData("false", "true")]
+    public void DirectoryBuildReferenceHelperItemsStartTheSemanticItemPhase(
+        string initialValue, string finalValue)
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.props"] = $$"""
+                <Project>
+                  <PropertyGroup><RemoveMissing>{{initialValue}}</RemoveMissing></PropertyGroup>
+                  <ItemGroup>
+                    <ReferencesToRemove Include="Missing.Reference"
+                      Condition="'$(RemoveMissing)' == 'true'" />
+                  </ItemGroup>
+                  <PropertyGroup><RemoveMissing>{{finalValue}}</RemoveMissing></PropertyGroup>
+                </Project>
+                """,
+            ["Directory.Build.targets"] =
+                "<Project><ItemGroup><Reference Remove=\"@(ReferencesToRemove)\" /></ItemGroup></Project>",
+        };
+
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject(
+            "<ItemGroup><Reference Include=\"Missing.Reference\" /></ItemGroup>",
+            imports, directoryBuildPropsPath: "Directory.Build.props",
+            directoryBuildTargetsPath: "Directory.Build.targets");
+
+        Assert.Equal("fsharp_semantic_evaluation_order_unsupported", result.Error);
+    }
+
+    [Theory]
+    [InlineData("true", "false")]
+    [InlineData("false", "true")]
+    public void DirectoryBuildReferenceHelpersTrackEnclosingItemGroupConditions(
+        string initialValue, string finalValue)
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.props"] = $$"""
+                <Project>
+                  <PropertyGroup><RemoveMissing>{{initialValue}}</RemoveMissing></PropertyGroup>
+                  <ItemGroup Condition="'$(RemoveMissing)' == 'true'">
+                    <ReferencesToRemove Include="Missing.Reference" />
+                  </ItemGroup>
+                  <PropertyGroup><RemoveMissing>{{finalValue}}</RemoveMissing></PropertyGroup>
+                </Project>
+                """,
+            ["Directory.Build.targets"] =
+                "<Project><ItemGroup><Reference Remove=\"@(ReferencesToRemove)\" /></ItemGroup></Project>",
+        };
+
+        Assert.Equal("fsharp_semantic_evaluation_order_unsupported",
+            EvaluateBoundedProject(
+                "<ItemGroup><Reference Include=\"Missing.Reference\" /></ItemGroup>",
+                imports, directoryBuildPropsPath: "Directory.Build.props",
+                directoryBuildTargetsPath: "Directory.Build.targets").Error);
+    }
+
+    [Theory]
+    [InlineData("true", "false")]
+    [InlineData("false", "true")]
+    public void DirectoryBuildReferenceHelpersTrackEnclosingChooseConditions(
+        string initialValue, string finalValue)
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.props"] = $$"""
+                <Project>
+                  <PropertyGroup><RemoveMissing>{{initialValue}}</RemoveMissing></PropertyGroup>
+                  <Choose>
+                    <When Condition="'$(RemoveMissing)' == 'true'">
+                      <ItemGroup><ReferencesToRemove Include="Missing.Reference" /></ItemGroup>
+                    </When>
+                  </Choose>
+                  <PropertyGroup><RemoveMissing>{{finalValue}}</RemoveMissing></PropertyGroup>
+                </Project>
+                """,
+            ["Directory.Build.targets"] =
+                "<Project><ItemGroup><Reference Remove=\"@(ReferencesToRemove)\" /></ItemGroup></Project>",
+        };
+
+        Assert.Equal("fsharp_semantic_evaluation_order_unsupported",
+            EvaluateBoundedProject(
+                "<ItemGroup><Reference Include=\"Missing.Reference\" /></ItemGroup>",
+                imports, directoryBuildPropsPath: "Directory.Build.props",
+                directoryBuildTargetsPath: "Directory.Build.targets").Error);
+    }
+
+    [Fact]
+    public void DirectoryBuildReferenceHelpersAllowUnrelatedLateProperties()
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.props"] = """
+                <Project>
+                  <PropertyGroup><RemoveMissing>true</RemoveMissing></PropertyGroup>
+                  <ItemGroup Condition="'$(RemoveMissing)' == 'true'">
+                    <ReferencesToRemove Include="Missing.Reference" />
+                  </ItemGroup>
+                  <PropertyGroup><Unrelated>still-supported</Unrelated></PropertyGroup>
+                </Project>
+                """,
+            ["Directory.Build.targets"] =
+                "<Project><ItemGroup><Reference Remove=\"@(ReferencesToRemove)\" /></ItemGroup></Project>",
+        };
+
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject(
+            "<ItemGroup><Reference Include=\"Missing.Reference\" /></ItemGroup>",
+            imports, directoryBuildPropsPath: "Directory.Build.props",
+            directoryBuildTargetsPath: "Directory.Build.targets");
+        Assert.Null(result.Error);
+        Assert.DoesNotContain("Missing.Reference", result.BareReferences!);
+    }
+
+    [Fact]
+    public void DirectoryBuildWildcardReferenceOperationsFailClosed()
+    {
+        var direct = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.targets"] =
+                "<Project><ItemGroup><Reference Remove=\"System.*\" /></ItemGroup></Project>",
+        };
+        Assert.Equal("fsharp_semantic_reference_unresolved", EvaluateBoundedProject(
+            "<ItemGroup><Reference Include=\"System.Runtime\" /></ItemGroup>", direct,
+            directoryBuildTargetsPath: "Directory.Build.targets").Error);
+
+        var throughList = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.props"] =
+                "<Project><ItemGroup><ReferencesToRemove Include=\"System.*\" /></ItemGroup></Project>",
+            ["Directory.Build.targets"] =
+                "<Project><ItemGroup><Reference Remove=\"@(ReferencesToRemove)\" /></ItemGroup></Project>",
+        };
+        Assert.Equal("fsharp_semantic_reference_unresolved", EvaluateBoundedProject(
+            "<ItemGroup><Reference Include=\"System.Runtime\" /></ItemGroup>", throughList,
+            directoryBuildPropsPath: "Directory.Build.props",
+            directoryBuildTargetsPath: "Directory.Build.targets").Error);
+    }
+
+    [Fact]
+    public void DirectoryBuildReferenceInputItemsRejectIncludeAndRemoveTogether()
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.props"] = """
+                <Project><ItemGroup>
+                  <ReferencesToAdd Include="System.Runtime" Remove="System.Xml.Linq" />
+                </ItemGroup></Project>
+                """,
+            ["Directory.Build.targets"] =
+                "<Project><ItemGroup><Reference Include=\"@(ReferencesToAdd)\" /></ItemGroup></Project>",
+        };
+
+        Assert.Equal("fsharp_semantic_reference_unresolved", EvaluateBoundedProject("",
+            imports, directoryBuildPropsPath: "Directory.Build.props",
+            directoryBuildTargetsPath: "Directory.Build.targets").Error);
+    }
+
+    [Fact]
+    public void DirectoryBuildTargetReferencePathMutationsFailClosed()
+    {
+        var direct = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.targets"] = """
+                <Project><Target Name="Retarget">
+                  <ItemGroup><ReferencePath Include="Ghost.dll" /></ItemGroup>
+                </Target></Project>
+                """,
+        };
+        Assert.Equal("fsharp_semantic_target_evaluation_unsupported",
+            EvaluateBoundedProject("", direct,
+                directoryBuildTargetsPath: "Directory.Build.targets").Error);
+
+        var chained = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.targets"] = """
+                <Project><Import Project="Build/References.targets"
+                  Condition="'$(UnknownReferenceFlavor)' == 'active'" /></Project>
+                """,
+            ["Build/References.targets"] = direct["Directory.Build.targets"],
+        };
+        Assert.Equal("fsharp_semantic_condition_property_unresolved",
+            EvaluateBoundedProject("", chained,
+                directoryBuildTargetsPath: "Directory.Build.targets").Error);
+    }
+
+    [Fact]
+    public void DirectoryBuildCompilerHookedMutationTasksFailClosed()
+    {
+        const string compilerHook = """
+            <Project><Target Name="RewriteSource" BeforeTargets="CoreCompile">
+              <WriteLinesToFile File="Core.fs" Lines="module Rewritten" Overwrite="true" />
+            </Target></Project>
+            """;
+        var direct = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.targets"] = compilerHook,
+        };
+        Assert.Equal("fsharp_semantic_target_evaluation_unsupported",
+            EvaluateBoundedProject("", direct,
+                directoryBuildTargetsPath: "Directory.Build.targets").Error);
+
+        direct["Directory.Build.targets"] = """
+            <Project><Target Name="DescribeBuild" BeforeTargets="CoreCompile">
+              <Message Text="diagnostic only" />
+            </Target></Project>
+            """;
+        Assert.Null(EvaluateBoundedProject("", direct,
+            directoryBuildTargetsPath: "Directory.Build.targets").Error);
+
+        var chained = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.targets"] = """
+                <Project><Import Project="Build/Rewrite.targets"
+                  Condition="'$(UnknownRewriteFlavor)' == 'active'" /></Project>
+                """,
+            ["Build/Rewrite.targets"] = compilerHook,
+        };
+        Assert.Equal("fsharp_semantic_condition_property_unresolved",
+            EvaluateBoundedProject("", chained,
+                directoryBuildTargetsPath: "Directory.Build.targets").Error);
+    }
+
+    [Theory]
+    [InlineData("CoreCompileDependsOn")]
+    [InlineData("CompileDependsOn")]
+    public void DirectoryBuildCompilerDependencySchedulingFailsClosed(string propertyName)
+    {
+        string scheduledMutation = $$"""
+            <Project>
+              <PropertyGroup>
+                <{{propertyName}}>$({{propertyName}});RewriteSource</{{propertyName}}>
+              </PropertyGroup>
+              <Target Name="RewriteSource">
+                <WriteLinesToFile File="Core.fs" Lines="module Rewritten" Overwrite="true" />
+              </Target>
+            </Project>
+            """;
+        var direct = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.targets"] = scheduledMutation,
+        };
+        Assert.Equal("fsharp_semantic_target_evaluation_unsupported",
+            EvaluateBoundedProject("", direct,
+                directoryBuildTargetsPath: "Directory.Build.targets").Error);
+
+        var chained = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.targets"] = """
+                <Project><Import Project="Build/Scheduled.targets"
+                  Condition="'$(UnknownSchedule)' == 'active'" /></Project>
+                """,
+            ["Build/Scheduled.targets"] = scheduledMutation,
+        };
+        Assert.Equal("fsharp_semantic_condition_property_unresolved",
+            EvaluateBoundedProject("", chained,
+                directoryBuildTargetsPath: "Directory.Build.targets").Error);
+    }
+
+    [Fact]
+    public void DirectoryBuildInitialTargetsSchedulingFailsClosed()
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.targets"] = """
+                <Project InitialTargets="RewriteSource">
+                  <Target Name="RewriteSource">
+                    <WriteLinesToFile File="Core.fs" Lines="module Rewritten"
+                                      Overwrite="true" />
+                  </Target>
+                </Project>
+                """,
+        };
+
+        Assert.Equal("fsharp_semantic_target_evaluation_unsupported",
+            EvaluateBoundedProject("", imports,
+                directoryBuildTargetsPath: "Directory.Build.targets").Error);
+    }
+
+    [Fact]
+    public void AmbiguousDirectoryBuildAuthorityFailsFSharpEvaluationClosed()
+    {
+        Assert.Equal("fsharp_semantic_directory_build_ambiguous",
+            EvaluateBoundedProject("", hasAmbiguousDirectoryBuildAuthority: true).Error);
+    }
+
+    [Fact]
+    public void DirectoryBuildDependencyWorklistIsBoundedAtTheDeclaredLimit()
+    {
+        static FSharpSemanticOptionsSnapshot Evaluate(int count)
+        {
+            var items = new StringBuilder("<Project><ItemGroup>");
+            for (int index = count - 1; index >= 0; index--)
+            {
+                string value = index == count - 1
+                    ? "System.Runtime"
+                    : $"@(ReferenceList{index + 1:D4})";
+                items.Append($"<ReferenceList{index:D4} Include=\"{value}\" />");
+            }
+            items.Append("</ItemGroup></Project>");
+            var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Directory.Build.props"] = items.ToString(),
+            };
+            return EvaluateBoundedProject(
+                "<ItemGroup><Reference Include=\"@(ReferenceList0000)\" /></ItemGroup>",
+                imports, directoryBuildPropsPath: "Directory.Build.props");
+        }
+
+        FSharpSemanticOptionsSnapshot atCap = Evaluate(
+            ProjectFileParser.MaxFSharpSemanticDependencyNodes);
+        Assert.Null(atCap.Error);
+        Assert.Equal(["System.Runtime"], atCap.BareReferences);
+
+        Assert.Equal("fsharp_semantic_dependency_limit", Evaluate(
+            ProjectFileParser.MaxFSharpSemanticDependencyNodes + 1).Error);
+    }
+
+    [Fact]
+    public void DirectoryBuildChainedTargetsOnlyFailWhenTheyCanAffectSemanticInputs()
+    {
+        const string directoryTargets = """
+            <Project>
+              <Import Project="Build/Chained.targets"
+                      Condition="'$(UnknownChainedFlavor)' == 'Release'" />
+            </Project>
+            """;
+        var irrelevantImports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.targets"] = directoryTargets,
+            ["Build/Chained.targets"] = """
+                <Project>
+                  <PropertyGroup Condition="'$(UnknownRedirectFlavor)' == 'Legacy'">
+                    <GenerateBindingRedirects>true</GenerateBindingRedirects>
+                  </PropertyGroup>
+                  <Target Name="Deploy" Condition="'$(UnknownDeployFlavor)' == 'Release'">
+                    <Message Text="deployment only" />
+                  </Target>
+                </Project>
+                """,
+        };
+        FSharpSemanticOptionsSnapshot irrelevant = EvaluateBoundedProject("",
+            irrelevantImports, directoryBuildTargetsPath: "Directory.Build.targets");
+        Assert.Null(irrelevant.Error);
+
+        var referenceImports = new Dictionary<string, string>(irrelevantImports,
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["Build/Chained.targets"] = """
+                <Project>
+                  <Target Name="MutateReferences">
+                    <ItemGroup><Reference Include="Unknown.Reference" /></ItemGroup>
+                  </Target>
+                </Project>
+                """,
+        };
+        FSharpSemanticOptionsSnapshot referenceAffecting = EvaluateBoundedProject("",
+            referenceImports, directoryBuildTargetsPath: "Directory.Build.targets");
+        Assert.Equal("fsharp_semantic_condition_property_unresolved",
+            referenceAffecting.Error);
+
+        referenceImports["Directory.Build.targets"] =
+            "<Project><Import Project=\"Build/Chained.targets\" /></Project>";
+        FSharpSemanticOptionsSnapshot activeReferenceTarget = EvaluateBoundedProject("",
+            referenceImports, directoryBuildTargetsPath: "Directory.Build.targets");
+        Assert.Equal("fsharp_semantic_target_evaluation_unsupported",
+            activeReferenceTarget.Error);
+    }
+
+    [Fact]
+    public void DirectoryBuildReferenceItemListCapAndCapPlusOneAreDecisive()
+    {
+        FSharpSemanticOptionsSnapshot Evaluate(int count)
+        {
+            string references = string.Join(';', Enumerable.Range(0, count)
+                .Select(index => $"Reference{index:D4}"));
+            var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Directory.Build.props"] =
+                    $"<Project><ItemGroup><ReferencesToAdd Include=\"{references}\" /></ItemGroup></Project>",
+                ["Directory.Build.targets"] =
+                    "<Project><ItemGroup><Reference Include=\"@(ReferencesToAdd)\" /></ItemGroup></Project>",
+            };
+            string unrelatedItems = string.Concat(Enumerable.Range(0,
+                ProjectFileParser.MaxFSharpSemanticItemListEntries + 1)
+                .Select(index => $"<Content Include=\"asset{index:D4}.txt\" />"));
+            return EvaluateBoundedProject(
+                $"<ItemGroup>{unrelatedItems}</ItemGroup>", imports,
+                directoryBuildPropsPath: "Directory.Build.props",
+                directoryBuildTargetsPath: "Directory.Build.targets");
+        }
+
+        FSharpSemanticOptionsSnapshot atCap = Evaluate(
+            ProjectFileParser.MaxFSharpSemanticItemListEntries);
+        Assert.Null(atCap.Error);
+        Assert.Equal(ProjectFileParser.MaxFSharpSemanticItemListEntries,
+            atCap.BareReferences!.Count);
+
+        Assert.Equal("fsharp_semantic_item_list_limit", Evaluate(
+            ProjectFileParser.MaxFSharpSemanticItemListEntries + 1).Error);
+    }
+
     [Theory]
     [InlineData("<Import Project=\"../Build/*.props\" />", "fsharp_semantic_import_unsupported")]
     [InlineData("<Import Project=\"../Build/Microsoft.FSharp.Targets\" />", "fsharp_semantic_import_unsupported")]
@@ -605,7 +1071,7 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Fact]
-    public void ApplicableDirectoryBuildAuthorityFailsClosedBeforeFcs()
+    public void AncestorDirectoryBuildReferenceMutationsReachSemanticResolution()
     {
         string root = Directory.CreateTempSubdirectory(
             "codenav-fsharp-semantic-directory-build").FullName;
@@ -613,10 +1079,172 @@ public partial class FSharpSemanticStage2Tests
         {
             WriteProject(root, "Directory.Build.props", """
                 <Project>
-                  <PropertyGroup><DefineConstants>FROM_DIRECTORY_BUILD</DefineConstants></PropertyGroup>
+                  <ItemGroup>
+                    <ReferencesToRemove Include="Missing.Reference" />
+                    <ReferencesToAdd Include="System.Xml.Linq" />
+                  </ItemGroup>
                 </Project>
                 """);
-            WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
+            WriteProject(root, "Directory.Build.targets", """
+                <Project>
+                  <ItemGroup>
+                    <Reference Remove="@(ReferencesToRemove)" />
+                    <Reference Include="@(ReferencesToAdd)" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Core.fs", """
+                namespace Ambient
+
+                module Core =
+                    let target = 42
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                namespace Ambient
+
+                module Use =
+                    let result = Core.target
+                """);
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Reference Include="Missing.Reference" />
+                    <Compile Include="Core.fs" />
+                    <Compile Include="Use.fs" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 4, 27, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.True(response.TryGetProperty("found", out JsonElement found) &&
+                        found.GetBoolean(), raw);
+            Assert.Equal("target",
+                response.GetProperty("symbol").GetProperty("name").GetString());
+
+            string definitionRaw = CallSemantic(() => fixture.Tools.Definition(
+                path: "Core/Use.fs", line: 4, column: 27, mode: "semantic",
+                timeoutMs: 60_000));
+            JsonElement definition = Parse(definitionRaw);
+            Assert.Contains(definition.GetProperty("declarations").EnumerateArray(), site =>
+                site.GetProperty("path").GetString() == "Core/Core.fs");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void DirectoryBuildTargetsPropertyRetargetingFailsBeforeFcs()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-directory-order").FullName;
+        try
+        {
+            WriteProject(root, "Directory.Build.props", """
+                <Project><PropertyGroup><UseExtra>true</UseExtra></PropertyGroup></Project>
+                """);
+            WriteProject(root, "Directory.Build.targets", """
+                <Project><PropertyGroup><UseExtra>false</UseExtra></PropertyGroup></Project>
+                """);
+            WriteProject(root, "Core/Core.fs", "module Core\nlet target = 42\n");
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Reference Include="System.Xml.Linq"
+                               Condition="'$(UseExtra)' == 'true'" />
+                    <Compile Include="Core.fs" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Core.fs", 2, 5, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.Equal("fsharp_semantic_evaluation_order_unsupported",
+                response.GetProperty("error").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void DirectoryBuildHelperRetargetingFailsBeforeFcs()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-directory-helper-order").FullName;
+        try
+        {
+            WriteProject(root, "Directory.Build.props", """
+                <Project>
+                  <PropertyGroup><RemoveMissing>true</RemoveMissing></PropertyGroup>
+                  <ItemGroup>
+                    <ReferencesToRemove Include="Missing.Reference"
+                      Condition="'$(RemoveMissing)' == 'true'" />
+                  </ItemGroup>
+                  <PropertyGroup><RemoveMissing>false</RemoveMissing></PropertyGroup>
+                </Project>
+                """);
+            WriteProject(root, "Directory.Build.targets", """
+                <Project><ItemGroup>
+                  <Reference Remove="@(ReferencesToRemove)" />
+                </ItemGroup></Project>
+                """);
+            WriteProject(root, "Core/Core.fs", "module Core\nlet target = 42\n");
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Reference Include="Missing.Reference" />
+                    <Compile Include="Core.fs" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Core.fs", 2, 5, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.Equal("fsharp_semantic_evaluation_order_unsupported",
+                response.GetProperty("error").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void DirectoryBuildCompilerHookedMutationFailsBeforeFcs()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-directory-compiler-hook").FullName;
+        try
+        {
+            WriteProject(root, "Directory.Build.targets", """
+                <Project><Target Name="RewriteSource" BeforeTargets="CoreCompile">
+                  <WriteLinesToFile File="Core/Core.fs" Lines="module Rewritten"
+                                    Overwrite="true" />
+                </Target></Project>
+                """);
+            WriteProject(root, "Core/Core.fs", "module Core\nlet target = 42\n");
             WriteProject(root, "Core/Core.fsproj", """
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup>
@@ -631,10 +1259,50 @@ public partial class FSharpSemanticStage2Tests
             string raw = CallSemantic(() => fixture.Tools.SymbolAt(
                 "Core/Core.fs", 2, 5, timeoutMs: 60_000));
             JsonElement response = Parse(raw);
-            Assert.Equal("fsharp_semantic_directory_build_unsupported",
+            Assert.Equal("fsharp_semantic_target_evaluation_unsupported",
                 response.GetProperty("error").GetString());
-            Assert.Contains("Directory.Build", response.GetProperty("detail").GetString(),
-                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void DirectoryBuildCompilerDependencySchedulingFailsBeforeFcs()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-directory-dependency-hook").FullName;
+        try
+        {
+            WriteProject(root, "Directory.Build.targets", """
+                <Project>
+                  <PropertyGroup>
+                    <CoreCompileDependsOn>$(CoreCompileDependsOn);RewriteSource</CoreCompileDependsOn>
+                  </PropertyGroup>
+                  <Target Name="RewriteSource">
+                    <WriteLinesToFile File="Core/Core.fs" Lines="module Rewritten"
+                                      Overwrite="true" />
+                  </Target>
+                </Project>
+                """);
+            WriteProject(root, "Core/Core.fs", "module Core\nlet target = 42\n");
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
+                </Project>
+                """);
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Core.fs", 2, 5, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.Equal("fsharp_semantic_target_evaluation_unsupported",
+                response.GetProperty("error").GetString());
         }
         finally
         {
@@ -765,10 +1433,17 @@ public partial class FSharpSemanticStage2Tests
         string dbPath = Path.Combine(root, "index.sqlite");
         try
         {
+            string nestedDirectory = string.Join('/',
+                Enumerable.Repeat("d", directoryDepth / 2));
             using (var store = new IndexStore(dbPath, createNew: true))
             using (var transaction = store.BeginTransaction())
             {
                 store.InsertFile(transaction, "Directory.Build.props", 0, 0, 0,
+                    "config", 0, isGenerated: false, hasTestAttrs: false);
+                store.InsertFile(transaction, "Directory.Build.targets", 0, 0, 0,
+                    "config", 0, isGenerated: false, hasTestAttrs: false);
+                store.InsertFile(transaction,
+                    nestedDirectory + "/Directory.Build.props", 0, 0, 0,
                     "config", 0, isGenerated: false, hasTestAttrs: false);
                 transaction.Commit();
             }
@@ -777,6 +1452,80 @@ public partial class FSharpSemanticStage2Tests
             string projectPath = string.Join('/',
                 Enumerable.Repeat("d", directoryDepth)) + "/Core.fsproj";
             Assert.True(queries.HasApplicableDirectoryBuildAuthority(projectPath));
+            DirectoryBuildAuthorityPaths authority =
+                queries.ApplicableDirectoryBuildAuthority(projectPath);
+            Assert.Equal(nestedDirectory + "/Directory.Build.props", authority.PropsPath);
+            Assert.Equal("Directory.Build.targets", authority.TargetsPath);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void WindowsDirectoryBuildAuthorityPrefersAnExactIndexedPathOverCaseAliases()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-directory-case-exact").FullName;
+        string dbPath = Path.Combine(root, "index.sqlite");
+        try
+        {
+            using (var store = new IndexStore(dbPath, createNew: true))
+            using (var transaction = store.BeginTransaction())
+            {
+                foreach (string path in new[]
+                         { "Core/Directory.Build.props", "Core/directory.build.props" })
+                    store.InsertFile(transaction, path, 0, 0, 0,
+                        "config", 0, isGenerated: false, hasTestAttrs: false);
+                transaction.Commit();
+            }
+
+            using var queries = new IndexQueries(dbPath);
+            DirectoryBuildAuthorityPaths authority =
+                queries.ApplicableDirectoryBuildAuthority(
+                    "Core/Sub/Core.fsproj", useWindowsPathPolicy: true);
+            Assert.Equal("Core/Directory.Build.props", authority.PropsPath);
+            Assert.False(authority.PropsPathAmbiguous);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void WindowsDirectoryBuildAuthorityStopsAtAnAmbiguousNearestAncestor()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-directory-case-ambiguous").FullName;
+        string dbPath = Path.Combine(root, "index.sqlite");
+        try
+        {
+            using (var store = new IndexStore(dbPath, createNew: true))
+            using (var transaction = store.BeginTransaction())
+            {
+                foreach (string path in new[]
+                         {
+                             "Core/DIRECTORY.BUILD.PROPS",
+                             "Core/directory.build.props",
+                             "Directory.Build.props",
+                             "Directory.Build.targets",
+                         })
+                    store.InsertFile(transaction, path, 0, 0, 0,
+                        "config", 0, isGenerated: false, hasTestAttrs: false);
+                transaction.Commit();
+            }
+
+            using var queries = new IndexQueries(dbPath);
+            DirectoryBuildAuthorityPaths authority =
+                queries.ApplicableDirectoryBuildAuthority(
+                    "Core/Sub/Core.fsproj", useWindowsPathPolicy: true);
+            Assert.Null(authority.PropsPath);
+            Assert.True(authority.PropsPathAmbiguous);
+            Assert.Equal("Directory.Build.targets", authority.TargetsPath);
+            Assert.True(authority.HasAmbiguity);
+            Assert.True(authority.HasPotentialAuthority);
         }
         finally
         {
@@ -886,7 +1635,10 @@ public partial class FSharpSemanticStage2Tests
     private static FSharpSemanticOptionsSnapshot EvaluateBoundedProject(
         string body,
         IReadOnlyDictionary<string, string>? imports = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? directoryBuildPropsPath = null,
+        string? directoryBuildTargetsPath = null,
+        bool hasAmbiguousDirectoryBuildAuthority = false)
     {
         string project = $$"""
             <Project>
@@ -900,7 +1652,10 @@ public partial class FSharpSemanticStage2Tests
             path => imports is not null && imports.TryGetValue(path, out string? content)
                 ? content
                 : null,
-            cancellationToken: cancellationToken);
+            directoryBuildPropsPath: directoryBuildPropsPath,
+            directoryBuildTargetsPath: directoryBuildTargetsPath,
+            cancellationToken: cancellationToken,
+            hasAmbiguousDirectoryBuildAuthority: hasAmbiguousDirectoryBuildAuthority);
     }
 
     private static FSharpSemanticOptionsSnapshot EvaluateImportCount(int count)

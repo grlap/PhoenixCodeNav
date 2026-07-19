@@ -457,6 +457,8 @@ public sealed partial class SemanticService
             return null;
         }
 
+        DirectoryBuildAuthorityPaths directoryBuild =
+            queries.ApplicableDirectoryBuildAuthority(owner.Path);
         FSharpSemanticOptionsSnapshot options =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(owner.Path, projectXml,
                 owner.Tfms, selected.TargetFramework, importPath =>
@@ -471,9 +473,10 @@ public sealed partial class SemanticService
                 {
                     FileHit? imported = ResolveIndexedFSharpImport(queries, importPath);
                     return imported is { Language: "config" } ? imported.Size : null;
-                }, hasImplicitDirectoryBuildAuthority:
-                queries.HasApplicableDirectoryBuildAuthority(owner.Path),
-                cancellationToken: cancellationToken);
+                }, directoryBuildPropsPath: directoryBuild.PropsPath,
+                directoryBuildTargetsPath: directoryBuild.TargetsPath,
+                cancellationToken: cancellationToken,
+                hasAmbiguousDirectoryBuildAuthority: directoryBuild.HasAmbiguity);
         if (options.Error is { } optionError)
         {
             failure = new(null, optionError, selected, contexts, options.PartialReason,

@@ -18,6 +18,17 @@ public sealed record SymbolHit(
 public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated,
     string Language = "cs");
 
+public sealed record DirectoryBuildAuthorityPaths(
+    string? PropsPath,
+    string? TargetsPath,
+    bool PropsPathAmbiguous = false,
+    bool TargetsPathAmbiguous = false)
+{
+    public bool HasAny => PropsPath is not null || TargetsPath is not null;
+    public bool HasAmbiguity => PropsPathAmbiguous || TargetsPathAmbiguous;
+    public bool HasPotentialAuthority => HasAny || HasAmbiguity;
+}
+
 /// <summary>A whole-token FTS candidate attributed to one physical project row. Keeping the
 /// physical path/language here prevents an unsupported F# owner from being silently replaced by
 /// a same-logical-name C# project during semantic scan-set construction.</summary>
@@ -1574,28 +1585,34 @@ public sealed partial class IndexQueries : IDisposable
             r => r.GetString(0), ("$n", projectName));
     }
 
-    /// <summary>Whether an implicit Directory.Build.props/targets file can participate in this
-    /// project's MSBuild evaluation. This is an authority-boundary check, not an evaluator: the
-    /// semantic layer uses it to disclose that locally modeled generated attributes may differ
-    /// from the real build. Unix lookup is case-sensitive; Windows uses the pinned index's
-    /// case-insensitive host-path policy.</summary>
-    public bool HasApplicableDirectoryBuildAuthority(string projectPath)
+    /// <summary>Returns the nearest indexed Directory.Build.props and Directory.Build.targets
+    /// applicable to a project. Each filename is searched independently, matching MSBuild's
+    /// ancestor discovery rule. The lookup uses only the pinned index: Unix is case-sensitive;
+    /// Windows accepts one unambiguous host-case match and otherwise fails closed.</summary>
+    public DirectoryBuildAuthorityPaths ApplicableDirectoryBuildAuthority(string projectPath)
+        => ApplicableDirectoryBuildAuthority(projectPath, OperatingSystem.IsWindows());
+
+    internal DirectoryBuildAuthorityPaths ApplicableDirectoryBuildAuthority(
+        string projectPath, bool useWindowsPathPolicy)
     {
         projectPath = WorkspacePaths.Normalize(projectPath);
         int slash = projectPath.LastIndexOf('/');
         string directory = slash < 0 ? "" : projectPath[..slash];
-        var candidates = new List<string>();
+        var candidates = new List<(string Props, string Targets)>();
         while (true)
         {
             string prefix = directory.Length == 0 ? "" : directory + "/";
-            candidates.Add(prefix + "Directory.Build.props");
-            candidates.Add(prefix + "Directory.Build.targets");
+            candidates.Add((prefix + "Directory.Build.props",
+                prefix + "Directory.Build.targets"));
             if (directory.Length == 0) break;
             int parentSlash = directory.LastIndexOf('/');
             directory = parentSlash < 0 ? "" : directory[..parentSlash];
         }
 
-        foreach (string[] chunk in candidates.Chunk(200))
+        var indexedPaths = new List<string>();
+        foreach (string[] chunk in candidates
+                     .SelectMany(candidate => new[] { candidate.Props, candidate.Targets })
+                     .Chunk(200))
         {
             var args = new List<(string, object)>();
             var parameters = new List<string>();
@@ -1604,14 +1621,59 @@ public sealed partial class IndexQueries : IDisposable
                 parameters.Add($"$p{i}");
                 args.Add(($"$p{i}", chunk[i]));
             }
-            string lhs = OperatingSystem.IsWindows() ? "path COLLATE NOCASE" : "path";
-            if (Query($"SELECT 1 FROM files WHERE {lhs} IN ({string.Join(",", parameters)}) LIMIT 1",
-                    r => r.GetInt32(0), args.ToArray()).Count > 0)
-            {
-                return true;
-            }
+            string lhs = useWindowsPathPolicy ? "path COLLATE NOCASE" : "path";
+            indexedPaths.AddRange(Query(
+                $"SELECT path FROM files WHERE {lhs} IN ({string.Join(",", parameters)})",
+                r => r.GetString(0), args.ToArray()));
         }
-        return false;
+
+        (string? Path, bool Ambiguous) Resolve(string candidate)
+        {
+            string? exact = indexedPaths.FirstOrDefault(path =>
+                path.Equals(candidate, StringComparison.Ordinal));
+            if (exact is not null) return (exact, false);
+            if (!useWindowsPathPolicy) return (null, false);
+
+            string[] matches = indexedPaths
+                .Where(path => path.Equals(candidate, StringComparison.OrdinalIgnoreCase))
+                .Take(2)
+                .ToArray();
+            return matches.Length switch
+            {
+                0 => (null, false),
+                1 => (matches[0], false),
+                _ => (null, true),
+            };
+        }
+
+        string? props = null;
+        string? targets = null;
+        bool propsComplete = false;
+        bool targetsComplete = false;
+        bool propsAmbiguous = false;
+        bool targetsAmbiguous = false;
+        foreach ((string propsCandidate, string targetsCandidate) in candidates)
+        {
+            if (!propsComplete)
+            {
+                (props, propsAmbiguous) = Resolve(propsCandidate);
+                propsComplete = props is not null || propsAmbiguous;
+            }
+            if (!targetsComplete)
+            {
+                (targets, targetsAmbiguous) = Resolve(targetsCandidate);
+                targetsComplete = targets is not null || targetsAmbiguous;
+            }
+            if (propsComplete && targetsComplete) break;
+        }
+        return new(props, targets, propsAmbiguous, targetsAmbiguous);
+    }
+
+    /// <summary>Whether either applicable Directory.Build file exists in the pinned index.</summary>
+    public bool HasApplicableDirectoryBuildAuthority(string projectPath)
+    {
+        DirectoryBuildAuthorityPaths authority = ApplicableDirectoryBuildAuthority(projectPath);
+        return authority.HasPotentialAuthority;
     }
 
     /// <summary>Fingerprints for MANY projects in one grouped query. Includes each project file
