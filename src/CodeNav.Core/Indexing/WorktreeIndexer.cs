@@ -18,7 +18,11 @@ public sealed record WorktreeIndexStatus(
 public sealed record WorktreeIndexResult(
     string Action, string? Detail,
     int AddedFiles, int ChangedFiles, int DeletedFiles, long ElapsedMs,
-    string? IndexedCommit, bool UsedFullSweep);
+    string? IndexedCommit, bool UsedFullSweep,
+    string? PartialReason = null,
+    IReadOnlyList<string>? IncompleteSourcePaths = null,
+    int IncompleteSourcePathCount = 0,
+    bool IncompleteSourcePathCountIsLowerBound = false);
 
 internal enum WorktreeIndexPlatformPolicy
 {
@@ -289,8 +293,8 @@ public static class WorktreeIndexer
                         }
                     }
                 }
-                var result = DeltaRefresher.Refresh(store, readRoot,
-                    sweep ? null : paths, log, removeUnavailableKnown: true);
+                var result = RefreshWithTransientRetries(store, readRoot,
+                    sweep ? null : paths, log);
                 added = result.AddedFiles;
                 changed = result.ChangedFiles;
                 deleted = result.DeletedFiles;
@@ -310,6 +314,20 @@ public static class WorktreeIndexer
                     store.DeleteMeta("indexed_branch");
                 }
                 store.CheckpointForAtomicInstall();
+            }
+            catch (RefreshInputUnavailableException ex)
+            {
+                log($"Worktree reconcile source capture retries exhausted: {ex}");
+                return Incomplete(IndexManager.RefreshInputUnavailableCause,
+                    "a regular source file remained unavailable after bounded retries",
+                    [ex.Path], sw, sweep);
+            }
+            catch (RefreshInputOversizedException ex)
+            {
+                log($"Worktree reconcile source exceeds the configured byte limit: {ex}");
+                return Incomplete(IndexManager.RefreshInputOversizedCause,
+                    "a regular source file exceeds the configured byte limit",
+                    [ex.Path], sw, sweep);
             }
             catch (Exception ex)
             {
@@ -345,6 +363,40 @@ public static class WorktreeIndexer
             // kae: scoped teardown for the same reason as the pre-install clear above.
             IndexQueries.ClearPoolsFor(dbPath);
         }
+    }
+
+    private static RefreshResult RefreshWithTransientRetries(
+        IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? paths,
+        Action<string> log)
+    {
+        int retry = 0;
+        while (true)
+        {
+            try
+            {
+                return DeltaRefresher.Refresh(store, workspaceRoot, paths, log);
+            }
+            catch (RefreshInputUnavailableException ex)
+                when (retry < DeltaRefresher.RefreshInputRetryDelays.Length)
+            {
+                TimeSpan delay = DeltaRefresher.RefreshInputRetryDelays[retry++];
+                log($"Worktree source capture unavailable for {ex.Path}; retrying complete " +
+                    $"reconcile after {delay.TotalMilliseconds:F0}ms.");
+                Thread.Sleep(delay);
+            }
+        }
+    }
+
+    private static WorktreeIndexResult Incomplete(
+        string reason, string detail, IReadOnlyList<string> paths,
+        System.Diagnostics.Stopwatch sw, bool usedFullSweep)
+    {
+        string[] distinct = paths.Distinct(GitPathComparer)
+            .OrderBy(path => path, StringComparer.Ordinal).ToArray();
+        return new WorktreeIndexResult(reason, detail, 0, 0, 0,
+            sw.ElapsedMilliseconds, null, usedFullSweep, reason,
+            distinct.Take(32).ToArray(), distinct.Length,
+            IncompleteSourcePathCountIsLowerBound: true);
     }
 
     private static WorktreeIndexResult Fail(string action, string detail, System.Diagnostics.Stopwatch sw) =>

@@ -59,6 +59,16 @@ public sealed partial class NavigationTools
         bool errorTruncated = h.Error is not null &&
             Json.Utf8Bytes(h.Error) > CapabilityDynamicTextBytes;
         int? errorBytes = errorTruncated ? Json.Utf8Bytes(h.Error!) : null;
+        bool incompletePathsTruncated = false;
+        string[]? incompletePaths = h.RefreshIncompletePaths?.Take(8)
+            .Select(path =>
+            {
+                string bounded = Json.Utf8Prefix(path, 512, out bool truncated);
+                incompletePathsTruncated |= truncated;
+                return bounded;
+            }).ToArray();
+        incompletePathsTruncated |= h.RefreshIncompletePathCount >
+            (incompletePaths?.Length ?? 0);
 
         return Json.WithCapabilitiesBudget(new
         {
@@ -96,6 +106,10 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-semantic-snapshot", summary = "v0.12.5 immutable source/project snapshot from one pinned index epoch plus request-private snapshots of verified workspace HintPath binaries; bounded deadline, inputs, checker cache, and concurrency" },
                 new { id = "workspace-msbuild-config-indexing", summary = "schema v16 persists arbitrary workspace .props/.targets as config inputs for find_file/config_lookup and pinned bounded project evaluation" },
                 new { id = "fsharp-semantic-bounded-project-evaluation", summary = "v0.12.6 bounded simple properties before semantic items, conditions, Choose, and workspace-local .props imports feed FCS; SDK/toolchain/Directory.Build authority and unresolved ambient inputs are explicit; no targets/tasks, property functions, imported semantic items, package closure, or project closure" },
+                new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry the same serialized request after bounded 100/250/1000 ms delays" },
+                new { id = "refresh-sweep-publication-gating", summary = "v0.12.7 builds and refreshes persist a follower-visible refresh_sweep_pending marker before publication or row mutation and clear it only after the serialized convergence sweep commits" },
+                new { id = "refresh-incomplete-freshness", summary = "v0.12.7 exhausted source capture keeps index state stale, preserves the Git baseline, exposes a stable refreshIncompleteReason plus bounded paths, and widens the next request to a recovery sweep" },
+                new { id = "oversized-source-coverage", summary = "v0.12.7 oversized regular sources are a distinct persistent outcome with explicit bounded coverage; they are not rapidly retried, cannot publish ready/current/exact evidence, and prevent strict worktree index installation" },
                 new { id = "fsharp-unsupported-language-boundary", summary = "F# name search, references, callers/callees, implementations, hierarchy, and dependency closure remain unsupported; mixed scopes disclose skips" },
                 new { id = "review-fsharp-file-coverage", summary = "review_pack: F# changes in unsupportedLanguageFiles" },
                 new { id = "compiled-awareness", summary = "search_symbol orphaned; repo_overview.orphanedFiles; compiled ownership guides semantic resolution, impact, and context_pack" },
@@ -214,6 +228,19 @@ public sealed partial class NavigationTools
                 error,
                 errorTruncated = errorTruncated ? true : (bool?)null,
                 errorBytes,
+                refreshIncompleteReason = h.RefreshIncompleteReason,
+                incompleteSourcePaths = incompletePaths,
+                incompleteSourcePathCount = h.RefreshIncompleteReason is null
+                    ? (int?)null
+                    : h.RefreshIncompletePathCount,
+                incompleteSourcePathCountLowerBound =
+                    h.RefreshIncompleteReason is not null &&
+                    h.RefreshIncompletePathCountIsLowerBound
+                        ? true
+                        : (bool?)null,
+                incompleteSourcePathsTruncated = incompletePathsTruncated
+                    ? true
+                    : (bool?)null,
                 dbBytes = h.DbBytes,
                 workspaceRoot,
                 workspaceRootTruncated = workspaceRootTruncated ? true : (bool?)null,
@@ -262,7 +289,8 @@ public sealed partial class NavigationTools
                 indexedCommit = h.IndexedCommit,
                 indexedBranch = h.IndexedBranch,
                 headCommit,
-                headMatchesIndex = headCommit is not null && h.IndexedCommit is not null
+                headMatchesIndex = h.RefreshIncompleteReason is null &&
+                    headCommit is not null && h.IndexedCommit is not null
                     && string.Equals(headCommit, h.IndexedCommit, StringComparison.OrdinalIgnoreCase),
             };
 

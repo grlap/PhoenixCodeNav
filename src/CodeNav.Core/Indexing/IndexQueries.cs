@@ -67,7 +67,11 @@ internal sealed record IndexMetadataSnapshot(
     string? IndexedAtUtc,
     string? LastRefreshUtc,
     string? IndexedCommit,
-    string? IndexedBranch);
+    string? IndexedBranch,
+    string? RefreshIncompleteReason,
+    IReadOnlyList<string>? RefreshIncompletePaths,
+    int RefreshIncompletePathCount,
+    bool RefreshIncompletePathCountIsLowerBound = false);
 
 /// <summary>
 /// Owns: read-side queries over the persisted index (one read-only connection, pooled for the
@@ -183,13 +187,32 @@ public sealed partial class IndexQueries : IDisposable
         cmd.CommandText =
             "SELECT key, value FROM meta WHERE key IN " +
             "('schema_version','workspace_root','index_version','indexed_at_utc'," +
-            "'last_refresh_utc','indexed_commit','indexed_branch')";
+            "'last_refresh_utc','indexed_commit','indexed_branch'," +
+            "'refresh_incomplete_reason','refresh_incomplete_paths'," +
+            "'refresh_incomplete_path_count','refresh_incomplete_path_count_lower_bound')";
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         using (var reader = cmd.ExecuteReader())
         {
             while (reader.Read()) values[reader.GetString(0)] = reader.GetString(1);
         }
         _afterQueryForTest?.Invoke(cmd.CommandText);
+        string[]? incompletePaths = null;
+        if (values.GetValueOrDefault("refresh_incomplete_paths") is { } pathsJson)
+        {
+            try
+            {
+                incompletePaths = System.Text.Json.JsonSerializer.Deserialize<string[]>(pathsJson)?
+                    .Take(32).ToArray();
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                incompletePaths = null;
+            }
+        }
+        int incompletePathCount = int.TryParse(
+            values.GetValueOrDefault("refresh_incomplete_path_count"), out int parsedCount)
+            ? Math.Max(parsedCount, incompletePaths?.Length ?? 0)
+            : incompletePaths?.Length ?? 0;
         return new IndexMetadataSnapshot(
             values.GetValueOrDefault("schema_version"),
             values.GetValueOrDefault("workspace_root"),
@@ -197,7 +220,13 @@ public sealed partial class IndexQueries : IDisposable
             values.GetValueOrDefault("indexed_at_utc"),
             values.GetValueOrDefault("last_refresh_utc"),
             values.GetValueOrDefault("indexed_commit"),
-            values.GetValueOrDefault("indexed_branch"));
+            values.GetValueOrDefault("indexed_branch"),
+            values.GetValueOrDefault("refresh_incomplete_reason"),
+            incompletePaths,
+            incompletePathCount,
+            string.Equals(values.GetValueOrDefault(
+                    "refresh_incomplete_path_count_lower_bound"), "1",
+                StringComparison.Ordinal));
     }
 
     // ---------------------------------------------------------------- find_file

@@ -7,8 +7,8 @@ namespace CodeNav.Tests;
 
 /// <summary>
 /// Batch 40 (v0.9.4) — the progress trio:
-/// efa — a build that SKIPPED unreadable .cs files or FAILED csproj parses looked identical to
-///       a clean one; filesSkipped/projectsFailed now count it, emitted only when &gt;0;
+/// efa — an unreadable .cs capture or FAILED csproj parse once looked identical to a clean build;
+///       filesSkipped/projectsFailed count the evidence, and unreadable source now fails closed;
 /// z4c — 'refreshing' was a binary; pendingProcessed (monotonic applied-delta count) paired
 ///       with pendingChanges turns it into movement — both flat means stuck, not busy;
 /// 0tn — filesPerSecond + estimatedRemainingMs derived from the indexing_files phase's OWN
@@ -20,7 +20,7 @@ public class Batch40Tests
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
 
     [Fact]
-    public void SkippedFilesAndFailedProjectsAreCounted()
+    public void UnreadableColdBuildFailsClosedAndCountsCaptureFailure()
     {
         string root = Directory.CreateTempSubdirectory("codenav-40-loss").FullName;
         try
@@ -30,21 +30,40 @@ public class Batch40Tests
             string badDir = Path.Combine(root, "Broken");
             Directory.CreateDirectory(badDir);
             File.WriteAllText(Path.Combine(badDir, "Broken.csproj"), "<Project><UnclosedTag</Project>");
-            // An exclusively-locked .cs file: the parallel reader gets IOException and must
-            // count the skip (the file is absent from the index until a delta retries it).
+            // An exclusively-locked .cs file: the parallel reader gets IOException, records the
+            // failed capture for progress, and refuses to publish a lossy cold index.
             string lockedPath = Path.Combine(root, "Lab", "Locked.cs");
             File.WriteAllText(lockedPath, "namespace Lab { public class LockedOut { } }");
-            using var padlock = new FileStream(lockedPath, FileMode.Open, FileAccess.Read, FileShare.None);
+            FileStream? padlock = null;
+            if (OperatingSystem.IsWindows())
+            {
+                padlock = new FileStream(lockedPath, FileMode.Open, FileAccess.Read,
+                    FileShare.None);
+            }
+            else
+            {
+                File.SetUnixFileMode(lockedPath, UnixFileMode.None);
+            }
 
-            var bp = new BuildProgress();
-            IndexBuilder.Build(root, IndexBuilder.DefaultDbPath(root), null, bp);
-            var snap = bp.Snapshot();
+            try
+            {
+                var bp = new BuildProgress();
+                Assert.Throws<RefreshInputUnavailableException>(() =>
+                    IndexBuilder.Build(root, IndexBuilder.DefaultDbPath(root), null, bp));
+                var snap = bp.Snapshot();
 
-            Assert.Equal(1, snap.FilesSkipped);
-            Assert.Equal(1, snap.ProjectsFailed);
-            // The skipped file is genuinely absent — the counter tells the truth.
-            using var q = new IndexQueries(IndexBuilder.DefaultDbPath(root));
-            Assert.Empty(q.SearchSymbols("LockedOut", "exact", null, 2));
+                Assert.Equal(1, snap.FilesSkipped);
+                Assert.Equal(1, snap.ProjectsFailed);
+            }
+            finally
+            {
+                padlock?.Dispose();
+                if (!OperatingSystem.IsWindows())
+                {
+                    File.SetUnixFileMode(lockedPath,
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                }
+            }
         }
         finally { Cleanup(root); }
     }

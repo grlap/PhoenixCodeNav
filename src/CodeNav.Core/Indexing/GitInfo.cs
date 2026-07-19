@@ -2191,6 +2191,7 @@ public static class GitInfo
         Missing,
         DefinitelyNonRegular,
         Unavailable,
+        Oversized,
     }
 
     internal readonly record struct WorkspaceFileReadResult(
@@ -2210,11 +2211,7 @@ public static class GitInfo
         {
             return ReadBoundedUnixFileAt(directoryFd, gitPath, maxBytes);
         }
-        byte[]? bytes = ReadBoundedRegularFileCore(fullPath, maxBytes, workspaceRoot,
-            missingAsEmpty: false);
-        if (bytes is not null)
-            return new(WorkspaceFileReadDisposition.Success, bytes);
-        return new(ClassifyUnreadableWorkspacePath(workspaceRoot, fullPath), null);
+        return ReadBoundedRegularFileResultCore(fullPath, maxBytes, workspaceRoot);
     }
 
     private static bool TryParseOwnProcDirectoryFd(string root, out int descriptor)
@@ -2223,45 +2220,6 @@ public static class GitInfo
         string prefix = $"/proc/{Environment.ProcessId}/fd/";
         return root.StartsWith(prefix, StringComparison.Ordinal) &&
             int.TryParse(root.AsSpan(prefix.Length), out descriptor) && descriptor >= 0;
-    }
-
-    private static WorkspaceFileReadDisposition ClassifyUnreadableWorkspacePath(
-        string workspaceRoot,
-        string fullPath)
-    {
-        try
-        {
-            if (WorkspacePaths.EscapesViaReparsePoint(workspaceRoot, fullPath))
-                return WorkspaceFileReadDisposition.DefinitelyNonRegular;
-            if (OperatingSystem.IsWindows())
-            {
-                FileAttributes attributes = File.GetAttributes(fullPath);
-                return (attributes & (FileAttributes.ReparsePoint | FileAttributes.Device |
-                                      FileAttributes.Directory)) != 0
-                    ? WorkspaceFileReadDisposition.DefinitelyNonRegular
-                    : WorkspaceFileReadDisposition.Unavailable;
-            }
-            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
-            {
-                if (LStatUnix(fullPath, out UnixFileStatus status) == 0)
-                    return (status.Mode & UnixFileTypeMask) != UnixRegularFile
-                        ? WorkspaceFileReadDisposition.DefinitelyNonRegular
-                        : WorkspaceFileReadDisposition.Unavailable;
-                return Marshal.GetLastPInvokeError() == UnixNoSuchFile
-                    ? WorkspaceFileReadDisposition.Missing
-                    : WorkspaceFileReadDisposition.Unavailable;
-            }
-        }
-        catch (FileNotFoundException)
-        {
-            return WorkspaceFileReadDisposition.Missing;
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return WorkspaceFileReadDisposition.Missing;
-        }
-        catch { }
-        return WorkspaceFileReadDisposition.Unavailable;
     }
 
     private static WorkspaceFileReadResult ReadBoundedUnixFileAt(
@@ -2283,9 +2241,8 @@ public static class GitInfo
             {
                 int descriptor = OpenAtUnix(current, segments[i], directoryFlags);
                 if (descriptor < 0)
-                    return new(Marshal.GetLastPInvokeError() == UnixNoSuchFile
-                        ? WorkspaceFileReadDisposition.Missing
-                        : WorkspaceFileReadDisposition.Unavailable, null);
+                    return new(ClassifyUnixOpenFailure(
+                        Marshal.GetLastPInvokeError(), missingAllowed: true), null);
                 var next = new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
                 openedDirectories.Add(next);
                 if (!IsUnixFileType(next, UnixDirectory, out _))
@@ -2302,16 +2259,16 @@ public static class GitInfo
                 UnixOpenNoControllingTerminalLinux | UnixOpenCloseOnExecLinux;
             int fileDescriptor = OpenAtUnix(current, segments[^1], fileFlags);
             if (fileDescriptor < 0)
-                return new(Marshal.GetLastPInvokeError() == UnixNoSuchFile
-                    ? WorkspaceFileReadDisposition.Missing
-                    : WorkspaceFileReadDisposition.Unavailable, null);
+                return new(ClassifyUnixOpenFailure(
+                    Marshal.GetLastPInvokeError(), missingAllowed: true), null);
             using var file = new SafeFileHandle((IntPtr)fileDescriptor, ownsHandle: true);
             if (!IsUnixFileType(file, UnixRegularFile, out long length))
             {
                 return new(WorkspaceFileReadDisposition.DefinitelyNonRegular, null);
             }
-            if (length < 0 || length > maxBytes || length > int.MaxValue ||
-                SetUnixNonBlocking(file, 0) != 0)
+            if (length > maxBytes || length > int.MaxValue)
+                return new(WorkspaceFileReadDisposition.Oversized, null);
+            if (length < 0 || SetUnixNonBlocking(file, 0) != 0)
                 return new(WorkspaceFileReadDisposition.Unavailable, null);
             byte[]? bytes = ReadBoundedHandle(file, length);
             return bytes is null
@@ -2332,12 +2289,23 @@ public static class GitInfo
     private static byte[]? ReadBoundedRegularFileCore(string path, int maxBytes,
         string allowedRoot, bool missingAsEmpty)
     {
+        WorkspaceFileReadResult result =
+            ReadBoundedRegularFileResultCore(path, maxBytes, allowedRoot);
+        if (result.Bytes is not null) return result.Bytes;
+        return missingAsEmpty && result.Disposition == WorkspaceFileReadDisposition.Missing
+            ? []
+            : null;
+    }
+
+    private static WorkspaceFileReadResult ReadBoundedRegularFileResultCore(
+        string path, int maxBytes, string allowedRoot)
+    {
         try
         {
             if (!TryBuildMetadataTraversal(path, allowedRoot, out string volumeRoot,
                     out string[] anchorSegments, out string[] targetSegments))
             {
-                return null;
+                return new(WorkspaceFileReadDisposition.Unavailable, null);
             }
             if (!OperatingSystem.IsWindows())
             {
@@ -2351,17 +2319,18 @@ public static class GitInfo
                 int directoryFlag = OperatingSystem.IsLinux()
                     ? UnixOpenDirectoryLinux
                     : OperatingSystem.IsMacOS() ? UnixOpenDirectoryMac : 0;
-                if (fileFlags < 0 || directoryFlag == 0) return null;
+                if (fileFlags < 0 || directoryFlag == 0)
+                    return new(WorkspaceFileReadDisposition.Unavailable, null);
                 return ReadBoundedUnixFile(volumeRoot, anchorSegments, targetSegments,
-                    maxBytes, fileFlags, fileFlags | directoryFlag, missingAsEmpty);
+                    maxBytes, fileFlags, fileFlags | directoryFlag);
             }
 
-            return ReadBoundedWindowsFile(volumeRoot, anchorSegments, targetSegments, maxBytes,
-                missingAsEmpty);
+            return ReadBoundedWindowsFile(volumeRoot, anchorSegments, targetSegments,
+                maxBytes);
         }
         catch
         {
-            return null;
+            return new(WorkspaceFileReadDisposition.Unavailable, null);
         }
     }
 
@@ -2403,14 +2372,16 @@ public static class GitInfo
         return segments.Length > 0 && segments.All(segment => segment is not "." and not "..");
     }
 
-    private static byte[]? ReadBoundedUnixFile(string volumeRoot, string[] anchorSegments,
-        string[] targetSegments, int maxBytes, int fileFlags, int directoryFlags,
-        bool missingAsEmpty)
+    private static WorkspaceFileReadResult ReadBoundedUnixFile(
+        string volumeRoot, string[] anchorSegments, string[] targetSegments,
+        int maxBytes, int fileFlags, int directoryFlags)
     {
         int rootDescriptor = OpenUnix(volumeRoot, directoryFlags, 0);
-        if (rootDescriptor < 0) return null;
+        if (rootDescriptor < 0)
+            return new(WorkspaceFileReadDisposition.Unavailable, null);
         using var rootHandle = new SafeFileHandle((IntPtr)rootDescriptor, ownsHandle: true);
-        if (!IsUnixFileType(rootHandle, UnixDirectory, out _)) return null;
+        if (!IsUnixFileType(rootHandle, UnixDirectory, out _))
+            return new(WorkspaceFileReadDisposition.DefinitelyNonRegular, null);
 
         SafeFileHandle current = rootHandle;
         var openedDirectories = new List<SafeFileHandle>();
@@ -2425,26 +2396,36 @@ public static class GitInfo
                     : targetSegments[i - anchorSegments.Length];
                 int descriptor = OpenAtUnix(current, segment, directoryFlags);
                 if (descriptor < 0)
-                    return !isAnchor && missingAsEmpty &&
-                           Marshal.GetLastPInvokeError() == UnixNoSuchFile ? [] : null;
+                    return new(ClassifyUnixOpenFailure(
+                        Marshal.GetLastPInvokeError(), missingAllowed: !isAnchor), null);
                 var next = new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
                 openedDirectories.Add(next);
-                if (!IsUnixFileType(next, UnixDirectory, out _)) return null;
+                if (!IsUnixFileType(next, UnixDirectory, out _))
+                    return new(WorkspaceFileReadDisposition.DefinitelyNonRegular, null);
                 current = next;
             }
 
+            if (OperatingSystem.IsLinux() &&
+                TryStatxTypeAt(current.DangerousGetHandle().ToInt32(), targetSegments[^1],
+                    out int namedType) && namedType != UnixRegularFile)
+            {
+                return new(WorkspaceFileReadDisposition.DefinitelyNonRegular, null);
+            }
             int fileDescriptor = OpenAtUnix(current, targetSegments[^1], fileFlags);
             if (fileDescriptor < 0)
-                return missingAsEmpty && Marshal.GetLastPInvokeError() == UnixNoSuchFile
-                    ? [] : null;
+                return new(ClassifyUnixOpenFailure(
+                    Marshal.GetLastPInvokeError(), missingAllowed: true), null);
             using var file = new SafeFileHandle((IntPtr)fileDescriptor, ownsHandle: true);
-            if (!IsUnixFileType(file, UnixRegularFile, out long length) ||
-                length < 0 || length > maxBytes || length > int.MaxValue)
-            {
-                return null;
-            }
-            if (SetUnixNonBlocking(file, 0) != 0) return null;
-            return ReadBoundedHandle(file, length);
+            if (!IsUnixFileType(file, UnixRegularFile, out long length))
+                return new(WorkspaceFileReadDisposition.DefinitelyNonRegular, null);
+            if (length > maxBytes || length > int.MaxValue)
+                return new(WorkspaceFileReadDisposition.Oversized, null);
+            if (length < 0 || SetUnixNonBlocking(file, 0) != 0)
+                return new(WorkspaceFileReadDisposition.Unavailable, null);
+            byte[]? bytes = ReadBoundedHandle(file, length);
+            return bytes is null
+                ? new(WorkspaceFileReadDisposition.Unavailable, null)
+                : new(WorkspaceFileReadDisposition.Success, bytes);
         }
         finally
         {
@@ -2501,20 +2482,21 @@ public static class GitInfo
         }
     }
 
-    private static byte[]? ReadBoundedWindowsFile(string volumeRoot, string[] anchorSegments,
-        string[] targetSegments, int maxBytes, bool missingAsEmpty)
+    private static WorkspaceFileReadResult ReadBoundedWindowsFile(
+        string volumeRoot, string[] anchorSegments, string[] targetSegments, int maxBytes)
     {
         using SafeFileHandle root = OpenWindowsMetadataFile(volumeRoot,
             WindowsReadAttributes | WindowsTraverse | WindowsSynchronize,
             WindowsShareRead | WindowsShareWrite | WindowsShareDelete,
             IntPtr.Zero, WindowsOpenExisting,
             WindowsOpenReparsePoint | WindowsBackupSemantics, IntPtr.Zero);
-        if (root.IsInvalid) return null;
+        if (root.IsInvalid)
+            return new(WorkspaceFileReadDisposition.Unavailable, null);
         FileAttributes rootAttributes = File.GetAttributes(root);
         if ((rootAttributes & FileAttributes.Directory) == 0 ||
             (rootAttributes & RejectedWindowsAttributes) != 0)
         {
-            return null;
+            return new(WorkspaceFileReadDisposition.DefinitelyNonRegular, null);
         }
 
         SafeFileHandle current = root;
@@ -2530,26 +2512,38 @@ public static class GitInfo
                     : targetSegments[i - anchorSegments.Length];
                 SafeFileHandle? next = OpenWindowsRelative(current, segment, true,
                     out bool missing);
-                if (next is null) return !isAnchor && missingAsEmpty && missing ? [] : null;
+                if (next is null)
+                    return new(!isAnchor && missing
+                        ? WorkspaceFileReadDisposition.Missing
+                        : WorkspaceFileReadDisposition.Unavailable, null);
                 openedDirectories.Add(next);
                 FileAttributes attributes = File.GetAttributes(next);
                 if ((attributes & FileAttributes.Directory) == 0 ||
                     (attributes & RejectedWindowsAttributes) != 0)
                 {
-                    return null;
+                    return new(WorkspaceFileReadDisposition.DefinitelyNonRegular, null);
                 }
                 current = next;
             }
 
             using SafeFileHandle? file = OpenWindowsRelative(current, targetSegments[^1],
                 false, out bool finalMissing);
-            if (file is null) return missingAsEmpty && finalMissing ? [] : null;
+            if (file is null)
+                return new(finalMissing
+                    ? WorkspaceFileReadDisposition.Missing
+                    : WorkspaceFileReadDisposition.Unavailable, null);
             FileAttributes fileAttributes = File.GetAttributes(file);
             if ((fileAttributes & (FileAttributes.Directory | RejectedWindowsAttributes)) != 0)
-                return null;
+                return new(WorkspaceFileReadDisposition.DefinitelyNonRegular, null);
             long length = RandomAccess.GetLength(file);
-            if (length < 0 || length > maxBytes || length > int.MaxValue) return null;
-            return ReadBoundedHandle(file, length);
+            if (length > maxBytes || length > int.MaxValue)
+                return new(WorkspaceFileReadDisposition.Oversized, null);
+            if (length < 0)
+                return new(WorkspaceFileReadDisposition.Unavailable, null);
+            byte[]? bytes = ReadBoundedHandle(file, length);
+            return bytes is null
+                ? new(WorkspaceFileReadDisposition.Unavailable, null)
+                : new(WorkspaceFileReadDisposition.Success, bytes);
         }
         finally
         {
@@ -2640,6 +2634,21 @@ public static class GitInfo
 
     private static bool IsUnixSymbolicLinkError(int error) =>
         OperatingSystem.IsLinux() ? error == 40 : OperatingSystem.IsMacOS() && error == 62;
+
+    private static WorkspaceFileReadDisposition ClassifyUnixOpenFailure(
+        int error, bool missingAllowed)
+    {
+        if (missingAllowed && error == UnixNoSuchFile)
+            return WorkspaceFileReadDisposition.Missing;
+        // With a held parent directory, ELOOP from O_NOFOLLOW proves a symbolic-link leaf and
+        // ENOTDIR proves a path component is not a directory. Neither is a transient regular-file
+        // sharing failure, so do not burn the retry budget or retain stale source evidence.
+        if (IsUnixSymbolicLinkError(error) || error == UnixNotDirectory)
+            return WorkspaceFileReadDisposition.DefinitelyNonRegular;
+        return WorkspaceFileReadDisposition.Unavailable;
+    }
+
+    private const int UnixNotDirectory = 20;
 
     private const uint WindowsReadData = 0x1;
     private const uint WindowsTraverse = 0x20;

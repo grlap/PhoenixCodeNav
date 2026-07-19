@@ -315,23 +315,44 @@ internal sealed record Meta(
     string? StatusNote = null,
     string? Build = null,
     string? IndexSchema = null, // field (asked twice): key on schema per-response, no capabilities call
-    string IndexMode = "writer")
+    string IndexMode = "writer",
+    string? PartialReason = null,
+    IReadOnlyList<string>? IncompleteSourcePaths = null,
+    int? IncompleteSourcePathCount = null,
+    bool? IncompleteSourcePathCountLowerBound = null,
+    bool? IncompleteSourcePathsTruncated = null)
 {
     public static Meta From(IndexHealth h, string confidence, string layer)
     {
         // Pending watcher changes mean results may lag the working tree.
-        string status = h.State == "ready" && h.PendingChanges > 0 ? "stale" : h.State;
+        string status = h.RefreshIncompleteReason is not null && h.State != "refreshing"
+            ? "stale"
+            : h.State == "ready" && h.PendingChanges > 0 ? "stale" : h.State;
+        string effectiveConfidence = h.RefreshIncompleteReason is not null &&
+                                     confidence == "exact"
+            ? "indexed"
+            : confidence;
         // 47t (field: "repeated on every response — after the first it's noise"): the indexed-tier
         // explainer is GONE from per-response meta — the tier meanings live in
         // server_capabilities.confidenceModel, read once. Only heuristic keeps its warning: it
         // changes how much to trust THIS specific result.
-        string? note = confidence == "heuristic"
+        string? note = effectiveConfidence == "heuristic"
             ? "naming/text inference — verify before relying on it"
             : null;
         // 9z4 (field: couldn't tell whether 'refreshing' meant "results may be wrong" or "background
         // catch-up, results fine"): one line of meaning, only when the status needs it.
         string? statusNote = h.AccessMode == IndexManager.FollowerAccessMode
-            ? "read-only follower — index-backed evidence reflects committed writer state; live source, Git, and semantic evidence may be newer; this process cannot observe the writer's pending queue"
+            ? h.RefreshIncompleteReason is null
+                ? "read-only follower — index-backed evidence reflects committed writer state; live source, Git, and semantic evidence may be newer; this process cannot observe the writer's pending queue"
+                : h.RefreshIncompleteReason == IndexManager.RefreshSweepPendingCause
+                    ? "read-only follower — the writer's freshness convergence is pending; index-backed evidence reflects the last committed state and may lag recent workspace edits; only the writer can complete or retry the sweep"
+                    : "read-only follower — the writer reports incomplete source capture; index-backed evidence reflects the last complete committed state and cannot claim current source evidence or exact confidence"
+            : h.RefreshIncompleteReason is not null
+                ? h.RefreshIncompleteReason == IndexManager.RefreshSweepPendingCause
+                    ? "freshness convergence pending — results may lag recent workspace edits; if this state persists, call refresh_index to retry"
+                    : status == "refreshing"
+                        ? "source capture retry in progress — results reflect the last complete index and cannot claim current source evidence"
+                        : "source capture incomplete — affected results cannot claim current source evidence or exact confidence; retry refresh before relying on them"
             : status switch
             {
                 "refreshing" => "background non-blocking refresh — results reflect the index as of lastRefreshUtc/indexedAtUtc",
@@ -341,8 +362,27 @@ internal sealed record Meta(
         // ddp (field: "I can programmatically check what's deployed — make it inline"): every
         // response self-identifies its build, ~20 bytes. indexSchema likewise (asked twice) —
         // schema bumps force reindexes, and a caller watching for one shouldn't need a second call.
-        return new Meta(status, h.IndexVersion, h.IndexedAtUtc, h.LastRefreshUtc, h.PendingChanges,
-            confidence, layer, note, statusNote, BuildInfo.Stamp, BuildInfo.IndexSchema,
-            h.AccessMode);
+        IReadOnlyList<string>? incompletePaths = null;
+        bool pathsTruncated = false;
+        if (h.RefreshIncompletePaths is { Count: > 0 } paths)
+        {
+            const int pathLimit = 8;
+            const int pathBytes = 512;
+            incompletePaths = paths.Take(pathLimit).Select(path =>
+            {
+                string bounded = Json.Utf8Prefix(path, pathBytes, out bool truncated);
+                pathsTruncated |= truncated;
+                return bounded;
+            }).ToArray();
+            pathsTruncated |= h.RefreshIncompletePathCount > incompletePaths.Count;
+        }
+        return new Meta(status, h.IndexVersion, h.IndexedAtUtc, h.LastRefreshUtc,
+            h.PendingChanges, effectiveConfidence, layer, note, statusNote, BuildInfo.Stamp,
+            BuildInfo.IndexSchema, h.AccessMode, h.RefreshIncompleteReason, incompletePaths,
+            h.RefreshIncompleteReason is null ? null : h.RefreshIncompletePathCount,
+            h.RefreshIncompleteReason is null || !h.RefreshIncompletePathCountIsLowerBound
+                ? null
+                : true,
+            pathsTruncated ? true : null);
     }
 }

@@ -709,6 +709,9 @@ public sealed class IndexStore : IDisposable
     public void DeleteMeta(string key) =>
         Exec(_write, "DELETE FROM meta WHERE key=$k", ("$k", key));
 
+    internal void DeleteMeta(SqliteTransaction tx, string key) =>
+        ExecTx(tx, "DELETE FROM meta WHERE key=$k", ("$k", key));
+
     public string? GetMeta(string key)
     {
         using var cmd = _write.CreateCommand();

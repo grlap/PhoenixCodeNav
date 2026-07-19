@@ -3,7 +3,7 @@ using System.Threading.Channels;
 namespace CodeNav.Core.Indexing;
 
 public sealed record IndexHealth(
-    string State,               // missing | building | ready | refreshing | failed
+    string State,               // missing | building | ready | refreshing | stale | failed
     string? IndexVersion,
     string? IndexedAtUtc,
     string? LastRefreshUtc,
@@ -20,7 +20,11 @@ public sealed record IndexHealth(
                                     // refreshing state from a binary into movement: pending drains while processed climbs —
                                     // a stuck pump (pending flat, processed flat) is distinguishable from a busy one.
     long PendingProcessed = 0,
-    string AccessMode = "writer");
+    string AccessMode = "writer",
+    string? RefreshIncompleteReason = null,
+    IReadOnlyList<string>? RefreshIncompletePaths = null,
+    int RefreshIncompletePathCount = 0,
+    bool RefreshIncompletePathCountIsLowerBound = false);
 
 public sealed class IndexReadSnapshot : IDisposable
 {
@@ -65,6 +69,15 @@ public sealed class IndexManager : IDisposable
         "the index writer is no longer running; restart this follower to acquire writer mode, or start another writer process";
     private const string FullRebuildDeferredForReaders =
         "full rebuild is waiting for active index readers; the queued rebuild remains pending";
+    private const int RefreshIncompletePathLimit = 32;
+    internal const string RefreshIncompleteReasonMeta = "refresh_incomplete_reason";
+    internal const string RefreshIncompletePathsMeta = "refresh_incomplete_paths";
+    internal const string RefreshIncompletePathCountMeta = "refresh_incomplete_path_count";
+    internal const string RefreshIncompletePathCountLowerBoundMeta =
+        "refresh_incomplete_path_count_lower_bound";
+    public const string RefreshSweepPendingCause = "refresh_sweep_pending";
+    public const string RefreshInputUnavailableCause = "refresh_input_unavailable";
+    public const string RefreshInputOversizedCause = "refresh_input_oversized";
 
     private sealed record FollowerPublication(
         IndexMetadataSnapshot? Metadata,
@@ -108,6 +121,14 @@ public sealed class IndexManager : IDisposable
     private volatile bool _disposed;
     private volatile string _state = "missing";
     private volatile string? _error;
+    private volatile string? _refreshIncompleteReason;
+    private volatile string[]? _refreshIncompletePaths;
+    private int _refreshIncompletePathCount;
+    private int _refreshIncompletePathCountIsLowerBound;
+    // In-memory reason and durable follower visibility are deliberately separate. A failed
+    // initial marker write may leave the writer stale in memory, but must not let a later request
+    // skip the publication gate merely because that non-durable reason is non-null.
+    private int _refreshIncompletePersisted;
     private volatile string _accessMode = UnavailableAccessMode;
     private FollowerPublication _followerPublication =
         new(null, false, "failed", FollowerIndexUnavailable);
@@ -139,6 +160,12 @@ public sealed class IndexManager : IDisposable
     internal Action? FullRebuildCompletedForTest { get; set; }
     internal Action? RefreshRequestDequeuedForTest { get; set; }
     internal Action? RefreshRequestPassedStartupBarrierForTest { get; set; }
+    internal Func<string, string, int, GitInfo.WorkspaceFileReadResult>?
+        WorkspaceFileReaderForTest
+    { get; set; }
+    internal Action? ClearRefreshIncompleteBeforeCommitForTest { get; set; }
+    internal Action<string>? RefreshIncompleteBeforeCommitForTest { get; set; }
+    internal Action? RefreshInputFailureBeforeLatchForTest { get; set; }
     internal Action? StartupAfterLeaseAcquiredForTest { get; set; }
     internal Action? StartupAfterLeaseContentionForTest { get; set; }
     internal Action? CleanupBeforePoolClearForTest { get; set; }
@@ -205,7 +232,8 @@ public sealed class IndexManager : IDisposable
                 pendingChanges = follower || _watcher is null ? null : (int?)h.PendingChanges,
                 pendingProcessed = follower ? null : (long?)h.PendingProcessed,
                 // h.Error may carry text; the contract allows stable codes only.
-                errorCode = h.Error is null ? null : "index_error",
+                errorCode = h.RefreshIncompleteReason ??
+                    (h.Error is null ? null : "index_error"),
             },
             process = new
             {
@@ -637,6 +665,11 @@ public sealed class IndexManager : IDisposable
                     }
 
                     var store = new IndexStore(_databaseIoPath, createNew: false);
+                    // A compatible database is not current until the watcher is attached and the
+                    // serialized detect-all pass closes the build/open-to-watch gap. Persist this
+                    // before publication so Windows followers cannot observe a false-ready epoch.
+                    if (store.GetMeta(RefreshIncompleteReasonMeta) is null)
+                        PersistRefreshSweepPending(store);
                     CacheMeta(store);              // read meta before publishing the store
 
                     // If Dispose ran while we were building/opening, don't publish or start the
@@ -648,10 +681,14 @@ public sealed class IndexManager : IDisposable
                     }
 
                     _store = store;
-                    _error = null;   // review F2 parity with FullRebuildInPump: recovery via a
-                                     // re-entered Start is a DESIGNED failed->ready transition — a
-                                     // healthy index must not keep reporting the pre-recovery refusal
-                    _state = "ready";
+                    _error = _refreshIncompleteReason;
+                    // Schema-17 persists the writer's incomplete-source latch so Windows
+                    // followers inherit stale/coverage state without ever owning a watcher or
+                    // refresh queue.
+                    _state = "stale";
+                    // review F2 parity with FullRebuildInPump: recovery via a
+                    // re-entered Start is a DESIGNED failed->ready transition — a healthy index
+                    // must not keep reporting the pre-recovery refusal.
                     StartWatcher();
                     _log(build
                         ? "Fresh index opened; running post-build freshness sweep ..."
@@ -688,6 +725,30 @@ public sealed class IndexManager : IDisposable
         _lastRefreshUtc ??= store.GetMeta("last_refresh_utc");
         _indexedCommit ??= store.GetMeta("indexed_commit");
         _indexedBranch ??= store.GetMeta("indexed_branch");
+        _refreshIncompleteReason = store.GetMeta(RefreshIncompleteReasonMeta);
+        Volatile.Write(ref _refreshIncompletePersisted,
+            _refreshIncompleteReason is null ? 0 : 1);
+        string? pathsJson = store.GetMeta(RefreshIncompletePathsMeta);
+        try
+        {
+            _refreshIncompletePaths = pathsJson is null
+                ? null
+                : System.Text.Json.JsonSerializer.Deserialize<string[]>(pathsJson)?
+                    .Take(RefreshIncompletePathLimit).ToArray();
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            _refreshIncompletePaths = null;
+        }
+        int count = int.TryParse(store.GetMeta(RefreshIncompletePathCountMeta),
+            out int parsedCount)
+            ? parsedCount
+            : _refreshIncompletePaths?.Length ?? 0;
+        Volatile.Write(ref _refreshIncompletePathCount,
+            Math.Max(count, _refreshIncompletePaths?.Length ?? 0));
+        Volatile.Write(ref _refreshIncompletePathCountIsLowerBound,
+            string.Equals(store.GetMeta(RefreshIncompletePathCountLowerBoundMeta), "1",
+                StringComparison.Ordinal) ? 1 : 0);
     }
 
     private FollowerPublication CurrentFollowerPublication =>
@@ -702,8 +763,10 @@ public sealed class IndexManager : IDisposable
         // Health can therefore observe either the previous committed epoch or this one, never a
         // mixture assembled from independently written fields.
         FollowerMetadataBeforePublishForTest?.Invoke(metadata);
+        string state = metadata.RefreshIncompleteReason is null ? "ready" : "stale";
         Volatile.Write(ref _followerPublication,
-            new FollowerPublication(metadata, true, "ready", null));
+            new FollowerPublication(metadata, true, state,
+                metadata.RefreshIncompleteReason));
     }
 
     private bool IsCompatibleFollowerMetadata(IndexMetadataSnapshot metadata) =>
@@ -958,8 +1021,18 @@ public sealed class IndexManager : IDisposable
 
     private async Task PumpRefreshesAsync()
     {
-        await foreach (var req in _refreshQueue.Reader.ReadAllAsync())
+        await foreach (var queuedRequest in _refreshQueue.Reader.ReadAllAsync())
         {
+            RefreshRequest req = queuedRequest;
+            if (_refreshIncompleteReason is not null && !req.FullRebuild &&
+                req.Paths is not null)
+            {
+                // A later narrow notification cannot prove recovery of the source whose event
+                // exhausted its retry budget. Widen the next request before opening a transaction;
+                // the single pump still preserves FIFO order and one recovery sweep covers all
+                // paths queued behind the failed request.
+                req = req with { Paths = null, Reason = "recovery_sweep" };
+            }
             RefreshRequestDequeuedForTest?.Invoke();
             await _startupComplete.Task.ConfigureAwait(false);
             RefreshRequestPassedStartupBarrierForTest?.Invoke();
@@ -1018,56 +1091,217 @@ public sealed class IndexManager : IDisposable
             string refreshReason = req.Reason ?? (req.Paths is null ? "full_sweep"
                 : req.RecordCommit is not null ? "git_head" : "watcher_batch");
             var refreshWall = System.Diagnostics.Stopwatch.StartNew(); // review B3: failures report MEASURED elapsed
-            BeginIndexMutation();
-            try
+            int captureRetry = 0;
+            if (Volatile.Read(ref _refreshIncompletePersisted) == 0 &&
+                !MarkRefreshIncomplete(RefreshSweepPendingCause, Array.Empty<string>(),
+                    pathCountIsLowerBound: false))
             {
-                _state = "refreshing";
-                string? recordBranch = req.RecordCommit is null
-                    ? null
-                    : GitInfo.HeadBranch(_workspaceRoot);
-                var result = DeltaRefresher.Refresh(_store, _workspaceRoot, req.Paths, _log,
-                    recordCommit: req.RecordCommit, recordBranch: recordBranch);
-                // z4c: count what was ACTUALLY applied (the refresh result), not what was
-                // requested — a sweep request has no path count, and hash-identical paths are
-                // rightly skipped without being "processed".
-                Interlocked.Add(ref _pendingProcessed, result.AddedFiles + result.ChangedFiles + result.DeletedFiles);
-                _lastRefreshUtc = result.RefreshedAtUtc ?? DateTime.UtcNow.ToString("O");
-                if (result.AddedFiles + result.ChangedFiles + result.DeletedFiles > 0)
-                {
-                    _log($"Delta refresh: +{result.AddedFiles} ~{result.ChangedFiles} -{result.DeletedFiles} " +
-                         $"(projects rebuilt: {result.ProjectsRefreshed}) in {result.Elapsed.TotalMilliseconds:F0}ms");
-                }
-                // Record the reflected commit only after a successful reconcile — so the diff
-                // baseline never advances past what the index actually contains.
-                if (req.RecordCommit is { } commit)
-                {
-                    _indexedCommit = commit;
-                    _indexedBranch = recordBranch ?? _indexedBranch;
-                    _log($"Git baseline recorded: {Short(commit)}."); // 17zd-b: close the loop visibly
-                }
-                _state = "ready";
-                EmitRefreshSnapshot(refreshId, refreshReason, "completed", // x5ls.1.2
-                    result.AddedFiles + result.ChangedFiles + result.DeletedFiles,
-                    (long)result.Elapsed.TotalMilliseconds, errorCode: null);
+                // Do not mutate rows when followers cannot first observe that a refresh epoch is
+                // pending. The old committed database remains intact and the writer stays stale.
+                _error = RefreshSweepPendingCause;
+                _state = "stale";
+                _log("Refresh refused because its follower-visible pending marker could not be persisted.");
+                EmitRefreshSnapshot(refreshId, refreshReason, "failed", batchProcessed: 0,
+                    elapsedMs: refreshWall.ElapsedMilliseconds,
+                    errorCode: RefreshSweepPendingCause);
+                req.CompletionForTest?.TrySetResult();
+                continue;
             }
-            catch (Exception ex)
+            while (true)
             {
-                // Type-name only, like the startup path (9vw) — no ex.Message internals to clients.
-                _error = $"{ex.GetType().Name} during delta refresh (see server log)";
-                _state = previous == "ready" ? "ready" : previous;
-                _log($"Delta refresh failed: {ex}");
-                // batchProcessed 0 is TRUE, not fabricated: DeltaRefresher runs one
-                // transaction, so a throw rolls back to zero applied (review B3).
-                EmitRefreshSnapshot(refreshId, refreshReason, "failed", // x5ls.1.2
-                    batchProcessed: 0, elapsedMs: refreshWall.ElapsedMilliseconds,
-                    errorCode: "refresh_failed");
-            }
-            finally
-            {
-                EndIndexMutation();
+                bool retryCapture = false;
+                BeginIndexMutation();
+                try
+                {
+                    _state = "refreshing";
+                    string? recordBranch = req.RecordCommit is null
+                        ? null
+                        : GitInfo.HeadBranch(_workspaceRoot);
+                    var result = WorkspaceFileReaderForTest is { } reader
+                        ? DeltaRefresher.RefreshWithReaderForTest(_store, _workspaceRoot,
+                            req.Paths, reader, _log, recordCommit: req.RecordCommit,
+                            recordBranch: recordBranch)
+                        : DeltaRefresher.Refresh(_store, _workspaceRoot, req.Paths, _log,
+                            recordCommit: req.RecordCommit, recordBranch: recordBranch);
+                    // z4c: count what was ACTUALLY applied (the refresh result), not what was
+                    // requested — a sweep request has no path count, and hash-identical paths are
+                    // rightly skipped without being "processed".
+                    Interlocked.Add(ref _pendingProcessed, result.AddedFiles +
+                        result.ChangedFiles + result.DeletedFiles);
+                    _lastRefreshUtc = result.RefreshedAtUtc ?? DateTime.UtcNow.ToString("O");
+                    if (result.AddedFiles + result.ChangedFiles + result.DeletedFiles > 0)
+                    {
+                        _log($"Delta refresh: +{result.AddedFiles} ~{result.ChangedFiles} -{result.DeletedFiles} " +
+                             $"(projects rebuilt: {result.ProjectsRefreshed}) in {result.Elapsed.TotalMilliseconds:F0}ms");
+                    }
+                    // Record the reflected commit only after a complete reconcile — so the diff
+                    // baseline never advances past what the index actually contains.
+                    if (req.RecordCommit is { } commit)
+                    {
+                        _indexedCommit = commit;
+                        _indexedBranch = recordBranch ?? _indexedBranch;
+                        _log($"Git baseline recorded: {Short(commit)}."); // 17zd-b: close the loop visibly
+                    }
+                    if (TryClearRefreshIncomplete())
+                    {
+                        _error = null;
+                        _state = "ready";
+                        EmitRefreshSnapshot(refreshId, refreshReason, "completed", // x5ls.1.2
+                            result.AddedFiles + result.ChangedFiles + result.DeletedFiles,
+                            (long)result.Elapsed.TotalMilliseconds, errorCode: null);
+                    }
+                    else
+                    {
+                        // Row changes committed successfully, but clearing the persisted coverage
+                        // latch did not. Keep serving the prior complete snapshot conservatively as
+                        // stale; do not mislabel the successful data refresh as refresh_failed.
+                        _error = _refreshIncompleteReason;
+                        _state = "stale";
+                        EmitRefreshSnapshot(refreshId, refreshReason, "completed", // x5ls.1.2
+                            result.AddedFiles + result.ChangedFiles + result.DeletedFiles,
+                            (long)result.Elapsed.TotalMilliseconds,
+                            errorCode: _refreshIncompleteReason);
+                    }
+                }
+                catch (RefreshInputUnavailableException ex)
+                {
+                    RefreshInputFailureBeforeLatchForTest?.Invoke();
+                    MarkRefreshIncomplete(RefreshInputUnavailableCause, [ex.Path],
+                        pathCountIsLowerBound: true);
+                    _error = RefreshInputUnavailableCause;
+                    if (captureRetry < DeltaRefresher.RefreshInputRetryDelays.Length)
+                    {
+                        retryCapture = true;
+                        _log($"Source capture unavailable for {ex.Path}; retrying complete " +
+                             $"refresh request after " +
+                             $"{DeltaRefresher.RefreshInputRetryDelays[captureRetry].TotalMilliseconds:F0}ms.");
+                    }
+                    else
+                    {
+                        _state = "stale";
+                        _log($"Source capture unavailable for {ex.Path}; bounded refresh " +
+                             "retries exhausted.");
+                        EmitRefreshSnapshot(refreshId, refreshReason, "failed",
+                            batchProcessed: 0, elapsedMs: refreshWall.ElapsedMilliseconds,
+                            errorCode: RefreshInputUnavailableCause);
+                    }
+                }
+                catch (RefreshInputOversizedException ex)
+                {
+                    RefreshInputFailureBeforeLatchForTest?.Invoke();
+                    MarkRefreshIncomplete(RefreshInputOversizedCause, [ex.Path],
+                        pathCountIsLowerBound: true);
+                    _error = RefreshInputOversizedCause;
+                    _state = "stale";
+                    _log($"Source capture exceeds the configured byte limit for {ex.Path}.");
+                    EmitRefreshSnapshot(refreshId, refreshReason, "failed",
+                        batchProcessed: 0, elapsedMs: refreshWall.ElapsedMilliseconds,
+                        errorCode: RefreshInputOversizedCause);
+                }
+                catch (Exception ex)
+                {
+                    // Type-name only, like the startup path (9vw) — no ex.Message internals to clients.
+                    _error = _refreshIncompleteReason ??
+                        $"{ex.GetType().Name} during delta refresh (see server log)";
+                    _state = _refreshIncompleteReason is not null
+                        ? "stale"
+                        : previous == "ready" ? "ready" : previous;
+                    _log($"Delta refresh failed: {ex}");
+                    // batchProcessed 0 is TRUE, not fabricated: DeltaRefresher runs one
+                    // transaction, so a throw rolls back to zero applied (review B3).
+                    EmitRefreshSnapshot(refreshId, refreshReason, "failed", // x5ls.1.2
+                        batchProcessed: 0, elapsedMs: refreshWall.ElapsedMilliseconds,
+                        errorCode: "refresh_failed");
+                }
+                finally
+                {
+                    EndIndexMutation();
+                }
+
+                if (!retryCapture) break;
+                await Task.Delay(DeltaRefresher.RefreshInputRetryDelays[captureRetry++])
+                    .ConfigureAwait(false);
             }
             req.CompletionForTest?.TrySetResult();
         }
+    }
+
+    private bool MarkRefreshIncomplete(string reason, IEnumerable<string> paths,
+        bool pathCountIsLowerBound)
+    {
+        string[] distinct = paths
+            .Distinct(WorkspacePaths.FileSystemPathComparer)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        _refreshIncompletePaths = distinct.Take(RefreshIncompletePathLimit).ToArray();
+        Volatile.Write(ref _refreshIncompletePathCount, distinct.Length);
+        Volatile.Write(ref _refreshIncompletePathCountIsLowerBound,
+            pathCountIsLowerBound ? 1 : 0);
+        _refreshIncompleteReason = reason;
+        if (_store is null) return false;
+        try
+        {
+            using var tx = _store.BeginTransaction();
+            _store.SetMeta(tx, RefreshIncompleteReasonMeta, reason);
+            _store.SetMeta(tx, RefreshIncompletePathsMeta,
+                System.Text.Json.JsonSerializer.Serialize(_refreshIncompletePaths));
+            _store.SetMeta(tx, RefreshIncompletePathCountMeta,
+                distinct.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            _store.SetMeta(tx, RefreshIncompletePathCountLowerBoundMeta,
+                pathCountIsLowerBound ? "1" : "0");
+            RefreshIncompleteBeforeCommitForTest?.Invoke(reason);
+            tx.Commit();
+            Volatile.Write(ref _refreshIncompletePersisted, 1);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // The writer still reports the specific in-memory latch. The already-committed sweep
+            // marker remains follower-visible if this was an unavailable/oversized refinement.
+            _log($"Could not persist incomplete-source refresh state: {ex}");
+            return false;
+        }
+    }
+
+    internal static void PersistRefreshSweepPending(IndexStore store)
+    {
+        using var tx = store.BeginTransaction();
+        store.SetMeta(tx, RefreshIncompleteReasonMeta, RefreshSweepPendingCause);
+        store.SetMeta(tx, RefreshIncompletePathsMeta, "[]");
+        store.SetMeta(tx, RefreshIncompletePathCountMeta, "0");
+        store.SetMeta(tx, RefreshIncompletePathCountLowerBoundMeta, "0");
+        tx.Commit();
+    }
+
+    private bool TryClearRefreshIncomplete()
+    {
+        if (_refreshIncompleteReason is null && _refreshIncompletePaths is null &&
+            Volatile.Read(ref _refreshIncompletePathCount) == 0)
+            return true;
+        try
+        {
+            if (_store is not null)
+            {
+                using var tx = _store.BeginTransaction();
+                _store.DeleteMeta(tx, RefreshIncompleteReasonMeta);
+                _store.DeleteMeta(tx, RefreshIncompletePathsMeta);
+                _store.DeleteMeta(tx, RefreshIncompletePathCountMeta);
+                _store.DeleteMeta(tx, RefreshIncompletePathCountLowerBoundMeta);
+                ClearRefreshIncompleteBeforeCommitForTest?.Invoke();
+                tx.Commit();
+            }
+        }
+        catch (Exception ex)
+        {
+            _log($"Could not clear incomplete-source refresh state: {ex}");
+            return false;
+        }
+        _refreshIncompleteReason = null;
+        _refreshIncompletePaths = null;
+        Volatile.Write(ref _refreshIncompletePathCount, 0);
+        Volatile.Write(ref _refreshIncompletePathCountIsLowerBound, 0);
+        Volatile.Write(ref _refreshIncompletePersisted, 0);
+        return true;
     }
 
     private void BeginIndexMutation()
@@ -1172,9 +1406,11 @@ public sealed class IndexManager : IDisposable
             _indexedBranch = null;
             CacheMeta(store);
             _store = store;
-            _error = null;   // review F2: recovery is a DESIGNED failed->ready transition — a
-                             // healthy index must not keep reporting the pre-recovery failure
-            _state = "ready";
+            // BuildOwned persists refresh_sweep_pending before it writes the compatibility
+            // barrier. Keep the replacement queryable only as stale until the queued detect-all
+            // sweep succeeds and clears that marker.
+            _error = _refreshIncompleteReason;
+            _state = "stale";
 
             // Review F1: recovery FROM FAILED never had a watcher or git tracking — startup died
             // before attaching them, and the recovered index silently went stale (PendingChanges
@@ -1244,6 +1480,22 @@ public sealed class IndexManager : IDisposable
         return false;
     }
 
+    /// <summary>Queues the same commit-bearing request used by Git reconciliation while exposing
+    /// completion to tests. This pins the invariant that an incomplete source capture cannot
+    /// advance either the cached or transactional indexed_commit baseline.</summary>
+    internal bool RequestGitRefreshForTest(IReadOnlyCollection<string>? paths,
+        string commit, out Task completion)
+    {
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        completion = signal.Task;
+        if (!IsWriter || _disposed) return false;
+        if (_refreshQueue.Writer.TryWrite(new RefreshRequest(paths, commit,
+                Reason: "git_head", CompletionForTest: signal)))
+            return true;
+        signal.TrySetResult();
+        return false;
+    }
+
     /// <summary>Queues a REBUILD-FROM-SCRATCH (tky): delete the db, run a full build, reopen.
     /// Serialized on the refresh pump like every other index mutation, so it can never race a
     /// delta batch. This is the in-band recovery hatch for a corrupt/failed index — including
@@ -1275,7 +1527,7 @@ public sealed class IndexManager : IDisposable
         {
             if (IsFollower && !TryRefreshFollowerMetadata(force: false)) return false;
             string state = State;
-            return state is "ready" or "refreshing" &&
+            return state is "ready" or "refreshing" or "stale" &&
                    TryGetSafeDatabaseStatus(out IndexLeaseIdentity? current, out _) &&
                    current?.DatabaseIdentity is not null;
         }
@@ -1383,7 +1635,7 @@ public sealed class IndexManager : IDisposable
             }
             long after = Volatile.Read(ref _refreshEpoch);
             if (followerStable && before == after && (after & 1) == 0 &&
-                health.State == "ready")
+                health.State is "ready" or "stale")
             {
                 IndexReviewCoordinationLease? transferredLease = coordinationLease;
                 coordinationLease = null;
@@ -1428,10 +1680,18 @@ public sealed class IndexManager : IDisposable
         }
     }
 
-    private IndexHealth FollowerHealth(IndexMetadataSnapshot metadata, long dbBytes) => new(
-        "ready", metadata.IndexVersion, metadata.IndexedAtUtc, metadata.LastRefreshUtc,
-        0, null, dbBytes, _workspaceRoot, _dbPath, metadata.IndexedCommit,
-        metadata.IndexedBranch, null, 0, FollowerAccessMode);
+    private IndexHealth FollowerHealth(IndexMetadataSnapshot metadata, long dbBytes) =>
+        FollowerHealthForTest(metadata, dbBytes, _workspaceRoot, _dbPath);
+
+    internal static IndexHealth FollowerHealthForTest(IndexMetadataSnapshot metadata,
+        long databaseBytes, string workspaceRoot, string databasePath) => new(
+        metadata.RefreshIncompleteReason is null ? "ready" : "stale",
+        metadata.IndexVersion, metadata.IndexedAtUtc, metadata.LastRefreshUtc,
+        0, metadata.RefreshIncompleteReason, databaseBytes, workspaceRoot, databasePath,
+        metadata.IndexedCommit, metadata.IndexedBranch, null, 0, FollowerAccessMode,
+        metadata.RefreshIncompleteReason, metadata.RefreshIncompletePaths,
+        metadata.RefreshIncompletePathCount,
+        metadata.RefreshIncompletePathCountIsLowerBound);
 
     public IndexHealth Health()
     {
@@ -1449,7 +1709,10 @@ public sealed class IndexManager : IDisposable
                 publication.State, metadata?.IndexVersion, metadata?.IndexedAtUtc,
                 metadata?.LastRefreshUtc, 0, publication.Error, dbBytes, _workspaceRoot,
                 _dbPath, metadata?.IndexedCommit, metadata?.IndexedBranch, null, 0,
-                FollowerAccessMode);
+                FollowerAccessMode, metadata?.RefreshIncompleteReason,
+                metadata?.RefreshIncompletePaths,
+                metadata?.RefreshIncompletePathCount ?? 0,
+                metadata?.RefreshIncompletePathCountIsLowerBound ?? false);
         }
 
         // Progress only while genuinely building — a background refresh must never show a
@@ -1460,7 +1723,10 @@ public sealed class IndexManager : IDisposable
             _watcher?.PendingCount ?? 0, _error, dbBytes, _workspaceRoot, _dbPath,
             _indexedCommit, _indexedBranch,
             _state == "building" && bp is not null ? bp.Snapshot() : null,
-            Interlocked.Read(ref _pendingProcessed), _accessMode);
+            Interlocked.Read(ref _pendingProcessed), _accessMode,
+            _refreshIncompleteReason, _refreshIncompletePaths,
+            Volatile.Read(ref _refreshIncompletePathCount),
+            Volatile.Read(ref _refreshIncompletePathCountIsLowerBound) != 0);
     }
 
     /// <summary>Current git HEAD commit for the workspace, or null if not a git repo / git absent.

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Hashing;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Channels;
@@ -26,6 +27,10 @@ internal sealed record FSharpPipelineTestHooks(
     long BatchMemoryBudgetBytes,
     Action<long, int>? ReadBatchPrepared = null,
     Action<int, int>? BeforePersist = null);
+
+internal sealed record BuildCaptureTestHooks(
+    Func<string, string, int, GitInfo.WorkspaceFileReadResult> Reader,
+    Action<string>? FirstCaptureFailureRetained = null);
 
 /// <summary>
 /// Owns: full index construction — scan, project/solution parsing, parallel syntax
@@ -80,32 +85,37 @@ public static class IndexBuilder
     /// v15: F# source files are persisted as lang='fs'; .fsproj inputs participate in project,
     /// reference, and compile-ownership graphs; projects persist their source language.
     /// v16: arbitrary workspace .props/.targets files are persisted as config inputs so cold builds
-    /// match delta refresh classification and pinned F# project evaluation can resolve local props.</summary>
-    public const string SchemaVersion = "16";
+    /// match delta refresh classification and pinned F# project evaluation can resolve local props.
+    /// v17: incomplete-source freshness metadata and fail-closed bounded capture prevent lossy
+    /// builds or refreshes from publishing complete-looking source evidence.</summary>
+    public const string SchemaVersion = "17";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null) =>
         BuildCore(workspaceRoot, dbPath, progress, liveProgress,
             TimeSpan.FromSeconds(30), waitingForReviewReaders: null, SourceWriteBatchSize,
-            fSharpPipelineTestHooks: null);
+            fSharpPipelineTestHooks: null, buildCaptureTestHooks: null);
 
     internal static BuildResult BuildWithReviewWaitForTest(string workspaceRoot,
         string? dbPath, TimeSpan reviewWaitTimeout, Action? waitingForReviewReaders = null) =>
         BuildCore(workspaceRoot, dbPath, progress: null, liveProgress: null,
             reviewWaitTimeout, waitingForReviewReaders, SourceWriteBatchSize,
-            fSharpPipelineTestHooks: null);
+            fSharpPipelineTestHooks: null, buildCaptureTestHooks: null);
 
     internal static BuildResult BuildWithSourceBatchSizeForTest(string workspaceRoot,
         int sourceWriteBatchSize, Action<string>? progress = null,
-        FSharpPipelineTestHooks? fSharpPipelineTestHooks = null) =>
+        FSharpPipelineTestHooks? fSharpPipelineTestHooks = null,
+        BuildCaptureTestHooks? buildCaptureTestHooks = null) =>
         BuildCore(workspaceRoot, dbPath: null, progress, liveProgress: null,
             TimeSpan.FromSeconds(30), waitingForReviewReaders: null,
-            Math.Max(1, sourceWriteBatchSize), fSharpPipelineTestHooks);
+            Math.Max(1, sourceWriteBatchSize), fSharpPipelineTestHooks,
+            buildCaptureTestHooks);
 
     private static BuildResult BuildCore(string workspaceRoot, string? dbPath,
         Action<string>? progress, BuildProgress? liveProgress, TimeSpan reviewWaitTimeout,
         Action? waitingForReviewReaders, int sourceWriteBatchSize,
-        FSharpPipelineTestHooks? fSharpPipelineTestHooks)
+        FSharpPipelineTestHooks? fSharpPipelineTestHooks,
+        BuildCaptureTestHooks? buildCaptureTestHooks)
     {
         string root = Path.GetFullPath(workspaceRoot);
         string database = Path.GetFullPath(dbPath ?? DefaultDbPath(root));
@@ -152,7 +162,8 @@ public static class IndexBuilder
 
                 using (rebuildLease)
                     return BuildOwned(root, authority.DatabasePath, progress, liveProgress,
-                        sourceWriteBatchSize, fSharpPipelineTestHooks);
+                        sourceWriteBatchSize, fSharpPipelineTestHooks,
+                        buildCaptureTestHooks);
             }
         }
     }
@@ -160,7 +171,8 @@ public static class IndexBuilder
     internal static BuildResult BuildOwned(string workspaceRoot, string dbPath,
         Action<string>? progress = null, BuildProgress? liveProgress = null,
         int sourceWriteBatchSize = SourceWriteBatchSize,
-        FSharpPipelineTestHooks? fSharpPipelineTestHooks = null)
+        FSharpPipelineTestHooks? fSharpPipelineTestHooks = null,
+        BuildCaptureTestHooks? buildCaptureTestHooks = null)
     {
         var total = Stopwatch.StartNew();
         progress?.Invoke($"Scanning {workspaceRoot} ...");
@@ -174,6 +186,25 @@ public static class IndexBuilder
         liveProgress?.SetFilesTotal(scan.CsFiles.Count + scan.FsFiles.Count);
         liveProgress?.SetPhase("parsing_projects");
 
+        GitInfo.WorkspaceFileReadResult ReadBuildInputResult(string relPath, int maxBytes) =>
+            buildCaptureTestHooks?.Reader(workspaceRoot, relPath, maxBytes) ??
+            GitInfo.ReadBoundedWorkspaceFileResult(workspaceRoot, relPath, maxBytes);
+
+        byte[]? ReadBuildInput(string relPath, int maxBytes)
+        {
+            GitInfo.WorkspaceFileReadResult read = ReadBuildInputResult(relPath, maxBytes);
+            if (read.Bytes is { } bytes) return bytes;
+            if (read.Disposition is GitInfo.WorkspaceFileReadDisposition.Missing or
+                GitInfo.WorkspaceFileReadDisposition.DefinitelyNonRegular)
+            {
+                liveProgress?.AddFileSkipped();
+                progress?.Invoke($"Skipped missing or non-regular build input: {relPath}");
+                return null;
+            }
+            ThrowRequiredCaptureFailure(relPath, read);
+            throw new RefreshInputUnavailableException(relPath);
+        }
+
         // Capture and parse every authoritative project independently through a bounded no-follow
         // snapshot. Only compact parse facts + hashes survive this pass, so thousands of custom
         // projects do not accumulate XML bytes in memory. Solutions are optional metadata under a
@@ -182,7 +213,7 @@ public static class IndexBuilder
         (ParsedProject[] parsedProjects, List<ParsedSolution> parsedSolutions,
             Dictionary<string, string> requiredStructuralHashes,
             Dictionary<string, string> optionalSolutionHashes) =
-            CaptureAndParseStructuralInputs(workspaceRoot, scan, progress);
+            CaptureAndParseStructuralInputs(scan, progress, ReadBuildInput);
         // efa: failed csproj parses were invisible — their compile sets and graph edges are
         // guesses at best, and a watcher of the build deserves the count, not a clean-looking bar.
         liveProgress?.SetProjectsFailed(parsedProjects.Count(p => p.LoadStatus.StartsWith("failed", StringComparison.Ordinal)));
@@ -205,13 +236,16 @@ public static class IndexBuilder
         bool PersistVerifiedStructuralFile(Microsoft.Data.Sqlite.SqliteTransaction tx,
             ScannedFile file, string lang, string expectedHash, bool required)
         {
-            byte[]? bytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot, file.RelPath,
-                MaxStructuralFileBytes);
+            GitInfo.WorkspaceFileReadResult read =
+                ReadBuildInputResult(file.RelPath, MaxStructuralFileBytes);
+            byte[]? bytes = read.Bytes;
             if (bytes is null || StructuralFingerprint(bytes) != expectedHash)
             {
                 if (required)
-                    throw new IOException(
-                        $"Authoritative project input changed during build: {file.RelPath}");
+                {
+                    ThrowRequiredCaptureFailure(file.RelPath, read);
+                    throw new RefreshInputUnavailableException(file.RelPath);
+                }
                 progress?.Invoke(
                     $"Skipped changed or unavailable optional solution metadata: {file.RelPath}");
                 return false;
@@ -302,33 +336,44 @@ public static class IndexBuilder
         var channel = Channel.CreateBounded<(
             ScannedFile File, ParsedCsFile Parsed, ulong Hash, int ByteCount)>(
             new BoundedChannelOptions(1024) { SingleReader = true });
+        Exception? csharpCaptureFailure = null;
 
         var producer = Task.Run(() =>
         {
             try
             {
-                Parallel.ForEach(scan.CsFiles, scanned =>
+                Parallel.ForEach(scan.CsFiles, (scanned, loop) =>
                 {
+                    if (Volatile.Read(ref csharpCaptureFailure) is not null)
+                    {
+                        loop.Stop();
+                        return;
+                    }
                     try
                     {
-                        byte[]? bytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot,
-                            scanned.RelPath, DeltaRefresher.MaxIndexedFileBytes);
-                        if (bytes is null)
-                        {
-                            liveProgress?.AddFileSkipped();
-                            return;
-                        }
+                        byte[]? bytes = ReadBuildInput(scanned.RelPath,
+                            DeltaRefresher.MaxIndexedFileBytes);
+                        if (bytes is null) return;
                         ulong hash = XxHash64.HashToUInt64(bytes);
                         string content = DecodeUtf8(bytes);
                         var parsed = SyntaxIndexer.Parse(scanned.RelPath, content);
                         channel.Writer.WriteAsync((scanned, parsed, hash, bytes.Length)).AsTask()
                             .GetAwaiter().GetResult();
                     }
-                    // efa: a skipped file is ABSENT from the index until a delta refresh retries
-                    // it — count it so filesIndexed + filesSkipped accounts for filesTotal and a
-                    // stalled-looking bar is distinguishable from a lossy one.
-                    catch (IOException) { liveProgress?.AddFileSkipped(); /* transiently unreadable; delta refresh will retry */ }
-                    catch (UnauthorizedAccessException) { liveProgress?.AddFileSkipped(); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        liveProgress?.AddFileSkipped();
+                        Exception normalized = ex is IOException
+                            ? ex
+                            : new RefreshInputUnavailableException(scanned.RelPath);
+                        if (Interlocked.CompareExchange(ref csharpCaptureFailure,
+                                normalized, null) is null)
+                        {
+                            buildCaptureTestHooks?.FirstCaptureFailureRetained?.Invoke(
+                                scanned.RelPath);
+                            loop.Stop();
+                        }
+                    }
                 });
             }
             finally
@@ -386,6 +431,8 @@ public static class IndexBuilder
             tx.Dispose();
         }
         producer.GetAwaiter().GetResult();
+        if (csharpCaptureFailure is not null)
+            ExceptionDispatchInfo.Capture(csharpCaptureFailure).Throw();
 
         // ---- persist F# source text (no compiler/syntax service in tier-a) ----
         // Parallel reads are grouped by a conservative byte budget covering both the raw byte[]
@@ -409,23 +456,29 @@ public static class IndexBuilder
                              scan.FsFiles, fsBatchMemoryBudget))
                 {
                     var prepared = new PreparedFSharpSource?[readBatch.Count];
-                    Parallel.For(0, readBatch.Count, i =>
+                    Exception? captureFailure = null;
+                    Parallel.For(0, readBatch.Count, (i, loop) =>
                     {
+                        if (Volatile.Read(ref captureFailure) is not null)
+                        {
+                            loop.Stop();
+                            return;
+                        }
                         Interlocked.Increment(ref fsReadersInFlight);
                         try
                         {
                             ScannedFile scanned = readBatch[i];
                             try
                             {
-                                byte[]? bytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot,
-                                    scanned.RelPath, DeltaRefresher.MaxIndexedFileBytes);
+                                byte[]? bytes = ReadBuildInput(scanned.RelPath,
+                                    DeltaRefresher.MaxIndexedFileBytes);
+                                if (bytes is null) return;
                                 // The byte budget was calculated from the no-follow scan snapshot.
                                 // If the file changed size meanwhile, omit this incoherent row; the
                                 // post-build freshness sweep will attribute the current bytes.
-                                if (bytes is null || bytes.LongLength != scanned.Size)
+                                if (bytes.LongLength != scanned.Size)
                                 {
-                                    liveProgress?.AddFileSkipped();
-                                    return;
+                                    throw new RefreshInputUnavailableException(scanned.RelPath);
                                 }
 
                                 string content = DecodeUtf8(bytes);
@@ -434,14 +487,28 @@ public static class IndexBuilder
                                     CountNewlines(content) + 1,
                                     FileClassifier.LooksGenerated(scanned.RelPath, content));
                             }
-                            catch (IOException) { liveProgress?.AddFileSkipped(); }
-                            catch (UnauthorizedAccessException) { liveProgress?.AddFileSkipped(); }
+                            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                            {
+                                liveProgress?.AddFileSkipped();
+                                Exception normalized = ex is IOException
+                                    ? ex
+                                    : new RefreshInputUnavailableException(scanned.RelPath);
+                                if (Interlocked.CompareExchange(ref captureFailure,
+                                        normalized, null) is null)
+                                {
+                                    buildCaptureTestHooks?.FirstCaptureFailureRetained?.Invoke(
+                                        scanned.RelPath);
+                                    loop.Stop();
+                                }
+                            }
                         }
                         finally
                         {
                             Interlocked.Decrement(ref fsReadersInFlight);
                         }
                     });
+                    if (captureFailure is not null)
+                        ExceptionDispatchInfo.Capture(captureFailure).Throw();
 
                     long batchMemoryBytes = prepared.Where(item => item is not null)
                         .Sum(item => ActualFSharpBatchMemoryBytes(
@@ -513,21 +580,16 @@ public static class IndexBuilder
                     // replacement and rebuild the graph. Orphan packages.config files retain their
                     // baseline config_lookup behavior here.
                     if (associatedPackagesPaths.Contains(f.RelPath)) continue;
-                    try
-                    {
-                        byte[]? bytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot,
-                            f.RelPath, DeltaRefresher.MaxIndexedFileBytes);
-                        if (bytes is null) continue;
-                        string content = DecodeUtf8(bytes);
-                        long id = store.InsertFile(tx, f.RelPath, bytes.LongLength, f.MtimeTicks,
-                            XxHash64.HashToUInt64(bytes), lang,
-                            CountNewlines(content) + 1, isGenerated: false, hasTestAttrs: false);
-                        store.InsertContent(tx, id, content);
-                        fileIds[f.RelPath] = id;
-                        otherCount++;
-                    }
-                    catch (IOException) { }
-                    catch (UnauthorizedAccessException) { }
+                    byte[]? bytes = ReadBuildInput(f.RelPath,
+                        DeltaRefresher.MaxIndexedFileBytes);
+                    if (bytes is null) continue;
+                    string content = DecodeUtf8(bytes);
+                    long id = store.InsertFile(tx, f.RelPath, bytes.LongLength, f.MtimeTicks,
+                        XxHash64.HashToUInt64(bytes), lang,
+                        CountNewlines(content) + 1, isGenerated: false, hasTestAttrs: false);
+                    store.InsertContent(tx, id, content);
+                    fileIds[f.RelPath] = id;
+                    otherCount++;
                 }
             }
             tx.Commit();
@@ -549,11 +611,15 @@ public static class IndexBuilder
             tx.Commit();
         }
 
-        store.SetMeta("schema_version", SchemaVersion);
         store.SetMeta("index_version", Guid.NewGuid().ToString("N"));
         store.SetMeta("indexed_at_utc", DateTime.UtcNow.ToString("O"));
         store.SetMeta("workspace_root", Path.GetFullPath(workspaceRoot));
         store.SetMeta("unresolved_project_refs", unresolvedRefs.ToString());
+        // A new database is compatible only after its manager attaches the watcher and commits
+        // the post-build detect-all pass. Write the follower-visible marker before schema_version,
+        // which is the final compatibility barrier observed by another process.
+        IndexManager.PersistRefreshSweepPending(store);
+        store.SetMeta("schema_version", SchemaVersion);
         progress?.Invoke("Optimizing index ...");
         store.Optimize();
 
@@ -645,7 +711,8 @@ public static class IndexBuilder
     private static (ParsedProject[] Projects, List<ParsedSolution> Solutions,
         Dictionary<string, string> RequiredHashes,
         Dictionary<string, string> OptionalSolutionHashes) CaptureAndParseStructuralInputs(
-        string workspaceRoot, ScanResult scan, Action<string>? progress)
+        ScanResult scan, Action<string>? progress,
+        Func<string, int, byte[]?> readBuildInput)
     {
         var requiredHashes = new Dictionary<string, string>(
             WorkspacePaths.FileSystemPathComparer);
@@ -656,41 +723,16 @@ public static class IndexBuilder
         var parsedProjects = new List<ParsedProject>(projects.Count);
         foreach (ScannedFile file in projects)
         {
-            GitInfo.WorkspaceFileReadResult projectRead =
-                GitInfo.ReadBoundedWorkspaceFileResult(workspaceRoot, file.RelPath,
-                    MaxStructuralFileBytes);
-            byte[]? projectBytes = projectRead.Bytes;
-            if (projectBytes is null &&
-                projectRead.Disposition == GitInfo.WorkspaceFileReadDisposition.DefinitelyNonRegular)
-            {
-                progress?.Invoke($"Skipped non-regular project candidate: {file.RelPath}");
-                continue;
-            }
-            if (projectBytes is null)
-                throw new IOException($"Project input could not be captured safely: {file.RelPath}");
+            byte[]? projectBytes = readBuildInput(file.RelPath, MaxStructuralFileBytes);
+            if (projectBytes is null) continue;
             requiredHashes[file.RelPath] = StructuralFingerprint(projectBytes);
             string packagesPath = PackagesConfigPath(file.RelPath);
             byte[]? packagesBytes = null;
             if (configByPath.ContainsKey(packagesPath))
             {
-                GitInfo.WorkspaceFileReadResult packagesRead =
-                    GitInfo.ReadBoundedWorkspaceFileResult(workspaceRoot, packagesPath,
-                        MaxStructuralFileBytes);
-                packagesBytes = packagesRead.Bytes;
-                if (packagesBytes is null &&
-                    packagesRead.Disposition ==
-                    GitInfo.WorkspaceFileReadDisposition.DefinitelyNonRegular)
-                {
-                    progress?.Invoke($"Skipped non-regular packages.config candidate: {packagesPath}");
-                }
-                else if (packagesBytes is null)
-                {
-                    throw new IOException($"packages.config could not be captured safely: {packagesPath}");
-                }
-                else
-                {
+                packagesBytes = readBuildInput(packagesPath, MaxStructuralFileBytes);
+                if (packagesBytes is not null)
                     requiredHashes[packagesPath] = StructuralFingerprint(packagesBytes);
-                }
             }
             parsedProjects.Add(ProjectFileParser.ParseSnapshot(file.RelPath, projectBytes,
                 packagesBytes));
@@ -703,8 +745,8 @@ public static class IndexBuilder
         foreach (ScannedFile file in scan.SolutionFiles.OrderBy(file => file.RelPath,
                      StringComparer.Ordinal))
         {
-            byte[]? bytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot, file.RelPath,
-                MaxStructuralFileBytes);
+            byte[]? bytes = GitInfo.ReadBoundedWorkspaceFile(scan.Root,
+                file.RelPath, MaxStructuralFileBytes);
             if (bytes is null || optionalBytes + bytes.LongLength >
                 MaxOptionalSolutionSnapshotBytes)
             {
@@ -721,6 +763,14 @@ public static class IndexBuilder
 
     private static string StructuralFingerprint(byte[] bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes));
+
+    private static void ThrowRequiredCaptureFailure(string relPath,
+        GitInfo.WorkspaceFileReadResult read)
+    {
+        if (read.Disposition == GitInfo.WorkspaceFileReadDisposition.Oversized)
+            throw new RefreshInputOversizedException(relPath);
+        throw new RefreshInputUnavailableException(relPath);
+    }
 
     private static string PackagesConfigPath(string projectPath)
     {

@@ -117,7 +117,8 @@ public class Batch33Tests
             Assert.True(queued.GetProperty("queued").GetBoolean());
             Assert.Equal("full rebuild from scratch", queued.GetProperty("scope").GetString());
 
-            Assert.True(WaitUntil(() => m.IsQueryable, 30000), "force:'full' did not recover from failed");
+            Assert.True(WaitUntil(() => m.State == "ready", 30000),
+                "force:'full' did not finish its post-build freshness sweep");
             using (var q = m.OpenQueries()) // tight scope: real tool calls release the db in ms
             {
                 Assert.NotEmpty(q.SearchSymbols("Alpha", "exact", null, 5));
@@ -140,7 +141,8 @@ public class Batch33Tests
             // A second full rebuild on a HEALTHY index mints a fresh index_version — the
             // observable proof the db was rebuilt, not delta-refreshed.
             tools.RefreshIndex(force: "full");
-            Assert.True(WaitUntil(() => m.IsQueryable && m.Health().IndexVersion != v1, 30000),
+            Assert.True(WaitUntil(() => m.State == "ready" &&
+                m.Health().IndexVersion != v1, 30000),
                 "second force:'full' did not mint a fresh index (index_version unchanged)");
         }
         finally { Cleanup(root); }

@@ -9,6 +9,18 @@ public sealed record RefreshResult(
     int ChangedFiles, int AddedFiles, int DeletedFiles, bool ProjectsRefreshed, TimeSpan Elapsed,
     string? RefreshedAtUtc = null);
 
+internal sealed class RefreshInputUnavailableException(string path) : IOException(
+    $"Workspace input could not be captured safely: {path}")
+{
+    internal string Path { get; } = path;
+}
+
+internal sealed class RefreshInputOversizedException(string path) : IOException(
+    $"Workspace input exceeds its bounded capture limit: {path}")
+{
+    internal string Path { get; } = path;
+}
+
 /// <summary>
 /// Owns: incremental index updates — targeted (watcher batches) or detect-all
 /// (mtime/size/hash sweep). Single-writer: callers must serialize invocations.
@@ -17,11 +29,32 @@ public sealed record RefreshResult(
 public static class DeltaRefresher
 {
     internal const int MaxIndexedFileBytes = 256 * 1024 * 1024;
+    internal static readonly TimeSpan[] RefreshInputRetryDelays =
+    [
+        TimeSpan.FromMilliseconds(100),
+        TimeSpan.FromMilliseconds(250),
+        TimeSpan.FromSeconds(1),
+    ];
 
     public static RefreshResult Refresh(
         IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? changedRelPaths,
-        Action<string>? log = null, bool removeUnavailableKnown = false,
-        string? recordCommit = null, string? recordBranch = null)
+        Action<string>? log = null,
+        string? recordCommit = null, string? recordBranch = null) =>
+        RefreshCore(store, workspaceRoot, changedRelPaths,
+            GitInfo.ReadBoundedWorkspaceFileResult, log, recordCommit, recordBranch);
+
+    internal static RefreshResult RefreshWithReaderForTest(
+        IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? changedRelPaths,
+        Func<string, string, int, GitInfo.WorkspaceFileReadResult> readWorkspaceFile,
+        Action<string>? log = null,
+        string? recordCommit = null, string? recordBranch = null) =>
+        RefreshCore(store, workspaceRoot, changedRelPaths, readWorkspaceFile, log,
+            recordCommit, recordBranch);
+
+    private static RefreshResult RefreshCore(
+        IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? changedRelPaths,
+        Func<string, string, int, GitInfo.WorkspaceFileReadResult> readWorkspaceFile,
+        Action<string>? log, string? recordCommit, string? recordBranch)
     {
         var sw = Stopwatch.StartNew();
         var stored = store.AllFilesByPath();
@@ -120,9 +153,11 @@ public static class DeltaRefresher
                 bool authoritativeProjectInput = lang is "csproj" or "fsproj" || IsPackagesConfig(rel);
                 bool projectShapePath = authoritativeProjectInput || lang == "sln";
 
+                int captureLimit = authoritativeProjectInput
+                    ? IndexBuilder.MaxStructuralFileBytes
+                    : MaxIndexedFileBytes;
                 GitInfo.WorkspaceFileReadResult read =
-                    GitInfo.ReadBoundedWorkspaceFileResult(workspaceRoot, rel,
-                        MaxIndexedFileBytes);
+                    readWorkspaceFile(workspaceRoot, rel, captureLimit);
                 byte[]? bytes = read.Bytes;
                 if (bytes is null)
                 {
@@ -137,28 +172,31 @@ public static class DeltaRefresher
                         }
                         continue;
                     }
-                    if (authoritativeProjectInput &&
-                        read.Disposition == GitInfo.WorkspaceFileReadDisposition.Unavailable)
+                    if (read.Disposition == GitInfo.WorkspaceFileReadDisposition.Oversized)
                     {
-                        // Regular project/package inputs are authoritative. Publishing a graph
-                        // that silently retained their old facts—or deleted them in a strict
-                        // worktree sweep—would be a false-complete snapshot. The surrounding
-                        // transaction rolls every preceding file mutation back.
-                        throw new IOException(
-                            $"Authoritative project input could not be captured safely: {rel}");
+                        // Oversize is persistent rather than transient, but it is still incomplete
+                        // source evidence. Throw inside the transaction so preceding row mutations
+                        // roll back before the manager publishes the persistent stale latch.
+                        throw new RefreshInputOversizedException(rel);
                     }
-                    if (known && (removeUnavailableKnown ||
-                        read.Disposition == GitInfo.WorkspaceFileReadDisposition.DefinitelyNonRegular))
+                    if (read.Disposition == GitInfo.WorkspaceFileReadDisposition.Unavailable)
                     {
-                        // A pinned full sweep has proved the leaf non-regular, or the strict
-                        // worktree reconcile could not obtain its complete bounded bytes. Remove
-                        // any seeded row; retaining it would publish source evidence for bytes the
-                        // target index did not inspect.
+                        // A regular source that exists but cannot be captured completely is a
+                        // transient refresh failure, not evidence that the old row is current.
+                        // Throw inside the transaction so the manager can retry the complete
+                        // request without publishing a partial batch.
+                        throw new RefreshInputUnavailableException(rel);
+                    }
+                    if (known &&
+                        read.Disposition == GitInfo.WorkspaceFileReadDisposition.DefinitelyNonRegular)
+                    {
+                        // A pinned read proved the leaf non-regular. Remove any seeded row;
+                        // retaining it would publish source evidence for a refused file type.
                         store.DeleteFileCascade(tx, old!.Id, store.GetContentForWrite(old.Id));
                         deleted++;
                         if (projectShapePath) projectDataDirty = true;
                     }
-                    log?.Invoke($"Skipped non-regular, linked, unreadable, or oversized file: {rel}");
+                    log?.Invoke($"Skipped definitely non-regular file: {rel}");
                     continue;
                 }
                 long mtimeTicks;
@@ -230,7 +268,7 @@ public static class DeltaRefresher
             if (projectDataDirty)
             {
                 log?.Invoke("Project files changed — rebuilding project graph ...");
-                RefreshProjectDataCore(store, workspaceRoot, tx, log);
+                RefreshProjectDataCore(store, workspaceRoot, tx, readWorkspaceFile, log);
             }
             if (added + changed + deleted > 0)
             {
@@ -274,12 +312,15 @@ public static class DeltaRefresher
     {
         _ = scan;
         using var tx = store.BeginTransaction();
-        RefreshProjectDataCore(store, workspaceRoot, tx, log: null);
+        RefreshProjectDataCore(store, workspaceRoot, tx,
+            GitInfo.ReadBoundedWorkspaceFileResult, log: null);
         tx.Commit();
     }
 
     private static void RefreshProjectDataCore(IndexStore store, string workspaceRoot,
-        Microsoft.Data.Sqlite.SqliteTransaction tx, Action<string>? log)
+        Microsoft.Data.Sqlite.SqliteTransaction tx,
+        Func<string, string, int, GitInfo.WorkspaceFileReadResult> readWorkspaceFile,
+        Action<string>? log)
     {
         List<(long Id, string Path, string Lang)> rows = store.FileIdPathLang(tx);
         Dictionary<string, IndexStore.StoredFile> stored = store.AllFilesByPath(tx);
@@ -290,21 +331,14 @@ public static class DeltaRefresher
         var parsedProjects = new List<ParsedProject>(projectPaths.Count);
         foreach (string path in projectPaths)
         {
-            byte[]? projectBytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot, path,
-                IndexBuilder.MaxStructuralFileBytes);
-            if (projectBytes is null ||
-                !stored.TryGetValue(path, out IndexStore.StoredFile? projectRow) ||
-                unchecked((long)XxHash64.HashToUInt64(projectBytes)) != projectRow.Hash)
-                throw new IOException($"Project snapshot changed or could not be captured safely: {path}");
+            byte[] projectBytes = ReadRequiredStructuralSnapshot(workspaceRoot, path, stored,
+                readWorkspaceFile);
             string packagesPath = PackagesConfigPath(path);
             byte[]? packagesBytes = null;
-            if (stored.TryGetValue(packagesPath, out IndexStore.StoredFile? packagesRow))
+            if (stored.ContainsKey(packagesPath))
             {
-                packagesBytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot, packagesPath,
-                    IndexBuilder.MaxStructuralFileBytes);
-                if (packagesBytes is null ||
-                    unchecked((long)XxHash64.HashToUInt64(packagesBytes)) != packagesRow.Hash)
-                    throw new IOException($"packages.config changed or could not be captured safely: {packagesPath}");
+                packagesBytes = ReadRequiredStructuralSnapshot(workspaceRoot, packagesPath,
+                    stored, readWorkspaceFile);
             }
             parsedProjects.Add(ProjectFileParser.ParseSnapshot(path, projectBytes,
                 packagesBytes));
@@ -315,8 +349,9 @@ public static class DeltaRefresher
         foreach (string path in solutionPaths)
         {
             if (!stored.TryGetValue(path, out IndexStore.StoredFile? row)) continue;
-            byte[]? bytes = GitInfo.ReadBoundedWorkspaceFile(workspaceRoot, path,
+            GitInfo.WorkspaceFileReadResult read = readWorkspaceFile(workspaceRoot, path,
                 IndexBuilder.MaxStructuralFileBytes);
+            byte[]? bytes = read.Bytes;
             if (bytes is null || unchecked((long)XxHash64.HashToUInt64(bytes)) != row.Hash ||
                 optionalSolutionBytes + bytes.LongLength >
                 IndexBuilder.MaxOptionalSolutionSnapshotBytes)
@@ -369,6 +404,23 @@ public static class DeltaRefresher
         // isTest R3 parity with the full build (a .cs file GAINING [TestFixture] converges on the
         // next graph rebuild — csproj-touch or full — an accepted staleness, same as ownership).
         store.PromoteTestProjectsByCompiledAttributes(tx);
+    }
+
+    private static byte[] ReadRequiredStructuralSnapshot(
+        string workspaceRoot,
+        string path,
+        IReadOnlyDictionary<string, IndexStore.StoredFile> stored,
+        Func<string, string, int, GitInfo.WorkspaceFileReadResult> readWorkspaceFile)
+    {
+        GitInfo.WorkspaceFileReadResult read = readWorkspaceFile(workspaceRoot, path,
+            IndexBuilder.MaxStructuralFileBytes);
+        if (read.Disposition == GitInfo.WorkspaceFileReadDisposition.Oversized)
+            throw new RefreshInputOversizedException(path);
+        if (read.Bytes is not { } bytes ||
+            !stored.TryGetValue(path, out IndexStore.StoredFile? row) ||
+            unchecked((long)XxHash64.HashToUInt64(bytes)) != row.Hash)
+            throw new RefreshInputUnavailableException(path);
+        return bytes;
     }
 
     private static string LangOf(string relPath)

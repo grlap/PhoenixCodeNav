@@ -228,23 +228,26 @@ mutations are serialized and each delta is applied in one transaction. A detect-
 uses `DeltaRefresher`; it is not a destructive rebuild. Full rebuild is reserved for a missing,
 incompatible, corrupt, or explicitly rebuilt index.
 
+Before that pump mutates rows it commits a follower-visible `refresh_sweep_pending` marker. A new
+database writes the same marker before its schema-version compatibility barrier, and startup keeps
+it through watcher attachment. The marker is cleared only after the serialized post-build/startup
+or ordinary refresh transaction succeeds. Thus a writer and any Windows followers report a
+queryable-but-stale epoch while convergence is pending; neither can publish `ready` in the gap
+between build capture and watcher-backed reconciliation. The manager tracks durable marker
+publication separately from its in-memory state: if the marker transaction fails, it refuses the
+refresh and every later request retries marker persistence before reading or mutating source rows.
+Response metadata advises callers to retry `refresh_index` if that pending state persists; the same
+marker also covers ordinary refresh convergence, not only the build/open handoff.
+
 The index writer lease is per database destination. Only the process holding that lease owns the
 watcher, queue, build, and refresh pump. On Windows, additional processes may attach to committed
 WAL state as read-only followers; followers never watch, enqueue, refresh, or rebuild. On macOS and
 Linux, a contender currently remains unavailable rather than attaching as a follower. Processes
 configured with different index database paths own independent leases and refresh pipelines.
 
-### Proposed unavailable source capture and retry contract
+### Unavailable source capture and retry contract
 
-> **Status: planned, not implemented.** This is the approved design for
-> `PhoenixCodeNav-0thv`, not a description of current runtime behavior. Today the reader has only
-> four dispositions (`Success`, `Missing`, `DefinitelyNonRegular`, and `Unavailable`); oversized
-> regular files are folded into `Unavailable`. Ordinary unavailable source files can still be
-> skipped, failed refresh requests are not requeued, and strict worktree reconciliation can install
-> an index after removing an unavailable source row. Until this design ships, `ready`, `inSync`,
-> and exact-looking semantic results do not prove that every regular source was captured.
-
-The implementation for `PhoenixCodeNav-0thv` will keep these outcomes distinct:
+Schema 17 and server version 0.12.7 keep these outcomes distinct:
 
 - `Success`: complete bounded bytes from one held regular-file handle.
 - `Missing`: the path is authoritatively absent, so an existing row may be deleted.
@@ -263,30 +266,39 @@ read/write/delete sharing, reparse-point refusal, and a non-directory leaf requi
 flags avoid following workspace-controlled links and avoid blocking on special files, but they
 cannot eliminate an editor save/rename race.
 
-Under the proposed contract, `Unavailable` is a refresh failure, not a skipped file.
-`DeltaRefresher` will throw a typed failure so its complete SQLite transaction rolls back. The
-single pump will retain that request ahead of later refreshes and retry the complete transaction
+`Unavailable` and `Oversized` regular sources are refresh failures, not skipped files. `Missing`
+and `DefinitelyNonRegular` scan entries are omitted with skipped-input accounting. `DeltaRefresher` throws a
+typed failure inside the transaction so every row and commit-metadata change in the complete batch
+rolls back while the previously persisted sweep marker remains visible to followers; the manager
+then refines that marker to the specific incomplete-source latch. The single pump retains an
+unavailable request ahead of later
+refreshes and retries the complete transaction
 after short bounded delays (100 ms, 250 ms, then 1 second); it must not sleep while a SQLite
 transaction is open. A retry success may publish the rows and commit metadata normally. While
-retries are pending, health will report a known incomplete refresh and must not publish `ready`,
+retries are pending, health reports a known incomplete refresh and does not publish `ready`,
 advance `indexed_commit`, report worktree `inSync`, or allow semantic coverage to claim
 exact/current source evidence.
 
-If the proposed quick retries are exhausted, the writer will keep a stable
-`refresh_input_unavailable` cause, coalesce subsequently queued paths into a detect-all recovery
-request, and remain stale or failed until that recovery succeeds or an explicit refresh is
-requested. It will never rely on the operating system producing a second notification. A fresh
-watcher signal may start a new bounded retry budget, but cannot clear the incomplete-freshness
-latch by itself.
+If the quick retries are exhausted, the writer keeps a stable `refresh_input_unavailable` cause,
+persists that latch for read-only followers, widens the next queued targeted request into a
+detect-all recovery sweep, and remains stale until that recovery or a full rebuild succeeds. It
+never relies on the operating system producing a second identical notification. A fresh watcher
+signal may start a new bounded retry budget, but cannot clear the incomplete-freshness latch unless
+the recovery sweep captures the previously unavailable source.
 
-The proposed `Oversized` outcome is persistent rather than transient and receives no rapid retry
-loop. The result will identify the skipped regular source and propagate partial coverage through
-refresh health, worktree-index results, and semantic responses. It cannot advance the Git baseline
-or earn `inSync`/exact claims. Strict worktree reconciliation will follow the same rule and must not
-install a staged database as `created` or `refreshed` when a regular source was unavailable. Tests
-must cover transient failure followed by success, retry exhaustion, oversize behavior,
-Git-baseline preservation, queued-request ordering, normal writer refresh, and strict worktree
-refresh.
+`Oversized` is persistent rather than transient and receives no rapid retry loop. The failure
+identifies the regular source that prevented the atomic batch and propagates bounded partial
+coverage through refresh health, follower metadata, worktree-index results, and response metadata.
+Because capture aborts on the first known-incomplete input, its path count is explicitly a lower
+bound rather than a complete workspace total. It cannot advance the Git
+baseline or earn `inSync`/exact claims. Strict worktree reconciliation follows the same rule and
+does not install a staged database as `created` or `refreshed` when a regular source is unavailable
+or oversized. Cold and explicit full builds also fail closed on any scanned regular source they
+cannot capture, so a lossy new database is never published as ready. Regression coverage pins
+transient failure followed by success, transaction rollback,
+retry exhaustion and recovery, oversize behavior, Git-baseline preservation, queued-request
+ordering, follower propagation (including a specific-latch persistence failure), post-build
+publication gating, normal writer refresh, and strict worktree refusal.
 
 ### `git checkout <branch>` / `git pull` / `merge` / `rebase`
 
@@ -307,13 +319,16 @@ These are **bulk working-tree mutations** handled by two complementary signals:
 **So switching branches or pulling *does* converge the index to the new tree** — with two honest
 caveats:
 
-1. **Brief staleness window.** For the ~600 ms debounce + refresh duration the index lags
-   the new branch; during it, responses report `indexStatus: refreshing`/`stale` and
-   non-zero `pendingChanges`. An agent that ignores that signal could act on a stale result.
-2. **Git can be unavailable.** If the configured Git executable cannot be resolved or a Git query
-   fails, Phoenix retains watcher-only convergence and logs the degraded mode. A watcher overflow
-   still escalates to a detect-all sweep; `refresh_index()` remains the manual recovery hatch when
-   the reported commit/freshness state is uncertain.
+1. **Brief staleness window.** During the ~600 ms debounce, watcher-backed responses may report
+   `stale` with non-zero `pendingChanges`. The watcher drains those paths when it enqueues the
+   serialized request, so the pump can report `refreshing` with `pendingChanges: 0`; Git-triggered
+   requests never contribute to that watcher-derived count. State and the incomplete-source fields,
+   rather than a zero pending count alone, determine whether current-source evidence is earned.
+2. **Git can be unavailable.** An unresolved configured Git executable logs watcher-only degraded
+   mode. Unresolved repository metadata can leave Git tracking unattached, while a failed or
+   over-cap commit diff falls back to a detect-all reconcile instead of logging watcher-only mode.
+   A watcher overflow also escalates to a detect-all sweep; `refresh_index()` remains the manual
+   recovery hatch when the reported commit/freshness state is uncertain.
 
 ## Result discipline
 

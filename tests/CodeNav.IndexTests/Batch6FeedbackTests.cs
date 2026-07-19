@@ -206,6 +206,33 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
     }
 
     [Fact]
+    public void IndexWorktreeIncompleteSourceResultCarriesStableCoverage()
+    {
+        var result = new WorktreeIndexResult(
+            IndexManager.RefreshInputOversizedCause,
+            "a regular source exceeds the configured byte limit",
+            0, 0, 0, 7, null, true,
+            IndexManager.RefreshInputOversizedCause, ["Oversized.cs"], 1,
+            IncompleteSourcePathCountIsLowerBound: true);
+        var meta = new Meta("ready", "17", "now", "now", 0,
+            "indexed", "text", Build: "0.12.7+test", IndexSchema: "17");
+
+        using JsonDocument document = JsonDocument.Parse(
+            NavigationTools.SerializeIndexWorktreeResult("/worktree", result, meta));
+        JsonElement response = document.RootElement;
+
+        Assert.Equal(IndexManager.RefreshInputOversizedCause,
+            response.GetProperty("error").GetString());
+        Assert.Equal(IndexManager.RefreshInputOversizedCause,
+            response.GetProperty("partialReason").GetString());
+        Assert.Equal(["Oversized.cs"], response.GetProperty("incompleteSourcePaths")
+            .EnumerateArray().Select(item => item.GetString()!).ToArray());
+        Assert.Equal(1, response.GetProperty("incompleteSourcePathCount").GetInt32());
+        Assert.True(response.GetProperty("incompleteSourcePathCountLowerBound").GetBoolean());
+        Assert.True(response.GetProperty("usedFullSweep").GetBoolean());
+    }
+
+    [Fact]
     public void DefinitionBodyRespectsByteBudgetAndHints()
     {
         var sb = new System.Text.StringBuilder();
@@ -279,6 +306,97 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
         var refreshing = Meta.From(ready with { State = "refreshing" }, "indexed", "text");
         Assert.Equal("refreshing", refreshing.IndexStatus);
         Assert.Contains("non-blocking", refreshing.StatusNote);
+    }
+
+    [Fact]
+    public void IncompleteSourceCaptureDowngradesExactConfidenceAndExposesCoverage()
+    {
+        var health = new IndexHealth("stale", "v", null, null, 0,
+            IndexManager.RefreshInputUnavailableCause, 0, "w", "d",
+            RefreshIncompleteReason: IndexManager.RefreshInputUnavailableCause,
+            RefreshIncompletePaths: ["Locked.cs"], RefreshIncompletePathCount: 1,
+            RefreshIncompletePathCountIsLowerBound: true);
+
+        Meta meta = Meta.From(health, "exact", "semantic");
+
+        Assert.Equal("stale", meta.IndexStatus);
+        Assert.Equal("indexed", meta.Confidence);
+        Assert.Equal(IndexManager.RefreshInputUnavailableCause, meta.PartialReason);
+        Assert.Equal(["Locked.cs"], meta.IncompleteSourcePaths);
+        Assert.Equal(1, meta.IncompleteSourcePathCount);
+        Assert.True(meta.IncompleteSourcePathCountLowerBound);
+        Assert.Null(meta.IncompleteSourcePathsTruncated);
+        Assert.Contains("cannot claim", meta.StatusNote);
+    }
+
+    [Fact]
+    public void ServerCapabilitiesExposeIncompleteSourceCoverageAndFeatureIds()
+    {
+        var health = new IndexHealth("stale", "17", "indexed", "refreshed", 0,
+            IndexManager.RefreshInputUnavailableCause, 123, "/workspace", "/index.db",
+            RefreshIncompleteReason: IndexManager.RefreshInputUnavailableCause,
+            RefreshIncompletePaths: ["Locked.cs"], RefreshIncompletePathCount: 1,
+            RefreshIncompletePathCountIsLowerBound: true);
+
+        using JsonDocument document = JsonDocument.Parse(
+            NavigationTools.ServerCapabilitiesForTest(health));
+        JsonElement root = document.RootElement;
+        JsonElement index = root.GetProperty("index");
+
+        Assert.Equal(IndexManager.RefreshInputUnavailableCause,
+            index.GetProperty("refreshIncompleteReason").GetString());
+        Assert.Equal(["Locked.cs"], index.GetProperty("incompleteSourcePaths")
+            .EnumerateArray().Select(item => item.GetString()!).ToArray());
+        Assert.Equal(1, index.GetProperty("incompleteSourcePathCount").GetInt32());
+        Assert.True(index.GetProperty("incompleteSourcePathCountLowerBound").GetBoolean());
+        string[] featureIds = root.GetProperty("features").EnumerateArray()
+            .Select(feature => feature.GetProperty("id").GetString()!).ToArray();
+        Assert.Contains("refresh-input-retry", featureIds);
+        Assert.Contains("refresh-sweep-publication-gating", featureIds);
+        Assert.Contains("refresh-incomplete-freshness", featureIds);
+        Assert.Contains("oversized-source-coverage", featureIds);
+    }
+
+    [Fact]
+    public void SweepPendingUsesSweepSpecificStatusNote()
+    {
+        var health = new IndexHealth("stale", "17", "indexed", "refreshed", 0,
+            IndexManager.RefreshSweepPendingCause, 123, "/workspace", "/index.db",
+            RefreshIncompleteReason: IndexManager.RefreshSweepPendingCause);
+
+        Meta meta = Meta.From(health, "exact", "semantic");
+
+        Assert.Equal(IndexManager.RefreshSweepPendingCause, meta.PartialReason);
+        Assert.Equal("indexed", meta.Confidence);
+        Assert.Contains("freshness convergence", meta.StatusNote);
+        Assert.Contains("refresh_index", meta.StatusNote);
+        Assert.DoesNotContain("source capture", meta.StatusNote);
+        Assert.DoesNotContain("no additional refresh request", meta.StatusNote);
+    }
+
+    [Fact]
+    public void IncompleteSourceCoverageBoundsCapPlusOneUtf8PathsAndLabelsLowerBound()
+    {
+        string[] paths = Enumerable.Range(0, 9)
+            .Select(i => $"{new string('ę', 300)}-{i}.cs")
+            .ToArray();
+        var health = new IndexHealth("stale", "17", "indexed", "refreshed", 0,
+            IndexManager.RefreshInputUnavailableCause, 123, "/workspace", "/index.db",
+            RefreshIncompleteReason: IndexManager.RefreshInputUnavailableCause,
+            RefreshIncompletePaths: paths, RefreshIncompletePathCount: 10,
+            RefreshIncompletePathCountIsLowerBound: true);
+
+        using JsonDocument document = JsonDocument.Parse(
+            NavigationTools.ServerCapabilitiesForTest(health));
+        JsonElement index = document.RootElement.GetProperty("index");
+        string[] returnedPaths = index.GetProperty("incompleteSourcePaths")
+            .EnumerateArray().Select(item => item.GetString()!).ToArray();
+
+        Assert.Equal(8, returnedPaths.Length);
+        Assert.All(returnedPaths, path => Assert.True(Json.Utf8Bytes(path) <= 512));
+        Assert.Equal(10, index.GetProperty("incompleteSourcePathCount").GetInt32());
+        Assert.True(index.GetProperty("incompleteSourcePathCountLowerBound").GetBoolean());
+        Assert.True(index.GetProperty("incompleteSourcePathsTruncated").GetBoolean());
     }
 
     // ---------------------------------------------------------------- zb9: containingSymbol

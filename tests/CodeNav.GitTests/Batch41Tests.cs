@@ -1033,7 +1033,7 @@ public class Batch41Tests
     }
 
     [Fact]
-    public async Task LinuxAnchoredFullSweepSkipsFifoAndSocketWithoutBlocking()
+    public async Task LinuxAnchoredFullSweepRefusesOversizedRegularSourceWithoutBlocking()
     {
         if (!OperatingSystem.IsLinux() || !GitInfo.GitAvailable) return;
         string root = Directory.CreateTempSubdirectory("codenav-41-fifo").FullName;
@@ -1069,13 +1069,11 @@ public class Batch41Tests
             Task<WorktreeIndexResult> reconcile = Task.Run(() => WorktreeIndexer.Ensure(
                 root, mainDb, wt, "create", _ => { }));
             WorktreeIndexResult result = await reconcile.WaitAsync(TimeSpan.FromSeconds(20));
-            Assert.Equal("created", result.Action);
+            Assert.Equal(IndexManager.RefreshInputOversizedCause, result.Action);
             Assert.True(result.UsedFullSweep);
-            using var queries = new IndexQueries(IndexBuilder.DefaultDbPath(wt));
-            Assert.Empty(queries.SearchSymbols("Alpha41", "exact", null, 2));
-            Assert.Empty(queries.SearchSymbols("SocketSeed41", "exact", null, 2));
-            Assert.Empty(queries.SearchSymbols("OversizeSeed41", "exact", null, 2));
-            Assert.Null(queries.ProjectByName("Lab"));
+            Assert.Equal(["Lab/OversizeSeed.cs"], result.IncompleteSourcePaths);
+            Assert.False(File.Exists(IndexBuilder.DefaultDbPath(wt)),
+                "strict worktree reconcile must not install a staged index with incomplete source coverage");
         }
         finally
         {
@@ -1456,7 +1454,8 @@ public class Batch41Tests
 
             using (var store = new IndexStore(database, createNew: false))
             {
-                Assert.Throws<IOException>(() => DeltaRefresher.Refresh(store, root,
+                Assert.Throws<RefreshInputOversizedException>(() =>
+                    DeltaRefresher.Refresh(store, root,
                     ["Consumer/Consumer.csproj", "Library/Library.csproj"]));
             }
 
@@ -1484,7 +1483,8 @@ public class Batch41Tests
                        FileAccess.Write, FileShare.ReadWrite))
                 oversized.SetLength((long)IndexBuilder.MaxStructuralFileBytes + 1);
 
-            Assert.Throws<IOException>(() => IndexBuilder.Build(root, database));
+            Assert.Throws<RefreshInputOversizedException>(() =>
+                IndexBuilder.Build(root, database));
             Assert.False(File.Exists(database));
             Assert.False(IndexOwnershipLease.IsHeld(root, database));
         }

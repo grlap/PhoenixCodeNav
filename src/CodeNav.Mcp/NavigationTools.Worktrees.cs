@@ -113,6 +113,16 @@ public sealed partial class NavigationTools
         int detailBytes = result.Detail is null ? 0 : Json.Utf8Bytes(result.Detail);
         int pathLimit = Math.Min(pathBytes, WorktreeDynamicTextBytes);
         int detailLimit = Math.Min(detailBytes, WorktreeDynamicTextBytes);
+        bool incompletePathsTruncated = false;
+        string[]? incompletePaths = result.IncompleteSourcePaths?.Take(8)
+            .Select(item =>
+            {
+                string bounded = Json.Utf8Prefix(item, 512, out bool truncated);
+                incompletePathsTruncated |= truncated;
+                return bounded;
+            }).ToArray();
+        incompletePathsTruncated |= result.IncompleteSourcePathCount >
+            (incompletePaths?.Length ?? 0);
 
         while (true)
         {
@@ -133,12 +143,26 @@ public sealed partial class NavigationTools
                 detail = boundedDetail,
                 detailTruncated = detailTruncated ? true : (bool?)null,
                 detailBytes = detailTruncated ? detailBytes : (int?)null,
+                partialReason = result.PartialReason,
+                incompleteSourcePaths = incompletePaths,
+                incompleteSourcePathCount = result.PartialReason is null
+                    ? (int?)null
+                    : result.IncompleteSourcePathCount,
+                incompleteSourcePathCountLowerBound = result.PartialReason is not null &&
+                    result.IncompleteSourcePathCountIsLowerBound
+                        ? true
+                        : (bool?)null,
+                incompleteSourcePathsTruncated = incompletePathsTruncated
+                    ? true
+                    : (bool?)null,
                 addedFiles = ok ? result.AddedFiles : (int?)null,
                 changedFiles = ok ? result.ChangedFiles : (int?)null,
                 deletedFiles = ok ? result.DeletedFiles : (int?)null,
                 // Honest reconcile provenance: false = the Windows targeted git-diff/status
                 // path; true = Linux's mandatory anchored sweep or a Windows fallback sweep.
-                usedFullSweep = ok ? result.UsedFullSweep : (bool?)null,
+                usedFullSweep = ok || result.PartialReason is not null
+                    ? result.UsedFullSweep
+                    : (bool?)null,
                 indexedCommit = result.IndexedCommit,
                 elapsedMs = result.ElapsedMs,
                 meta,
