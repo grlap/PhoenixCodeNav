@@ -1,6 +1,4 @@
 using Microsoft.Data.Sqlite;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 
@@ -36,9 +34,10 @@ public sealed record SemanticTextCandidateProject(
     long ProjectId, string Project, string ProjectPath, string Language, int FileCount);
 
 /// <summary>Per-call attribution for the transitive implementation-closure walk. Database time
-/// includes command execution plus row materialization; managed-filter time covers the exact
-/// whole-token/arity check over returned rows. The remaining time is bounded frontier/deduplication
-/// bookkeeping. Counts disclose work volume without exposing symbol names or paths.</summary>
+/// includes command execution plus row materialization. Managed-filter time is retained as a
+/// telemetry compatibility field and is zero on the normalized v18 edge path; the remaining time
+/// is bounded frontier/deduplication bookkeeping. Counts disclose work volume without exposing
+/// symbol names or paths.</summary>
 public sealed record ImplementationClosureStats(
     double TotalMs,
     double DbQueryAndMapMs,
@@ -1376,98 +1375,48 @@ public sealed partial class IndexQueries : IDisposable
             ReadSymbol, args.ToArray());
     }
 
-    /// <summary>Types whose base list textually mentions the given name (heuristic implementations).</summary>
+    /// <summary>Types that name the given simple identity as the head of a direct base-list
+    /// entry (heuristic implementations). Qualification is deliberately over-inclusive; semantic
+    /// verification decides which same-name declaration the edge actually binds to.</summary>
     public List<SymbolHit> ImplementationCandidates(string name, int limit, int? targetArity = null)
     {
-        // An empty name would make the LIKE pattern collapse to '%: %' and match every type that has
-        // any base list — never run that catch-all.
         if (string.IsNullOrEmpty(name) || limit <= 0) return new();
-        string esc = EscapeLike(name);
-        // The LIKE is a SUBSTRING filter, so over-fetch and refine to types whose base list names the
-        // interface as a WHOLE identifier token — otherwise 'IFoo' would also match 'IFooBar'.
-        List<SymbolHit> QueryPage(int pageLimit, int offset) => Query(
+        if (targetArity is { } arity)
+        {
+            return Query(
+                """
+                SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
+                FROM type_base_edges e
+                JOIN symbols s ON s.id = e.derived_symbol_id
+                JOIN files f ON f.id = s.file_id
+                WHERE e.base_name = $n AND e.base_arity = $arity
+                  AND s.kind IN ('class','struct','record','record_struct')
+                ORDER BY f.is_generated, s.name, f.path, s.id
+                LIMIT $lim
+                """,
+                ReadSymbol, ("$n", name), ("$arity", arity), ("$lim", limit));
+        }
+
+        // A declaration can mention the same simple name at several arities or through several
+        // qualifications. The edge PK deduplicates one arity; this projection preserves the old
+        // one-symbol result when the caller intentionally asks for every arity.
+        return Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
                    s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
-            FROM symbols s JOIN files f ON f.id = s.file_id
+            FROM (
+                SELECT DISTINCT derived_symbol_id
+                FROM type_base_edges
+                WHERE base_name = $n
+            ) e
+            JOIN symbols s ON s.id = e.derived_symbol_id
+            JOIN files f ON f.id = s.file_id
             WHERE s.kind IN ('class','struct','record','record_struct')
-              AND s.name <> $n
-              AND s.signature LIKE $pat ESCAPE '\'
             ORDER BY f.is_generated, s.name, f.path, s.id
-            LIMIT $lim OFFSET $off
+            LIMIT $lim
             """,
-            ReadSymbol,
-            ("$n", name), ("$pat", $"%: %{esc}%"), ("$lim", pageLimit), ("$off", offset));
-
-        if (targetArity is null)
-        {
-            return QueryPage(Math.Min(limit * 4, 2000), 0)
-                .Where(h => BaseListContainsIdentity(h.Signature, name, targetArity))
-                .Take(limit)
-                .ToList();
-        }
-
-        // Arity filtering happens after the broad SQL text prefilter. Page until enough exact
-        // syntax matches are found (or the candidate set is exhausted), so earlier rows for IFoo
-        // cannot hide every IFoo<T> row behind the prefilter cap.
-        int batchSize = Math.Clamp(limit * 4, 64, 512);
-        int offset = 0;
-        var matches = new List<SymbolHit>(limit);
-        while (matches.Count < limit)
-        {
-            List<SymbolHit> page = QueryPage(batchSize, offset);
-            foreach (SymbolHit hit in page)
-            {
-                if (BaseListContainsIdentity(hit.Signature, name, targetArity))
-                {
-                    matches.Add(hit);
-                    if (matches.Count == limit) break;
-                }
-            }
-            if (page.Count < batchSize) break;
-            offset += page.Count;
-        }
-        return matches;
-    }
-
-    /// <summary>Checks the right-most type name in each syntax-derived base-list entry.
-    /// The SQL LIKE above remains a broad candidate prefilter; generic arity is decided from
-    /// parsed C# syntax so <c>ICache</c> and <c>ICache&lt;T&gt;</c> never merge in a fallback.</summary>
-    private static bool BaseListContainsIdentity(string signature, string name, int? targetArity)
-    {
-        if (!ContainsWholeToken(signature, name)) return false;
-        if (targetArity is null) return true;
-
-        int marker = signature.IndexOf(" : ", StringComparison.Ordinal);
-        if (marker < 0 || marker + 3 >= signature.Length) return false;
-
-        CompilationUnitSyntax unit = SyntaxFactory.ParseCompilationUnit(
-            $"class __PhoenixArityProbe : {signature[(marker + 3)..]} {{ }}");
-        BaseListSyntax? baseList = unit.Members.OfType<ClassDeclarationSyntax>()
-            .FirstOrDefault()?.BaseList;
-        if (baseList is null) return false;
-
-        foreach (BaseTypeSyntax baseType in baseList.Types)
-        {
-            SimpleNameSyntax? simpleName = baseType.Type switch
-            {
-                QualifiedNameSyntax qualified => qualified.Right,
-                AliasQualifiedNameSyntax aliased => aliased.Name,
-                SimpleNameSyntax simple => simple,
-                _ => baseType.Type.DescendantNodesAndSelf().OfType<SimpleNameSyntax>().LastOrDefault(),
-            };
-            if (simpleName is null ||
-                !string.Equals(simpleName.Identifier.ValueText, name, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            int arity = simpleName is GenericNameSyntax generic
-                ? generic.TypeArgumentList.Arguments.Count
-                : 0;
-            if (arity == targetArity.Value) return true;
-        }
-        return false;
+            ReadSymbol, ("$n", name), ("$lim", limit));
     }
 
     /// <summary>jj1q: the full SYNTACTIC subtype closure of a type — every type whose base
@@ -1493,7 +1442,6 @@ public sealed partial class IndexQueries : IDisposable
         try
         {
             if (string.IsNullOrEmpty(rootName)) return results;
-            var seenDeclarations = new HashSet<string>(StringComparer.Ordinal);
             var visitedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var frontier = new Queue<(string Name, int? Arity)>();
             frontier.Enqueue((rootName, rootArity));
@@ -1506,17 +1454,17 @@ public sealed partial class IndexQueries : IDisposable
                 foreach (var hit in BaseListMentions(name, arity, maxTypes + 1,
                              cancellationToken, attribution))
                 {
-                    string key = hit.DeclarationKey
-                        ?? $"{hit.Ns}|{hit.Container}|{hit.Name}|{hit.Arity}|{hit.FilePath}|{hit.StartLine}";
-                    if (!seenDeclarations.Add(key)) continue;
                     if (results.Count >= maxTypes)
                     {
                         capped = true;
                         return results;
                     }
                     results.Add(hit);
-                    // Partial declarations of one type share a name — visitedNames keeps the
-                    // frontier from re-walking a name, while every declaration is still returned.
+                    // Retain every physical edge candidate for compiler verification. Indexed
+                    // declaration/container identities intentionally are not complete semantic
+                    // identities (for example Outer and Outer<T> share the stored container
+                    // text), so pre-verification deduplication can create false-exact omissions.
+                    // visitedNames only prevents re-walking the same simple name/arity frontier.
                     if (visitedNames.Add($"{hit.Name}`{hit.Arity}"))
                     {
                         frontier.Enqueue((hit.Name, hit.Arity));
@@ -1532,7 +1480,7 @@ public sealed partial class IndexQueries : IDisposable
                 double totalMs = System.Diagnostics.Stopwatch
                     .GetElapsedTime(totalStarted).TotalMilliseconds;
                 double dbMs = TicksToMilliseconds(attribution.DbQueryAndMapTicks);
-                double filterMs = TicksToMilliseconds(attribution.ManagedFilterTicks);
+                const double filterMs = 0;
                 statsBox.Stats = new ImplementationClosureStats(
                     totalMs,
                     dbMs,
@@ -1550,13 +1498,40 @@ public sealed partial class IndexQueries : IDisposable
     private sealed class ImplementationClosureAccumulator
     {
         public long DbQueryAndMapTicks;
-        public long ManagedFilterTicks;
         public int DbQueries;
         public int RowsReturned;
     }
 
     private static double TicksToMilliseconds(long ticks) =>
         ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
+    internal const string BaseListMentionsExactSql = """
+        SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+               s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
+        FROM type_base_edges e
+        JOIN symbols s ON s.id = e.derived_symbol_id
+        JOIN files f ON f.id = s.file_id
+        WHERE e.base_name = $n AND e.base_arity = $arity
+          AND e.derived_symbol_id > $after
+          AND s.kind IN ('class','struct','record','record_struct','interface')
+        ORDER BY e.derived_symbol_id
+        LIMIT $lim
+        """;
+
+    private const string BaseListMentionsAnyAritySql = """
+        SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+               s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
+        FROM (
+            SELECT DISTINCT derived_symbol_id
+            FROM type_base_edges
+            WHERE base_name = $n AND derived_symbol_id > $after
+        ) e
+        JOIN symbols s ON s.id = e.derived_symbol_id
+        JOIN files f ON f.id = s.file_id
+        WHERE s.kind IN ('class','struct','record','record_struct','interface')
+        ORDER BY e.derived_symbol_id
+        LIMIT $lim
+        """;
 
     /// <summary>All type declarations (interfaces INCLUDED — unlike the heuristic
     /// ImplementationCandidates, which serves a tool that only lists instantiable-ish kinds)
@@ -1567,32 +1542,25 @@ public sealed partial class IndexQueries : IDisposable
         ImplementationClosureAccumulator? attribution = null)
     {
         if (string.IsNullOrEmpty(name) || cap <= 0) return new();
-        string esc = EscapeLike(name);
         var matches = new List<SymbolHit>();
-        int offset = 0;
+        long afterSymbolId = 0;
         const int page = 512;
         while (matches.Count < cap)
         {
             cancellationToken.ThrowIfCancellationRequested();
             List<SymbolHit> rows;
+            int pageLimit = Math.Min(page, cap - matches.Count);
             long dbStarted = attribution is null
                 ? 0
                 : System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
-                rows = Query(
-                    """
-                    SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                           s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key
-                    FROM symbols s JOIN files f ON f.id = s.file_id
-                    WHERE s.kind IN ('class','struct','record','record_struct','interface')
-                      AND s.name <> $n
-                      AND s.signature LIKE $pat ESCAPE '\'
-                    ORDER BY s.id
-                    LIMIT $lim OFFSET $off
-                    """,
-                    ReadSymbol,
-                    ("$n", name), ("$pat", $"%: %{esc}%"), ("$lim", page), ("$off", offset));
+                rows = targetArity is { } arity
+                    ? Query(BaseListMentionsExactSql, ReadSymbol,
+                        ("$n", name), ("$arity", arity),
+                        ("$after", afterSymbolId), ("$lim", pageLimit))
+                    : Query(BaseListMentionsAnyAritySql, ReadSymbol,
+                        ("$n", name), ("$after", afterSymbolId), ("$lim", pageLimit));
             }
             finally
             {
@@ -1604,38 +1572,17 @@ public sealed partial class IndexQueries : IDisposable
                 }
             }
             if (attribution is not null) attribution.RowsReturned += rows.Count;
-
-            long filterStarted = attribution is null
-                ? 0
-                : System.Diagnostics.Stopwatch.GetTimestamp();
-            try
-            {
-                foreach (SymbolHit hit in rows)
-                {
-                    if (BaseListContainsIdentity(hit.Signature, name, targetArity))
-                    {
-                        matches.Add(hit);
-                        if (matches.Count == cap) break;
-                    }
-                }
-            }
-            finally
-            {
-                if (attribution is not null)
-                {
-                    attribution.ManagedFilterTicks +=
-                        System.Diagnostics.Stopwatch.GetTimestamp() - filterStarted;
-                }
-            }
-            if (rows.Count < page) break;
-            offset += rows.Count;
+            if (rows.Count == 0) break;
+            matches.AddRange(rows);
+            afterSymbolId = rows[^1].Id;
+            if (rows.Count < pageLimit) break;
         }
         return matches;
     }
 
     /// <summary>
-    /// Every project containing a type whose base list names <paramref name="name"/> as a whole
-    /// identifier token. Semantic cluster discovery must enumerate projects before applying its
+    /// Every project containing a type whose direct base-list head has the simple identity
+    /// <paramref name="name"/>. Semantic cluster discovery must enumerate projects before applying its
     /// caller-selected project budget; a symbol-hit cap here would silently make maxProjects lie.
     /// </summary>
     public List<string> ImplementationCandidateProjects(
@@ -1643,7 +1590,6 @@ public sealed partial class IndexQueries : IDisposable
         bool includeGenerated = true, bool includeTests = true)
     {
         if (string.IsNullOrEmpty(name)) return new();
-        string esc = EscapeLike(name);
         var projects = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         long afterSymbolId = 0;
@@ -1654,15 +1600,19 @@ public sealed partial class IndexQueries : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             var batch = QueryCoreCancellable(snapshot,
                 """
-                SELECT DISTINCT c.id, c.signature, p.name, f.is_generated, p.is_test
+                WITH matching_symbols AS (
+                    SELECT DISTINCT e.derived_symbol_id AS id, s.file_id
+                    FROM type_base_edges e
+                    JOIN symbols s ON s.id = e.derived_symbol_id
+                    WHERE e.base_name = $n
+                      AND s.kind IN ('class','struct','record','record_struct')
+                )
+                SELECT DISTINCT c.id, p.name, f.is_generated, p.is_test
                 FROM (
-                    SELECT s.id, s.file_id, s.signature
-                    FROM symbols s
-                    WHERE s.kind IN ('class','struct','record','record_struct')
-                      AND s.name <> $n
-                      AND s.signature LIKE $pat ESCAPE '\'
-                      AND s.id > $after
-                    ORDER BY s.id
+                    SELECT id, file_id
+                    FROM matching_symbols
+                    WHERE id > $after
+                    ORDER BY id
                     LIMIT $batch
                 ) c
                 JOIN files f ON f.id = c.file_id
@@ -1670,12 +1620,12 @@ public sealed partial class IndexQueries : IDisposable
                 LEFT JOIN projects p ON p.id = ci.project_id
                 ORDER BY c.id, p.name COLLATE NOCASE
                 """,
-                r => (Id: r.GetInt64(0), Signature: r.GetString(1),
-                    Project: r.IsDBNull(2) ? null : r.GetString(2),
-                    IsGenerated: r.GetBoolean(3),
-                    IsTest: r.IsDBNull(4) ? (bool?)null : r.GetBoolean(4)),
+                r => (Id: r.GetInt64(0),
+                    Project: r.IsDBNull(1) ? null : r.GetString(1),
+                    IsGenerated: r.GetBoolean(2),
+                    IsTest: r.IsDBNull(3) ? (bool?)null : r.GetBoolean(3)),
                 cancellationToken,
-                ("$n", name), ("$pat", $"%: %{esc}%"), ("$after", afterSymbolId),
+                ("$n", name), ("$after", afterSymbolId),
                 ("$batch", CandidateDiscoveryBatchSize));
             if (batch.Count == 0) break;
             afterSymbolId = batch[^1].Id;
@@ -1683,9 +1633,7 @@ public sealed partial class IndexQueries : IDisposable
             {
                 if (!includeGenerated && candidate.IsGenerated) continue;
                 if (!includeTests && candidate.IsTest is true) continue;
-                if (candidate.Project is not null &&
-                    ContainsWholeToken(candidate.Signature, name) &&
-                    seen.Add(candidate.Project))
+                if (candidate.Project is not null && seen.Add(candidate.Project))
                 {
                     projects.Add(candidate.Project);
                 }

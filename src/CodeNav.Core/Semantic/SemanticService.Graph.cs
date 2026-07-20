@@ -272,11 +272,13 @@ public sealed partial class SemanticService
             planning.ImplementationClosure = new ImplementationClosureStatsBox();
             var swClosure = System.Diagnostics.Stopwatch.StartNew();
             var typeClosure = indexSnapshot.Queries.TransitiveImplementationClosure(
-                typeA.Name, typeA.Arity, out bool closureCapped, cancellationToken: cts.Token,
+                typeA.Name, typeA.Arity, out bool closureCapped,
+                maxTypes: Math.Max(1, TestOnlyImplementationClosureMaxTypes ?? 2000),
+                cancellationToken: cts.Token,
                 statsBox: planning.ImplementationClosure);
             long closureMs = swClosure.ElapsedMilliseconds;
             planning.SeedDiscoveryMode = closureCapped
-                ? "fallbackCandidates"
+                ? "dependentClosure"
                 : "closureOwners";
             planning.SeedInputs = closureCapped ? null : typeClosure.Count;
             List<string> implementerSeeds;
@@ -284,7 +286,7 @@ public sealed partial class SemanticService
             try
             {
                 implementerSeeds = closureCapped
-                    ? indexSnapshot.Queries.ImplementationCandidateProjects(symbolA.Name, cts.Token)
+                    ? CompleteDependentSeeds(indexSnapshot.Queries, owningProject)
                     : ClosureSeedProjects(indexSnapshot.Queries, typeClosure);
             }
             finally

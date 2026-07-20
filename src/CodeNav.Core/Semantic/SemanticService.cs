@@ -103,6 +103,11 @@ public sealed partial class SemanticService : IDisposable
     /// the cold branch). Never set in production; instance-scoped.</summary>
     internal Action<string>? TestOnlyPhaseHook;
 
+    /// <summary>TEST SEAM (epuc.3): lowers the normally defensive 2,000-row implementation
+    /// closure cap so the semantic fallback and its project-coverage contract can be exercised
+    /// with a tiny deterministic graph. Never set in production; instance-scoped.</summary>
+    internal int? TestOnlyImplementationClosureMaxTypes;
+
     public bool FrameworkRefsAvailable
     {
         get
@@ -635,18 +640,20 @@ public sealed partial class SemanticService : IDisposable
                 planning.ImplementationClosure = new ImplementationClosureStatsBox();
                 var swClosure = System.Diagnostics.Stopwatch.StartNew();
                 typeClosure = indexSnapshot.Queries.TransitiveImplementationClosure(
-                    typeA.Name, typeA.Arity, out closureCapped, cancellationToken: cts.Token,
+                    typeA.Name, typeA.Arity, out closureCapped,
+                    maxTypes: Math.Max(1, TestOnlyImplementationClosureMaxTypes ?? 2000),
+                    cancellationToken: cts.Token,
                     statsBox: planning.ImplementationClosure);
                 closureMs = swClosure.ElapsedMilliseconds;
                 planning.SeedDiscoveryMode = closureCapped
-                    ? "fallbackCandidates"
+                    ? "dependentClosure"
                     : "closureOwners";
                 planning.SeedInputs = closureCapped ? null : typeClosure.Count;
                 var swSeeds = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
                     implementerSeeds = closureCapped
-                        ? indexSnapshot.Queries.ImplementationCandidateProjects(symbolA.Name, cts.Token)
+                        ? CompleteDependentSeeds(indexSnapshot.Queries, owningProject)
                         : ClosureSeedProjects(indexSnapshot.Queries, typeClosure);
                 }
                 finally
@@ -1421,6 +1428,15 @@ public sealed partial class SemanticService : IDisposable
         }
         return seeds;
     }
+
+    /// <summary>A capped syntactic closure cannot prove which transitive implementer projects
+    /// matter. Seed every graph-valid dependent so the compiler fallback is genuinely exhaustive.
+    /// A positive maxProjects budget is applied later by LoadScanSetAndResolveAsync, where omitted
+    /// dependents become explicit skipped-candidate coverage instead of a false exact answer.</summary>
+    private static List<string> CompleteDependentSeeds(IndexQueries queries, string owningProject) =>
+        queries.DependentClosure(owningProject)
+            .OrderBy(project => project, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     /// <summary>The candidate's DIRECT bases only - its immediate BaseType and its
     /// syntactically declared interfaces. Direct bases always resolve (the direct project

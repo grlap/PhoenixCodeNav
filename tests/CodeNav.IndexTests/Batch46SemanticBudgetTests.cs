@@ -89,7 +89,8 @@ public class Batch46SemanticBudgetTests
                             EndLine: 1,
                             IsPartial: false,
                             Arity: 0,
-                            AttrMarkers: null)
+                            AttrMarkers: null,
+                            BaseTypes: [new BaseTypeIdentity("IProbe", 0)])
                     ]);
                     store.InsertCompileItem(transaction, projectId, fileId);
                 }

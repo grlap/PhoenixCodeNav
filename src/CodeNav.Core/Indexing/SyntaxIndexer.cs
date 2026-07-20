@@ -5,6 +5,8 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace CodeNav.Core.Indexing;
 
+public readonly record struct BaseTypeIdentity(string Name, int Arity);
+
 public sealed record SymbolRow(
     int OrdinalInFile,
     int ParentOrdinal,          // -1 for top-level
@@ -25,7 +27,8 @@ public sealed record SymbolRow(
     string? Accessors = null,   // "get=public;set=private" — ONLY when an accessor's accessibility
                                 // differs from the member's own (hu7, field twice-asked: the private
                                 // on a setter was invisible); null when uniform or accessor-less
-    string? DeclarationKey = null);
+    string? DeclarationKey = null,
+    IReadOnlyList<BaseTypeIdentity>? BaseTypes = null); // v18: direct syntax heads before signature truncation
 
 public sealed record ParsedCsFile(
     string RelPath,
@@ -96,12 +99,14 @@ public static class SyntaxIndexer
                             string? attrs = AttrMarkers(typeDecl.AttributeLists, ref hasTestAttrs);
                             string baseList = typeDecl.BaseList is { } bl ? $" : {Compact(bl.Types.ToString())}" : "";
                             string sig = $"{kind} {name}{TypeParams(typeDecl)}{baseList}";
+                            IReadOnlyList<BaseTypeIdentity>? baseTypes =
+                                BaseTypeIdentities(typeDecl.BaseList);
 
                             int ord = Add(symbols, text, member, parentOrdinal, kind, name, ns, container,
                                 // A nested type's default follows its container: public inside an interface
                                 // (memberDefault), private inside a class/struct/record; internal at top level.
                                 sig, Access(typeDecl.Modifiers, defaultAcc: container is null ? "internal" : memberDefault),
-                                partial, arity, attrs);
+                                partial, arity, attrs, baseTypes);
 
                             string childContainer = container is null ? name : $"{container}.{name}";
                             // Interface members are implicitly public; other type members default to private.
@@ -323,10 +328,58 @@ public static class SyntaxIndexer
         _ => Enumerable.Empty<SyntaxNode>(),
     };
 
+    /// <summary>Persists the right-most simple identity of every direct base-list entry. The
+    /// closure intentionally over-includes same-named types across namespaces and lets Roslyn
+    /// verify them later, so qualification is not identity here. Extraction happens from the
+    /// original syntax before the display signature's 400-character cap; type arguments and
+    /// where-clause constraints are deliberately not separate edges.</summary>
+    private static IReadOnlyList<BaseTypeIdentity>? BaseTypeIdentities(BaseListSyntax? baseList)
+    {
+        if (baseList is null) return null;
+        var result = new List<BaseTypeIdentity>(baseList.Types.Count);
+        var seen = new HashSet<BaseTypeIdentity>(BaseTypeIdentityComparer.Instance);
+        foreach (BaseTypeSyntax baseType in baseList.Types)
+        {
+            if (BaseTypeHead(baseType.Type) is not { } identity || !seen.Add(identity)) continue;
+            result.Add(identity);
+        }
+        return result.Count == 0 ? null : result;
+    }
+
+    internal static BaseTypeIdentity? BaseTypeHead(TypeSyntax type)
+    {
+        SimpleNameSyntax? simpleName = type switch
+        {
+            QualifiedNameSyntax qualified => qualified.Right,
+            AliasQualifiedNameSyntax aliased => aliased.Name,
+            SimpleNameSyntax simple => simple,
+            _ => type.DescendantNodesAndSelf().OfType<SimpleNameSyntax>().LastOrDefault(),
+        };
+        if (simpleName is null) return null;
+        return new BaseTypeIdentity(
+            simpleName.Identifier.ValueText,
+            simpleName is GenericNameSyntax generic
+                ? generic.TypeArgumentList.Arguments.Count
+                : 0);
+    }
+
+    private sealed class BaseTypeIdentityComparer : IEqualityComparer<BaseTypeIdentity>
+    {
+        public static BaseTypeIdentityComparer Instance { get; } = new();
+
+        public bool Equals(BaseTypeIdentity x, BaseTypeIdentity y) =>
+            x.Arity == y.Arity &&
+            string.Equals(x.Name, y.Name, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode(BaseTypeIdentity value) =>
+            HashCode.Combine(StringComparer.OrdinalIgnoreCase.GetHashCode(value.Name), value.Arity);
+    }
+
     private static int Add(
         List<SymbolRow> symbols, SourceText text, SyntaxNode node, int parentOrdinal,
         string kind, string name, string? ns, string? container, string signature,
-        string accessibility, bool isPartial, int arity, string? attrs)
+        string accessibility, bool isPartial, int arity, string? attrs,
+        IReadOnlyList<BaseTypeIdentity>? baseTypes = null)
     {
         var span = text.Lines.GetLinePositionSpan(node.Span);
         int ordinal = symbols.Count;
@@ -340,7 +393,7 @@ public static class SyntaxIndexer
             accessibility,
             span.Start.Line + 1, span.End.Line + 1,
             isPartial, arity, attrs, mods, accessors,
-            DeclarationKey(node, kind, name, arity)));
+            DeclarationKey(node, kind, name, arity), baseTypes));
         return ordinal;
     }
 

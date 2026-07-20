@@ -45,10 +45,10 @@ resolution:
 
 ```json
 "planning":{
-  "implementationClosure":{"totalMs":5534.2,"dbQueryAndMapMs":5410.8,
-    "managedFilterMs":91.3,"otherMs":32.1,"dbQueries":147,"rowsReturned":826,
-    "frontierExpansions":147,"matches":146,"capped":false},
-  "seedDiscovery":{"mode":"closureOwners","totalMs":211.4,"inputs":146,"projects":19},
+  "implementationClosure":{"totalMs":12.4,"dbQueryAndMapMs":8.1,
+    "managedFilterMs":0,"otherMs":4.3,"dbQueries":9,"rowsReturned":8,
+    "frontierExpansions":9,"matches":8,"capped":false},
+  "seedDiscovery":{"mode":"closureOwners","totalMs":11.4,"inputs":8,"projects":19},
   "scanSet":{"totalMs":83.6,"dependentGraphMs":15.1,"candidateDiscoveryMs":42.7,
     "dependencyGraphMs":13.2,"otherMs":12.6,"seedProjects":19,
     "candidateProjects":37,"selectedProjects":37,"scanProjects":41,
@@ -76,9 +76,9 @@ load ran).
 | `planning` | pre-load closure, seed, and scan-set attribution for `implementations`/`type_hierarchy`; omitted before type resolution and on tools that do not run the transitive implementation closure |
 | `planning.implementationClosure.totalMs` | complete transitive implementation-closure wall time |
 | `planning.implementationClosure.dbQueryAndMapMs` | SQLite command execution plus returned-row materialization; this is deliberately not labeled pure engine time |
-| `planning.implementationClosure.managedFilterMs/otherMs` | exact whole-token/arity filtering, then the remaining frontier/deduplication bookkeeping |
+| `planning.implementationClosure.managedFilterMs/otherMs` | compatibility filter bucket (zero on schema v18's exact normalized edge lookup), then the remaining frontier/deduplication bookkeeping |
 | `planning.implementationClosure.dbQueries/rowsReturned/frontierExpansions/matches/capped` | bounded closure work volume and completeness; no names or paths |
-| `planning.seedDiscovery` | maps closure rows to declaring projects (`closureOwners`) or records the capped/direct candidate fallback; `inputs` is present only for closure-owner mapping |
+| `planning.seedDiscovery` | maps closure rows to declaring projects (`closureOwners`), expands a capped walk to the complete graph-valid dependent set (`dependentClosure`), or records direct candidate discovery (`directCandidates`); `inputs` is present only for closure-owner mapping |
 | `planning.scanSet.totalMs` | complete scan-set planning wall before `EnsureLoadedAsync` |
 | `planning.scanSet.dependentGraphMs/candidateDiscoveryMs/dependencyGraphMs/otherMs` | dependent-graph query+walk, text-candidate discovery, mandatory dependency-graph query+walk, and remaining selection/set bookkeeping |
 | `planning.scanSet.*Projects` | privacy-safe input/output counts for seed, candidate, selected, final scan, skipped, out-of-graph, and unsupported-language project sets |
@@ -109,10 +109,14 @@ Known v1 attribution caveat: Roslyn compiles lazily inside the find stage, so on
 the find/query time (outside the load blocks) includes compilation of the scan set; the
 cold-vs-warm delta attributes it numerically. Splitting compile out is the flagged v2 item.
 
-`dbQueryAndMapMs` is the decision field for `epuc.3`: if it dominates closure `totalMs`,
-optimize or cache the SQLite-backed closure lookup; if `managedFilterMs` dominates, optimize
-the exact syntax/arity filter; if neither dominates, use the reported query/frontier/row counts
-to target repeated BFS or seed/scan planning. Measure writer and follower processes separately.
+`dbQueryAndMapMs` was the decision field for `epuc.3`. Field captures showed roughly
+600–700 ms per frontier query even when only 5–322 rows were returned, and an identical warm
+re-hit repeated the same cost. Schema v18 therefore replaces the leading-wildcard symbol scan
+and per-row signature reparse with an indexed normalized edge lookup. On v18,
+`managedFilterMs` is retained for telemetry compatibility but is always zero; use
+`dbQueryAndMapMs`, query/frontier counts, and the seed/scan split to verify the closure has
+collapsed and to locate any remaining planning cost. Measure writer and follower processes
+separately.
 
 Auxiliary records: `telemetry_dropped` (backpressure dropped N oldest queued records — the
 channel never blocks a request) and `telemetry_truncated` (file cap reached).

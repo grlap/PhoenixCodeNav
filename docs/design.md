@@ -119,7 +119,8 @@ Every response carries a `confidence`:
 **Storage** is SQLite with FTS5 (`IndexStore`). Schema: `files` (path, hash, generated/test
 flags, freshness), `file_contents` + an external-content `fts_content` virtual table,
 `projects` / `project_refs` / `package_refs` / `compile_items`, `solutions` /
-`solution_projects`, `symbols` (kind, name facets, spans, parent links), and `meta`
+`solution_projects`, `symbols` (kind, name facets, spans, parent links), `type_base_edges`
+(syntax-derived direct base name/arity keyed to the derived declaration and deletion file), and `meta`
 (index version, timestamps, coverage). On Windows, WAL mode is exposed as one writer process plus
 many read-only follower processes. Follower index-backed evidence uses committed snapshots and
 followers never open a writer connection; explicitly live source/Git and compiler-backed semantic
@@ -160,6 +161,14 @@ identity. `implementations` and `type_hierarchy` select generic declarations by 
 syntax arity (explicit `arity`, or a `search_symbol` `symbolId`). A bare exact name spanning
 multiple arities is refused rather than merging generic and non-generic symbols. FTS text
 matches remain candidate evidence only and cannot accept, reject, or merge symbol identities.
+
+Direct C# base-list entries are normalized at syntax-index time into `type_base_edges` using
+the right-most simple name and generic arity. Extraction happens before the 400-character
+display-signature cap, so long declarations cannot disappear from implementation discovery.
+Qualification is deliberately not stored as identity: same-name namespace collisions remain
+candidate over-inclusion and are pruned by the compiler-backed verification step. Exact closure
+lookups use the table's `(base_name, base_arity, derived_symbol_id)` primary key; incremental
+refresh deletes edges by `file_id` in the same transaction as the replaced symbol rows.
 
 ## The semantic layer — MSBuild-free, lazy, snapshot-pinned
 

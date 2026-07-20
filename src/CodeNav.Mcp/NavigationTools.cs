@@ -110,6 +110,7 @@ public sealed partial class NavigationTools
                 new { id = "semantic-parallel-cold-start-loader", summary = "v0.12.9 C# semantic clusters prepare immutable project inputs concurrently through one bounded process scheduler, then commit one dependency-ordered Roslyn solution while preserving reload, cycle, and source-over-binary authority" },
                 new { id = "semantic-candidate-completeness-over-accounting", summary = "v0.12.12 aggregate semantic input accounting never omits an already-selected candidate project; bounded file capture, preparation concurrency, deadlines, and resident-count eviction remain the safety boundaries" },
                 new { id = "semantic-planning-attribution", summary = "v0.12.13 implementations/type_hierarchy semanticOp telemetry splits transitive-closure database query+row mapping, managed identity filtering, frontier bookkeeping, seed discovery, and scan-set planning with privacy-safe work counts and writer/follower accessMode" },
+                new { id = "indexed-base-type-edges", summary = "v0.12.14 schema v18 persists syntax-derived simple-name/arity base-list edges before display-signature truncation; implementations/type_hierarchy use indexed lookups instead of repeated leading-wildcard symbol scans while semantic verification preserves same-name collision honesty" },
                 new { id = "search-symbol-malformed-query", summary = "v0.12.10 search_symbol rejects ToolSearch-style select: routing prefixes with malformed_query instead of returning a clean empty result; valid C# qualification and generic punctuation remain searchable" },
                 new { id = "index-follower-liveness-fail-closed", summary = "v0.12.11 follower liveness distinguishes mutex contention from coordination failure; only contention proves a live writer, while an unverified probe publishes an explicit unavailable state" },
                 new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry the same serialized request after bounded 100/250/1000 ms delays" },
@@ -1536,8 +1537,8 @@ public sealed partial class NavigationTools
                   ?? "no_semantic_implementers";
         }
 
-        // Heuristic fallback: types whose base list textually mentions the name — a naming
-        // guess, not a compiler fact, so it is labeled confidence 'heuristic'.
+        // Heuristic fallback: types with a normalized direct base-head edge for the name — a
+        // naming guess, not a compiler fact, so it is labeled confidence 'heuristic'.
         using var q = _manager.OpenQueries();
         string lookupName = name ?? hint ?? "";
         SymbolHit? targetSym = null;
@@ -1584,7 +1585,8 @@ public sealed partial class NavigationTools
                 // Scope the member lookup to the implementer types by (namespace, type name) IDENTITY —
                 // so the query's cap bounds only genuine implementer members (not every same-simple-named
                 // type across all namespaces) and an unrelated type can't sneak in. ImplementationCandidates
-                // now whole-token-matches the base list, so a superstring interface (IFooBar) doesn't scope in.
+                // now matches normalized direct base-head identities, so a superstring interface
+                // (IFooBar) doesn't scope in.
                 var typeKeys = q.ImplementationCandidates(declType, 100)
                     .Select(t => (t.Ns ?? "", t.Name))
                     .ToList();

@@ -56,7 +56,7 @@ public sealed class IndexStore : IDisposable
     // Plain (unsynchronized) tick counters: every mutation happens on the single writer
     // thread that owns _write — the same invariant the store itself already relies on.
     // Read via WriterTimingsMs after the build completes.
-    private long _tFileRows, _tContentRows, _tFtsRows, _tSymbolRows,
+    private long _tFileRows, _tContentRows, _tFtsRows, _tSymbolRows, _tBaseEdgeRows,
                  _tFtsOptimize, _tAnalyze, _tCheckpoint;
 
     /// <summary>lf4p: where the single writer's time went, in milliseconds — the measurement
@@ -64,9 +64,10 @@ public sealed class IndexStore : IDisposable
     /// b-tree work dominates the build's critical path. Statement-scoped stopwatches cost
     /// tens of nanoseconds against millisecond-scale SQLite work.</summary>
     public (double FileRows, double ContentRows, double FtsRows, double SymbolRows,
+            double BaseEdgeRows,
             double FtsOptimize, double Analyze, double Checkpoint) WriterTimingsMs =>
         (ToMs(_tFileRows), ToMs(_tContentRows), ToMs(_tFtsRows), ToMs(_tSymbolRows),
-         ToMs(_tFtsOptimize), ToMs(_tAnalyze), ToMs(_tCheckpoint));
+         ToMs(_tBaseEdgeRows), ToMs(_tFtsOptimize), ToMs(_tAnalyze), ToMs(_tCheckpoint));
 
     private static double ToMs(long ticks) =>
         ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
@@ -215,6 +216,15 @@ public sealed class IndexStore : IDisposable
             CREATE INDEX idx_symbols_file ON symbols(file_id, start_line);
             CREATE INDEX idx_symbols_name ON symbols(name COLLATE NOCASE);
             CREATE INDEX idx_symbols_kind ON symbols(kind, name COLLATE NOCASE);
+
+            CREATE TABLE type_base_edges(
+              base_name TEXT COLLATE NOCASE NOT NULL,
+              base_arity INTEGER NOT NULL CHECK(base_arity >= 0),
+              derived_symbol_id INTEGER NOT NULL,
+              file_id INTEGER NOT NULL,
+              PRIMARY KEY(base_name, base_arity, derived_symbol_id)
+            ) WITHOUT ROWID;
+            CREATE INDEX idx_type_base_edges_file ON type_base_edges(file_id);
             """);
     }
 
@@ -313,6 +323,7 @@ public sealed class IndexStore : IDisposable
     private long _nextSymbolId = -1;
     private SqliteCommand? _symbolChunkCmd;
     private SqliteCommand? _symbolSingleCmd;
+    private SqliteCommand? _baseEdgeInsertCmd;
 
     /// <summary>Review (lf4p): runs at store OPEN, outside any transaction — the first version
     /// read MAX(id) lazily UNDER the caller's tx, which observes that tx's own uncommitted
@@ -420,7 +431,38 @@ public sealed class IndexStore : IDisposable
                 _symbolSingleCmd.ExecuteNonQuery();
             }
         }
-        _tSymbolRows += System.Diagnostics.Stopwatch.GetTimestamp() - tSym0; // lf4p
+        long tEdges = System.Diagnostics.Stopwatch.GetTimestamp();
+        _tSymbolRows += tEdges - tSym0; // lf4p
+
+        foreach (SymbolRow row in rows)
+        {
+            if (row.BaseTypes is not { Count: > 0 }) continue;
+            _baseEdgeInsertCmd ??= BuildBaseEdgeInsert();
+            _baseEdgeInsertCmd.Transaction = tx;
+            foreach (BaseTypeIdentity baseType in row.BaseTypes)
+            {
+                _baseEdgeInsertCmd.Parameters[0].Value = baseType.Name;
+                _baseEdgeInsertCmd.Parameters[1].Value = baseType.Arity;
+                _baseEdgeInsertCmd.Parameters[2].Value = ordinalToId[row.OrdinalInFile];
+                _baseEdgeInsertCmd.Parameters[3].Value = fileId;
+                _baseEdgeInsertCmd.ExecuteNonQuery();
+            }
+        }
+        _tBaseEdgeRows += System.Diagnostics.Stopwatch.GetTimestamp() - tEdges;
+    }
+
+    private SqliteCommand BuildBaseEdgeInsert()
+    {
+        var cmd = _write.CreateCommand();
+        cmd.CommandText = """
+            INSERT INTO type_base_edges(base_name, base_arity, derived_symbol_id, file_id)
+            VALUES($name, $arity, $symbol, $file)
+            """;
+        cmd.Parameters.Add("$name", SqliteType.Text);
+        cmd.Parameters.Add("$arity", SqliteType.Integer);
+        cmd.Parameters.Add("$symbol", SqliteType.Integer);
+        cmd.Parameters.Add("$file", SqliteType.Integer);
+        return cmd;
     }
 
     public long InsertProject(SqliteTransaction tx, Discovery.ParsedProject p)
@@ -635,8 +677,14 @@ public sealed class IndexStore : IDisposable
         ExecTx(tx, "INSERT INTO fts_content(rowid, content) VALUES($id, $c)", ("$id", fileId), ("$c", newContent));
     }
 
-    public void DeleteSymbolsForFile(SqliteTransaction tx, long fileId) =>
+    /// <summary>Deletes the normalized base edges before their symbol rows in the same
+    /// transaction. Symbol ids can be reused only after this helper removes the old edges, so a
+    /// refreshed declaration can never inherit another declaration's base identities.</summary>
+    public void DeleteSymbolsForFile(SqliteTransaction tx, long fileId)
+    {
+        ExecTx(tx, "DELETE FROM type_base_edges WHERE file_id=$id", ("$id", fileId));
         ExecTx(tx, "DELETE FROM symbols WHERE file_id=$id", ("$id", fileId));
+    }
 
     public void DeleteFileCascade(SqliteTransaction tx, long fileId, string? oldContent)
     {
@@ -646,7 +694,7 @@ public sealed class IndexStore : IDisposable
                 ("$id", fileId), ("$old", oldContent));
         }
         ExecTx(tx, "DELETE FROM file_contents WHERE file_id=$id", ("$id", fileId));
-        ExecTx(tx, "DELETE FROM symbols WHERE file_id=$id", ("$id", fileId));
+        DeleteSymbolsForFile(tx, fileId);
         ExecTx(tx, "DELETE FROM compile_items WHERE file_id=$id", ("$id", fileId));
         ExecTx(tx, "DELETE FROM files WHERE id=$id", ("$id", fileId));
     }
@@ -768,6 +816,7 @@ public sealed class IndexStore : IDisposable
     {
         _symbolChunkCmd?.Dispose();  // lf4p: cached prepared inserts die with their connection
         _symbolSingleCmd?.Dispose();
+        _baseEdgeInsertCmd?.Dispose();
         _fileInsertCmd?.Dispose();
         _write.Dispose();
     }

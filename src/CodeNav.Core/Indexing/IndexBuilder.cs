@@ -87,8 +87,10 @@ public static class IndexBuilder
     /// v16: arbitrary workspace .props/.targets files are persisted as config inputs so cold builds
     /// match delta refresh classification and pinned F# project evaluation can resolve local props.
     /// v17: incomplete-source freshness metadata and fail-closed bounded capture prevent lossy
-    /// builds or refreshes from publishing complete-looking source evidence.</summary>
-    public const string SchemaVersion = "17";
+    /// builds or refreshes from publishing complete-looking source evidence.
+    /// v18: normalized syntax-derived type_base_edges replace repeated leading-wildcard signature
+    /// scans and preserve base entries beyond the 400-character display-signature limit.</summary>
+    public const string SchemaVersion = "18";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null) =>
@@ -629,10 +631,12 @@ public static class IndexBuilder
         var wt = store.WriterTimingsMs;
         double commitMs = commitTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
         double writerTotal = wt.FileRows + wt.ContentRows + wt.FtsRows + wt.SymbolRows
+                             + wt.BaseEdgeRows
                              + wt.FtsOptimize + wt.Analyze + wt.Checkpoint + commitMs;
         progress?.Invoke(
             $"Writer split (lf4p): fts {wt.FtsRows / 1000:F1}s, content {wt.ContentRows / 1000:F1}s, " +
-            $"symbols {wt.SymbolRows / 1000:F1}s, files {wt.FileRows / 1000:F1}s, " +
+            $"symbols {wt.SymbolRows / 1000:F1}s, base-edges {wt.BaseEdgeRows / 1000:F1}s, " +
+            $"files {wt.FileRows / 1000:F1}s, " +
             $"commits {commitMs / 1000:F1}s, fts-optimize {wt.FtsOptimize / 1000:F1}s, " +
             $"analyze {wt.Analyze / 1000:F1}s, checkpoint {wt.Checkpoint / 1000:F1}s " +
             $"— writer statements total {writerTotal / 1000:F1}s");

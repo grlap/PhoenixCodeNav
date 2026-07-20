@@ -120,7 +120,7 @@ public class Batch57TransitiveImplementationsTests
                             closure.GetProperty("matches").GetInt32());
                 Assert.True(closure.GetProperty("frontierExpansions").GetInt32() > 0);
                 Assert.True(closure.GetProperty("dbQueryAndMapMs").GetDouble() >= 0);
-                Assert.True(closure.GetProperty("managedFilterMs").GetDouble() >= 0);
+                Assert.Equal(0, closure.GetProperty("managedFilterMs").GetDouble());
                 Assert.Equal("closureOwners",
                     planning.GetProperty("seedDiscovery").GetProperty("mode").GetString());
                 JsonElement scanSet = planning.GetProperty("scanSet");
@@ -132,6 +132,105 @@ public class Batch57TransitiveImplementationsTests
             finally { semantic.Dispose(); m.Dispose(); }
         }
         finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
+    }
+
+    [Fact]
+    public void CappedSemanticFallbackLoadsEveryTransitiveDependent()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-57-capped-fallback").FullName;
+        try
+        {
+            void Proj(string name, string? reference, string source)
+            {
+                string dir = Path.Combine(root, name);
+                Directory.CreateDirectory(dir);
+                string refItem = reference is null
+                    ? ""
+                    : $"""<ItemGroup><ProjectReference Include="../{reference}/{reference}.csproj" /></ItemGroup>""";
+                File.WriteAllText(Path.Combine(dir, $"{name}.csproj"),
+                    $"""
+                    <Project Sdk="Microsoft.NET.Sdk">
+                      <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                      {refItem}
+                    </Project>
+                    """);
+                File.WriteAllText(Path.Combine(dir, $"{name}.cs"), source);
+            }
+
+            Proj("P1", null,
+                "namespace Capped { public interface IRoot { } }");
+            Proj("P2", "P1",
+                "namespace Capped { public abstract class Intermediate : IRoot { } }");
+            Proj("P3", "P2",
+                "namespace Capped { public sealed class Leaf : Intermediate { } }");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using (var queries = new IndexQueries(dbPath))
+            {
+                List<SymbolHit> cappedClosure = queries.TransitiveImplementationClosure(
+                    "IRoot", 0, out bool capped, maxTypes: 1);
+                Assert.True(capped);
+                Assert.Single(cappedClosure);
+                Assert.DoesNotContain("P3", queries.ImplementationCandidateProjects("IRoot"));
+                Assert.Contains("P3", queries.DependentClosure("P1"));
+            }
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000));
+            using (var probe = new SemanticService(manager))
+            {
+                if (!probe.FrameworkRefsAvailable) return;
+            }
+
+            JsonElement implementations = Invoke(tools => tools.Implementations(
+                name: "IRoot", maxProjects: 0, timeoutMs: 120_000));
+            Assert.False(implementations.TryGetProperty("partial", out JsonElement implementationsPartial) &&
+                         implementationsPartial.GetBoolean());
+            Assert.Contains(implementations.GetProperty("implementations").EnumerateArray(), item =>
+                item.GetProperty("symbol").GetProperty("display").GetString()!
+                    .Contains("Leaf", StringComparison.Ordinal));
+
+            JsonElement hierarchy = Invoke(tools => tools.TypeHierarchy(
+                name: "IRoot", maxProjects: 0, timeoutMs: 120_000));
+            Assert.False(hierarchy.TryGetProperty("partial", out JsonElement hierarchyPartial) &&
+                         hierarchyPartial.GetBoolean());
+            Assert.Contains(hierarchy.GetProperty("derivedOrImplementing").EnumerateArray(), item =>
+                item.GetProperty("display").GetString()!.Contains("Leaf", StringComparison.Ordinal));
+
+            // A deliberate project budget remains honest: the leaf is skipped, the answer is
+            // partial, and the omitted transitive dependent is named in coverage.
+            JsonElement bounded = Invoke(tools => tools.Implementations(
+                name: "IRoot", maxProjects: 1, timeoutMs: 120_000));
+            Assert.True(bounded.GetProperty("partial").GetBoolean());
+            Assert.StartsWith("candidate_cluster_bounded",
+                bounded.GetProperty("partialReason").GetString(), StringComparison.Ordinal);
+            Assert.Contains("P3", bounded.GetProperty("skippedCandidateProjects")
+                .EnumerateArray().Select(item => item.GetString()));
+
+            string telemetryLine = manager.Telemetry.Snapshot().Last(line =>
+                line.Contains("\"tool\":\"implementations\"", StringComparison.Ordinal));
+            using JsonDocument telemetry = JsonDocument.Parse(telemetryLine);
+            JsonElement planning = telemetry.RootElement.GetProperty("planning");
+            Assert.True(planning.GetProperty("implementationClosure")
+                .GetProperty("capped").GetBoolean());
+            Assert.Equal("dependentClosure",
+                planning.GetProperty("seedDiscovery").GetProperty("mode").GetString());
+
+            JsonElement Invoke(Func<NavigationTools, string> operation)
+            {
+                using var semantic = new SemanticService(manager)
+                {
+                    TestOnlyImplementationClosureMaxTypes = 1,
+                };
+                var tools = new NavigationTools(manager, semantic);
+                return SemanticRetry.ParseExactWithRetry(() => operation(tools));
+            }
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
     }
 
     [Fact]
@@ -167,7 +266,8 @@ public class Batch57TransitiveImplementationsTests
             using var q = new IndexQueries(dbPath, pinReadSnapshot: false,
                 beforeQueryForTest: sql =>
                 {
-                    if (sql.Contains("s.signature LIKE", StringComparison.Ordinal))
+                    if (sql.Contains("FROM type_base_edges e", StringComparison.Ordinal) &&
+                        sql.Contains("ORDER BY e.derived_symbol_id", StringComparison.Ordinal))
                         Thread.Sleep(5);
                 });
 
@@ -184,6 +284,7 @@ public class Batch57TransitiveImplementationsTests
             Assert.Equal(5, stats.FrontierExpansions);
             Assert.Equal(4, stats.Matches);
             Assert.False(stats.Capped);
+            Assert.Equal(0, stats.ManagedFilterMs);
             Assert.True(stats.DbQueryAndMapMs >= stats.DbQueries * 4.0,
                 $"injected query delay was not attributed: {stats.DbQueryAndMapMs}ms/{stats.DbQueries} queries");
             Assert.True(stats.TotalMs >= stats.DbQueryAndMapMs + stats.ManagedFilterMs,
