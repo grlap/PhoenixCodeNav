@@ -1,6 +1,6 @@
-# Semantic Operation Telemetry (epuc.1, epuc.3)
+# Semantic Operation Telemetry (epuc.1, epuc.3, epuc.4)
 
-Beads: `PhoenixCodeNav-epuc.1`, `PhoenixCodeNav-epuc.3` · Consumed by: [`../internal-operations-portal.md`](../internal-operations-portal.md) (x5ls, design-frozen)
+Beads: `PhoenixCodeNav-epuc.1`, `PhoenixCodeNav-epuc.3`, `PhoenixCodeNav-epuc.4` · Consumed by: [`../internal-operations-portal.md`](../internal-operations-portal.md) (x5ls, design-frozen)
 
 Phoenix writes one JSONL record per semantic operation to a bounded, privacy-safe,
 per-process file. This is the data layer the operations portal renders later; it is useful
@@ -41,7 +41,8 @@ process is alive).
 ```
 
 `implementations` and `type_hierarchy` add a privacy-safe planning block after type
-resolution:
+resolution. `references` emits the same `seedDiscovery`/`scanSet` shape (with
+`mode:"directCandidates"` for type targets) but no `implementationClosure`:
 
 ```json
 "planning":{
@@ -53,6 +54,17 @@ resolution:
     "dependencyGraphMs":13.2,"otherMs":12.6,"seedProjects":19,
     "candidateProjects":37,"selectedProjects":37,"scanProjects":41,
     "skippedProjects":0,"outOfGraphProjects":0,"unsupportedLanguageProjects":0}}
+```
+
+`references` also owns the post-resolution query split that field evidence identified as
+the remaining dominant wall:
+
+```json
+"queryStages":{"path":"symbol_finder","findReferencesMs":9234.1,
+  "postProcessMs":947.6,"syntaxRootLoadMs":621.4,"classificationMs":42.8,
+  "sampleTextMs":18.2,"postProcessOtherMs":265.2,"otherMs":186.3,
+  "referencedSymbols":4,"rawLocations":531,"sourceLocations":525,
+  "uniqueSyntaxTrees":194,"uniqueSites":525,"samplesRead":159}
 ```
 
 The numbers above illustrate the shape; they are not a benchmark baseline.
@@ -69,11 +81,11 @@ load ran).
 | `result` | `exact` (success) \| `degraded` (deadline died: see `reason`) \| `unresolved` (position/symbol didn't resolve; see `reason`) \| `error` |
 | `reason` | Stable primary cause, including `cluster_cold_load`, `semantic_timeout`, `project_load_failed`, `index_snapshot_unavailable`, symbol-resolution causes, or an exception type name |
 | `clusterLoadMs` | the op's LOAD+RESOLVE wall (all phases through symbol resolution) — restored after a field regression hid a 48s query behind load-only telemetry |
-| `queryMs` | the op's FIND wall (SymbolFinder/scan/count after resolution; includes lazy Roslyn compilation on cold ops — the v1 caveat below). Null when the op died during load |
+| `queryMs` | the op's FIND wall after scan-set planning/loading/resolution (SymbolFinder plus result processing; includes lazy Roslyn compilation on cold ops — the v1 caveat below). Null when the op died during load |
 | `cold` | present+true when phase 1 found zero projects already loaded — the workspace was cold before this op |
 | `ownerLoad` | stage split of phase 1: loading the owning project's dependency closure (all six tools) |
 | `scanLoad` | stage split of phase 2: loading the dependent scan set (`references`/`implementations`/`callers`/`type_hierarchy` only) |
-| `planning` | pre-load closure, seed, and scan-set attribution for `implementations`/`type_hierarchy`; omitted before type resolution and on tools that do not run the transitive implementation closure |
+| `planning` | pre-load seed and scan-set attribution for `references`/`implementations`/`type_hierarchy`, plus implementation closure for the latter two; omitted before the relevant planning runs |
 | `planning.implementationClosure.totalMs` | complete transitive implementation-closure wall time |
 | `planning.implementationClosure.dbQueryAndMapMs` | SQLite command execution plus returned-row materialization; this is deliberately not labeled pure engine time |
 | `planning.implementationClosure.managedFilterMs/otherMs` | compatibility filter bucket (zero on schema v18's exact normalized edge lookup), then the remaining frontier/deduplication bookkeeping |
@@ -82,6 +94,11 @@ load ran).
 | `planning.scanSet.totalMs` | complete scan-set planning wall before `EnsureLoadedAsync` |
 | `planning.scanSet.dependentGraphMs/candidateDiscoveryMs/dependencyGraphMs/otherMs` | dependent-graph query+walk, text-candidate discovery, mandatory dependency-graph query+walk, and remaining selection/set bookkeeping |
 | `planning.scanSet.*Projects` | privacy-safe input/output counts for seed, candidate, selected, final scan, skipped, out-of-graph, and unsupported-language project sets |
+| `queryStages` | `references` post-resolution attribution; emitted on exact/partial success and on post-load degraded/error records when query wall is available |
+| `queryStages.findReferencesMs/postProcessMs/otherMs` | Roslyn `SymbolFinder.FindReferencesAsync` wall, complete filtering/counting/sampling wall, and remaining response/coverage shaping residue; together explain `queryMs` subject to 0.1 ms rounding |
+| `queryStages.syntaxRootLoadMs/classificationMs/sampleTextMs/postProcessOtherMs` | nested subsets of `postProcessMs`: syntax-root fetches, usage-kind classification, sampled line fetches, and remaining filter/dedup/group bookkeeping |
+| `queryStages.referencedSymbols/rawLocations/sourceLocations` | returned Roslyn work volume before Phoenix filtering; scalar counts only |
+| `queryStages.uniqueSyntaxTrees/uniqueSites/samplesRead` | post-filter trees visited, deduplicated physical sites, and sample lines fetched; scalar counts only |
 | `*.gateWaitMs` | cumulative time queued for the brief plan/commit workspace-mutation sections |
 | `*.fingerprintMs` | warm-set freshness check |
 | `*.topoMs` | dependency-closure discovery (index queries + topo order) |
@@ -125,8 +142,9 @@ channel never blocks a request) and `telemetry_truncated` (file cap reached).
 
 No source code, no query arguments, no symbol names or payloads, no absolute or relative
 paths. Correlation ids are random per operation. Pinned by
-`Batch51TelemetryTests.SemanticOperationEmitsBoundedPrivacySafeTelemetry` and the planning
-canaries in `Batch57TransitiveImplementationsTests.DeepChainAndInterfaceHopImplementersAreAllFound`.
+`Batch51TelemetryTests.SemanticOperationEmitsBoundedPrivacySafeTelemetry`, its unguarded
+references query-stage wire-shape test, and the planning canaries in
+`Batch57TransitiveImplementationsTests.DeepChainAndInterfaceHopImplementersAreAllFound`.
 
 ## Guarantees
 

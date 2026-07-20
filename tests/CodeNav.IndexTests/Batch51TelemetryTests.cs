@@ -32,7 +32,7 @@ public class Batch51TelemetryTests
                 </Project>
                 """);
             File.WriteAllText(Path.Combine(proj, "Core.cs"),
-                "namespace S { public class Core { public void Ping() { } } }");
+                "namespace S { public class Core { public void Ping() { } } public class Use { public Core Value = new Core(); } }");
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var m = new IndexManager(root, dbPath);
@@ -44,9 +44,11 @@ public class Batch51TelemetryTests
                 if (!semantic.FrameworkRefsAvailable) return;
 
                 // One cold semantic op (retry rides transients, per the n7ly family).
+                var tools = new CodeNav.Mcp.NavigationTools(m, semantic);
                 _ = SemanticRetry.ParseExactWithRetry(() =>
-                    new CodeNav.Mcp.NavigationTools(m, semantic)
-                        .Definition(name: "Core", timeoutMs: 60000));
+                    tools.Definition(name: "Core", timeoutMs: 60000));
+                _ = SemanticRetry.ParseExactWithRetry(() =>
+                    tools.References(name: "Core", mode: "semantic", timeoutMs: 60000));
 
                 // (1) the record reached the file (drainer is async — bounded wait, no sleep-only).
                 string telemetryDir = Path.Combine(root, ".codenav", "telemetry");
@@ -57,8 +59,9 @@ public class Batch51TelemetryTests
                 Assert.True(WaitUntil(() =>
                     Directory.Exists(telemetryDir) &&
                     Directory.EnumerateFiles(telemetryDir, "phoenix-*.jsonl")
-                        .Any(f => ReadShared(f).Contains("\"semanticOp\"")), 10_000),
-                    "no semanticOp record reached the telemetry file");
+                        .Any(f => ReadShared(f).Contains("\"tool\":\"references\"") &&
+                                  ReadShared(f).Contains("\"queryStages\"")), 10_000),
+                    "no attributed references semanticOp record reached the telemetry file");
 
                 string content = ReadShared(
                     Directory.EnumerateFiles(telemetryDir, "phoenix-*.jsonl").First());
@@ -92,6 +95,36 @@ public class Batch51TelemetryTests
                 Assert.Contains("\"replanCount\":", exactLine);
                 Assert.Contains("\"totalElapsedMs\":", exactLine);
 
+                // epuc.4: references candidate/graph discovery belongs to clusterLoadMs and
+                // queryStages owns the post-resolution wall. The field sample that motivated this
+                // contract had queryMs=10.4s with no way to distinguish Roslyn finding from
+                // syntax-root/classification/sample work.
+                string referencesLine = content.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                    .First(l => l.Contains("\"result\":\"exact\"")
+                             && l.Contains("\"tool\":\"references\""));
+                using var referencesRecord = System.Text.Json.JsonDocument.Parse(referencesLine);
+                var referencesRoot = referencesRecord.RootElement;
+                var scanSet = referencesRoot.GetProperty("planning").GetProperty("scanSet");
+                Assert.True(scanSet.GetProperty("totalMs").GetDouble() >= 0);
+                Assert.True(scanSet.GetProperty("scanProjects").GetInt32() >= 1);
+
+                var queryStages = referencesRoot.GetProperty("queryStages");
+                Assert.Equal("symbol_finder", queryStages.GetProperty("path").GetString());
+                foreach (string field in new[]
+                         {
+                             "findReferencesMs", "postProcessMs", "syntaxRootLoadMs",
+                             "classificationMs", "sampleTextMs", "postProcessOtherMs", "otherMs",
+                         })
+                {
+                    Assert.True(queryStages.GetProperty(field).GetDouble() >= 0, field);
+                }
+                Assert.True(queryStages.GetProperty("referencedSymbols").GetInt32() >= 1);
+                Assert.True(queryStages.GetProperty("rawLocations").GetInt32() >= 1);
+                Assert.True(queryStages.GetProperty("sourceLocations").GetInt32() >= 1);
+                Assert.True(queryStages.GetProperty("uniqueSyntaxTrees").GetInt32() >= 1);
+                Assert.True(queryStages.GetProperty("uniqueSites").GetInt32() >= 1);
+                Assert.True(queryStages.GetProperty("samplesRead").GetInt32() >= 1);
+
                 // (2) privacy: no drive-rooted path may appear in any record —
                 // neither drive-letter (C:\\) nor UNC (\\\\server\\share) shaped.
                 foreach (string line in content.Split('\n', StringSplitOptions.RemoveEmptyEntries))
@@ -104,6 +137,47 @@ public class Batch51TelemetryTests
             finally { semantic.Dispose(); m.Dispose(); }
         }
         finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
+    }
+
+    [Fact]
+    public void ReferencesQueryStageShapeAttributesFinderAndPostProcessingWithoutSensitiveData()
+    {
+        // Unguarded contract coverage: the full semantic fixture above is skipped on machines
+        // without the pinned framework references, but the telemetry wire shape must never become
+        // latent there. Values make both residue buckets decisive.
+        var stats = new SemanticService.ReferenceQueryStats
+        {
+            FindReferencesMs = 100,
+            PostProcessMs = 50,
+            SyntaxRootLoadMs = 10,
+            ClassificationMs = 5,
+            SampleTextMs = 15,
+            ReferencedSymbols = 3,
+            RawLocations = 9,
+            SourceLocations = 8,
+            UniqueSyntaxTrees = 4,
+            UniqueSites = 7,
+            SamplesRead = 2,
+        };
+
+        string json = System.Text.Json.JsonSerializer.Serialize(stats.Shape(queryMs: 175));
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.Equal("symbol_finder", root.GetProperty("path").GetString());
+        Assert.Equal(100, root.GetProperty("findReferencesMs").GetDouble());
+        Assert.Equal(50, root.GetProperty("postProcessMs").GetDouble());
+        Assert.Equal(20, root.GetProperty("postProcessOtherMs").GetDouble());
+        Assert.Equal(25, root.GetProperty("otherMs").GetDouble());
+        Assert.Equal(3, root.GetProperty("referencedSymbols").GetInt32());
+        Assert.Equal(9, root.GetProperty("rawLocations").GetInt32());
+        Assert.Equal(8, root.GetProperty("sourceLocations").GetInt32());
+        Assert.Equal(4, root.GetProperty("uniqueSyntaxTrees").GetInt32());
+        Assert.Equal(7, root.GetProperty("uniqueSites").GetInt32());
+        Assert.Equal(2, root.GetProperty("samplesRead").GetInt32());
+        Assert.False(root.TryGetProperty("symbolName", out _));
+        Assert.False(root.TryGetProperty("workspacePath", out _));
+        Assert.False(root.TryGetProperty("sourceText", out _));
+        Assert.False(root.TryGetProperty("arguments", out _));
     }
 
     [Fact]

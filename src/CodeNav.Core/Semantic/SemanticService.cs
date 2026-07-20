@@ -161,6 +161,48 @@ public sealed partial class SemanticService : IDisposable
         public ScanPlanStatsBox ScanSet { get; } = new();
     }
 
+    /// <summary>Privacy-safe attribution for the post-resolution references query. Durations are
+    /// operation-local wall time; counters disclose work volume without symbol names, source, or
+    /// paths. Mutable so cancellation can publish the stages completed before the deadline.</summary>
+    internal sealed class ReferenceQueryStats
+    {
+        public double FindReferencesMs { get; set; }
+        public double PostProcessMs { get; set; }
+        public double SyntaxRootLoadMs { get; set; }
+        public double ClassificationMs { get; set; }
+        public double SampleTextMs { get; set; }
+        public int ReferencedSymbols { get; set; }
+        public int RawLocations { get; set; }
+        public int SourceLocations { get; set; }
+        public int UniqueSyntaxTrees { get; set; }
+        public int UniqueSites { get; set; }
+        public int SamplesRead { get; set; }
+
+        internal object Shape(double queryMs)
+        {
+            double postProcessOtherMs = Math.Max(0,
+                PostProcessMs - SyntaxRootLoadMs - ClassificationMs - SampleTextMs);
+            double otherMs = Math.Max(0, queryMs - FindReferencesMs - PostProcessMs);
+            return new
+            {
+                path = "symbol_finder",
+                findReferencesMs = Math.Round(FindReferencesMs, 1),
+                postProcessMs = Math.Round(PostProcessMs, 1),
+                syntaxRootLoadMs = Math.Round(SyntaxRootLoadMs, 1),
+                classificationMs = Math.Round(ClassificationMs, 1),
+                sampleTextMs = Math.Round(SampleTextMs, 1),
+                postProcessOtherMs = Math.Round(postProcessOtherMs, 1),
+                otherMs = Math.Round(otherMs, 1),
+                referencedSymbols = ReferencedSymbols,
+                rawLocations = RawLocations,
+                sourceLocations = SourceLocations,
+                uniqueSyntaxTrees = UniqueSyntaxTrees,
+                uniqueSites = UniqueSites,
+                samplesRead = SamplesRead,
+            };
+        }
+    }
+
     /// <summary>Emits one bounded telemetry record for a semantic operation — tool,
     /// outcome/reason, and the per-CALL stage stats of the loads this op itself ran (review F2:
     /// an earlier cut read an ambient last-load property, which let concurrent ops steal each
@@ -367,6 +409,8 @@ public sealed partial class SemanticService : IDisposable
         long clusterLoadMs = 0;
         var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
         var scanBox = new SemanticWorkspace.LoadStatsBox();
+        var planning = new SemanticPlanningStats();
+        var queryStages = new ReferenceQueryStats();
         try
         {
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
@@ -390,7 +434,8 @@ public sealed partial class SemanticService : IDisposable
             {
                 string reason = SemanticCoverageReasons.FailedProjects(ownerCoverage)
                     ?? "symbol_not_resolved";
-                EmitOpTelemetry("references", "unresolved", reason, ownerBox.Stats); // epuc.1
+                EmitOpTelemetry("references", "unresolved", reason, ownerBox.Stats,
+                    planning: planning); // epuc.1 + epuc.4
                 return (null, reason);
             }
 
@@ -402,9 +447,19 @@ public sealed partial class SemanticService : IDisposable
             List<string>? implementerSeeds = null;
             if (symbolA is INamedTypeSymbol)
             {
-                implementerSeeds = indexSnapshot.Queries
-                    .ImplementationCandidateProjects(symbolA.Name, cts.Token,
-                        includeGenerated, includeTests);
+                planning.SeedDiscoveryMode = "directCandidates";
+                var swSeeds = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    implementerSeeds = indexSnapshot.Queries
+                        .ImplementationCandidateProjects(symbolA.Name, cts.Token,
+                            includeGenerated, includeTests);
+                }
+                finally
+                {
+                    planning.SeedDiscoveryMs = swSeeds.Elapsed.TotalMilliseconds;
+                }
+                planning.SeedProjects = implementerSeeds.Count;
             }
 
             // Phase 2: load the dependent scan set and re-resolve IN that snapshot, then
@@ -415,7 +470,8 @@ public sealed partial class SemanticService : IDisposable
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds,
                 statsBox: scanBox, includeGenerated: includeGenerated,
-                includeTests: includeTests).ConfigureAwait(false);
+                includeTests: includeTests,
+                planStatsBox: planning.ScanSet).ConfigureAwait(false);
             using var scanOperation = scanLease;
             Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
@@ -426,12 +482,24 @@ public sealed partial class SemanticService : IDisposable
                 string reason = SemanticCoverageReasons.FailedProjects(coverage)
                     ?? "symbol_not_resolved_in_scope";
                 EmitOpTelemetry("references", "unresolved", reason,
-                    ownerBox.Stats, scanBox.Stats); // epuc.1
+                    ownerBox.Stats, scanBox.Stats, planning: planning); // epuc.1 + epuc.4
                 return (null, reason);
             }
 
-            var found = await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token).ConfigureAwait(false);
+            IEnumerable<ReferencedSymbol> found;
+            long findStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                found = await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                queryStages.FindReferencesMs += System.Diagnostics.Stopwatch
+                    .GetElapsedTime(findStarted).TotalMilliseconds;
+            }
 
+            long postProcessStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             var testFlags = ProjectTestFlags();
             // When excluding generated code, drop reference locations in generated files from BOTH the
             // counts and the samples (bug wi3: the semantic path previously ignored includeGenerated).
@@ -467,9 +535,12 @@ public sealed partial class SemanticService : IDisposable
             {
                 foreach (var referenced in found)
                 {
+                    queryStages.ReferencedSymbols++;
                     foreach (var loc in referenced.Locations)
                     {
+                        queryStages.RawLocations++;
                         if (loc.Location.SourceTree is null) continue;
+                        queryStages.SourceLocations++;
                         var doc = loc.Document;
                         string project = doc.Project.Name;
                         var lineSpan = loc.Location.GetLineSpan();
@@ -490,10 +561,31 @@ public sealed partial class SemanticService : IDisposable
                         // counting so totals honor usageKinds (same discipline as includeGenerated).
                         if (!rootCache.TryGetValue(loc.Location.SourceTree, out var rootNode))
                         {
-                            rootNode = await loc.Location.SourceTree.GetRootAsync(cts.Token).ConfigureAwait(false);
+                            long rootStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                            try
+                            {
+                                rootNode = await loc.Location.SourceTree.GetRootAsync(cts.Token)
+                                    .ConfigureAwait(false);
+                            }
+                            finally
+                            {
+                                queryStages.SyntaxRootLoadMs += System.Diagnostics.Stopwatch
+                                    .GetElapsedTime(rootStarted).TotalMilliseconds;
+                            }
                             rootCache[loc.Location.SourceTree] = rootNode;
                         }
-                        string kind = SemanticReferenceKinds.Classify(rootNode, loc.Location.SourceSpan.Start, symbolIsType);
+                        string kind;
+                        long classifyStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                        try
+                        {
+                            kind = SemanticReferenceKinds.Classify(rootNode,
+                                loc.Location.SourceSpan.Start, symbolIsType);
+                        }
+                        finally
+                        {
+                            queryStages.ClassificationMs += System.Diagnostics.Stopwatch
+                                .GetElapsedTime(classifyStarted).TotalMilliseconds;
+                        }
                         if (usageKinds is not null && !usageKinds.Contains(kind)) continue;
                         if (!seenSites.Add((project, relPath, refLine, kind))) continue; // field P1: idempotent site counting
 
@@ -516,9 +608,20 @@ public sealed partial class SemanticService : IDisposable
                         var samples = g.Samples;
                         if (samples.Count < samplesPerGroup)
                         {
-                            string text = (await loc.Location.SourceTree.GetTextAsync(cts.Token).ConfigureAwait(false))
-                                .Lines[lineSpan.StartLinePosition.Line].ToString().Trim();
-                            samples.Add(new SemanticLocation(relPath, refLine, Truncate(text), project, isTest, kind));
+                            long sampleStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                            try
+                            {
+                                string text = (await loc.Location.SourceTree.GetTextAsync(cts.Token)
+                                        .ConfigureAwait(false))
+                                    .Lines[lineSpan.StartLinePosition.Line].ToString().Trim();
+                                samples.Add(new SemanticLocation(relPath, refLine, Truncate(text), project, isTest, kind));
+                                queryStages.SamplesRead++;
+                            }
+                            finally
+                            {
+                                queryStages.SampleTextMs += System.Diagnostics.Stopwatch
+                                    .GetElapsedTime(sampleStarted).TotalMilliseconds;
+                            }
                         }
                     }
                 }
@@ -530,6 +633,10 @@ public sealed partial class SemanticService : IDisposable
                 // confidence would read as dead code when the deadline simply beat the count.
                 deadlineExhausted = true;
             }
+            queryStages.PostProcessMs += System.Diagnostics.Stopwatch
+                .GetElapsedTime(postProcessStarted).TotalMilliseconds;
+            queryStages.UniqueSyntaxTrees = rootCache.Count;
+            queryStages.UniqueSites = seenSites.Count;
 
             bool projectModelUnproven = FriendAssemblyAuthorityUnproven(symbol,
                 groups.Keys, coverage);
@@ -563,10 +670,12 @@ public sealed partial class SemanticService : IDisposable
             string? telemetryReason = SemanticCoverageReasons.Primary(coverage,
                 deadlineExhausted, candidateProjectsSkipped, outOfGraphCandidates,
                 projectModelUnproven);
+            long telemetryQueryMs = swPhase.ElapsedMilliseconds - clusterLoadMs;
             EmitOpTelemetry("references", incomplete ? "partial" : "exact",
                 telemetryReason,
                 ownerBox.Stats, scanBox.Stats,
-                clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
+                clusterLoadMs, telemetryQueryMs,
+                queryStages.Shape(telemetryQueryMs), planning); // epuc.1 + epuc.4
             return (result, null);
         }
         catch (OperationCanceledException)
@@ -576,7 +685,10 @@ public sealed partial class SemanticService : IDisposable
             // Field 48s gap: a timed-out op is exactly the record that NEEDS the query wall.
             EmitOpTelemetry("references", "degraded", reason, ownerBox.Stats, scanBox.Stats,
                 clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
-                clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
+                clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs,
+                queryStages: clusterLoadInProgress ? null : queryStages.Shape(
+                    swPhase.ElapsedMilliseconds - clusterLoadMs),
+                planning: planning); // epuc.1 + epuc.4
             return (null, reason);
         }
         catch (Exception ex)
@@ -584,7 +696,10 @@ public sealed partial class SemanticService : IDisposable
             _log($"Semantic references failed: {ex}");
             EmitOpTelemetry("references", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
                 clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
-                clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
+                clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs,
+                queryStages: clusterLoadInProgress ? null : queryStages.Shape(
+                    swPhase.ElapsedMilliseconds - clusterLoadMs),
+                planning: planning); // epuc.1 + epuc.4
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
     }
