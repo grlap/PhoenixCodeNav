@@ -109,6 +109,7 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-semantic-directory-build-reference-evaluation", summary = "v0.12.8 nearest indexed ancestor Directory.Build.props/targets are evaluated around one F# project for bounded properties, conditions, and Reference Include/Remove item-list mutations; irrelevant chained targets are ignored while reference-affecting targets/tasks remain fail-closed" },
                 new { id = "semantic-parallel-cold-start-loader", summary = "v0.12.9 C# semantic clusters prepare immutable project inputs concurrently through one bounded process scheduler, then commit one dependency-ordered Roslyn solution while preserving reload, cycle, and source-over-binary authority" },
                 new { id = "semantic-resource-budget-coverage", summary = "v0.12.9 process-wide semantic input admission and operation-scoped solution leases bound retained cold-load inputs; exhausted projects remain explicit partial coverage under semantic_resource_budget_exhausted" },
+                new { id = "search-symbol-malformed-query", summary = "v0.12.10 search_symbol rejects ToolSearch-style select: routing prefixes with malformed_query instead of returning a clean empty result; valid C# qualification and generic punctuation remain searchable" },
                 new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry the same serialized request after bounded 100/250/1000 ms delays" },
                 new { id = "refresh-sweep-publication-gating", summary = "v0.12.7 builds and refreshes persist a follower-visible refresh_sweep_pending marker before publication or row mutation and clear it only after the serialized convergence sweep commits" },
                 new { id = "refresh-incomplete-freshness", summary = "v0.12.7 exhausted source capture keeps index state stale, preserves the Git baseline, exposes a stable refreshIncompleteReason plus bounded paths, and widens the next request to a recovery sweep" },
@@ -983,6 +984,19 @@ public sealed partial class NavigationTools
         [Description("Opaque cursor from a previous call.")] string? cursor = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        query ??= "";
+        const string routingPrefix = "select:";
+        string trimmedQuery = query.TrimStart();
+        if (trimmedQuery.StartsWith(routingPrefix, StringComparison.OrdinalIgnoreCase) &&
+            (trimmedQuery.Length == routingPrefix.Length || trimmedQuery[routingPrefix.Length] != ':'))
+        {
+            return Json.Serialize(new
+            {
+                error = "malformed_query",
+                hint = "Remove the 'select:' routing prefix and pass only the symbol name.",
+                meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+            });
+        }
         (limit, int offset, string? cursorMode) = Page(limit, cursor);
         var kindList = SplitCsv(kinds);
         using var q = _manager.OpenQueries();

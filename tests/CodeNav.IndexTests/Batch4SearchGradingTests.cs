@@ -254,6 +254,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("capabilities-hard-budget", ids);
         Assert.Contains("semantic-large-repo-budget", ids);
         Assert.Contains("semantic-rebuild-coordination", ids);
+        Assert.Contains("search-symbol-malformed-query", ids);
         string semanticBudget = Assert.Single(json.GetProperty("features").EnumerateArray(),
             feature => feature.GetProperty("id").GetString() == "semantic-large-repo-budget")
             .GetProperty("summary").GetString()!;
@@ -266,6 +267,12 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("implementations/type_hierarchy select by arity or symbolId", arityResolution);
         Assert.Contains("mixed-arity names refuse", arityResolution);
         Assert.Contains("syntax fallback is arity-exact", arityResolution);
+
+        string malformedQuery = Assert.Single(json.GetProperty("features").EnumerateArray(),
+            feature => feature.GetProperty("id").GetString() == "search-symbol-malformed-query")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("malformed_query", malformedQuery);
+        Assert.Contains("select:", malformedQuery);
     }
 
     [Fact]

@@ -269,6 +269,51 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
     }
 
     [Fact]
+    public void SearchSymbolRejectsRoutingTokenWithoutConflatingAValidMiss()
+    {
+        var tools = Tools();
+
+        foreach (string malformedQuery in new[] { "select:ICache", "  SELECT:ICache" })
+        {
+            JsonElement malformed = Parse(tools.SearchSymbol(malformedQuery));
+            Assert.Equal("malformed_query", malformed.GetProperty("error").GetString());
+            Assert.Contains("select:", malformed.GetProperty("hint").GetString());
+            Assert.False(malformed.TryGetProperty("symbols", out _));
+        }
+
+        JsonElement cleanMiss = Parse(tools.SearchSymbol("NoSuchSymbolZz123", match: "exact"));
+        Assert.False(cleanMiss.TryGetProperty("error", out _));
+        Assert.Empty(cleanMiss.GetProperty("symbols").EnumerateArray());
+
+        JsonElement validHit = Parse(tools.SearchSymbol("Guard", kinds: "class", match: "exact"));
+        Assert.False(validHit.TryGetProperty("error", out _));
+        Assert.NotEmpty(validHit.GetProperty("symbols").EnumerateArray());
+
+        // Do not mistake legal qualification/generic punctuation for a routing prefix. These
+        // shapes may or may not match an indexed simple name, but they remain valid searches.
+        foreach (string legalQuery in new[]
+                 {
+                     "global::Guard", "select::ICache", "SELECT::ICache",
+                     "Acme.Platform.Guard", "Dictionary<TKey,TValue>",
+                 })
+        {
+            JsonElement legal = Parse(tools.SearchSymbol(legalQuery));
+            Assert.False(legal.TryGetProperty("error", out _));
+        }
+    }
+
+    [Fact]
+    public void SearchSymbolNullQueryStillEnumeratesRequestedScope()
+    {
+        var tools = Tools();
+
+        JsonElement enumeration = Parse(tools.SearchSymbol(null!, @namespace: "Acme.Platform.Common"));
+
+        Assert.False(enumeration.TryGetProperty("error", out _));
+        Assert.NotEmpty(enumeration.GetProperty("symbols").EnumerateArray());
+    }
+
+    [Fact]
     public void ConfidenceNoteIsContextualNotVerbatim()
     {
         // 47t (field: the indexed explainer repeated on EVERY response was noise): plain indexed
