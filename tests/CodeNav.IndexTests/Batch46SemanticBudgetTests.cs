@@ -175,6 +175,71 @@ public class Batch46SemanticBudgetTests
     }
 
     [Fact]
+    public async Task TypeHierarchyAndImplementationsLoadTheSameEightCandidatesInOneIndexEpoch()
+    {
+        const int implementerCount = 8;
+        string root = Directory.CreateTempSubdirectory("codenav-semantic-parity").FullName;
+        try
+        {
+            WriteWorkspace(root, implementerCount);
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000), manager.Health().Error);
+            string? indexVersion = manager.Health().IndexVersion;
+
+            SymbolHit target;
+            using (var queries = manager.OpenQueries())
+            {
+                target = Assert.Single(queries.SearchSymbols(
+                    "IBudgetProbe", "exact", new[] { "interface" }, 10));
+            }
+
+            using var semantic = new SemanticService(manager);
+            if (!semantic.FrameworkRefsAvailable) return;
+
+            var (hierarchy, hierarchyCoverage, hierarchySkipped, hierarchyReason) =
+                await semantic.TypeHierarchyAsync(
+                    target.FilePath, target.StartLine, column: null, nameHint: target.Name,
+                    maxProjects: SemanticService.DefaultCandidateProjectBudget,
+                    timeoutMs: 120_000);
+            Assert.NotNull(hierarchy);
+            Assert.Null(hierarchyReason);
+            Assert.Equal(implementerCount, hierarchy!.DerivedOrImplementing.Count);
+            AssertCompleteCandidateCoverage(hierarchyCoverage, hierarchySkipped);
+
+            var (implementations, implementationsReason) = await semantic.ImplementationsAsync(
+                target.FilePath, target.StartLine, column: null, nameHint: target.Name,
+                maxProjects: SemanticService.DefaultCandidateProjectBudget,
+                timeoutMs: 120_000);
+            Assert.NotNull(implementations);
+            Assert.Null(implementationsReason);
+            Assert.Equal(implementerCount, implementations!.Implementations.Count);
+            AssertCompleteCandidateCoverage(implementations.Coverage,
+                implementations.SkippedCandidateProjects);
+            Assert.Equal(indexVersion, manager.Health().IndexVersion);
+
+            static void AssertCompleteCandidateCoverage(ClusterCoverage? coverage,
+                IReadOnlyCollection<string>? skipped)
+            {
+                ClusterCoverage complete = Assert.IsType<ClusterCoverage>(coverage);
+                Assert.Equal(implementerCount + 1, complete.RequestedProjects);
+                Assert.Equal(complete.RequestedProjects, complete.LoadedProjects);
+                Assert.Empty(complete.FailedProjects);
+                Assert.Empty(complete.SkippedProjects);
+                Assert.Empty(skipped ?? []);
+            }
+        }
+        finally
+        {
+            TestWorkspaceCleanup.ClearIndexPools(root);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void ExplicitBudgetReportsPartialAcrossExactSemanticListTools()
     {
         string root = Directory.CreateTempSubdirectory("codenav-semantic-partial").FullName;

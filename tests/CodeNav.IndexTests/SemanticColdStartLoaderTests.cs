@@ -19,7 +19,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             int active = 0;
             int maximum = 0;
@@ -64,7 +63,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             int captures = 0;
             var captureEntered = NewSignal();
@@ -101,7 +99,7 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public async Task SoleCanceledWaiterStopsItsUnpublishedPreparationAndReleasesAdmission()
+    public async Task SoleCanceledWaiterStopsItsUnpublishedPreparationAndReleasesAccounting()
     {
         string root = CreateWorkspace("cancel-preparation", ("P", null));
         try
@@ -109,7 +107,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             var captureEntered = NewSignal();
             workspace.TestOnlyBeforeProjectCaptureAsync = async (_, cancellationToken) =>
@@ -130,7 +127,7 @@ public class SemanticColdStartLoaderTests
             Assert.True(stats.Stats.PreparationMs > 0,
                 "canceled preparation time disappeared from phase telemetry");
             await WaitUntilAsync(() => workspace.RetainedSemanticInputBytes == 0,
-                "canceled single-flight preparation retained its admission reservation");
+                "canceled single-flight preparation retained its input-accounting reservation");
 
             workspace.TestOnlyBeforeProjectCaptureAsync = null;
             using SemanticSolutionLease retry = await workspace.EnsureLoadedAsync(
@@ -153,7 +150,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             var fastPrepared = NewSignal();
             workspace.TestOnlyAfterProjectPrepared = name =>
@@ -187,7 +183,7 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public async Task CancellationDuringPlanningSqlReleasesDescriptorAdmission()
+    public async Task CancellationDuringPlanningSqlReleasesDescriptorAccounting()
     {
         string root = CreateWorkspace("planning-sql-cancellation", ("P", null));
         try
@@ -195,7 +191,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 1);
             using var canceled = new CancellationTokenSource();
             int projectRowQueries = 0;
@@ -228,7 +223,7 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public async Task CancellationDuringPreCommitVerificationSqlReleasesPreparedAdmission()
+    public async Task CancellationDuringPreCommitVerificationSqlReleasesPreparedAccounting()
     {
         string root = CreateWorkspace("verification-sql-cancellation", ("P", null));
         try
@@ -236,7 +231,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 1);
             using var canceled = new CancellationTokenSource();
             int projectRowQueries = 0;
@@ -286,7 +280,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             using (SemanticSolutionLease owners = await workspace.EnsureLoadedAsync(
                        ["OwnerA", "OwnerB"], CancellationToken.None))
@@ -352,7 +345,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             using (SemanticSolutionLease owners = await workspace.EnsureLoadedAsync(
                        ["OwnerA", "OwnerB"], CancellationToken.None))
@@ -449,7 +441,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             int captures = 0;
             var captureEntered = NewSignal();
@@ -485,7 +476,7 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public async Task IndexedFallbackCancellationIsChargedToPreparationAndReleasesAdmission()
+    public async Task IndexedFallbackCancellationIsChargedToPreparationAndReleasesAccounting()
     {
         string root = CreateWorkspace("fallback-cancellation", ("P", null));
         try
@@ -494,7 +485,6 @@ public class SemanticColdStartLoaderTests
             IndexBuilder.Build(root, dbPath);
             File.Delete(Path.Combine(root, "P", "P.cs"));
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 1);
             var fallbackEntered = NewSignal();
             workspace.TestOnlyBeforeIndexedFallbackAsync = async (_, cancellationToken) =>
@@ -533,7 +523,6 @@ public class SemanticColdStartLoaderTests
             IndexBuilder.Build(root, dbPath);
             File.Delete(Path.Combine(root, "P", "P.cs"));
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             int captures = 0;
             workspace.TestOnlyBeforeProjectCaptureAsync = (_, _) =>
@@ -599,7 +588,6 @@ public class SemanticColdStartLoaderTests
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             using (SemanticSolutionLease warm = await workspace.EnsureLoadedAsync(
                        ["A"], CancellationToken.None))
@@ -656,7 +644,6 @@ public class SemanticColdStartLoaderTests
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             int captures = 0;
             int beforeCommitCalls = 0;
@@ -699,7 +686,7 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public async Task PlanningDescriptorsAreAdmittedBeforeLargeWorkspaceListsMaterialize()
+    public async Task PlanningDescriptorsAreAccountedWithoutBecomingACompletenessGate()
     {
         string root = CreateWorkspace("planning-budget", ("P", null));
         try
@@ -711,18 +698,17 @@ public class SemanticColdStartLoaderTests
             }
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
-            const long budget = 64 * 1024;
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: budget,
                 preparationConcurrency: 2);
 
             using SemanticSolutionLease load = await workspace.EnsureLoadedAsync(
                 ["P"], CancellationToken.None);
 
-            Assert.Equal(SemanticCoverageReasons.ResourceBudgetExhausted,
-                load.Coverage.FailedProjectCauses?["P"]);
-            Assert.True(workspace.SemanticInputHighWaterBytes <= budget);
-            Assert.Equal(0, workspace.RetainedSemanticInputBytes);
+            Assert.Equal(1, load.Coverage.LoadedProjects);
+            Assert.Empty(load.Coverage.FailedProjects);
+            Assert.Contains(load.Solution.Projects, project => project.Name == "P");
+            Assert.True(workspace.SemanticInputHighWaterBytes > 0);
+            Assert.True(workspace.RetainedSemanticInputBytes > 0);
         }
         finally
         {
@@ -731,7 +717,7 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public async Task DeepDirectoryBuildAuthorityCandidatesAreIncludedInPlanningAdmission()
+    public async Task DeepDirectoryBuildAuthorityLoadsWithoutAnAggregateInputLimit()
     {
         string root = Directory.CreateTempSubdirectory("codenav-cold-deep-authority").FullName;
         try
@@ -746,18 +732,16 @@ public class SemanticColdStartLoaderTests
                 "namespace DeepProject; public sealed class Marker { }");
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
-            const long budget = 16 * 1024;
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: budget,
                 preparationConcurrency: 1);
 
             using SemanticSolutionLease load = await workspace.EnsureLoadedAsync(
                 ["DeepProject"], CancellationToken.None);
 
-            Assert.Equal(SemanticCoverageReasons.ResourceBudgetExhausted,
-                load.Coverage.FailedProjectCauses?["DeepProject"]);
-            Assert.True(workspace.SemanticInputHighWaterBytes <= budget);
-            Assert.Equal(0, workspace.RetainedSemanticInputBytes);
+            Assert.Equal(1, load.Coverage.LoadedProjects);
+            Assert.Empty(load.Coverage.FailedProjects);
+            Assert.Contains(load.Solution.Projects, project => project.Name == "DeepProject");
+            Assert.True(workspace.SemanticInputHighWaterBytes > 0);
         }
         finally
         {
@@ -774,7 +758,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 1);
             var gate = (SemaphoreSlim)typeof(SemanticWorkspace).GetField("_gate",
                 BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(workspace)!;
@@ -867,7 +850,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             var beforeCommit = NewSignal();
             var releaseCommit = NewSignal();
@@ -907,7 +889,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             var commitEntered = NewSignal();
             workspace.TestOnlyBeforeCommitAsync = async cancellationToken =>
@@ -945,7 +926,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2)
             {
                 TestOnlyRejectPreparedCommit = true,
@@ -981,7 +961,6 @@ public class SemanticColdStartLoaderTests
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             try
             {
@@ -1023,7 +1002,7 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public async Task OversizeProjectFailsImmediatelyWithStableResourceCauseAndNoLeak()
+    public async Task LargeBoundedProjectIsNotRejectedByAggregateInputAccounting()
     {
         string root = CreateWorkspace("budget", ("Resident", null));
         try
@@ -1034,7 +1013,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 100 * 1024,
                 preparationConcurrency: 2);
             try
             {
@@ -1045,14 +1023,15 @@ public class SemanticColdStartLoaderTests
                 }
                 using SemanticSolutionLease load = await workspace.EnsureLoadedAsync(
                     ["P"], CancellationToken.None);
-                Assert.Equal(0, load.Coverage.LoadedProjects);
-                Assert.Equal("P", Assert.Single(load.Coverage.FailedProjects));
-                Assert.Equal(SemanticCoverageReasons.ResourceBudgetExhausted,
-                    load.Coverage.FailedProjectCauses?["P"]);
-                Assert.Equal(SemanticCoverageReasons.ResourceBudgetExhausted,
-                    SemanticCoverageReasons.Primary(load.Coverage));
+                Assert.Equal(1, load.Coverage.LoadedProjects);
+                Assert.Empty(load.Coverage.FailedProjects);
+                Assert.Null(SemanticCoverageReasons.Primary(load.Coverage));
                 Assert.Contains(load.Solution.Projects,
                     project => project.Name == "Resident");
+                Project project = Assert.Single(load.Solution.Projects,
+                    candidate => candidate.Name == "P");
+                Compilation? compilation = await project.GetCompilationAsync();
+                Assert.NotNull(compilation?.GetTypeByMetadataName("P.PType"));
                 Assert.True(workspace.RetainedSemanticInputBytes > 0);
             }
             finally
@@ -1068,9 +1047,9 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public async Task FriendAssemblySyntheticDocumentIsIncludedInProjectAdmission()
+    public async Task FriendAssemblySyntheticDocumentIsIncludedInProjectAccounting()
     {
-        string root = CreateWorkspace("friend-admission", ("P", null));
+        string root = CreateWorkspace("friend-accounting", ("P", null));
         try
         {
             File.WriteAllText(Path.Combine(root, "P", "P.csproj"),
@@ -1083,7 +1062,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 1);
 
             using SemanticSolutionLease load = await workspace.EnsureLoadedAsync(
@@ -1102,16 +1080,14 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public async Task DisjointConcurrentLoadsShareOneProcessBudgetWithoutOvercommit()
+    public async Task DisjointConcurrentLoadsShareTheSchedulerWithoutDroppingEitherProject()
     {
         string root = CreateWorkspace("disjoint-budget", ("A", null), ("B", null));
         try
         {
-            const long budget = 100 * 1024;
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: budget,
                 preparationConcurrency: 2);
             var firstReserved = NewSignal();
             var releaseFirst = NewSignal();
@@ -1126,16 +1102,17 @@ public class SemanticColdStartLoaderTests
                 Task<SemanticSolutionLease> first = workspace.EnsureLoadedAsync(
                     ["A"], CancellationToken.None);
                 await firstReserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                using SemanticSolutionLease bounded = await workspace.EnsureLoadedAsync(
+                using SemanticSolutionLease second = await workspace.EnsureLoadedAsync(
                     ["B"], CancellationToken.None);
-                Assert.Equal(SemanticCoverageReasons.ResourceBudgetExhausted,
-                    bounded.Coverage.FailedProjectCauses?["B"]);
-                Assert.True(workspace.SemanticInputHighWaterBytes <= budget);
+                Assert.Equal(1, second.Coverage.LoadedProjects);
+                Assert.Empty(second.Coverage.FailedProjects);
 
                 releaseFirst.TrySetResult(true);
                 using SemanticSolutionLease loaded = await first;
                 Assert.Equal(1, loaded.Coverage.LoadedProjects);
-                Assert.True(workspace.SemanticInputHighWaterBytes <= budget);
+                Assert.Empty(loaded.Coverage.FailedProjects);
+                Assert.Contains(loaded.Solution.Projects, project => project.Name == "A");
+                Assert.Contains(loaded.Solution.Projects, project => project.Name == "B");
             }
             finally
             {
@@ -1151,16 +1128,14 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public async Task AdmissionReclaimsAnUnreferencedResidentBeforeFailingTheNextProject()
+    public async Task AggregateAccountingDoesNotEvictAnUnreferencedResident()
     {
-        string root = CreateWorkspace("admission-reclaim", ("A", null), ("B", null));
+        string root = CreateWorkspace("accounting-retention", ("A", null), ("B", null));
         try
         {
-            const long budget = 100 * 1024;
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: budget,
                 preparationConcurrency: 1);
 
             using (SemanticSolutionLease first = await workspace.EnsureLoadedAsync(
@@ -1172,9 +1147,8 @@ public class SemanticColdStartLoaderTests
                 ["B"], CancellationToken.None);
 
             Assert.Equal(1, second.Coverage.LoadedProjects);
-            Assert.DoesNotContain(second.Solution.Projects, project => project.Name == "A");
+            Assert.Contains(second.Solution.Projects, project => project.Name == "A");
             Assert.Contains(second.Solution.Projects, project => project.Name == "B");
-            Assert.True(workspace.SemanticInputHighWaterBytes <= budget);
         }
         finally
         {
@@ -1183,16 +1157,14 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public async Task AdmissionDoesNotEvictAResidentRequestedByTheActiveLoad()
+    public async Task AggregateInputAccountingDoesNotDropARequestedCandidateProject()
     {
-        string root = CreateWorkspace("admission-active-request", ("A", null), ("B", null));
+        string root = CreateWorkspace("accounting-active-request", ("A", null), ("B", null));
         try
         {
-            const long budget = 100 * 1024;
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: budget,
                 preparationConcurrency: 1);
             using (SemanticSolutionLease first = await workspace.EnsureLoadedAsync(
                        ["A"], CancellationToken.None))
@@ -1204,9 +1176,10 @@ public class SemanticColdStartLoaderTests
                 ["A", "B"], CancellationToken.None);
 
             Assert.Contains(second.Solution.Projects, project => project.Name == "A");
-            Assert.Equal(SemanticCoverageReasons.ResourceBudgetExhausted,
-                second.Coverage.FailedProjectCauses?["B"]);
-            Assert.True(workspace.SemanticInputHighWaterBytes <= budget);
+            Assert.Contains(second.Solution.Projects, project => project.Name == "B");
+            Assert.Equal(2, second.Coverage.LoadedProjects);
+            Assert.Empty(second.Coverage.FailedProjects);
+            Assert.Null(second.Coverage.FailedProjectCauses);
         }
         finally
         {
@@ -1215,7 +1188,7 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public async Task FailedDependencyPreparationKeepsTheConsumersBinaryFallback()
+    public async Task AggregateAccountingLoadsSourceDependencyAndSuppressesBinaryFallback()
     {
         string root = Directory.CreateTempSubdirectory("codenav-cold-binary-fallback").FullName;
         try
@@ -1246,44 +1219,21 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 96 * 1024,
                 preparationConcurrency: 1);
             using SemanticSolutionLease load = await workspace.EnsureLoadedAsync(
                 ["Dependency", "Consumer"], CancellationToken.None);
 
-            Assert.Equal(SemanticCoverageReasons.ResourceBudgetExhausted,
-                load.Coverage.FailedProjectCauses?["Dependency"]);
+            Assert.Equal(2, load.Coverage.LoadedProjects);
+            Assert.Empty(load.Coverage.FailedProjects);
             Project consumer = Assert.Single(load.Solution.Projects,
                 project => project.Name == "Consumer");
-            Assert.Contains(consumer.MetadataReferences.OfType<PortableExecutableReference>(),
+            Assert.DoesNotContain(consumer.MetadataReferences.OfType<PortableExecutableReference>(),
                 reference => string.Equals(reference.FilePath, dependencyDll,
                     StringComparison.OrdinalIgnoreCase));
             Compilation? compilation = await consumer.GetCompilationAsync();
             Assert.NotNull(compilation?.GetTypeByMetadataName("Dependency.ExternalType"));
-            Assert.Empty(consumer.ProjectReferences);
+            Assert.Single(consumer.ProjectReferences);
 
-            var managerLog = new List<string>();
-            using var manager = new IndexManager(root, dbPath, managerLog.Add);
-            manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
-            var constrainedWorkspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 96 * 1024,
-                preparationConcurrency: 1);
-            typeof(SemanticService).GetField("_workspace",
-                    BindingFlags.Instance | BindingFlags.NonPublic)!
-                .SetValue(semantic, constrainedWorkspace);
-            var tools = new NavigationTools(manager, semantic);
-            using JsonDocument definition = JsonDocument.Parse(tools.Definition(
-                name: "Derived",
-                path: "Consumer/Consumer.cs",
-                line: 1,
-                mode: "semantic"));
-            Assert.True(definition.RootElement.GetProperty("partial").GetBoolean());
-            Assert.Equal(SemanticCoverageReasons.ResourceBudgetExhausted,
-                definition.RootElement.GetProperty("partialReason").GetString());
-            Assert.Equal("indexed", definition.RootElement.GetProperty("meta")
-                .GetProperty("confidence").GetString());
         }
         finally
         {
@@ -1321,7 +1271,6 @@ public class SemanticColdStartLoaderTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             int dependencyAttempts = 0;
             workspace.TestOnlyBeforeProjectCaptureAsync = (name, _) =>
@@ -1396,7 +1345,6 @@ public class SemanticColdStartLoaderTests
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             using var workspace = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             using (SemanticSolutionLease warm = await workspace.EnsureLoadedAsync(
                        ["Dependency", "Consumer"], CancellationToken.None))
@@ -1442,7 +1390,7 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
-    public void ResourceFailureCoverageIsBoundedAndMixedFailuresKeepGenericPrecedence()
+    public void FailureCauseCoverageIsBoundedAndKeepsGenericPrecedence()
     {
         var coverage = new ClusterCoverage(
             LoadedProjects: 0,
@@ -1452,7 +1400,7 @@ public class SemanticColdStartLoaderTests
             FrameworkRefsAvailable: true,
             FailedProjectCauses: new Dictionary<string, string>
             {
-                ["Budget"] = SemanticCoverageReasons.ResourceBudgetExhausted,
+                ["Budget"] = "semantic_test_failure",
             });
         Assert.Equal("project_load_failed", SemanticCoverageReasons.Primary(coverage));
 
@@ -1461,18 +1409,18 @@ public class SemanticColdStartLoaderTests
         object shaped = method.Invoke(null, [coverage])!;
         using JsonDocument json = JsonDocument.Parse(JsonSerializer.Serialize(shaped));
         JsonElement root = json.RootElement;
-        Assert.Equal(1, root.GetProperty("resourceBudgetFailedProjectCount").GetInt32());
         JsonElement cause = Assert.Single(root.GetProperty("failedProjectCauses").EnumerateArray());
-        Assert.Equal(SemanticCoverageReasons.ResourceBudgetExhausted,
+        Assert.Equal("semantic_test_failure",
             cause.GetProperty("cause").GetString());
         Assert.Equal(1, cause.GetProperty("projectCount").GetInt32());
+        Assert.False(root.TryGetProperty("resourceBudgetFailedProjectCount", out _));
 
         var manyFailures = Enumerable.Range(0, 10).Select(index => $"P{index}").ToList();
         var manyCauses = manyFailures.ToDictionary(
             project => project,
             project => $"semantic_test_cause_{project}",
             StringComparer.OrdinalIgnoreCase);
-        manyCauses["NotFailed"] = SemanticCoverageReasons.ResourceBudgetExhausted;
+        manyCauses["NotFailed"] = "semantic_filtered_failure";
         var boundedCoverage = coverage with
         {
             RequestedProjects = manyFailures.Count,
@@ -1488,8 +1436,8 @@ public class SemanticColdStartLoaderTests
             .GetInt32());
         Assert.True(boundedJson.RootElement.GetProperty("failedProjectCausesTruncated")
             .GetBoolean());
-        Assert.Equal(JsonValueKind.Null, boundedJson.RootElement
-            .GetProperty("resourceBudgetFailedProjectCount").ValueKind);
+        Assert.False(boundedJson.RootElement.TryGetProperty(
+            "resourceBudgetFailedProjectCount", out _));
 
         var completeCoverage = new ClusterCoverage(1, 1, [], [], true);
         object completeShape = method.Invoke(null, [completeCoverage])!;

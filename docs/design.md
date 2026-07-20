@@ -282,54 +282,47 @@ cover simultaneous same-DLL preparation, identity sharing, stamp invalidation wh
 reference remains in a resident or actively searched solution, and failure/cancellation followed
 by retry.
 
-Preparation uses one process-wide runtime and one process-wide weighted admission controller, not
-one budget per request or batch. A bounded descriptor lane plus the pre-materialization aggregate
-reservation caps queued and retained planning metadata. Bounded
-project files and file/reference sizes produce a conservative whole-project upper bound for raw
-capture, decoded `SourceText`, parser state, and metadata candidates. The controller acquires that
-whole-project reservation atomically before source capture. A project larger than the process
-ceiling fails admission immediately; a project that does not currently fit keeps no partial
-reservation. Live file sizes are folded into the bound immediately before admission and the
-bounded reader refuses a file that grows beyond it. After shared metadata and actual capture sizes
-are known, unused pessimistic capacity is released. This prevents two preparations from each
-retaining a partial allocation while waiting for capacity owned by the other.
+Preparation uses one process-wide runtime, not one scheduler per request or batch. Bounded
+descriptor, project, source-read, and large-file lanes cap concurrent work. Project files and
+file/reference sizes produce a conservative whole-project byte estimate for observability and
+resource ownership; that estimate is not a completeness gate. Once the semantic planner selects a
+candidate project, aggregate byte accounting cannot omit it or turn an otherwise usable solution
+into partial coverage. Live file sizes are folded into the estimate immediately before capture,
+and the bounded reader still refuses an individual file that grows past its type-specific maximum.
+After shared metadata and actual capture sizes are known, pessimistic accounting is reduced to the
+retained inputs.
 
-Project and `packages.config` parsing uses a separate atomic descriptor allowance based on the
-pinned and live structural-file sizes. That allowance is acquired before either file is captured,
-is bounded by the same process controller, and is released before the whole-project reservation
-is attempted; a worker never waits for the larger reservation while retaining a partial one.
-Source-size lower bounds are checked first, so a project that can never fit is rejected without
-evicting useful warm residents merely to parse its descriptor.
+Project and `packages.config` parsing uses a separate descriptor charge based on the pinned and
+live structural-file sizes. It is recorded before either file is captured and released before the
+whole-project retained-input charge replaces it. Structural-file and source-file reads remain
+individually bounded, so malformed growth is rejected at the input boundary rather than by
+discarding a candidate because unrelated projects already consume an aggregate allowance.
 
-The same controller covers owned input bytes retained by in-flight work, prepared results,
+The same accounting covers owned input bytes retained by in-flight work, prepared results,
 metadata leases, resident semantic projects, and active solution generations; the existing
 project-count LRU and managed-heap backstop remain secondary protections for Roslyn's internal
-allocations, which cannot be measured exactly by input size. Reservations remain held while
+allocations, which cannot be measured exactly by input size. Charges remain held while
 prepared results wait to commit or re-plan. Shared preparations and metadata leases are charged
 once, not once per waiter or project. On commit, source/reference reservations transfer to the
 resident project; reload, cancellation, failed preparation, stale-plan discard, safe LRU eviction,
 operation-lease disposal, retired-cache lease release, and workspace disposal release their
 respective ownership when the final owner is gone.
 
-No worker waits for byte admission while holding the workspace-mutation gate. When admission is
-exhausted, the coordinator briefly takes the gate to evict only reference-safe LRU projects that
-are not requested by any active load, then retries the atomic reservation. If active calls, active
-leases, or resident dependencies make sufficient
-reclamation impossible, the affected project is reported through the existing failed/partial
-coverage path with an explicit resource-budget cause; the loader never overcommits the ceiling. A
-new disjoint request therefore cannot multiply retained bytes past the process budget. Project
-preparation and source reads use process-wide bounded lanes whose caps are not multiplied by the
-number of requests or projects. Large files use one sequential process lane, so parallelism cannot
-multiply the per-file maximum into an unbounded transient working set. Cancellation stops work
-that has no remaining waiter and is observed by every worker and pinned-index fallback query.
+No worker waits for aggregate byte capacity while holding the workspace-mutation gate. Selected
+projects proceed through the process-wide bounded preparation and source-read lanes, whose caps are
+not multiplied by the number of requests or projects. Large files use one sequential process lane,
+so parallelism cannot multiply the per-file maximum into an unbounded transient working set. The
+resident-project count cap remains the warm-cache eviction boundary; byte accounting never evicts
+a candidate merely to make a later candidate fit. Cancellation stops work that has no remaining
+waiter and is observed by every worker and pinned-index fallback query.
 Indexed fallback resolution remains part of the preparation phase for timing and cancellation;
 it cannot continue invisibly past the caller's deadline. No prepared result becomes visible after
 cancellation, a fingerprint or workspace-generation mismatch, or a failed Roslyn apply.
 
 The process-global net472 reference-assembly set remains a fixed bootstrap cache owned by
-`ReferenceAssemblyLocator`; its constant baseline is outside the incremental semantic-input
-admission total. HintPath and package candidates, source inputs, prepared results, residents, and
-active solution snapshots are all admitted and leased by the cold-start runtime.
+`ReferenceAssemblyLocator`; its constant baseline is outside incremental semantic-input
+accounting. HintPath and package candidates, source inputs, prepared results, residents, and active
+solution snapshots are accounted and leased by the cold-start runtime.
 
 Failure and honesty policy does not weaken. Unsupported-language projects remain explicit skips;
 project capture or preparation failures remain in `FailedProjects`; unloaded references remain
@@ -339,18 +332,14 @@ compiler-backed evidence if its own preparation or required closure fails. Live 
 project-resolution authority, exact-first path handling, reload identity, snapshot pinning, and
 fail-closed project-model boundaries remain unchanged.
 
-Resource exhaustion has one stable cause, `semantic_resource_budget_exhausted`. Core retains the
-existing `FailedProjects` list for compatibility and adds a per-project failure-cause carrier to
-`ClusterCoverage`; admission failures populate both. MCP coverage exposes a bounded sample and
-total count by cause, semantic partiality uses the stable cause when resource admission is the
-blocking failure, and telemetry records the same token. Mixed failure sets retain the existing
-primary-cause precedence while still exposing the resource-cause count, so exhaustion cannot be
-hidden behind a generic `project_load_failed`. Any result produced with a budget-failed project is
-explicitly partial and any affected count is a lower bound. Presence, absence, truncation, and
-mixed-cause precedence require contract tests.
+Aggregate semantic input accounting has no failure cause and cannot populate `FailedProjects`.
+Real project capture, parse, metadata, model, or Roslyn-apply failures continue through the generic
+`project_load_failed` coverage path, with bounded per-project cause samples where a stable concrete
+cause exists. This keeps memory estimates observable without allowing an internal estimate to
+change the compiler-visible candidate set.
 
 The load telemetry must separate `planMs`, preparation queue/wall time, prepared project count,
-effective project concurrency, process-wide admitted/retained-byte high-water marks,
+effective project concurrency, process-wide accounted/retained-byte high-water marks,
 workspace-gate wait, commit/apply time, and committed/failed counts. The existing cold/warm
 attribution and aggregate
 `projectLoadMs` remain available during migration. This makes a wide-graph preparation bottleneck
@@ -365,11 +354,11 @@ refresh immediately before another project's commit, unrelated-refresh stability
 descriptors including deep Directory.Build ancestor candidates, failed/dependency-recovered/reload
 source-over-binary transitions when only the dependency is requested, and cycle-rejected fallback,
 simultaneous metadata-cache identity/invalidation/lease-lifetime tests, cancellation before
-commit, stale-plan rejection, partial-coverage parity, admission exhaustion without gate deadlock,
-atomic fragmented-capacity failure/reclamation, active-request eviction protection, and
-oversize-project rejection, active-search snapshot survival across eviction/reload, concurrent
-disjoint-cluster admission and reservation-leak tests, cancellation telemetry after partial
-preparation completion, and resource-cause contract tests. `CodeNav.Bench --semantic` remains the
+commit, stale-plan rejection, partial-coverage parity, aggregate-accounting candidate completeness,
+eight-project `type_hierarchy`/`implementations` parity on one index epoch, individually bounded
+oversize-input rejection, active-search snapshot survival across eviction/reload, concurrent
+disjoint-cluster scheduling and reservation-leak tests, and cancellation telemetry after partial
+preparation completion. `CodeNav.Bench --semantic` remains the
 deployment benchmark;
 rollout comparisons should include both wide independent layers and deep dependency chains. Wide
 graphs should gain from concurrent preparation; deep chains may still require ordered commit but

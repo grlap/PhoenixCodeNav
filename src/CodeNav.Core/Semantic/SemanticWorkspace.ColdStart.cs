@@ -34,13 +34,12 @@ public sealed class SemanticSolutionLease : IDisposable
 
 public sealed partial class SemanticWorkspace
 {
-    private const long DefaultSemanticInputBudgetBytes = 1024L * 1024 * 1024;
     private const long PreparedProjectOverheadBytes = 64 * 1024;
     private const long PerDocumentOverheadBytes = 4 * 1024;
     private const long LargeSourceFileBytes = 4L * 1024 * 1024;
 
     private static readonly ColdStartRuntime SharedColdStartRuntime = new(
-        DefaultSemanticInputBudgetBytes, Math.Min(8, Math.Max(1, Environment.ProcessorCount)));
+        Math.Min(8, Math.Max(1, Environment.ProcessorCount)));
 
     private ColdStartRuntime _coldStartRuntime = SharedColdStartRuntime;
     private readonly CancellationTokenSource _disposeCts = new();
@@ -62,8 +61,8 @@ public sealed partial class SemanticWorkspace
     internal Func<CancellationToken, Task>? TestOnlyBeforeCommitAsync { get; set; }
     internal Action<string>? TestOnlyBeforeColdStartSql { get; set; }
     internal bool TestOnlyRejectPreparedCommit { get; set; }
-    internal long RetainedSemanticInputBytes => _coldStartRuntime.Admission.RetainedBytes;
-    internal long SemanticInputHighWaterBytes => _coldStartRuntime.Admission.HighWaterBytes;
+    internal long RetainedSemanticInputBytes => _coldStartRuntime.Accounting.RetainedBytes;
+    internal long SemanticInputHighWaterBytes => _coldStartRuntime.Accounting.HighWaterBytes;
     internal int TestOnlyPreparationWaiters =>
         _inFlightPreparations.Values.Sum(preparation => preparation.WaiterCount);
     internal int TestOnlyPlannedProjectIds
@@ -74,12 +73,11 @@ public sealed partial class SemanticWorkspace
         }
     }
 
-    internal SemanticWorkspace(string workspaceRoot, string dbPath, long semanticInputBudgetBytes,
-        int preparationConcurrency, Action<string>? log = null, bool poolIndexConnections = true)
+    internal SemanticWorkspace(string workspaceRoot, string dbPath, int preparationConcurrency,
+        Action<string>? log = null, bool poolIndexConnections = true)
         : this(workspaceRoot, dbPath, log, poolIndexConnections)
     {
-        _coldStartRuntime = new ColdStartRuntime(semanticInputBudgetBytes,
-            Math.Max(1, preparationConcurrency));
+        _coldStartRuntime = new ColdStartRuntime(Math.Max(1, preparationConcurrency));
     }
 
     private sealed record LoadedSnapshot(
@@ -141,7 +139,6 @@ public sealed partial class SemanticWorkspace
         public required long DescriptorRetainedBytes { get; init; }
         public required long QueueTicks { get; init; }
         public string? FailureCause { get; private set; }
-        public string? FailureDetail { get; private set; }
         public IReadOnlyList<DocumentInfo> Documents { get; private set; } = [];
 
         public static PreparedProject Failed(PlannedProject plan, string? cause = null,
@@ -219,14 +216,7 @@ public sealed partial class SemanticWorkspace
                         loader: TextLoader.From(TextAndVersion.Create(text, VersionStamp.Create()))));
                 }
 
-                if (!Resources.TryShrinkProjectReservation(retained))
-                {
-                    FailureCause = SemanticCoverageReasons.ResourceBudgetExhausted;
-                    FailureDetail = $"retained={retained} reserved={Resources.ProjectReservationBytes}";
-                    Documents = [];
-                    _fallbacksResolved = true;
-                    return false;
-                }
+                Resources.ResizeProjectReservation(retained);
                 Documents = documents;
                 _fallbacksResolved = true;
                 return true;
@@ -356,11 +346,11 @@ public sealed partial class SemanticWorkspace
 
     private sealed class ProjectResources
     {
-        private AdmissionReservation? _projectReservation;
+        private InputReservation? _projectReservation;
         private List<MetadataReferenceLease>? _metadataLeases;
         private int _references = 1;
 
-        public ProjectResources(AdmissionReservation projectReservation,
+        public ProjectResources(InputReservation projectReservation,
             List<MetadataReferenceLease> metadataLeases)
         {
             _projectReservation = projectReservation;
@@ -380,10 +370,11 @@ public sealed partial class SemanticWorkspace
             throw new ObjectDisposedException(nameof(ProjectResources));
         }
 
-        public bool TryShrinkProjectReservation(long bytes)
+        public void ResizeProjectReservation(long bytes)
         {
-            AdmissionReservation? reservation = Volatile.Read(ref _projectReservation);
-            return reservation is not null && reservation.TryShrink(bytes);
+            InputReservation? reservation = Volatile.Read(ref _projectReservation);
+            if (reservation is null) throw new ObjectDisposedException(nameof(ProjectResources));
+            reservation.Resize(bytes);
         }
 
         public long ProjectReservationBytes =>
@@ -401,12 +392,12 @@ public sealed partial class SemanticWorkspace
         }
     }
 
-    private sealed class AdmissionReservation : IDisposable
+    private sealed class InputReservation : IDisposable
     {
-        private readonly WeightedAdmission _owner;
+        private readonly InputAccounting _owner;
         private long _bytes;
 
-        public AdmissionReservation(WeightedAdmission owner, long bytes)
+        public InputReservation(InputAccounting owner, long bytes)
         {
             _owner = owner;
             _bytes = bytes;
@@ -414,29 +405,27 @@ public sealed partial class SemanticWorkspace
 
         public long Bytes => Interlocked.Read(ref _bytes);
 
-        public bool TryShrink(long bytes)
+        public void Resize(long bytes)
         {
             bytes = Math.Max(0, bytes);
             lock (_owner.Sync)
             {
                 long current = _bytes;
-                if (current == 0 || bytes > current) return false;
                 _bytes = bytes;
-                _owner.ReleaseLocked(current - bytes);
-                return true;
+                if (bytes > current) _owner.AddLocked(bytes - current);
+                else _owner.ReleaseLocked(current - bytes);
             }
         }
 
-        public bool TrySplit(long bytes, out AdmissionReservation? split)
+        public InputReservation Split(long bytes)
         {
-            split = null;
             bytes = Math.Max(0, bytes);
             lock (_owner.Sync)
             {
-                if (_bytes == 0 || bytes > _bytes) return false;
-                _bytes -= bytes;
-                split = new AdmissionReservation(_owner, bytes);
-                return true;
+                long current = _bytes;
+                _bytes = Math.Max(0, current - bytes);
+                if (bytes > current) _owner.AddLocked(bytes - current);
+                return new InputReservation(_owner, bytes);
             }
         }
 
@@ -451,42 +440,36 @@ public sealed partial class SemanticWorkspace
         }
     }
 
-    private sealed class WeightedAdmission
+    private sealed class InputAccounting
     {
-        private readonly long _limit;
         private long _retained;
         private long _highWater;
 
-        public WeightedAdmission(long limit) => _limit = Math.Max(1, limit);
-
         public object Sync { get; } = new();
-        public long Limit => _limit;
         public long RetainedBytes { get { lock (Sync) return _retained; } }
         public long HighWaterBytes { get { lock (Sync) return _highWater; } }
 
-        public bool TryReserve(long bytes, out AdmissionReservation? reservation)
+        public InputReservation Reserve(long bytes)
         {
-            reservation = null;
             bytes = Math.Max(1, bytes);
             lock (Sync)
             {
-                if (bytes > _limit || _retained > _limit - bytes) return false;
-                _retained += bytes;
-                _highWater = Math.Max(_highWater, _retained);
-                reservation = new AdmissionReservation(this, bytes);
-                return true;
+                AddLocked(bytes);
+                return new InputReservation(this, bytes);
             }
         }
 
-        public bool CanReserve(long bytes)
+        public void AddLocked(long bytes)
         {
-            lock (Sync) return bytes <= _limit && _retained <= _limit - bytes;
+            _retained = SaturatingAdd(_retained, bytes);
+            _highWater = Math.Max(_highWater, _retained);
         }
 
         public void ReleaseLocked(long bytes)
         {
             _retained -= bytes;
-            if (_retained < 0) throw new InvalidOperationException("semantic admission underflow");
+            if (_retained < 0)
+                throw new InvalidOperationException("semantic input accounting underflow");
         }
     }
 
@@ -512,7 +495,7 @@ public sealed partial class SemanticWorkspace
         private readonly MetadataCacheKey _key;
         private readonly object _sync = new();
         private PortableExecutableReference? _reference;
-        private AdmissionReservation? _reservation;
+        private InputReservation? _reservation;
         private int _leases;
         private bool _retired;
 
@@ -522,11 +505,10 @@ public sealed partial class SemanticWorkspace
             _key = key;
         }
 
-        public MetadataReferenceLease? TryAcquire(AdmissionReservation projectReservation,
-            out bool retry, out bool budgetFailed)
+        public MetadataReferenceLease? TryAcquire(InputReservation projectReservation,
+            out bool retry)
         {
             retry = false;
-            budgetFailed = false;
             lock (_sync)
             {
                 if (_retired)
@@ -536,11 +518,7 @@ public sealed partial class SemanticWorkspace
                 }
                 if (_reference is null)
                 {
-                    if (!projectReservation.TrySplit(_key.Size, out AdmissionReservation? split))
-                    {
-                        budgetFailed = true;
-                        return null;
-                    }
+                    InputReservation split = projectReservation.Split(_key.Size);
                     try
                     {
                         _reference = MetadataReference.CreateFromFile(_key.Path);
@@ -548,7 +526,7 @@ public sealed partial class SemanticWorkspace
                     }
                     catch
                     {
-                        split!.Dispose();
+                        split.Dispose();
                         _retired = true;
                         _owner.Metadata.TryRemove(
                             new KeyValuePair<MetadataCacheKey, MetadataCacheEntry>(_key, this));
@@ -562,7 +540,7 @@ public sealed partial class SemanticWorkspace
 
         public void Release()
         {
-            AdmissionReservation? release = null;
+            InputReservation? release = null;
             lock (_sync)
             {
                 if (--_leases > 0) return;
@@ -579,9 +557,9 @@ public sealed partial class SemanticWorkspace
 
     private sealed class ColdStartRuntime
     {
-        public ColdStartRuntime(long inputBudgetBytes, int concurrency)
+        public ColdStartRuntime(int concurrency)
         {
-            Admission = new WeightedAdmission(inputBudgetBytes);
+            Accounting = new InputAccounting();
             ProjectSlots = new SemaphoreSlim(concurrency, concurrency);
             SourceReadSlots = new SemaphoreSlim(concurrency, concurrency);
             DescriptorSlots = new SemaphoreSlim(Math.Max(32, concurrency * 16),
@@ -589,7 +567,7 @@ public sealed partial class SemanticWorkspace
             Concurrency = concurrency;
         }
 
-        public WeightedAdmission Admission { get; }
+        public InputAccounting Accounting { get; }
         public int Concurrency { get; }
         public SemaphoreSlim ProjectSlots { get; }
         public SemaphoreSlim SourceReadSlots { get; }
@@ -598,9 +576,8 @@ public sealed partial class SemanticWorkspace
         public ConcurrentDictionary<MetadataCacheKey, MetadataCacheEntry> Metadata { get; } = new();
 
         public MetadataReferenceLease? AcquireMetadata(
-            string fullPath, AdmissionReservation projectReservation, out bool budgetFailed)
+            string fullPath, InputReservation projectReservation)
         {
-            budgetFailed = false;
             try
             {
                 string canonical = Path.GetFullPath(fullPath);
@@ -613,7 +590,7 @@ public sealed partial class SemanticWorkspace
                     MetadataCacheEntry entry = Metadata.GetOrAdd(key,
                         static (cacheKey, runtime) => new MetadataCacheEntry(runtime, cacheKey), this);
                     MetadataReferenceLease? lease = entry.TryAcquire(projectReservation,
-                        out bool retry, out budgetFailed);
+                        out bool retry);
                     if (!retry) return lease;
                 }
             }
@@ -692,8 +669,8 @@ public sealed partial class SemanticWorkspace
                 PreparationMs: ToMs(publishedPrepareTicks), PreparedProjects: preparedCount,
                 EffectiveProjectConcurrency: Math.Min(preparedCount,
                     _coldStartRuntime.Concurrency),
-                AdmittedBytesHighWater: _coldStartRuntime.Admission.HighWaterBytes,
-                RetainedBytes: _coldStartRuntime.Admission.RetainedBytes,
+                AdmittedBytesHighWater: _coldStartRuntime.Accounting.HighWaterBytes,
+                RetainedBytes: _coldStartRuntime.Accounting.RetainedBytes,
                 ReplanCount: replanCount,
                 TotalElapsedMs: ToMs(elapsed),
                 PreparationQueueMs: ToMs(queueTicks),
@@ -773,53 +750,8 @@ public sealed partial class SemanticWorkspace
 
                 long planningBytes = queries.SemanticPlanningDescriptorBytes(requested,
                     cancellationToken);
-                if (!_coldStartRuntime.Admission.TryReserve(planningBytes,
-                        out AdmissionReservation? planningReservation))
-                {
-                    planTicks += System.Diagnostics.Stopwatch.GetTimestamp() - planStarted;
-                    activePlanStarted = 0;
-                    if (planningBytes <= _coldStartRuntime.Admission.Limit &&
-                        await TryReclaimSemanticInputAsync(planningBytes, cancellationToken,
-                            ticks => gateWaitTicks += ticks)
-                            .ConfigureAwait(false) &&
-                        _coldStartRuntime.Admission.CanReserve(planningBytes))
-                    {
-                        replanCount++;
-                        continue;
-                    }
-
-                    await WaitForGateAsync().ConfigureAwait(false);
-                    try
-                    {
-                        var failureSet = new HashSet<string>(requested,
-                            StringComparer.OrdinalIgnoreCase);
-                        var causes = failureSet.ToDictionary(name => name,
-                            _ => SemanticCoverageReasons.ResourceBudgetExhausted,
-                            StringComparer.OrdinalIgnoreCase);
-                        var coverage = new ClusterCoverage(
-                            LoadedProjects: requested.Count(name =>
-                                _loaded.ContainsKey(name) && !failureSet.Contains(name)),
-                            RequestedProjects: requested.Count,
-                            SkippedProjects: [],
-                            FailedProjects: failureSet.OrderBy(name => name,
-                                StringComparer.OrdinalIgnoreCase).ToList(),
-                            FrameworkRefsAvailable: ReferenceAssemblyLocator.Net472References(
-                                out string? planningFailureReferenceDirectory).Count > 0 &&
-                                planningFailureReferenceDirectory is not null,
-                            SolutionProjects: _workspace.CurrentSolution.ProjectIds.Count,
-                            FailedProjectCauses: causes);
-                        loadedResult = coverage.LoadedProjects;
-                        failedResult = coverage.FailedProjects.Count;
-                        SemanticSolutionLease failureLease = CreateSolutionLease(coverage);
-                        PublishStats();
-                        return failureLease;
-                    }
-                    finally
-                    {
-                        _gate.Release();
-                    }
-                }
-                using AdmissionReservation planningLease = planningReservation!;
+                using InputReservation planningLease =
+                    _coldStartRuntime.Accounting.Reserve(planningBytes);
 
                 phase = System.Diagnostics.Stopwatch.GetTimestamp();
                 Dictionary<string, List<ProjectRow>> rowsByProject =
@@ -998,7 +930,7 @@ public sealed partial class SemanticWorkspace
                                 {
                                     failureCauses[handle.Project.Identity.Name] = cause;
                                     _log($"Semantic preparation failed for {handle.Project.Identity.Name}: " +
-                                        $"{cause} {handle.Project.FailureDetail}".TrimEnd());
+                                        cause);
                                 }
                             }
                         }
@@ -1423,25 +1355,8 @@ public sealed partial class SemanticWorkspace
                     packagesPath.Replace('/', Path.DirectorySeparatorChar));
                 long descriptorAllowance = SaturatingAdd(PreparedProjectOverheadBytes,
                     SaturatingAdd(projectBound * 2, packagesBound * 2));
-                long sourceAllowance = sourceBounds.Aggregate(0L, (total, size) =>
-                    SaturatingAdd(total,
-                        SaturatingAdd(size * 3, PerDocumentOverheadBytes)));
-                if (SaturatingAdd(descriptorAllowance, sourceAllowance) >
-                    _coldStartRuntime.Admission.Limit)
-                {
-                    return PreparedProject.Failed(plan,
-                        SemanticCoverageReasons.ResourceBudgetExhausted, projectQueueTicks);
-                }
-                if (!_coldStartRuntime.Admission.TryReserve(descriptorAllowance,
-                        out AdmissionReservation? descriptorReservation) &&
-                    (!await TryReclaimSemanticInputAsync(descriptorAllowance,
-                         cancellationToken).ConfigureAwait(false) ||
-                     !_coldStartRuntime.Admission.TryReserve(descriptorAllowance,
-                         out descriptorReservation)))
-                {
-                    return PreparedProject.Failed(plan,
-                        SemanticCoverageReasons.ResourceBudgetExhausted, projectQueueTicks);
-                }
+                InputReservation descriptorReservation =
+                    _coldStartRuntime.Accounting.Reserve(descriptorAllowance);
 
                 long parseStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 ParsedProject parsed;
@@ -1474,7 +1389,7 @@ public sealed partial class SemanticWorkspace
                 }
                 finally
                 {
-                    descriptorReservation!.Dispose();
+                    descriptorReservation.Dispose();
                 }
                 long parseTicks = System.Diagnostics.Stopwatch.GetTimestamp() - parseStarted;
 
@@ -1482,20 +1397,7 @@ public sealed partial class SemanticWorkspace
                     packagesByteCount * 2);
                 long estimate = EstimateProjectBytes(plan, parsed, projectByteCount,
                     packagesByteCount, sourceBounds);
-                if (estimate > _coldStartRuntime.Admission.Limit)
-                {
-                    return PreparedProject.Failed(plan,
-                        SemanticCoverageReasons.ResourceBudgetExhausted, projectQueueTicks);
-                }
-                if (!_coldStartRuntime.Admission.TryReserve(estimate,
-                        out AdmissionReservation? reservation) &&
-                    (!await TryReclaimSemanticInputAsync(estimate, cancellationToken)
-                         .ConfigureAwait(false) ||
-                     !_coldStartRuntime.Admission.TryReserve(estimate, out reservation)))
-                {
-                    return PreparedProject.Failed(plan,
-                        SemanticCoverageReasons.ResourceBudgetExhausted, projectQueueTicks);
-                }
+                InputReservation reservation = _coldStartRuntime.Accounting.Reserve(estimate);
 
                 var metadataLeases = new List<MetadataReferenceLease>();
                 try
@@ -1568,21 +1470,18 @@ public sealed partial class SemanticWorkspace
                     var leasesByPath = new Dictionary<string, MetadataReferenceLease>(
                         WorkspacePaths.FileSystemPathComparer);
 
-                    bool AddCandidate(string? assemblyName, string fullPath)
+                    void AddCandidate(string? assemblyName, string fullPath)
                     {
                         string key = Path.GetFullPath(fullPath);
                         if (!leasesByPath.TryGetValue(key, out MetadataReferenceLease? lease))
                         {
-                            lease = _coldStartRuntime.AcquireMetadata(key, reservation!,
-                                out bool budgetFailed);
-                            if (budgetFailed) return false;
-                            if (lease is null) return true; // unreadable/missing keeps old skip semantics
+                            lease = _coldStartRuntime.AcquireMetadata(key, reservation);
+                            if (lease is null) return; // unreadable/missing keeps old skip semantics
                             leasesByPath[key] = lease;
                             metadataLeases.Add(lease);
                         }
                         candidates.Add(new PreparedMetadataCandidate(
                             assemblyName, key, lease.Reference));
-                        return true;
                     }
 
                     foreach ((string assembly, string? hint) in parsed.AssemblyRefs)
@@ -1590,26 +1489,12 @@ public sealed partial class SemanticWorkspace
                         if (hint is null) continue;
                         string full = Path.Combine(_workspaceRoot,
                             hint.Replace('/', Path.DirectorySeparatorChar));
-                        if (!AddCandidate(assembly, full))
-                        {
-                            foreach (MetadataReferenceLease lease in metadataLeases) lease.Dispose();
-                            reservation!.Dispose();
-                            return PreparedProject.Failed(plan,
-                                SemanticCoverageReasons.ResourceBudgetExhausted,
-                                projectQueueTicks);
-                        }
+                        AddCandidate(assembly, full);
                     }
                     foreach ((string package, string version) in parsed.PackageRefs)
                     {
-                        if (ReferenceAssemblyLocator.ResolvePackageDll(package, version) is { } dll &&
-                            !AddCandidate(null, dll))
-                        {
-                            foreach (MetadataReferenceLease lease in metadataLeases) lease.Dispose();
-                            reservation!.Dispose();
-                            return PreparedProject.Failed(plan,
-                                SemanticCoverageReasons.ResourceBudgetExhausted,
-                                projectQueueTicks);
-                        }
+                        if (ReferenceAssemblyLocator.ResolvePackageDll(package, version) is { } dll)
+                            AddCandidate(null, dll);
                     }
                     long metadataTicks = System.Diagnostics.Stopwatch.GetTimestamp() - metadataStarted;
 
@@ -1619,7 +1504,7 @@ public sealed partial class SemanticWorkspace
                     if (unproven)
                         _log($"Semantic project-model boundary: imported friend-assembly authority is unproven for {plan.Name}.");
 
-                    var resources = new ProjectResources(reservation!, metadataLeases);
+                    var resources = new ProjectResources(reservation, metadataLeases);
                     var preparedProject = new PreparedProject
                     {
                         Identity = PreparedIdentity(plan),
@@ -1640,7 +1525,7 @@ public sealed partial class SemanticWorkspace
                 catch
                 {
                     foreach (MetadataReferenceLease lease in metadataLeases) lease.Dispose();
-                    reservation!.Dispose();
+                    reservation.Dispose();
                     throw;
                 }
             }
@@ -1661,66 +1546,6 @@ public sealed partial class SemanticWorkspace
         finally
         {
             _coldStartRuntime.DescriptorSlots.Release();
-        }
-    }
-
-    /// <summary>Reclaims only reference-safe resident projects. Admission itself stays atomic:
-    /// this method never holds a partial reservation and never waits for capacity while holding
-    /// the workspace gate. Active operation leases may keep an evicted generation charged; in
-    /// that case reclamation cannot manufacture capacity and the caller fails honestly.</summary>
-    private async Task<bool> TryReclaimSemanticInputAsync(long requiredBytes,
-        CancellationToken cancellationToken, Action<long>? recordGateWait = null)
-    {
-        if (_coldStartRuntime.Admission.CanReserve(requiredBytes)) return true;
-
-        long gateWaitStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        try
-        {
-            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            recordGateWait?.Invoke(System.Diagnostics.Stopwatch.GetTimestamp() - gateWaitStarted);
-        }
-        try
-        {
-            int evicted = 0;
-            while (!_coldStartRuntime.Admission.CanReserve(requiredBytes))
-            {
-                HashSet<string> activeRequested;
-                lock (_planningOwnershipSync)
-                    activeRequested = _activeRequestedProjects.Keys.ToHashSet(
-                        StringComparer.OrdinalIgnoreCase);
-                var referenced = new HashSet<ProjectId>();
-                foreach (Project project in _workspace.CurrentSolution.Projects)
-                {
-                    foreach (ProjectReference reference in project.ProjectReferences)
-                        referenced.Add(reference.ProjectId);
-                }
-
-                KeyValuePair<string, LoadedProject>? candidate = _loaded
-                    .Where(pair => !activeRequested.Contains(pair.Key) &&
-                                   !referenced.Contains(pair.Value.Id))
-                    .OrderBy(pair => pair.Value.LastUse)
-                    .Cast<KeyValuePair<string, LoadedProject>?>()
-                    .FirstOrDefault();
-                if (candidate is null) break;
-
-                (string name, LoadedProject residentProject) = candidate.Value;
-                Solution next = _workspace.CurrentSolution.RemoveProject(residentProject.Id);
-                if (!_workspace.TryApplyChanges(next)) break;
-                _loaded.Remove(name);
-                residentProject.Resources?.Release();
-                _workspaceGeneration++;
-                evicted++;
-            }
-            if (evicted > 0)
-                _log($"Semantic admission reclaimed {evicted} reference-safe resident projects.");
-            return _coldStartRuntime.Admission.CanReserve(requiredBytes);
-        }
-        finally
-        {
-            _gate.Release();
         }
     }
 

@@ -43,7 +43,6 @@ public class Batch54ParallelLoadTests
             File.Delete(Path.Combine(proj, "F3.cs"));
 
             using var ws = new SemanticWorkspace(root, dbPath,
-                semanticInputBudgetBytes: 64 * 1024 * 1024,
                 preparationConcurrency: 2);
             int activeReads = 0;
             int maximumReads = 0;

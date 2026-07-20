@@ -26,17 +26,8 @@ public sealed record ClusterCoverage(
 /// same incomplete compiler scan.</summary>
 public static class SemanticCoverageReasons
 {
-    public const string ResourceBudgetExhausted = "semantic_resource_budget_exhausted";
-
     public static string? FailedProjects(ClusterCoverage? coverage)
-    {
-        if (coverage is not { FailedProjects.Count: > 0 }) return null;
-        bool allResourceFailures = coverage.FailedProjects.All(project =>
-            coverage.FailedProjectCauses is not null &&
-            coverage.FailedProjectCauses.TryGetValue(project, out string? cause) &&
-            cause == ResourceBudgetExhausted);
-        return allResourceFailures ? ResourceBudgetExhausted : "project_load_failed";
-    }
+        => coverage is { FailedProjects.Count: > 0 } ? "project_load_failed" : null;
 
     public static string? Primary(
         ClusterCoverage? coverage,

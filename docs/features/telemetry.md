@@ -49,7 +49,7 @@ load ran).
 | `ts` | UTC, `yyyy-MM-ddTHH:mm:ss.fffZ` |
 | `tool` | `references` \| `implementations` \| `type_hierarchy` \| `definition` \| `callers` \| `callees` |
 | `result` | `exact` (success) \| `degraded` (deadline died: see `reason`) \| `unresolved` (position/symbol didn't resolve; see `reason`) \| `error` |
-| `reason` | Stable primary cause, including `cluster_cold_load`, `semantic_timeout`, `semantic_resource_budget_exhausted`, `project_load_failed`, `index_snapshot_unavailable`, symbol-resolution causes, or an exception type name |
+| `reason` | Stable primary cause, including `cluster_cold_load`, `semantic_timeout`, `project_load_failed`, `index_snapshot_unavailable`, symbol-resolution causes, or an exception type name |
 | `clusterLoadMs` | the op's LOAD+RESOLVE wall (all phases through symbol resolution) — restored after a field regression hid a 48s query behind load-only telemetry |
 | `queryMs` | the op's FIND wall (SymbolFinder/scan/count after resolution; includes lazy Roslyn compilation on cold ops — the v1 caveat below). Null when the op died during load |
 | `cold` | present+true when phase 1 found zero projects already loaded — the workspace was cold before this op |
@@ -65,7 +65,7 @@ load ran).
 | `*.projectParseMs/sourceReadMs/metadataResolveMs` | summed worker phase durations; parallel durations may overlap and can exceed preparation wall |
 | `*.workspaceMutationMs` | ordered `ProjectInfo` construction, reference wiring, and the single Roslyn apply |
 | `*.preparedProjects/committedProjects/effectiveProjectConcurrency` | preparation volume, successfully published projects, and the effective process-wide project concurrency cap |
-| `*.admittedBytesHighWater/retainedBytes` | process-wide attributed-input high-water and current retained-byte ownership |
+| `*.admittedBytesHighWater/retainedBytes` | process-wide accounted-input high-water and current retained-byte ownership; observational only, never a candidate-project completeness gate |
 | `*.replanCount/totalElapsedMs` | stale-plan retries and complete per-call wall time |
 | `*.loadedBefore/requested/reloaded/loaded/failed` | warm-set size before this load, and this load's compatibility work volume |
 

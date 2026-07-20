@@ -90,7 +90,7 @@ public sealed class FSharpSingleFilePublishTests
                 cancellationToken: mcpTimeout.Token);
             JsonElement capabilities = await WaitForReadyAsync(client, TimeSpan.FromSeconds(60),
                 mcpTimeout.Token);
-            Assert.Equal("0.12.11", capabilities.GetProperty("version").GetString());
+            Assert.Equal("0.12.12", capabilities.GetProperty("version").GetString());
             JsonElement semantic = await CallJsonAsync(client, "symbol_at",
                 new Dictionary<string, object?>
                 {

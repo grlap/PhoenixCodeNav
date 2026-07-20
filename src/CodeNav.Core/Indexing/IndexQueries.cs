@@ -1638,7 +1638,7 @@ public sealed partial class IndexQueries : IDisposable
     }
 
     /// <summary>Ordered compiled C# inputs plus their indexed byte sizes. Semantic cold-start
-    /// planning uses the size as a conservative, snapshot-pinned admission input before any live
+    /// planning uses the size as a conservative, snapshot-pinned accounting input before any live
     /// file is opened. Keeping the path and size in one query also avoids a point lookup per file.</summary>
     public List<(string Path, long Size)> ProjectFilesWithSizes(string projectName,
         CancellationToken cancellationToken = default)
@@ -1692,7 +1692,7 @@ public sealed partial class IndexQueries : IDisposable
 
     /// <summary>Conservative retained-byte charge for the project/file/edge descriptors that a
     /// cold-start plan will materialize. The aggregate query itself returns one tiny row per chunk,
-    /// allowing admission to happen before any workspace-sized descriptor collection exists.</summary>
+    /// allowing byte ownership to be accounted before any workspace-sized descriptor collection exists.</summary>
     public long SemanticPlanningDescriptorBytes(IReadOnlyCollection<string> projectNames,
         CancellationToken cancellationToken = default)
     {

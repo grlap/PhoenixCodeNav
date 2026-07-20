@@ -108,7 +108,7 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-semantic-bounded-project-evaluation", summary = "v0.12.6 bounded simple properties before semantic items, conditions, Choose, and workspace-local .props imports feed FCS; unresolved SDK/toolchain/ambient inputs remain explicit; no targets/tasks, property functions, package closure, or project closure" },
                 new { id = "fsharp-semantic-directory-build-reference-evaluation", summary = "v0.12.8 nearest indexed ancestor Directory.Build.props/targets are evaluated around one F# project for bounded properties, conditions, and Reference Include/Remove item-list mutations; irrelevant chained targets are ignored while reference-affecting targets/tasks remain fail-closed" },
                 new { id = "semantic-parallel-cold-start-loader", summary = "v0.12.9 C# semantic clusters prepare immutable project inputs concurrently through one bounded process scheduler, then commit one dependency-ordered Roslyn solution while preserving reload, cycle, and source-over-binary authority" },
-                new { id = "semantic-resource-budget-coverage", summary = "v0.12.9 process-wide semantic input admission and operation-scoped solution leases bound retained cold-load inputs; exhausted projects remain explicit partial coverage under semantic_resource_budget_exhausted" },
+                new { id = "semantic-candidate-completeness-over-accounting", summary = "v0.12.12 aggregate semantic input accounting never omits an already-selected candidate project; bounded file capture, preparation concurrency, deadlines, and resident-count eviction remain the safety boundaries" },
                 new { id = "search-symbol-malformed-query", summary = "v0.12.10 search_symbol rejects ToolSearch-style select: routing prefixes with malformed_query instead of returning a clean empty result; valid C# qualification and generic punctuation remain searchable" },
                 new { id = "index-follower-liveness-fail-closed", summary = "v0.12.11 follower liveness distinguishes mutex contention from coordination failure; only contention proves a live writer, while an unverified probe publishes an explicit unavailable state" },
                 new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry the same serialized request after bounded 100/250/1000 ms delays" },
@@ -2186,9 +2186,6 @@ public sealed partial class NavigationTools
                     : (bool?)null,
             };
         }).ToList();
-        int resourceBudgetFailures = causeGroups
-            .Where(group => group.Key == SemanticCoverageReasons.ResourceBudgetExhausted)
-            .Sum(group => group.Count());
         return new
         {
             loadedProjects = c.LoadedProjects,
@@ -2216,9 +2213,6 @@ public sealed partial class NavigationTools
             failedProjectCauses = causeSample.Count > 0 ? causeSample : null,
             failedProjectCauseCount = causeGroups.Count > 0 ? causeGroups.Count : (int?)null,
             failedProjectCausesTruncated = causeGroups.Count > 8 ? true : (bool?)null,
-            resourceBudgetFailedProjectCount = resourceBudgetFailures > 0
-                ? resourceBudgetFailures
-                : (int?)null,
             unprovenFriendAssemblyProjects = c.UnprovenFriendAssemblyProjects is { Count: > 0 } unproven
                 ? unproven.Take(8).Select(CoverageIdentity).ToList()
                 : null,
