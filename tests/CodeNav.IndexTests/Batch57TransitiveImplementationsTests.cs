@@ -1,3 +1,4 @@
+using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
@@ -102,6 +103,31 @@ public class Batch57TransitiveImplementationsTests
                 Assert.True(names.Any(n => n.Contains("LeafHandler")),
                     $"LeafHandler missing (depth-4, never names the target): [{string.Join("; ", names)}]");
                 Assert.Contains(names, n => n.Contains("ViaInterface"));
+
+                // epuc.3: the planning wall must be attributable without exposing the queried
+                // symbol or workspace. The field reproducer saw closureMs ~= 5.5s but could not
+                // distinguish SQLite reads from exact-identity filtering/frontier bookkeeping.
+                string telemetryLine = m.Telemetry.Snapshot().Last(line =>
+                    line.Contains("\"tool\":\"implementations\"", StringComparison.Ordinal) &&
+                    line.Contains("\"result\":\"exact\"", StringComparison.Ordinal));
+                using JsonDocument telemetry = JsonDocument.Parse(telemetryLine);
+                Assert.Equal("writer",
+                    telemetry.RootElement.GetProperty("accessMode").GetString());
+                JsonElement planning = telemetry.RootElement.GetProperty("planning");
+                JsonElement closure = planning.GetProperty("implementationClosure");
+                Assert.True(closure.GetProperty("dbQueries").GetInt32() > 0);
+                Assert.True(closure.GetProperty("rowsReturned").GetInt32() >=
+                            closure.GetProperty("matches").GetInt32());
+                Assert.True(closure.GetProperty("frontierExpansions").GetInt32() > 0);
+                Assert.True(closure.GetProperty("dbQueryAndMapMs").GetDouble() >= 0);
+                Assert.True(closure.GetProperty("managedFilterMs").GetDouble() >= 0);
+                Assert.Equal("closureOwners",
+                    planning.GetProperty("seedDiscovery").GetProperty("mode").GetString());
+                JsonElement scanSet = planning.GetProperty("scanSet");
+                Assert.True(scanSet.GetProperty("candidateProjects").GetInt32() > 0);
+                Assert.True(scanSet.GetProperty("scanProjects").GetInt32() >= 4);
+                Assert.DoesNotContain("IDeepContract", telemetryLine, StringComparison.Ordinal);
+                Assert.DoesNotContain(root, telemetryLine, StringComparison.Ordinal);
             }
             finally { semantic.Dispose(); m.Dispose(); }
         }
@@ -136,17 +162,41 @@ public class Batch57TransitiveImplementationsTests
                 """);
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
-            using var q = new IndexQueries(dbPath);
+            // A deterministic per-command delay makes the decisive attribution contract red if
+            // dbQueryAndMapMs is accidentally measured outside Query execution or left at zero.
+            using var q = new IndexQueries(dbPath, pinReadSnapshot: false,
+                beforeQueryForTest: sql =>
+                {
+                    if (sql.Contains("s.signature LIKE", StringComparison.Ordinal))
+                        Thread.Sleep(5);
+                });
 
-            var closure = q.TransitiveImplementationClosure("IRoot", 0, out bool capped);
+            var statsBox = new ImplementationClosureStatsBox();
+            var closure = q.TransitiveImplementationClosure("IRoot", 0, out bool capped,
+                statsBox: statsBox);
             Assert.False(capped);
             var names = closure.Select(h => h.Name).ToList();
             Assert.Equal(new[] { "A", "B", "C3", "D" }, names.OrderBy(n => n, StringComparer.Ordinal));
 
+            ImplementationClosureStats stats = Assert.IsType<ImplementationClosureStats>(statsBox.Stats);
+            Assert.Equal(5, stats.DbQueries); // IRoot, A, B, C3, then leaf D
+            Assert.Equal(4, stats.RowsReturned);
+            Assert.Equal(5, stats.FrontierExpansions);
+            Assert.Equal(4, stats.Matches);
+            Assert.False(stats.Capped);
+            Assert.True(stats.DbQueryAndMapMs >= stats.DbQueries * 4.0,
+                $"injected query delay was not attributed: {stats.DbQueryAndMapMs}ms/{stats.DbQueries} queries");
+            Assert.True(stats.TotalMs >= stats.DbQueryAndMapMs + stats.ManagedFilterMs,
+                $"total {stats.TotalMs} did not contain db {stats.DbQueryAndMapMs} + filter {stats.ManagedFilterMs}");
+
             // Cap honesty: a walk that cannot finish reports capped instead of a silent cut.
-            var partial = q.TransitiveImplementationClosure("IRoot", 0, out bool cappedSmall, maxTypes: 2);
+            var cappedStatsBox = new ImplementationClosureStatsBox();
+            var partial = q.TransitiveImplementationClosure("IRoot", 0, out bool cappedSmall,
+                maxTypes: 2, statsBox: cappedStatsBox);
             Assert.True(cappedSmall);
             Assert.Equal(2, partial.Count);
+            Assert.True(cappedStatsBox.Stats!.Capped);
+            Assert.Equal(2, cappedStatsBox.Stats.Matches);
         }
         finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
     }

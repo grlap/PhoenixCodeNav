@@ -127,6 +127,35 @@ public sealed partial class SemanticService : IDisposable
 
     // ---------------------------------------------------------------- epuc.1 telemetry
 
+    private sealed record ScanPlanStats(
+        double TotalMs,
+        double DependentGraphMs,
+        double CandidateDiscoveryMs,
+        double DependencyGraphMs,
+        double OtherMs,
+        int SeedProjects,
+        int CandidateProjects,
+        int SelectedProjects,
+        int ScanProjects,
+        int SkippedProjects,
+        int OutOfGraphProjects,
+        int UnsupportedLanguageProjects);
+
+    private sealed class ScanPlanStatsBox
+    {
+        public ScanPlanStats? Stats { get; set; }
+    }
+
+    private sealed class SemanticPlanningStats
+    {
+        public ImplementationClosureStatsBox? ImplementationClosure { get; set; }
+        public string? SeedDiscoveryMode { get; set; }
+        public double? SeedDiscoveryMs { get; set; }
+        public int? SeedInputs { get; set; }
+        public int? SeedProjects { get; set; }
+        public ScanPlanStatsBox ScanSet { get; } = new();
+    }
+
     /// <summary>Emits one bounded telemetry record for a semantic operation — tool,
     /// outcome/reason, and the per-CALL stage stats of the loads this op itself ran (review F2:
     /// an earlier cut read an ambient last-load property, which let concurrent ops steal each
@@ -140,7 +169,8 @@ public sealed partial class SemanticService : IDisposable
         SemanticWorkspace.LoadStats? ownerLoad = null,
         SemanticWorkspace.LoadStats? scanLoad = null,
         long? clusterLoadMs = null, long? queryMs = null,
-        object? queryStages = null)
+        object? queryStages = null,
+        SemanticPlanningStats? planning = null)
     {
         _manager.Telemetry.Emit(new
         {
@@ -151,6 +181,9 @@ public sealed partial class SemanticService : IDisposable
                 System.Globalization.CultureInfo.InvariantCulture),
             corr = Guid.NewGuid().ToString("N")[..8],
             tool,
+            accessMode = _manager.IsWriter
+                ? "writer"
+                : _manager.IsFollower ? "follower" : "unattached",
             result,
             reason,
             // Field regression fix (IPartnerFrameworkInterface, 48s query invisible): the F2
@@ -161,6 +194,10 @@ public sealed partial class SemanticService : IDisposable
             // jj1q: the closure-verified find path reports its own stage split — the field's
             // "break down the 43.7s inside queryMs" ask, answered by owning the stages.
             queryStages,
+            // epuc.3: planning is intentionally separate from ownerLoad/scanLoad. It runs before
+            // EnsureLoadedAsync and was previously folded into clusterLoadMs, making a 5.5s
+            // SQLite-backed closure walk look like Roslyn project loading.
+            planning = ShapePlanning(planning),
             cold = ownerLoad is { LoadedBefore: 0 } ? true : (bool?)null,
             ownerLoad = Shape(ownerLoad),
             scanLoad = Shape(scanLoad),
@@ -195,6 +232,52 @@ public sealed partial class SemanticService : IDisposable
             reloaded = load.Reloaded,
             loaded = load.Loaded,
             failed = load.Failed,
+        };
+    }
+
+    private static object? ShapePlanning(SemanticPlanningStats? planning)
+    {
+        ImplementationClosureStats? closure = planning?.ImplementationClosure?.Stats;
+        ScanPlanStats? scan = planning?.ScanSet.Stats;
+        bool hasSeed = planning?.SeedDiscoveryMs is not null;
+        if (closure is null && scan is null && !hasSeed) return null;
+
+        return new
+        {
+            implementationClosure = closure is null ? null : new
+            {
+                totalMs = Math.Round(closure.TotalMs, 1),
+                dbQueryAndMapMs = Math.Round(closure.DbQueryAndMapMs, 1),
+                managedFilterMs = Math.Round(closure.ManagedFilterMs, 1),
+                otherMs = Math.Round(closure.OtherMs, 1),
+                dbQueries = closure.DbQueries,
+                rowsReturned = closure.RowsReturned,
+                frontierExpansions = closure.FrontierExpansions,
+                matches = closure.Matches,
+                capped = closure.Capped,
+            },
+            seedDiscovery = !hasSeed ? null : new
+            {
+                mode = planning!.SeedDiscoveryMode,
+                totalMs = Math.Round(planning.SeedDiscoveryMs!.Value, 1),
+                inputs = planning.SeedInputs,
+                projects = planning.SeedProjects,
+            },
+            scanSet = scan is null ? null : new
+            {
+                totalMs = Math.Round(scan.TotalMs, 1),
+                dependentGraphMs = Math.Round(scan.DependentGraphMs, 1),
+                candidateDiscoveryMs = Math.Round(scan.CandidateDiscoveryMs, 1),
+                dependencyGraphMs = Math.Round(scan.DependencyGraphMs, 1),
+                otherMs = Math.Round(scan.OtherMs, 1),
+                seedProjects = scan.SeedProjects,
+                candidateProjects = scan.CandidateProjects,
+                selectedProjects = scan.SelectedProjects,
+                scanProjects = scan.ScanProjects,
+                skippedProjects = scan.SkippedProjects,
+                outOfGraphProjects = scan.OutOfGraphProjects,
+                unsupportedLanguageProjects = scan.UnsupportedLanguageProjects,
+            },
         };
     }
 
@@ -513,6 +596,7 @@ public sealed partial class SemanticService : IDisposable
         long clusterLoadMs = 0;
         var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
         var scanBox = new SemanticWorkspace.LoadStatsBox();
+        var planning = new SemanticPlanningStats(); // epuc.3
         try
         {
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
@@ -548,25 +632,49 @@ public sealed partial class SemanticService : IDisposable
             long closureMs = 0;
             if (symbolA is INamedTypeSymbol typeA)
             {
+                planning.ImplementationClosure = new ImplementationClosureStatsBox();
                 var swClosure = System.Diagnostics.Stopwatch.StartNew();
                 typeClosure = indexSnapshot.Queries.TransitiveImplementationClosure(
-                    typeA.Name, typeA.Arity, out closureCapped, cancellationToken: cts.Token);
+                    typeA.Name, typeA.Arity, out closureCapped, cancellationToken: cts.Token,
+                    statsBox: planning.ImplementationClosure);
                 closureMs = swClosure.ElapsedMilliseconds;
-                implementerSeeds = closureCapped
-                    ? indexSnapshot.Queries.ImplementationCandidateProjects(symbolA.Name, cts.Token)
-                    : ClosureSeedProjects(indexSnapshot.Queries, typeClosure);
+                planning.SeedDiscoveryMode = closureCapped
+                    ? "fallbackCandidates"
+                    : "closureOwners";
+                planning.SeedInputs = closureCapped ? null : typeClosure.Count;
+                var swSeeds = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    implementerSeeds = closureCapped
+                        ? indexSnapshot.Queries.ImplementationCandidateProjects(symbolA.Name, cts.Token)
+                        : ClosureSeedProjects(indexSnapshot.Queries, typeClosure);
+                }
+                finally
+                {
+                    planning.SeedDiscoveryMs = swSeeds.Elapsed.TotalMilliseconds;
+                }
             }
             else
             {
-                implementerSeeds = indexSnapshot.Queries
-                    .ImplementationCandidateProjects(symbolA.Name, cts.Token);
+                planning.SeedDiscoveryMode = "directCandidates";
+                var swSeeds = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    implementerSeeds = indexSnapshot.Queries
+                        .ImplementationCandidateProjects(symbolA.Name, cts.Token);
+                }
+                finally
+                {
+                    planning.SeedDiscoveryMs = swSeeds.Elapsed.TotalMilliseconds;
+                }
             }
+            planning.SeedProjects = implementerSeeds.Count;
 
             clusterLoadInProgress = true;
             var (scanLease, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
-                statsBox: scanBox).ConfigureAwait(false);
+                statsBox: scanBox, planStatsBox: planning.ScanSet).ConfigureAwait(false);
             using var scanOperation = scanLease;
             Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
@@ -576,7 +684,7 @@ public sealed partial class SemanticService : IDisposable
                 string reason = SemanticCoverageReasons.FailedProjects(coverage)
                     ?? "symbol_not_resolved_in_scope";
                 EmitOpTelemetry("implementations", "unresolved", reason,
-                    ownerBox.Stats, scanBox.Stats); // epuc.1
+                    ownerBox.Stats, scanBox.Stats, planning: planning); // epuc.1 + epuc.3
                 return (null, reason);
             }
 
@@ -679,7 +787,7 @@ public sealed partial class SemanticService : IDisposable
                 telemetryReason,
                 ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs,
-                queryStages); // epuc.1 + jj1q stages
+                queryStages, planning); // epuc.1 + jj1q + epuc.3 stages
             return (payload, null);
         }
         catch (OperationCanceledException)
@@ -688,7 +796,8 @@ public sealed partial class SemanticService : IDisposable
             string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
             EmitOpTelemetry("implementations", "degraded", reason, ownerBox.Stats, scanBox.Stats,
                 clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
-                clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
+                clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs,
+                planning: planning); // epuc.1 + epuc.3
             return (null, reason);
         }
         catch (Exception ex)
@@ -696,7 +805,8 @@ public sealed partial class SemanticService : IDisposable
             _log($"Semantic implementations failed: {ex}");
             EmitOpTelemetry("implementations", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
                 clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
-                clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs); // epuc.1
+                clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs,
+                planning: planning); // epuc.1 + epuc.3
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
     }
@@ -909,15 +1019,38 @@ public sealed partial class SemanticService : IDisposable
         int maxProjects, IndexQueries q, CancellationToken ct,
         IReadOnlyList<string>? prioritySeeds = null, int? arityHint = null,
         SemanticWorkspace.LoadStatsBox? statsBox = null,
-        bool includeGenerated = true, bool includeTests = true)
+        bool includeGenerated = true, bool includeTests = true,
+        ScanPlanStatsBox? planStatsBox = null)
     {
-        List<string> skipped;
+        bool capturePlan = planStatsBox is not null;
+        long planStarted = capturePlan ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+        long dependentGraphTicks = 0;
+        long candidateDiscoveryTicks = 0;
+        long dependencyGraphTicks = 0;
+        int seedProjectCount = 0;
+        int candidateProjectCount = 0;
+        int selectedProjectCount = 0;
+        List<string> skipped = [];
         var outOfGraph = new List<string>();
         var outOfGraphSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var unsupportedCandidatePaths = new HashSet<string>(StringComparer.Ordinal);
-        HashSet<string> scanSet;
+        HashSet<string> scanSet = new(StringComparer.OrdinalIgnoreCase);
+        try
         {
-            var dependents = q.DependentClosure(owningProject);
+            HashSet<string> dependents;
+            long dependentStarted = capturePlan ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+            try
+            {
+                dependents = q.DependentClosure(owningProject);
+            }
+            finally
+            {
+                if (capturePlan)
+                {
+                    dependentGraphTicks +=
+                        System.Diagnostics.Stopwatch.GetTimestamp() - dependentStarted;
+                }
+            }
             dependents.Add(owningProject);
             int budget = NormalizeCandidateProjectBudget(maxProjects);
 
@@ -932,6 +1065,7 @@ public sealed partial class SemanticService : IDisposable
             var orderedSeeds = (prioritySeeds ?? [])
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            seedProjectCount = orderedSeeds.Count;
 
             void Consider(string project)
             {
@@ -955,8 +1089,23 @@ public sealed partial class SemanticService : IDisposable
             // projects that mention the name but have no graph path to the declarer. Retain all of
             // them until after the loaded-solution filter; only the public sample is capped.
             var candidates = new List<(string Project, int FileCount)>();
-            foreach (var c in q.CandidateProjectsForName(symbolName, ct,
-                         includeGenerated, includeTests))
+            List<SemanticTextCandidateProject> discoveredCandidates;
+            long candidateStarted = capturePlan ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+            try
+            {
+                discoveredCandidates = q.CandidateProjectsForName(symbolName, ct,
+                    includeGenerated, includeTests);
+            }
+            finally
+            {
+                if (capturePlan)
+                {
+                    candidateDiscoveryTicks +=
+                        System.Diagnostics.Stopwatch.GetTimestamp() - candidateStarted;
+                }
+            }
+            candidateProjectCount = discoveredCandidates.Count;
+            foreach (var c in discoveredCandidates)
             {
                 // Candidate ownership is a physical fact. An F# file that mentions the symbol
                 // must not nominate a same-logical-name C# project for Roslyn loading; that would
@@ -978,12 +1127,49 @@ public sealed partial class SemanticService : IDisposable
                 Consider(project);
                 AddOutOfGraph(project);
             }
-            scanSet = q.DependencyClosure(new[] { owningProject });
+            long dependencyStarted = capturePlan ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+            try
+            {
+                scanSet = q.DependencyClosure(new[] { owningProject });
+            }
+            finally
+            {
+                if (capturePlan)
+                {
+                    dependencyGraphTicks +=
+                        System.Diagnostics.Stopwatch.GetTimestamp() - dependencyStarted;
+                }
+            }
             foreach (var p in chosen) scanSet.Add(p);
+            selectedProjectCount = chosen.Count;
             // The owning project's mandatory dependency closure is loaded regardless of the
             // optional candidate budget. Report only relevant projects absent from the FINAL scan
             // set, otherwise a budget filled by seeds can falsely mark a project that was loaded.
             skipped = relevant.Where(project => !scanSet.Contains(project)).ToList();
+        }
+        finally
+        {
+            if (planStatsBox is not null)
+            {
+                double totalMs = System.Diagnostics.Stopwatch
+                    .GetElapsedTime(planStarted).TotalMilliseconds;
+                double dependentMs = TicksToMs(dependentGraphTicks);
+                double candidatesMs = TicksToMs(candidateDiscoveryTicks);
+                double dependencyMs = TicksToMs(dependencyGraphTicks);
+                planStatsBox.Stats = new ScanPlanStats(
+                    totalMs,
+                    dependentMs,
+                    candidatesMs,
+                    dependencyMs,
+                    Math.Max(0, totalMs - dependentMs - candidatesMs - dependencyMs),
+                    seedProjectCount,
+                    candidateProjectCount,
+                    selectedProjectCount,
+                    scanSet.Count,
+                    skipped.Count,
+                    outOfGraph.Count,
+                    unsupportedCandidatePaths.Count);
+            }
         }
 
         SemanticSolutionLease lease = await Workspace
@@ -1027,6 +1213,9 @@ public sealed partial class SemanticService : IDisposable
             lease.Dispose();
             throw;
         }
+
+        static double TicksToMs(long ticks) =>
+            ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
     }
 
     // ---------------------------------------------------------------- shaping

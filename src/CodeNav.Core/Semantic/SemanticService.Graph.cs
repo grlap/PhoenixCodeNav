@@ -1,3 +1,4 @@
+using CodeNav.Core.Indexing;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.FindSymbols;
@@ -230,6 +231,7 @@ public sealed partial class SemanticService
         long loadMs = 0;
         var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
         var scanBox = new SemanticWorkspace.LoadStatsBox();
+        var planning = new SemanticPlanningStats(); // epuc.3
         try
         {
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
@@ -267,19 +269,35 @@ public sealed partial class SemanticService
             // jj1q: transitive-closure seeds (see ImplementationsAsync — level-1 seeding
             // was a correctness hole for deep chains, not just a perf ceiling).
             var typeA = (INamedTypeSymbol)symbolA;
+            planning.ImplementationClosure = new ImplementationClosureStatsBox();
             var swClosure = System.Diagnostics.Stopwatch.StartNew();
             var typeClosure = indexSnapshot.Queries.TransitiveImplementationClosure(
-                typeA.Name, typeA.Arity, out bool closureCapped, cancellationToken: cts.Token);
+                typeA.Name, typeA.Arity, out bool closureCapped, cancellationToken: cts.Token,
+                statsBox: planning.ImplementationClosure);
             long closureMs = swClosure.ElapsedMilliseconds;
-            List<string> implementerSeeds = closureCapped
-                ? indexSnapshot.Queries.ImplementationCandidateProjects(symbolA.Name, cts.Token)
-                : ClosureSeedProjects(indexSnapshot.Queries, typeClosure);
+            planning.SeedDiscoveryMode = closureCapped
+                ? "fallbackCandidates"
+                : "closureOwners";
+            planning.SeedInputs = closureCapped ? null : typeClosure.Count;
+            List<string> implementerSeeds;
+            var swSeeds = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                implementerSeeds = closureCapped
+                    ? indexSnapshot.Queries.ImplementationCandidateProjects(symbolA.Name, cts.Token)
+                    : ClosureSeedProjects(indexSnapshot.Queries, typeClosure);
+            }
+            finally
+            {
+                planning.SeedDiscoveryMs = swSeeds.Elapsed.TotalMilliseconds;
+            }
+            planning.SeedProjects = implementerSeeds.Count;
 
             clusterLoadInProgress = true;
             var (scanLease, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
-                statsBox: scanBox).ConfigureAwait(false);
+                statsBox: scanBox, planStatsBox: planning.ScanSet).ConfigureAwait(false);
             using var scanOperation = scanLease;
             Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
@@ -290,7 +308,8 @@ public sealed partial class SemanticService
                     ? SemanticCoverageReasons.FailedProjects(coverage)
                       ?? "symbol_not_resolved_in_scope"
                     : "not_a_type";
-                EmitOpTelemetry("type_hierarchy", "unresolved", why, ownerBox.Stats, scanBox.Stats); // epuc.1
+                EmitOpTelemetry("type_hierarchy", "unresolved", why, ownerBox.Stats, scanBox.Stats,
+                    planning: planning); // epuc.1 + epuc.3
                 return (null, null, null, why);
             }
 
@@ -367,7 +386,7 @@ public sealed partial class SemanticService
                 telemetryReason,
                 ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs,
-                queryStages: queryStages); // epuc.1 + jj1q stages
+                queryStages: queryStages, planning: planning); // epuc.1 + jj1q + epuc.3 stages
             return (payload, coverage, skipped, null);
         }
         catch (OperationCanceledException)
@@ -376,7 +395,8 @@ public sealed partial class SemanticService
             string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
             EmitOpTelemetry("type_hierarchy", "degraded", reason, ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs: clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
-                queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs); // epuc.1
+                queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs,
+                planning: planning); // epuc.1 + epuc.3
             return (null, null, null, reason);
         }
         catch (Exception ex)
@@ -384,7 +404,8 @@ public sealed partial class SemanticService
             _log($"Semantic type hierarchy failed: {ex}");
             EmitOpTelemetry("type_hierarchy", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs: clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
-                queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs); // epuc.1 review F3
+                queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs,
+                planning: planning); // epuc.1 + epuc.3 review F3
             return (null, null, null, $"semantic_error:{ex.GetType().Name}");
         }
     }
