@@ -484,8 +484,9 @@ public class FSharpTierATests
 
             using (var semanticWorkspace = new SemanticWorkspace(root, dbPath))
             {
-                var (solution, coverage) = await semanticWorkspace.EnsureLoadedAsync(
+                using var load = await semanticWorkspace.EnsureLoadedAsync(
                     ["Streams.CSharp", "Streams.Core"], CancellationToken.None);
+                var (solution, coverage) = load;
                 Assert.Equal(2, coverage.RequestedProjects);
                 Assert.Equal(1, coverage.LoadedProjects);
                 Assert.Equal("Streams.Core", Assert.Single(coverage.SkippedProjects));
@@ -676,8 +677,9 @@ public class FSharpTierATests
             IndexBuilder.Build(root, dbPath);
             using (var workspace = new SemanticWorkspace(root, dbPath))
             {
-                var (solution, coverage) = await workspace.EnsureLoadedAsync(
+                using var load = await workspace.EnsureLoadedAsync(
                     ["Shared.Logical"], CancellationToken.None);
+                var (solution, coverage) = load;
                 Assert.Equal(1, coverage.LoadedProjects);
                 Assert.Empty(coverage.SkippedProjects);
                 var loaded = Assert.Single(solution.Projects);
@@ -788,9 +790,10 @@ public class FSharpTierATests
 
             using (var workspace = new SemanticWorkspace(root, dbPath))
             {
-                var (_, warmCoverage) = await workspace.EnsureLoadedAsync(
+                using var warmLoad = await workspace.EnsureLoadedAsync(
                     ["Shared.Logical", "Cs.Dependency"],
                     CancellationToken.None);
+                ClusterCoverage warmCoverage = warmLoad.Coverage;
                 Assert.Equal(2, warmCoverage.LoadedProjects);
                 Assert.Empty(warmCoverage.SkippedProjects);
 
@@ -798,9 +801,10 @@ public class FSharpTierATests
                 // asking each one to see that already-warm owner. This second phase is decisive:
                 // the old force-reference path bypassed the physical F# edge rejection below and
                 // wired Consumer to the loaded C# namesake.
-                var (solution, coverage) = await workspace.EnsureLoadedAsync(
+                using var scanLoad = await workspace.EnsureLoadedAsync(
                     ["Shared.Logical", "Cs.Dependency", "Fs.Dependency", "Consumer"],
                     CancellationToken.None, ensureReferenceTo: ["Shared.Logical"]);
+                var (solution, coverage) = scanLoad;
                 Assert.Equal(3, coverage.LoadedProjects);
                 Assert.Contains("Fs.Dependency", coverage.SkippedProjects);
                 Assert.Contains($"{fsharpDirectory}/Shared.fsproj", coverage.SkippedProjects);
@@ -899,8 +903,9 @@ public class FSharpTierATests
             }
 
             using var workspace = new SemanticWorkspace(root, dbPath);
-            var (_, coverage) = await workspace.EnsureLoadedAsync(
+            using var load = await workspace.EnsureLoadedAsync(
                 ["Bare", "Shared.Assembly"], CancellationToken.None);
+            ClusterCoverage coverage = load.Coverage;
             Assert.Equal(2, coverage.LoadedProjects);
             Assert.Contains($"{fsharpDirectory}/Shared.fsproj", coverage.SkippedProjects);
         }

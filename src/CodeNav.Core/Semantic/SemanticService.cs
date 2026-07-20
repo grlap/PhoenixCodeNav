@@ -180,6 +180,16 @@ public sealed partial class SemanticService : IDisposable
             sourceReadMs = Math.Round(load.SourceReadMs, 1),
             metadataResolveMs = Math.Round(load.MetadataResolveMs, 1),
             workspaceMutationMs = Math.Round(load.WorkspaceMutationMs, 1),
+            planMs = Math.Round(load.PlanMs, 1),
+            preparationMs = Math.Round(load.PreparationMs, 1),
+            preparationQueueMs = Math.Round(load.PreparationQueueMs, 1),
+            preparedProjects = load.PreparedProjects,
+            committedProjects = load.CommittedProjects,
+            effectiveProjectConcurrency = load.EffectiveProjectConcurrency,
+            admittedBytesHighWater = load.AdmittedBytesHighWater,
+            retainedBytes = load.RetainedBytes,
+            replanCount = load.ReplanCount,
+            totalElapsedMs = Math.Round(load.TotalElapsedMs, 1),
             loadedBefore = load.LoadedBefore,
             requested = load.Requested,
             reloaded = load.Reloaded,
@@ -191,7 +201,7 @@ public sealed partial class SemanticService : IDisposable
     // ---------------------------------------------------------------- definition
 
     public async Task<(SemanticDeclaration? Result, string? FailReason,
-        bool ProjectModelUnproven)> DefinitionAsync(
+        bool ProjectModelUnproven, string? PartialReason)> DefinitionAsync(
         string path, int line, int? column, string? nameHint, int timeoutMs)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 60000));
@@ -205,27 +215,32 @@ public sealed partial class SemanticService : IDisposable
             if (indexSnapshot is null)
             {
                 EmitOpTelemetry("definition", "unresolved", "index_snapshot_unavailable"); // epuc.1
-                return (null, "index_snapshot_unavailable", false);
+                return (null, "index_snapshot_unavailable", false, null);
             }
-            var (_, symbol, owningProject, coverage) = await LoadOwnerAndResolveAsync(
+            var (ownerLease, symbol, owningProject, coverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox).ConfigureAwait(false);
+            using var ownerOperation = ownerLease;
             loadCompleted = true;
             loadMs = swOp.ElapsedMilliseconds;
             if (symbol is null)
             {
-                EmitOpTelemetry("definition", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
-                return (null, "symbol_not_resolved", false);
+                string reason = SemanticCoverageReasons.FailedProjects(coverage)
+                    ?? "symbol_not_resolved";
+                EmitOpTelemetry("definition", "unresolved", reason, ownerBox.Stats); // epuc.1
+                return (null, reason, false, null);
             }
             // Review r2: materialize BEFORE the emit — a Describe throw after an "exact"
             // record would add a second ("error") record for the same op via the catch.
             var described = Describe(symbol);
             bool projectModelUnproven = FriendAssemblyAuthorityUnproven(symbol,
                 owningProject is null ? [] : [owningProject], coverage);
-            EmitOpTelemetry("definition", projectModelUnproven ? "partial" : "exact",
-                projectModelUnproven ? "project_model_unproven" : null, ownerBox.Stats,
+            string? partialReason = SemanticCoverageReasons.ResolvedDefinition(coverage,
+                projectModelUnproven);
+            EmitOpTelemetry("definition", partialReason is not null ? "partial" : "exact",
+                partialReason, ownerBox.Stats,
                 clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs); // epuc.1
-            return (described, null, projectModelUnproven);
+            return (described, null, projectModelUnproven, partialReason);
         }
         catch (OperationCanceledException)
         {
@@ -237,7 +252,7 @@ public sealed partial class SemanticService : IDisposable
             EmitOpTelemetry("definition", "degraded", reason, ownerBox.Stats,
                 clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
                 queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
-            return (null, reason, false);
+            return (null, reason, false, null);
         }
         catch (Exception ex)
         {
@@ -247,7 +262,7 @@ public sealed partial class SemanticService : IDisposable
             EmitOpTelemetry("definition", "error", ex.GetType().Name, ownerBox.Stats,
                 clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
                 queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1 review F3
-            return (null, $"semantic_error:{ex.GetType().Name}", false);
+            return (null, $"semantic_error:{ex.GetType().Name}", false, null);
         }
     }
 
@@ -274,9 +289,10 @@ public sealed partial class SemanticService : IDisposable
             }
 
             // Phase 1: load the owner closure and resolve, to learn the symbol name.
-            var (_, symbolA, owningProject, _) = await LoadOwnerAndResolveAsync(
+            var (ownerLease, symbolA, owningProject, ownerCoverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox).ConfigureAwait(false);
+            using var ownerOperation = ownerLease;
             clusterLoadInProgress = false; // candidate discovery is a query phase, not cold loading
             // Review q2 (progressive stamp): a deadline in the DISCOVERY window otherwise
             // reports clusterLoadMs 0 / queryMs = whole wall — the exact inverse of the truth
@@ -284,8 +300,10 @@ public sealed partial class SemanticService : IDisposable
             clusterLoadMs = swPhase.ElapsedMilliseconds;
             if (symbolA is null || owningProject is null)
             {
-                EmitOpTelemetry("references", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
-                return (null, "symbol_not_resolved");
+                string reason = SemanticCoverageReasons.FailedProjects(ownerCoverage)
+                    ?? "symbol_not_resolved";
+                EmitOpTelemetry("references", "unresolved", reason, ownerBox.Stats); // epuc.1
+                return (null, reason);
             }
 
             // Implementer seeds for TYPE targets — parity with Implementations/TypeHierarchy
@@ -305,19 +323,23 @@ public sealed partial class SemanticService : IDisposable
             // resolve + search against the SAME solution (no snapshot drift).
             clusterLoadInProgress = true;
             TestOnlyPhaseHook?.Invoke("beforeScanSetLoad");
-            var (solution, symbol, coverage, skipped, outOfGraph) = await LoadScanSetAndResolveAsync(
+            var (scanLease, symbol, coverage, skipped, outOfGraph) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds,
                 statsBox: scanBox, includeGenerated: includeGenerated,
                 includeTests: includeTests).ConfigureAwait(false);
+            using var scanOperation = scanLease;
+            Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
             clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find+count
             TestOnlyPhaseHook?.Invoke("afterScanSetLoad");
             if (symbol is null)
             {
-                EmitOpTelemetry("references", "unresolved", "symbol_not_resolved_in_scope",
+                string reason = SemanticCoverageReasons.FailedProjects(coverage)
+                    ?? "symbol_not_resolved_in_scope";
+                EmitOpTelemetry("references", "unresolved", reason,
                     ownerBox.Stats, scanBox.Stats); // epuc.1
-                return (null, "symbol_not_resolved_in_scope");
+                return (null, reason);
             }
 
             var found = await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token).ConfigureAwait(false);
@@ -500,16 +522,19 @@ public sealed partial class SemanticService : IDisposable
                 return (null, "index_snapshot_unavailable");
             }
 
-            var (_, symbolA, owningProject, _) = await LoadOwnerAndResolveAsync(
+            var (ownerLease, symbolA, owningProject, ownerCoverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries, arityHint,
                 statsBox: ownerBox)
                 .ConfigureAwait(false);
+            using var ownerOperation = ownerLease;
             clusterLoadInProgress = false;
             clusterLoadMs = swPhase.ElapsedMilliseconds; // review q2: progressive stamp (see references)
             if (symbolA is null || owningProject is null)
             {
-                EmitOpTelemetry("implementations", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
-                return (null, "symbol_not_resolved");
+                string reason = SemanticCoverageReasons.FailedProjects(ownerCoverage)
+                    ?? "symbol_not_resolved";
+                EmitOpTelemetry("implementations", "unresolved", reason, ownerBox.Stats); // epuc.1
+                return (null, reason);
             }
 
             // Seed the scan-set with the projects that syntactically implement/derive the type.
@@ -538,17 +563,21 @@ public sealed partial class SemanticService : IDisposable
             }
 
             clusterLoadInProgress = true;
-            var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
+            var (scanLease, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
                 statsBox: scanBox).ConfigureAwait(false);
+            using var scanOperation = scanLease;
+            Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
             clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find
             if (symbol is null)
             {
-                EmitOpTelemetry("implementations", "unresolved", "symbol_not_resolved_in_scope",
+                string reason = SemanticCoverageReasons.FailedProjects(coverage)
+                    ?? "symbol_not_resolved_in_scope";
+                EmitOpTelemetry("implementations", "unresolved", reason,
                     ownerBox.Stats, scanBox.Stats); // epuc.1
-                return (null, "symbol_not_resolved_in_scope");
+                return (null, reason);
             }
 
             var results = new List<SemanticImplementation>();
@@ -681,7 +710,7 @@ public sealed partial class SemanticService : IDisposable
     /// resolution and search share one snapshot (otherwise a reload/eviction between them
     /// silently orphans the symbol and yields empty "exact" results).
     /// </summary>
-    private async Task<(Solution? Solution, ISymbol? Symbol, string? OwningProject,
+    private async Task<(SemanticSolutionLease? Lease, ISymbol? Symbol, string? OwningProject,
         ClusterCoverage? Coverage)> LoadOwnerAndResolveAsync(
         string path, int line, int? column, string? nameHint, CancellationToken ct,
         IndexQueries? snapshotQueries = null, int? arityHint = null,
@@ -690,12 +719,15 @@ public sealed partial class SemanticService : IDisposable
         string relPath = WorkspacePaths.Normalize(path);
         string owningProject;
         HashSet<string> closure;
+        string[] operationReferenceTargets;
         if (snapshotQueries is not null)
         {
             var owners = snapshotQueries.ProjectsContaining(relPath);
             if (owners.Count == 0) return (null, null, null, null);
             owningProject = (owners.FirstOrDefault(o => !o.IsTest) ?? owners[0]).Name;
             closure = snapshotQueries.DependencyClosure(new[] { owningProject });
+            operationReferenceTargets = UnambiguousDeclarationProjects(
+                snapshotQueries, nameHint, arityHint, owningProject);
         }
         else
         {
@@ -704,15 +736,47 @@ public sealed partial class SemanticService : IDisposable
             if (owners.Count == 0) return (null, null, null, null);
             owningProject = (owners.FirstOrDefault(o => !o.IsTest) ?? owners[0]).Name;
             closure = queries.DependencyClosure(new[] { owningProject });
+            operationReferenceTargets = UnambiguousDeclarationProjects(
+                queries, nameHint, arityHint, owningProject);
         }
 
-        var (solution, coverage) = await Workspace.EnsureLoadedAsync(closure, ct,
-                statsBox: statsBox)
+        SemanticSolutionLease lease = await Workspace.EnsureLoadedAsync(closure, ct,
+                ensureReferenceTo: operationReferenceTargets, statsBox: statsBox)
             .ConfigureAwait(false);
-        var symbol = await ResolveInSolutionAsync(
-                solution, owningProject, relPath, line, column, nameHint, ct, arityHint)
-            .ConfigureAwait(false);
-        return (solution, symbol, owningProject, coverage);
+        try
+        {
+            var symbol = await ResolveInSolutionAsync(
+                    lease.Solution, owningProject, relPath, line, column, nameHint, ct, arityHint)
+                .ConfigureAwait(false);
+            return (lease, symbol, owningProject, lease.Coverage);
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
+    }
+
+    private static string[] UnambiguousDeclarationProjects(IndexQueries queries,
+        string? nameHint, int? arityHint, string owningProject)
+    {
+        if (string.IsNullOrWhiteSpace(nameHint)) return [];
+        const int proofLimit = 16;
+        List<SymbolHit> hits = queries.SearchSymbols(nameHint, "exact", kinds: null,
+            limit: proofLimit + 1, arity: arityHint);
+        if (hits.Count == 0 || hits.Count > proofLimit) return [];
+
+        string[] projects = hits
+            .SelectMany(hit => queries.ProjectsContaining(hit.FilePath))
+            .Where(project => project.Language.Equals("cs", StringComparison.OrdinalIgnoreCase))
+            .Select(project => project.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(2)
+            .ToArray();
+        return projects.Length == 1 &&
+               !projects[0].Equals(owningProject, StringComparison.OrdinalIgnoreCase)
+            ? projects
+            : [];
     }
 
     /// <summary>
@@ -840,7 +904,7 @@ public sealed partial class SemanticService : IDisposable
     /// dependent scan set and re-resolves the symbol IN the loaded snapshot. The returned
     /// symbol and solution are one consistent snapshot for SymbolFinder.
     /// </summary>
-    private async Task<(Solution Solution, ISymbol? Symbol, ClusterCoverage Coverage, List<string> Skipped, List<string> OutOfGraph)> LoadScanSetAndResolveAsync(
+    private async Task<(SemanticSolutionLease Lease, ISymbol? Symbol, ClusterCoverage Coverage, List<string> Skipped, List<string> OutOfGraph)> LoadScanSetAndResolveAsync(
         string symbolName, string owningProject, string path, int line, int? column, string? nameHint,
         int maxProjects, IndexQueries q, CancellationToken ct,
         IReadOnlyList<string>? prioritySeeds = null, int? arityHint = null,
@@ -922,39 +986,47 @@ public sealed partial class SemanticService : IDisposable
             skipped = relevant.Where(project => !scanSet.Contains(project)).ToList();
         }
 
-        var (solution, coverage) = await Workspace
+        SemanticSolutionLease lease = await Workspace
             .EnsureLoadedAsync(scanSet, ct, ensureReferenceTo: new[] { owningProject },
-                statsBox: statsBox)
-            .ConfigureAwait(false);
-        if (unsupportedCandidatePaths.Count > 0)
+                statsBox: statsBox).ConfigureAwait(false);
+        try
         {
-            coverage = coverage with
+            Solution solution = lease.Solution;
+            ClusterCoverage coverage = lease.Coverage;
+            if (unsupportedCandidatePaths.Count > 0)
             {
-                SkippedProjects = coverage.SkippedProjects
-                    .Concat(unsupportedCandidatePaths)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
-                    .ToList(),
-            };
+                coverage = coverage with
+                {
+                    SkippedProjects = coverage.SkippedProjects
+                        .Concat(unsupportedCandidatePaths)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+                        .ToList(),
+                };
+            }
+            // `outOfGraph` is coverage evidence, not merely topology trivia: callers use it to
+            // decide whether the reference census is a lower bound. Loading one chosen project can
+            // pull in additional dependencies that were not explicit members of `scanSet`, so filter
+            // against the actual Roslyn solution rather than the requested names.
+            var loadedProjectNames = solution.Projects
+                .Select(project => project.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            outOfGraph.RemoveAll(project =>
+            {
+                if (!loadedProjectNames.Contains(project)) return false;
+                outOfGraphSet.Remove(project);
+                return true;
+            });
+            var symbol = await ResolveInSolutionAsync(
+                solution, owningProject, WorkspacePaths.Normalize(path), line, column, nameHint, ct,
+                arityHint).ConfigureAwait(false);
+            return (lease, symbol, coverage, skipped, outOfGraph);
         }
-        // `outOfGraph` is coverage evidence, not merely topology trivia: callers use it to
-        // decide whether the reference census is a lower bound. Loading one chosen project can
-        // pull in additional dependencies that were not explicit members of `scanSet`, so filter
-        // against the actual Roslyn solution rather than the requested names.
-        var loadedProjectNames = solution.Projects
-            .Select(project => project.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        outOfGraph.RemoveAll(project =>
+        catch
         {
-            if (!loadedProjectNames.Contains(project)) return false;
-            outOfGraphSet.Remove(project);
-            return true;
-        });
-        var symbol = await ResolveInSolutionAsync(
-            solution, owningProject, WorkspacePaths.Normalize(path), line, column, nameHint, ct,
-            arityHint)
-            .ConfigureAwait(false);
-        return (solution, symbol, coverage, skipped, outOfGraph);
+            lease.Dispose();
+            throw;
+        }
     }
 
     // ---------------------------------------------------------------- shaping

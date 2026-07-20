@@ -1137,7 +1137,7 @@ public sealed class Batch44GitSubtreeTests
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             Assert.True(semantic.FrameworkRefsAvailable);
 
-            var (definition, definitionReason, _) = await semantic.DefinitionAsync(
+            var (definition, definitionReason, _, _) = await semantic.DefinitionAsync(
                 gitPath, 2, null, typeName, 30_000);
             Assert.True(definition is not null,
                 $"semantic definition failed: {definitionReason}");

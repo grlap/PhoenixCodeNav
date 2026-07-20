@@ -4,7 +4,9 @@ using CodeNav.Core.Semantic;
 namespace CodeNav.Tests;
 
 /// <summary>
-/// Batch 54 (pv1k): the per-file open→read→decode in LoadProject fans out across workers.
+/// Batch 54 (pv1k): per-file open→read→decode uses the cold-start runtime's process-wide
+/// bounded source lane, so one large project can fan out without multiplying the worker cap by
+/// the number of concurrently prepared projects.
 /// Pins the two properties the parallelization must not cost:
 /// (1) the disk-miss fallback still serves the INDEXED text (that path runs single-threaded
 ///     against SQLite after the fan-out — a worker touching the shared connection would
@@ -40,9 +42,28 @@ public class Batch54ParallelLoadTests
             // Vanish ONE file from disk after indexing — its text must come from the index.
             File.Delete(Path.Combine(proj, "F3.cs"));
 
-            using var ws = new SemanticWorkspace(root, dbPath);
-            var (solution, coverage) = await ws.EnsureLoadedAsync(
+            using var ws = new SemanticWorkspace(root, dbPath,
+                semanticInputBudgetBytes: 64 * 1024 * 1024,
+                preparationConcurrency: 2);
+            int activeReads = 0;
+            int maximumReads = 0;
+            var bothReadsEntered = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            ws.TestOnlyBeforeSourceCaptureAsync = async (_, _, cancellationToken) =>
+            {
+                int current = Interlocked.Increment(ref activeReads);
+                int observed;
+                while ((observed = Volatile.Read(ref maximumReads)) < current &&
+                       Interlocked.CompareExchange(ref maximumReads, current, observed) != observed)
+                {
+                }
+                if (current >= 2) bothReadsEntered.TrySetResult(true);
+                await bothReadsEntered.Task.WaitAsync(cancellationToken);
+                Interlocked.Decrement(ref activeReads);
+            };
+            using var firstLoad = await ws.EnsureLoadedAsync(
                 new[] { "P" }, CancellationToken.None);
+            var (solution, coverage) = firstLoad;
             Assert.Equal(1, coverage.LoadedProjects);
 
             var project = Assert.Single(solution.Projects);
@@ -58,9 +79,12 @@ public class Batch54ParallelLoadTests
             // path order, not merely stable across loads.
             var expected = Enumerable.Range(0, 6).Select(i => $"F{i}.cs").ToList();
             Assert.Equal(expected, docNames); // exact order AND nothing lost/duplicated
+            Assert.True(maximumReads >= 2,
+                $"one-project source capture stayed serial (max={maximumReads})");
             using var ws2 = new SemanticWorkspace(root, dbPath);
-            var (solution2, _) = await ws2.EnsureLoadedAsync(
+            using var secondLoad = await ws2.EnsureLoadedAsync(
                 new[] { "P" }, CancellationToken.None);
+            var solution2 = secondLoad.Solution;
             var docNames2 = Assert.Single(solution2.Projects)
                 .Documents.Select(d => d.Name).ToList();
             Assert.Equal(expected, docNames2); // and identical on a fresh load

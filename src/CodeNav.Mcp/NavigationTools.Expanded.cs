@@ -512,10 +512,10 @@ public sealed partial class NavigationTools
         // 1. Definition (semantic first, indexed fallback).
         var (target, _) = ResolveSemanticTarget(name, container, null, null, 0, 0);
         SemanticDeclaration? semDecl = null;
-        bool semanticProjectModelUnproven = false;
+        string? semanticPartialReason = null;
         if (target is { } t)
         {
-            (semDecl, _, semanticProjectModelUnproven) = _semantic
+            (semDecl, _, _, semanticPartialReason) = _semantic
                 .DefinitionAsync(t.Path, t.Line, t.Column, name, timeoutMs)
                 .GetAwaiter().GetResult();
         }
@@ -567,7 +567,7 @@ public sealed partial class NavigationTools
             : new List<object>();
 
         var meta = Meta.From(_manager.Health(),
-            semDecl is not null && !semanticProjectModelUnproven ? "exact" : "indexed",
+            semDecl is not null && semanticPartialReason is null ? "exact" : "indexed",
             semDecl is not null ? "semantic" : "syntax");
         var omitted = new List<string>();
 
@@ -576,8 +576,8 @@ public sealed partial class NavigationTools
             name,
             summary = $"{name}: declared in {owner ?? "unknown project"}; {refTotal} candidate references across {refGroups.Count} projects; {tests.Count} related test groups.",
             symbol = semDecl is not null ? SemanticSymbolJson(semDecl) : null,
-            partial = semanticProjectModelUnproven ? true : (bool?)null,
-            partialReason = semanticProjectModelUnproven ? "project_model_unproven" : null,
+            partial = semanticPartialReason is not null ? true : (bool?)null,
+            partialReason = semanticPartialReason,
             declarations = indexedDecls.Select(SymbolJson),
             primarySource = dropSource ? null : primarySource,
             references = new

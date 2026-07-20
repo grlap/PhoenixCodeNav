@@ -25,8 +25,9 @@ public sealed class SemanticProjectFingerprintTests
 
             var log = new List<string>();
             using var workspace = new SemanticWorkspace(root, dbPath, log.Add);
-            var (beforeSolution, beforeCoverage) = await workspace.EnsureLoadedAsync(
+            using var beforeLoad = await workspace.EnsureLoadedAsync(
                 new[] { "Package.Consumer", "Other.Consumer" }, CancellationToken.None);
+            var (beforeSolution, beforeCoverage) = beforeLoad;
             Assert.Equal(2, beforeCoverage.LoadedProjects);
             AssertPackageReference(beforeSolution, "Package.Consumer",
                 "Microsoft.CodeAnalysis.CSharp.dll", present: true);
@@ -71,8 +72,9 @@ public sealed class SemanticProjectFingerprintTests
                 Assert.Equal(unrelatedBefore, batch["Other.Consumer"]);
             }
 
-            var (afterSolution, afterCoverage) = await workspace.EnsureLoadedAsync(
+            using var afterLoad = await workspace.EnsureLoadedAsync(
                 new[] { "Package.Consumer", "Other.Consumer" }, CancellationToken.None);
+            var (afterSolution, afterCoverage) = afterLoad;
             Assert.Equal(2, afterCoverage.LoadedProjects);
             AssertPackageReference(afterSolution, "Package.Consumer",
                 "Microsoft.CodeAnalysis.CSharp.dll", present: false);

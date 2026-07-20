@@ -41,28 +41,35 @@ public sealed partial class SemanticService
                 return (null, null, null, false, "index_snapshot_unavailable");
             }
 
-            var (_, symbolA, owningProject, _) = await LoadOwnerAndResolveAsync(
+            var (ownerLease, symbolA, owningProject, ownerCoverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox).ConfigureAwait(false);
+            using var ownerOperation = ownerLease;
             clusterLoadInProgress = false;
             loadMs = swOp.ElapsedMilliseconds; // review q2: progressive stamp (see references)
             if (symbolA is null || owningProject is null)
             {
-                EmitOpTelemetry("callers", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
-                return (null, null, null, false, "symbol_not_resolved");
+                string reason = SemanticCoverageReasons.FailedProjects(ownerCoverage)
+                    ?? "symbol_not_resolved";
+                EmitOpTelemetry("callers", "unresolved", reason, ownerBox.Stats); // epuc.1
+                return (null, null, null, false, reason);
             }
 
             clusterLoadInProgress = true;
-            var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
+            var (scanLease, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, statsBox: scanBox).ConfigureAwait(false);
+            using var scanOperation = scanLease;
+            Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
             loadMs = swOp.ElapsedMilliseconds;
             if (symbol is null)
             {
-                EmitOpTelemetry("callers", "unresolved", "symbol_not_resolved_in_scope",
+                string reason = SemanticCoverageReasons.FailedProjects(coverage)
+                    ?? "symbol_not_resolved_in_scope";
+                EmitOpTelemetry("callers", "unresolved", reason,
                     ownerBox.Stats, scanBox.Stats); // epuc.1
-                return (null, null, null, false, "symbol_not_resolved_in_scope");
+                return (null, null, null, false, reason);
             }
 
             var callers = await SymbolFinder.FindCallersAsync(symbol, solution, cts.Token).ConfigureAwait(false);
@@ -137,15 +144,19 @@ public sealed partial class SemanticService
                 EmitOpTelemetry("callees", "unresolved", "index_snapshot_unavailable"); // epuc.1
                 return (null, null, false, "index_snapshot_unavailable");
             }
-            var (solution, symbol, owningProject, coverage) = await LoadOwnerAndResolveAsync(
+            var (ownerLease, symbol, owningProject, coverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox).ConfigureAwait(false);
+            using var ownerOperation = ownerLease;
+            Solution? solution = ownerLease?.Solution;
             loadCompleted = true;
             loadMs = swOp.ElapsedMilliseconds;
             if (symbol is null || solution is null)
             {
-                EmitOpTelemetry("callees", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
-                return (null, coverage, false, "symbol_not_resolved");
+                string reason = SemanticCoverageReasons.FailedProjects(coverage)
+                    ?? "symbol_not_resolved";
+                EmitOpTelemetry("callees", "unresolved", reason, ownerBox.Stats); // epuc.1
+                return (null, coverage, false, reason);
             }
 
             var byTarget = new Dictionary<ISymbol, List<int>>(SymbolEqualityComparer.Default);
@@ -228,16 +239,19 @@ public sealed partial class SemanticService
                 return (null, null, null, "index_snapshot_unavailable");
             }
 
-            var (_, symbolA, owningProject, _) = await LoadOwnerAndResolveAsync(
+            var (ownerLease, symbolA, owningProject, ownerCoverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries, arityHint,
                 statsBox: ownerBox)
                 .ConfigureAwait(false);
+            using var ownerOperation = ownerLease;
             clusterLoadInProgress = false;
             loadMs = swOp.ElapsedMilliseconds; // review q2: progressive stamp (see references)
             if (symbolA is null || owningProject is null)
             {
-                EmitOpTelemetry("type_hierarchy", "unresolved", "symbol_not_resolved", ownerBox.Stats); // epuc.1
-                return (null, null, null, "symbol_not_resolved");
+                string reason = SemanticCoverageReasons.FailedProjects(ownerCoverage)
+                    ?? "symbol_not_resolved";
+                EmitOpTelemetry("type_hierarchy", "unresolved", reason, ownerBox.Stats); // epuc.1
+                return (null, null, null, reason);
             }
             if (symbolA is not INamedTypeSymbol)
             {
@@ -262,15 +276,20 @@ public sealed partial class SemanticService
                 : ClosureSeedProjects(indexSnapshot.Queries, typeClosure);
 
             clusterLoadInProgress = true;
-            var (solution, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
+            var (scanLease, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
                 statsBox: scanBox).ConfigureAwait(false);
+            using var scanOperation = scanLease;
+            Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
             loadMs = swOp.ElapsedMilliseconds;
             if (symbol is not INamedTypeSymbol type)
             {
-                string why = symbol is null ? "symbol_not_resolved_in_scope" : "not_a_type";
+                string why = symbol is null
+                    ? SemanticCoverageReasons.FailedProjects(coverage)
+                      ?? "symbol_not_resolved_in_scope"
+                    : "not_a_type";
                 EmitOpTelemetry("type_hierarchy", "unresolved", why, ownerBox.Stats, scanBox.Stats); // epuc.1
                 return (null, null, null, why);
             }

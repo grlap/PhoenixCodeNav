@@ -17,28 +17,53 @@ namespace CodeNav.Tests;
 public class Batch53MetadataRefCacheTests
 {
     [Fact]
-    public void CacheReturnsSameInstanceUntilTheDllChanges()
+    public async Task RebuiltDllPublishesFreshReferenceAndMissingDllRemainsAQuietSkip()
     {
         string root = Directory.CreateTempSubdirectory("codenav-53-unit").FullName;
         try
         {
-            string dll = Path.Combine(root, "Vendor.dll");
+            string projectDirectory = Path.Combine(root, "P");
+            Directory.CreateDirectory(projectDirectory);
+            string dll = Path.Combine(projectDirectory, "Vendor.dll");
             EmitAssembly(dll, "VendorLib", "namespace V { public class A { } }");
-            using var ws = new SemanticWorkspace(root, Path.Combine(root, "index.db"));
-
-            var first = ws.GetOrCreateMetadataRef(dll);
-            var second = ws.GetOrCreateMetadataRef(dll);
-            Assert.NotNull(first);
-            Assert.Same(first, second); // one parse, shared instance
+            File.WriteAllText(Path.Combine(projectDirectory, "P.csproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net472</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <Reference Include="VendorLib"><HintPath>Vendor.dll</HintPath></Reference>
+                    <Reference Include="Missing"><HintPath>missing.dll</HintPath></Reference>
+                  </ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(projectDirectory, "P.cs"),
+                "namespace P; public sealed class UsesVendor : V.A { }");
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var firstWorkspace = new SemanticWorkspace(root, dbPath);
+            using SemanticSolutionLease firstLoad = await firstWorkspace.EnsureLoadedAsync(
+                ["P"], CancellationToken.None);
+            PortableExecutableReference first = Assert.Single(
+                Assert.Single(firstLoad.Solution.Projects).MetadataReferences
+                    .OfType<PortableExecutableReference>(), reference =>
+                    reference.FilePath?.EndsWith("Vendor.dll",
+                        StringComparison.OrdinalIgnoreCase) == true);
+            Assert.DoesNotContain(Assert.Single(firstLoad.Solution.Projects).MetadataReferences,
+                reference => reference.Display?.EndsWith("missing.dll",
+                    StringComparison.OrdinalIgnoreCase) == true);
 
             // A rebuilt dll must invalidate: same path, new content/mtime → fresh instance.
             EmitAssembly(dll, "VendorLib", "namespace V { public class A { public int X; } }");
             File.SetLastWriteTimeUtc(dll, DateTime.UtcNow.AddHours(1));
-            var third = ws.GetOrCreateMetadataRef(dll);
-            Assert.NotNull(third);
-            Assert.NotSame(first, third);
-
-            Assert.Null(ws.GetOrCreateMetadataRef(Path.Combine(root, "missing.dll")));
+            using var secondWorkspace = new SemanticWorkspace(root, dbPath);
+            using SemanticSolutionLease secondLoad = await secondWorkspace.EnsureLoadedAsync(
+                ["P"], CancellationToken.None);
+            PortableExecutableReference second = Assert.Single(
+                Assert.Single(secondLoad.Solution.Projects).MetadataReferences
+                    .OfType<PortableExecutableReference>(), reference =>
+                    reference.FilePath?.EndsWith("Vendor.dll",
+                        StringComparison.OrdinalIgnoreCase) == true);
+            Assert.NotSame(first, second);
         }
         finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
     }
@@ -79,8 +104,9 @@ public class Batch53MetadataRefCacheTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var ws = new SemanticWorkspace(root, dbPath);
-            var (solution, coverage) = await ws.EnsureLoadedAsync(
+            using var load = await ws.EnsureLoadedAsync(
                 new[] { "P1", "P2" }, CancellationToken.None);
+            var (solution, coverage) = load;
             Assert.Equal(2, coverage.LoadedProjects);
 
             var perProject = new List<PortableExecutableReference>();

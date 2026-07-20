@@ -1,8 +1,6 @@
-using CodeNav.Core.Discovery;
 using CodeNav.Core.Indexing;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.Text;
 
 namespace CodeNav.Core.Semantic;
 
@@ -18,13 +16,28 @@ public sealed record ClusterCoverage(
     // Projects whose locally modeled InternalsVisibleTo attributes can be changed by imported
     // MSBuild authority. Friend-only relationships involving these projects are candidates, not
     // exact facts from the real build.
-    IReadOnlyList<string>? UnprovenFriendAssemblyProjects = null);
+    IReadOnlyList<string>? UnprovenFriendAssemblyProjects = null,
+    // Stable per-project causes for failures that have an actionable semantic contract. The
+    // existing FailedProjects list remains the compatibility carrier for every failed load.
+    IReadOnlyDictionary<string, string>? FailedProjectCauses = null);
 
 /// <summary>Stable one-cause classification shared by semantic telemetry and MCP envelopes.
 /// Keeping this in Core prevents each protocol shaper from inventing a different token for the
 /// same incomplete compiler scan.</summary>
 public static class SemanticCoverageReasons
 {
+    public const string ResourceBudgetExhausted = "semantic_resource_budget_exhausted";
+
+    public static string? FailedProjects(ClusterCoverage? coverage)
+    {
+        if (coverage is not { FailedProjects.Count: > 0 }) return null;
+        bool allResourceFailures = coverage.FailedProjects.All(project =>
+            coverage.FailedProjectCauses is not null &&
+            coverage.FailedProjectCauses.TryGetValue(project, out string? cause) &&
+            cause == ResourceBudgetExhausted);
+        return allResourceFailures ? ResourceBudgetExhausted : "project_load_failed";
+    }
+
     public static string? Primary(
         ClusterCoverage? coverage,
         bool deadlineExhausted = false,
@@ -36,10 +49,23 @@ public static class SemanticCoverageReasons
         if (coverage is { SkippedProjects.Count: > 0 })
             return "unsupported_language_projects_skipped";
         if (candidateProjectsSkipped) return "candidate_cluster_bounded";
-        if (coverage is { FailedProjects.Count: > 0 }) return "project_load_failed";
+        if (FailedProjects(coverage) is { } failedReason) return failedReason;
         if (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects)
             return "project_coverage_incomplete";
         if (outOfGraphCandidates) return "out_of_graph_candidates";
+        return projectModelUnproven ? "project_model_unproven" : null;
+    }
+
+    /// <summary>Partiality for a declaration already resolved by the C# compiler. Unsupported
+    /// language projects are a scan-census gap, but cannot contain another C# declaration for the
+    /// resolved symbol; load failures and incomplete C# coverage can still hide partial parts.</summary>
+    public static string? ResolvedDefinition(
+        ClusterCoverage? coverage, bool projectModelUnproven = false)
+    {
+        if (FailedProjects(coverage) is { } failedReason) return failedReason;
+        if (coverage is not null && coverage.LoadedProjects < coverage.RequestedProjects &&
+            coverage.SkippedProjects.Count == 0)
+            return "project_coverage_incomplete";
         return projectModelUnproven ? "project_model_unproven" : null;
     }
 }
@@ -51,7 +77,7 @@ public static class SemanticCoverageReasons
 /// LRU-evicts beyond a project cap; reloads projects whose files changed (index fingerprint).
 /// Does not own: which projects to load (SemanticService decides) or result shaping.
 /// </summary>
-public sealed class SemanticWorkspace : IDisposable
+public sealed partial class SemanticWorkspace : IDisposable
 {
     private const int MaxLoadedProjects = 160;
 
@@ -68,8 +94,13 @@ public sealed class SemanticWorkspace : IDisposable
     {
         public required ProjectId Id { get; init; }
         public required (long Count, long Sum) Fingerprint { get; set; }
+        public required string ModelIdentity { get; init; }
         public required bool UnprovenFriendAssemblyAuthority { get; init; }
         public long LastUse { get; set; }
+        public ProjectResources? Resources { get; init; }
+        public IReadOnlyList<PreparedMetadataCandidate> MetadataCandidates { get; init; } = [];
+        public IReadOnlySet<string> PhysicalReferenceNames { get; init; } =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     }
 
     private static readonly CSharpParseOptions ParseOptions = new(LanguageVersion.Latest);
@@ -87,22 +118,18 @@ public sealed class SemanticWorkspace : IDisposable
 
     /// <summary>LoadedBefore is null when the load died QUEUED for the gate — the warm-set
     /// size is guarded by the gate and cannot be read honestly from outside it (review r2).
-    /// x5ls.1.3: the four sub-splits dissect ProjectLoadMs (field: 6.8s lump post-xqxw/pv1k) —
-    /// csproj/packages parsing, source open+read+decode, dll metadata resolution, and Roslyn
-    /// workspace mutation. Their sum can undershoot ProjectLoadMs (loop residue); phases never
-    /// entered report 0.</summary>
+    /// x5ls.1.3: the four sub-splits dissect ProjectLoadMs into project parsing, source capture,
+    /// metadata resolution, and Roslyn workspace mutation. Parallel phase totals may overlap wall
+    /// time; phases never entered report 0. The newer plan/preparation/commit fields carry the
+    /// wall-clock cold-start path.</summary>
     public sealed record LoadStats(double GateWaitMs, double FingerprintMs, double TopoMs,
         double ProjectLoadMs, int? LoadedBefore, int Requested, int Reloaded, int Loaded,
         int Failed, double ProjectParseMs = 0, double SourceReadMs = 0,
-        double MetadataResolveMs = 0, double WorkspaceMutationMs = 0);
-
-    /// <summary>x5ls.1.3: tick accumulator threaded through LoadProject — one per
-    /// EnsureLoadedAsync call, summed across that call's projects (single-threaded under the
-    /// gate; the pv1k worker fan-out is bracketed from the outside, never written from workers).</summary>
-    private sealed class LoadPhaseTicks
-    {
-        public long Parse, Read, Metadata, Mutation;
-    }
+        double MetadataResolveMs = 0, double WorkspaceMutationMs = 0,
+        double PlanMs = 0, double PreparationMs = 0, int PreparedProjects = 0,
+        int EffectiveProjectConcurrency = 0, long AdmittedBytesHighWater = 0,
+        long RetainedBytes = 0, int ReplanCount = 0, double TotalElapsedMs = 0,
+        double PreparationQueueMs = 0, int CommittedProjects = 0);
 
     /// <summary>epuc.1 (review F2): per-CALL stats vehicle. The first cut published stats via
     /// an ambient last-load property — a concurrent caller could emit ANOTHER op's load as its
@@ -117,491 +144,17 @@ public sealed class SemanticWorkspace : IDisposable
 
     /// <summary>
     /// Ensures the given projects (dependency closures must already be included by the
-    /// caller for full-fidelity targets) are loaded; returns a solution snapshot.
+    /// caller for full-fidelity targets) are loaded; returns an operation-scoped solution lease.
     /// Load order is topological (dependencies first); references to projects outside
     /// the requested set are skipped (navigation-grade holes).
     /// </summary>
-    public async Task<(Solution Solution, ClusterCoverage Coverage)> EnsureLoadedAsync(
+    public Task<SemanticSolutionLease> EnsureLoadedAsync(
         IReadOnlyCollection<string> projectNames, CancellationToken ct,
         IReadOnlyCollection<string>? ensureReferenceTo = null,
         LoadStatsBox? statsBox = null)
-    {
-        // Allocated BEFORE the gate: nothing may sit between WaitAsync and try that could
-        // throw, or the semaphore leaks. (The finally reads these plus _loaded under the gate.)
-        var requested = new HashSet<string>(projectNames, StringComparer.OrdinalIgnoreCase);
-        var failed = new List<string>();
-        var phaseTicks = new LoadPhaseTicks(); // x5ls.1.3: sub-splits of projectLoadMs
-        long tFinger = 0, tTopo = 0; // 0 = the phase never completed (died mid-phase)
-        int reloadedCount = 0;
-        long tEnter = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
-        try
-        {
-            await _gate.WaitAsync(ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Review r2: a deadline dying while QUEUED behind another caller's load is the
-            // primary gate-contention signal (cold workspace, two parallel ops) — without this
-            // stamp such records carried no split at all. Gate wait absorbs the whole wall;
-            // phases never entered report 0; loadedBefore stays null (unknown without the gate).
-            if (statsBox is not null)
-            {
-                statsBox.Stats = new LoadStats(
-                    ToMs(System.Diagnostics.Stopwatch.GetTimestamp() - tEnter), 0, 0, 0,
-                    null, requested.Count, 0, 0, 0);
-            }
-            throw;
-        }
-        long tGate = System.Diagnostics.Stopwatch.GetTimestamp();
-        int loadedBefore = _loaded.Count;
-        try
-        {
-            using var q = new IndexQueries(_dbPath, pinReadSnapshot: false,
-                pooling: _poolIndexConnections);
-            var skipped = new List<string>();
-
-            // Reload any requested project whose files changed since load. Reuse its
-            // existing ProjectId so already-loaded dependents keep valid references — a
-            // fresh id would silently orphan them (Roslyn drops references to absent ids).
-            var reuseIds = new Dictionary<string, ProjectId>(StringComparer.OrdinalIgnoreCase);
-            var loadedRequested = requested.Where(_loaded.ContainsKey).ToList();
-            // ONE grouped fingerprint query for the whole warm set — this loop ran a point query per
-            // already-loaded project on every semantic call (dz3: the dominant warm-path SQL cost).
-            var fingerprints = loadedRequested.Count > 0
-                ? q.ProjectFingerprints(loadedRequested)
-                : new Dictionary<string, (long, long)>(StringComparer.OrdinalIgnoreCase);
-            foreach (var name in loadedRequested)
-            {
-                var current = fingerprints.TryGetValue(name, out var fp) ? fp : (0L, 0L);
-                if (_loaded[name].Fingerprint != current)
-                {
-                    _log($"Semantic reload (files changed): {name}");
-                    reuseIds[name] = _loaded[name].Id;
-                    _workspace.TryApplyChanges(_workspace.CurrentSolution.RemoveProject(_loaded[name].Id));
-                    _loaded.Remove(name);
-                    // epuc.1 review r2: stamped PER REMOVAL, not after the loop — a load dying
-                    // mid-loop must still explain why `loaded` dropped below `loadedBefore`.
-                    reloadedCount++;
-                }
-            }
-
-            tFinger = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
-            var toLoad = TopoOrder(q, requested.Where(n => !_loaded.ContainsKey(n)).ToList());
-            Dictionary<string, HashSet<string>> ensuredReferencesByProject =
-                ensureReferenceTo is { Count: > 0 }
-                    ? q.SemanticCSharpReachability(toLoad, ensureReferenceTo, ct)
-                    : new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-            tTopo = System.Diagnostics.Stopwatch.GetTimestamp(); // epuc.1
-            var frameworkRefs = ReferenceAssemblyLocator.Net472References(out string? refDir);
-            if (refDir is null)
-            {
-                _log("WARNING: no .NET Framework reference assemblies found — semantic fidelity degraded.");
-            }
-
-            foreach (var name in toLoad)
-            {
-                ct.ThrowIfCancellationRequested();
-                // Tier-a F# support indexes source text and project topology but deliberately
-                // does not construct a fake C# Roslyn project for .fsproj inputs. Keeping the
-                // project in coverage as skipped makes a C# dependency closure honestly partial
-                // while preserving any real metadata boundary the caller supplied.
-                List<ProjectRow> projectRows = q.ProjectsByName(name);
-                ProjectRow? projectRow = projectRows.FirstOrDefault(row => row.Language == "cs");
-                if (projectRow is null && projectRows.Count > 0)
-                {
-                    skipped.Add(name);
-                    continue;
-                }
-                if (projectRow is null)
-                {
-                    failed.Add(name);
-                    continue;
-                }
-                try
-                {
-                    var reuseId = reuseIds.TryGetValue(name, out var rid) ? rid : null;
-                    ensuredReferencesByProject.TryGetValue(name,
-                        out HashSet<string>? ensuredReferences);
-                    if (LoadProject(q, projectRow, name, frameworkRefs, reuseId,
-                            ensuredReferences, phaseTicks) is { } lp)
-                    {
-                        _loaded[name] = lp;
-                    }
-                    else
-                    {
-                        failed.Add(name);
-                    }
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    _log($"Semantic load failed for {name}: {ex.Message}");
-                    failed.Add(name);
-                }
-            }
-
-            foreach (var name in requested)
-            {
-                if (_loaded.TryGetValue(name, out var lp)) lp.LastUse = ++_useCounter;
-            }
-
-            EvictBeyondCap(requested);
-
-            // A logical target name can have both C# and F# physical rows. Loading the C# twin
-            // must not erase the fact that a particular source edge targets the unsupported F#
-            // row. F#-only requested projects already have their logical name in `skipped`; use
-            // the physical path only for the collision/unrequested cases so coverage is neither
-            // duplicated nor ambiguous.
-            var skippedSet = new HashSet<string>(skipped, StringComparer.OrdinalIgnoreCase);
-            foreach (SemanticProjectEdge edge in q.SemanticProjectEdges(requested))
-            {
-                if (!edge.ToLanguage.Equals("cs", StringComparison.OrdinalIgnoreCase) &&
-                    !skippedSet.Contains(edge.ToProject))
-                    skippedSet.Add(edge.ToPath);
-            }
-            skipped = skippedSet.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
-
-            var coverage = new ClusterCoverage(
-                LoadedProjects: requested.Count(n => _loaded.ContainsKey(n)),
-                RequestedProjects: requested.Count,
-                SkippedProjects: skipped,
-                FailedProjects: failed,
-                FrameworkRefsAvailable: refDir is not null,
-                SolutionProjects: _workspace.CurrentSolution.ProjectIds.Count,
-                UnprovenFriendAssemblyProjects: requested
-                    .Where(projectName =>
-                        _loaded.TryGetValue(projectName, out LoadedProject? project) &&
-                        project.UnprovenFriendAssemblyAuthority)
-                    .OrderBy(projectName => projectName, StringComparer.OrdinalIgnoreCase)
-                    .ToList());
-            return (_workspace.CurrentSolution, coverage);
-        }
-        finally
-        {
-            // epuc.1 (review F2): fill THIS call's box even when the load dies mid-flight —
-            // cluster_cold_load records are precisely the ones whose split we need most.
-            // A phase that never stamped its end gets the remaining wall (died in-phase);
-            // phases never entered report 0.
-            if (statsBox is not null)
-            {
-                long tEnd = System.Diagnostics.Stopwatch.GetTimestamp();
-                statsBox.Stats = new LoadStats(
-                    ToMs(tGate - tEnter),
-                    tFinger > 0 ? ToMs(tFinger - tGate) : ToMs(tEnd - tGate),
-                    tTopo > 0 ? ToMs(tTopo - tFinger) : tFinger > 0 ? ToMs(tEnd - tFinger) : 0,
-                    tTopo > 0 ? ToMs(tEnd - tTopo) : 0,
-                    loadedBefore, requested.Count, reloadedCount,
-                    requested.Count(n => _loaded.ContainsKey(n)), failed.Count,
-                    ToMs(phaseTicks.Parse), ToMs(phaseTicks.Read),
-                    ToMs(phaseTicks.Metadata), ToMs(phaseTicks.Mutation));
-            }
-            _gate.Release();
-        }
-    }
+        => EnsureLoadedParallelAsync(projectNames, ct, ensureReferenceTo, statsBox);
 
     private static double ToMs(long ticks) => ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-
-    // xqxw: HintPath/package MetadataReferences were re-created PER PROJECT — the same vendor
-    // dll re-mapped, re-validated, and later re-bound for every project in a scan set (field
-    // telemetry: scanLoad.projectLoadMs 12.3s cold). PortableExecutableReference is immutable
-    // and designed for reuse across compilations; reusing ONE instance also lets Roslyn share
-    // the lazily-decoded assembly symbols. One stat per lookup replaces a full map+parse.
-    // Invalidation is (mtime, size) — the same heuristic MSBuild up-to-date checks use, with
-    // the same KNOWN WINDOW: a timestamp-preserving pipeline (MSBuild Copy propagates source
-    // mtime; build caches normalize stamps) dropping a same-length dll serves the stale
-    // instance until restart or the next stamp/size change. Accepted deliberately (review):
-    // direct NTFS writes cannot collide (100ns stamps); escalate to content hashing only on
-    // field evidence. Entries live until workspace Dispose — no eviction; the retained bytes
-    // are bounded by the workspace's distinct dll set and strictly beat the old one-copy-per-
-    // project duplication while any two consumers share a dll. Only touched under _gate
-    // (LoadProject runs inside EnsureLoadedAsync's critical section) — no lock needed.
-    private readonly Dictionary<string, (DateTime MTimeUtc, long Size, PortableExecutableReference Ref)>
-        _metadataRefCache = new(StringComparer.OrdinalIgnoreCase);
-
-    internal PortableExecutableReference? GetOrCreateMetadataRef(string fullPath) // internal: tests pin identity+invalidation
-    {
-        try
-        {
-            var fi = new FileInfo(fullPath);
-            if (!fi.Exists) return null;
-            if (_metadataRefCache.TryGetValue(fullPath, out var cached) &&
-                cached.MTimeUtc == fi.LastWriteTimeUtc && cached.Size == fi.Length)
-            {
-                return cached.Ref;
-            }
-            var mref = MetadataReference.CreateFromFile(fullPath);
-            _metadataRefCache[fullPath] = (fi.LastWriteTimeUtc, fi.Length, mref);
-            return mref;
-        }
-        catch
-        {
-            return null; // unreadable/malformed dll: same skip semantics as before
-        }
-    }
-
-    // ---------------------------------------------------------------- loading
-
-    private LoadedProject? LoadProject(
-        IndexQueries q, ProjectRow row, string name,
-        IReadOnlyList<MetadataReference> frameworkRefs,
-        ProjectId? reuseId, IReadOnlyCollection<string>? ensuredReferences,
-        LoadPhaseTicks? phaseTicks = null)
-    {
-        // Preserve live load-time fidelity (assembly refs, hint paths), but capture through the
-        // bounded no-follow reader so a project or packages.config FIFO/socket/link cannot block
-        // semantic loading. The byte parser remains BOM/encoding aware.
-        long tPhase = System.Diagnostics.Stopwatch.GetTimestamp(); // x5ls.1.3
-        byte[] projectBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, row.Path,
-            IndexBuilder.MaxStructuralFileBytes) ?? [];
-        string packagesPath = PackagesConfigPath(row.Path);
-        byte[]? packagesBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, packagesPath,
-            IndexBuilder.MaxStructuralFileBytes);
-        var parsed = ProjectFileParser.ParseSnapshot(row.Path, projectBytes, packagesBytes);
-        bool unprovenFriendAssemblyAuthority = parsed.InternalsVisibleTo is { Count: > 0 } &&
-            (!parsed.InternalsVisibleToAuthorityComplete ||
-             q.HasApplicableDirectoryBuildAuthority(row.Path));
-        if (unprovenFriendAssemblyAuthority)
-        {
-            _log($"Semantic project-model boundary: imported friend-assembly authority is unproven for {name}.");
-        }
-        if (phaseTicks is not null)
-        {
-            phaseTicks.Parse += System.Diagnostics.Stopwatch.GetTimestamp() - tPhase;
-        }
-
-        var files = q.ProjectFiles(name);
-        if (files.Count == 0) return null;
-
-        var docs = new List<DocumentInfo>();
-        // Reuse the prior id on reload (keeps dependents' references valid); mint a new
-        // one only for a genuinely new project.
-        var projectId = reuseId ?? ProjectId.CreateNewId(debugName: name);
-
-        // pv1k: the per-file open→read→decode ran strictly sequentially — on a cold scan set
-        // that is thousands of small CreateFile calls on one thread (field telemetry:
-        // scanLoad.projectLoadMs 12.3s; this stage dominates). The reads are independent pure
-        // functions, so fan them out bounded and ORDER-PRESERVING (index-addressed results —
-        // document order must stay deterministic). Everything that is not thread-safe stays
-        // on this thread: the SQLite fallback (q.ContentByPath) runs afterward for the rare
-        // disk-miss, and DocumentInfo/workspace mutation below never see worker threads.
-        // A worker exception propagates (as AggregateException) into the same per-project
-        // catch that marked sequential-era failures — project lands in `failed`; only the
-        // log text shape differs (review r2 nit, accepted).
-        // Big files (review r2 LOW): DOP workers each staging a ≤256MB raw buffer could hold
-        // ~2GB transiently where the old loop peaked at one buffer — anything over the
-        // threshold is deferred to the sequential pass, restoring the old one-at-a-time peak
-        // (plus at most DOP small buffers).
-        const long ParallelReadMaxBytes = 4 * 1024 * 1024;
-        tPhase = System.Diagnostics.Stopwatch.GetTimestamp(); // x5ls.1.3: source_read starts
-        var decoded = new SourceText?[files.Count];
-        var deferredBig = new bool[files.Count];
-        System.Threading.Tasks.Parallel.For(0, files.Count, new ParallelOptions
-        {
-            MaxDegreeOfParallelism = Math.Min(8, Environment.ProcessorCount),
-        }, i =>
-        {
-            string workerFull = Path.Combine(_workspaceRoot,
-                files[i].Replace('/', Path.DirectorySeparatorChar));
-            try
-            {
-                if (new FileInfo(workerFull) is { Exists: true, Length: > ParallelReadMaxBytes })
-                {
-                    deferredBig[i] = true;
-                    return;
-                }
-            }
-            catch
-            {
-                // stat failed: fall through to the bounded reader, which resolves it safely
-            }
-            byte[]? liveBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, files[i],
-                DeltaRefresher.MaxIndexedFileBytes);
-            if (liveBytes is not null)
-            {
-                using var stream = new MemoryStream(liveBytes, writable: false);
-                decoded[i] = SourceText.From(stream);
-            }
-        });
-
-        for (int i = 0; i < files.Count; i++)
-        {
-            string rel = files[i];
-            string full = Path.Combine(_workspaceRoot,
-                rel.Replace('/', Path.DirectorySeparatorChar));
-            SourceText? text = decoded[i];
-            if (text is null && deferredBig[i])
-            {
-                // Sequential big-file read: same bytes, same authority, old-era peak memory.
-                byte[]? bigBytes = GitInfo.ReadBoundedWorkspaceFile(_workspaceRoot, rel,
-                    DeltaRefresher.MaxIndexedFileBytes);
-                if (bigBytes is not null)
-                {
-                    using var stream = new MemoryStream(bigBytes, writable: false);
-                    text = SourceText.From(stream);
-                }
-            }
-            if (text is null)
-            {
-                string? indexed = q.ContentByPath(rel);
-                if (indexed is null) continue;
-                text = SourceText.From(indexed);
-            }
-            docs.Add(DocumentInfo.Create(
-                DocumentId.CreateNewId(projectId, debugName: rel),
-                name: Path.GetFileName(rel),
-                loader: TextLoader.From(TextAndVersion.Create(text, VersionStamp.Create(), full)),
-                filePath: full));
-        }
-
-        // MSBuild's GenerateAssemblyInfo target turns literal InternalsVisibleTo items into
-        // assembly attributes. Recreate only the parser's fail-closed subset in the ad-hoc
-        // compilation; without it, legitimate friend projects bind internal base types as error
-        // symbols and exact implementation/hierarchy verification silently falls back to syntax.
-        // This document intentionally has no file path: it is compiler input, not indexed source.
-        if (parsed.InternalsVisibleTo is { Count: > 0 } friendAssemblies)
-        {
-            string generated = string.Join('\n', friendAssemblies.Select(friend =>
-                $"[assembly: global::System.Runtime.CompilerServices.InternalsVisibleToAttribute({SyntaxFactory.Literal(friend).Text})]")) + '\n';
-            SourceText text = SourceText.From(generated);
-            const string generatedName = "__PhoenixCodeNav.InternalsVisibleTo.g.cs";
-            docs.Add(DocumentInfo.Create(
-                DocumentId.CreateNewId(projectId, debugName: generatedName),
-                name: generatedName,
-                loader: TextLoader.From(TextAndVersion.Create(text, VersionStamp.Create()))));
-        }
-        if (phaseTicks is not null) // x5ls.1.3: source_read ends (fan-out + fallback + docs).
-        {
-            // Review s1: closing HERE, not after ProjectReference wiring — the wiring stage
-            // (per-project graph SQL + cycle DFS over the resident solution) would otherwise
-            // bias sourceReadMs, the exact metric the wusi decision reads. Wiring is residue.
-            phaseTicks.Read += System.Diagnostics.Stopwatch.GetTimestamp() - tPhase;
-        }
-
-        // Project references FIRST (order matters for the dll-substitution below): in-cluster
-        // only; unloaded refs become navigation-grade holes.
-        var projectRefs = new List<ProjectReference>();
-        var refIds = new HashSet<ProjectId>();
-        var refNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // names actually wired
-        var solutionNow = _workspace.CurrentSolution;
-        // Cycle guard (review, HIGH): mutual assembly refs (A <Reference> B.dll, B <Reference> A.dll —
-        // a legal multi-stage shape) put BOTH edges in project_refs. Within one load pass only
-        // backward edges wire, but a fingerprint RELOAD re-adds a project while its dependents are
-        // already loaded — wiring the forward edge then completes a ProjectReference CYCLE, which
-        // AdhocWorkspace ACCEPTS (TryApplyChanges true) and which deadlocks GetCompilationAsync
-        // forever after (review-reproduced; eviction can never break it — both sides stay
-        // 'referenced'). Skip any edge whose target already REACHES this project id; the skipped
-        // direction is deliberately NOT in refNames, so its hint dll below stays — the metadata
-        // binding is the correct degraded wiring for the back edge.
-        bool WouldCycle(ProjectId target) => ReachesId(solutionNow, target, projectId);
-        using (var q2 = new IndexQueries(_dbPath, pinReadSnapshot: false,
-                   pooling: _poolIndexConnections))
-        {
-            foreach (SemanticProjectEdge edge in q2.SemanticProjectEdges(name))
-            {
-                if (!edge.ToLanguage.Equals("cs", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-                if (_loaded.TryGetValue(edge.ToProject, out var dep) && !refIds.Contains(dep.Id) &&
-                    !WouldCycle(dep.Id) && refIds.Add(dep.Id))
-                {
-                    projectRefs.Add(new ProjectReference(dep.Id));
-                    refNames.Add(edge.ToProject);
-                }
-            }
-
-            // Guarantee visibility of the symbol-declaring project when a supported physical
-            // C# path proves SDK-style transitivity. The logical-name closure is not authority:
-            // a C# consumer can point at an F# physical row whose assembly name collides with an
-            // already-loaded C# row. Force-wiring that namesake would bind compiler results
-            // against the wrong project even though the direct edge loop correctly rejected it.
-            if (ensuredReferences is not null)
-            {
-                foreach (var target in ensuredReferences)
-                {
-                    if (!target.Equals(name, StringComparison.OrdinalIgnoreCase) &&
-                        _loaded.TryGetValue(target, out var dep) && !refIds.Contains(dep.Id) &&
-                        !WouldCycle(dep.Id) && refIds.Add(dep.Id))
-                    {
-                        projectRefs.Add(new ProjectReference(dep.Id));
-                        refNames.Add(target);
-                    }
-                }
-            }
-        }
-
-        tPhase = System.Diagnostics.Stopwatch.GetTimestamp(); // metadata_resolve starts
-        var metadataRefs = new List<MetadataReference>(frameworkRefs);
-        foreach (var (assembly, hint) in parsed.AssemblyRefs)
-        {
-            if (hint is null) continue; // plain framework refs covered by reference assemblies
-            // Source-over-binary substitution (lhg): when the referenced assembly IS a project we
-            // just wired a ProjectReference to (multi-staged builds reference the built dll from a
-            // common folder, not the project — the recovered assembly-ref edge supplies the wire),
-            // SKIP the metadata dll: the name binds to the SOURCE symbol. The dll ALONE binds
-            // consumers to a METADATA symbol that never matches the queried source declaration —
-            // the field's 8-implementers-found-0 trap. Keyed on refNames, NOT on _loaded: only a
-            // WIRED ProjectReference justifies dropping the dll — a same-named project that is
-            // merely loaded but not wired (edge missing, load-order miss, cycle-guard skip) must
-            // keep its dll or the consumer is left with NEITHER binding. (Collided names DO
-            // produce edges since Batch 29 — the wired-only keying is what stays load-bearing.)
-            // Defense-in-depth note: with BOTH references present Roslyn empirically prefers the
-            // source project in every shape we reproduced (equal and differing versions), so this
-            // skip is not independently test-pinnable — it exists so we never depend on that
-            // conflict resolution (e.g. strong-named field dlls whose distinct identities tests
-            // cannot reproduce). TopoOrder loads dependencies first, so the edge target is already
-            // in _loaded — and thus in refNames — when its consumers load.
-            if (refNames.Contains(assembly) ||
-                refNames.Contains(Path.GetFileNameWithoutExtension(hint)))
-            {
-                continue;
-            }
-            string full = Path.Combine(_workspaceRoot, hint.Replace('/', Path.DirectorySeparatorChar));
-            // Existence is checked inside GetOrCreateMetadataRef (one stat serves both).
-            if (GetOrCreateMetadataRef(full) is { } mref) metadataRefs.Add(mref);
-        }
-        foreach (var (pkg, version) in parsed.PackageRefs)
-        {
-            if (ReferenceAssemblyLocator.ResolvePackageDll(pkg, version) is { } dll)
-            {
-                if (GetOrCreateMetadataRef(dll) is { } mref) metadataRefs.Add(mref);
-            }
-        }
-
-        if (phaseTicks is not null) // x5ls.1.3: metadata_resolve ends
-        {
-            phaseTicks.Metadata += System.Diagnostics.Stopwatch.GetTimestamp() - tPhase;
-        }
-        var info = ProjectInfo.Create(
-                projectId,
-                VersionStamp.Create(),
-                name: name,
-                assemblyName: name,
-                language: LanguageNames.CSharp,
-                filePath: Path.Combine(_workspaceRoot, row.Path.Replace('/', Path.DirectorySeparatorChar)),
-                compilationOptions: CompilationOptions,
-                parseOptions: ParseOptions,
-                documents: docs,
-                projectReferences: projectRefs,
-                metadataReferences: metadataRefs);
-
-        tPhase = System.Diagnostics.Stopwatch.GetTimestamp(); // x5ls.1.3: workspace_mutation
-        bool applied = _workspace.TryApplyChanges(_workspace.CurrentSolution.AddProject(info));
-        if (phaseTicks is not null)
-        {
-            phaseTicks.Mutation += System.Diagnostics.Stopwatch.GetTimestamp() - tPhase;
-        }
-        if (!applied)
-        {
-            return null;
-        }
-        return new LoadedProject
-        {
-            Id = projectId,
-            Fingerprint = q.ProjectFingerprint(name),
-            UnprovenFriendAssemblyAuthority = unprovenFriendAssemblyAuthority,
-            LastUse = ++_useCounter,
-        };
-    }
 
     /// <summary>True when <paramref name="from"/> reaches <paramref name="target"/> over the
     /// solution's recorded ProjectReferences. A dangling id (a project removed for reload) has no
@@ -632,11 +185,16 @@ public sealed class SemanticWorkspace : IDisposable
         return false;
     }
 
-    private List<string> TopoOrder(IndexQueries q, List<string> names)
+    private static List<string> TopoOrder(List<string> names,
+        IReadOnlyCollection<SemanticProjectEdge> edges)
     {
         // Order by dependency depth so referenced projects load before referencing ones.
         var set = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
         var depth = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, List<SemanticProjectEdge>> edgesByProject = edges
+            .GroupBy(edge => edge.FromProject, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.ToList(),
+                StringComparer.OrdinalIgnoreCase);
 
         int Depth(string n, int guard)
         {
@@ -644,7 +202,7 @@ public sealed class SemanticWorkspace : IDisposable
             if (depth.TryGetValue(n, out int d)) return d;
             depth[n] = 0; // cycle guard
             int max = 0;
-            foreach (SemanticProjectEdge e in q.SemanticProjectEdges(n))
+            foreach (SemanticProjectEdge e in edgesByProject.GetValueOrDefault(n) ?? [])
             {
                 if (e.ToLanguage.Equals("cs", StringComparison.OrdinalIgnoreCase) &&
                     set.Contains(e.ToProject))
@@ -695,15 +253,22 @@ public sealed class SemanticWorkspace : IDisposable
             .OrderBy(kv => kv.Value.LastUse)
             .Take(_loaded.Count - cap)
             .ToList();
+        if (evictable.Count == 0) return;
+        Solution next = _workspace.CurrentSolution;
+        foreach ((_, LoadedProject project) in evictable)
+            next = next.RemoveProject(project.Id);
+        if (!_workspace.TryApplyChanges(next))
+        {
+            _log("Semantic cache eviction was rejected by the workspace; resident ownership is unchanged.");
+            return;
+        }
         foreach (var (name, lp) in evictable)
         {
-            _workspace.TryApplyChanges(_workspace.CurrentSolution.RemoveProject(lp.Id));
             _loaded.Remove(name);
+            lp.Resources?.Release();
         }
-        if (evictable.Count > 0)
-        {
-            _log($"Semantic cache evicted {evictable.Count} projects (cap {cap}).");
-        }
+        _workspaceGeneration++;
+        _log($"Semantic cache evicted {evictable.Count} projects (cap {cap}).");
     }
 
     private static string PackagesConfigPath(string projectPath)
@@ -714,7 +279,12 @@ public sealed class SemanticWorkspace : IDisposable
 
     public void Dispose()
     {
+        _disposeCts.Cancel();
+        foreach (LoadedProject project in _loaded.Values)
+            project.Resources?.Release();
+        _loaded.Clear();
         _workspace.Dispose();
         _gate.Dispose();
+        _disposeCts.Dispose();
     }
 }

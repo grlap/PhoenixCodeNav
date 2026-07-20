@@ -107,6 +107,8 @@ public sealed partial class NavigationTools
                 new { id = "workspace-msbuild-config-indexing", summary = "schema v16 persists arbitrary workspace .props/.targets as config inputs for find_file/config_lookup and pinned bounded project evaluation" },
                 new { id = "fsharp-semantic-bounded-project-evaluation", summary = "v0.12.6 bounded simple properties before semantic items, conditions, Choose, and workspace-local .props imports feed FCS; unresolved SDK/toolchain/ambient inputs remain explicit; no targets/tasks, property functions, package closure, or project closure" },
                 new { id = "fsharp-semantic-directory-build-reference-evaluation", summary = "v0.12.8 nearest indexed ancestor Directory.Build.props/targets are evaluated around one F# project for bounded properties, conditions, and Reference Include/Remove item-list mutations; irrelevant chained targets are ignored while reference-affecting targets/tasks remain fail-closed" },
+                new { id = "semantic-parallel-cold-start-loader", summary = "v0.12.9 C# semantic clusters prepare immutable project inputs concurrently through one bounded process scheduler, then commit one dependency-ordered Roslyn solution while preserving reload, cycle, and source-over-binary authority" },
+                new { id = "semantic-resource-budget-coverage", summary = "v0.12.9 process-wide semantic input admission and operation-scoped solution leases bound retained cold-load inputs; exhausted projects remain explicit partial coverage under semantic_resource_budget_exhausted" },
                 new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry the same serialized request after bounded 100/250/1000 ms delays" },
                 new { id = "refresh-sweep-publication-gating", summary = "v0.12.7 builds and refreshes persist a follower-visible refresh_sweep_pending marker before publication or row mutation and clear it only after the serialized convergence sweep commits" },
                 new { id = "refresh-incomplete-freshness", summary = "v0.12.7 exhausted source capture keeps index state stale, preserves the Git baseline, exposes a stable refreshIncompleteReason plus bounded paths, and widens the next request to a recovery sweep" },
@@ -1221,7 +1223,7 @@ public sealed partial class NavigationTools
             var (target, hint) = ResolveSemanticTarget(name, container, kinds, path, line, column);
             if (target is { } t)
             {
-                var (decl, reason, projectModelUnproven) = _semantic
+                var (decl, reason, _, semanticPartialReason) = _semantic
                     .DefinitionAsync(t.Path, t.Line, t.Column, hint, timeoutMs)
                     .GetAwaiter().GetResult();
                 if (decl is not null)
@@ -1246,11 +1248,11 @@ public sealed partial class NavigationTools
                         declarations = items.Select(d => new { d.Path, d.StartLine, d.EndLine }),
                         declarationsTruncated = (listTrunc || totalDecls > MaxDeclarationSites) ? true : (bool?)null,
                         body,
-                        partial = projectModelUnproven ? true : (bool?)null,
-                        partialReason = projectModelUnproven ? "project_model_unproven" : null,
+                        partial = semanticPartialReason is not null ? true : (bool?)null,
+                        partialReason = semanticPartialReason,
                         timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds }, // 24n
                         meta = Meta.From(_manager.Health(),
-                            projectModelUnproven ? "indexed" : "exact", "semantic"),
+                            semanticPartialReason is not null ? "indexed" : "exact", "semantic"),
                     });
                     // Semantic spans come from live sources — pair them with live content.
                     object? MakeSemanticBody(int budget) =>
@@ -1772,7 +1774,11 @@ public sealed partial class NavigationTools
                     if (candidateProjectsSkipped)
                         partialReasons.Add($"candidate_cluster_bounded: skipped {result.SkippedCandidateProjects.Count} candidate project(s) (raise maxProjects)");
                     if (failedLoads)
-                        partialReasons.Add($"project_load_failed: {result.Coverage.FailedProjects.Count} project(s) were not scanned");
+                    {
+                        string failedCause = SemanticCoverageReasons.FailedProjects(result.Coverage)
+                            ?? "project_load_failed";
+                        partialReasons.Add($"{failedCause}: {result.Coverage.FailedProjects.Count} project(s) were not scanned");
+                    }
                     if (coverageIncomplete && !unsupportedLanguageSkipped && !failedLoads)
                         partialReasons.Add($"project_coverage_incomplete: loaded {result.Coverage.LoadedProjects} of {result.Coverage.RequestedProjects} requested projects");
                     if (outOfGraphCandidates)
@@ -2141,43 +2147,77 @@ public sealed partial class NavigationTools
         return truncated;
     }
 
-    private static object CoverageJson(ClusterCoverage c) => new
+    private static object CoverageJson(ClusterCoverage c)
     {
-        loadedProjects = c.LoadedProjects,
-        requestedProjects = c.RequestedProjects,
-        // Field 0.7.0: SymbolFinder scans the WHOLE solution (including projects loaded by earlier
-        // calls), so hits can legitimately exceed the requested set — this makes that legible
-        // instead of "coverage 1/1 but 8 hits from 8 projects".
-        solutionProjects = c.SolutionProjects > 0 ? c.SolutionProjects : (int?)null,
-        skippedProjects = c.SkippedProjects.Count > 0
-            ? c.SkippedProjects.Take(8).Select(CoverageIdentity).ToList()
-            : null,
-        skippedProjectCount = c.SkippedProjects.Count > 0 ? c.SkippedProjects.Count : (int?)null,
-        skippedProjectsTruncated = c.SkippedProjects.Count > 8 ||
-                                   c.SkippedProjects.Any(CoverageIdentityTruncated)
-            ? true
-            : (bool?)null,
-        failedProjects = c.FailedProjects.Count > 0
-            ? c.FailedProjects.Take(8).Select(CoverageIdentity).ToList()
-            : null,
-        failedProjectCount = c.FailedProjects.Count > 0 ? c.FailedProjects.Count : (int?)null,
-        failedProjectsTruncated = c.FailedProjects.Count > 8 ||
-                                  c.FailedProjects.Any(CoverageIdentityTruncated)
-            ? true
-            : (bool?)null,
-        unprovenFriendAssemblyProjects = c.UnprovenFriendAssemblyProjects is { Count: > 0 } unproven
-            ? unproven.Take(8).Select(CoverageIdentity).ToList()
-            : null,
-        unprovenFriendAssemblyProjectCount = c.UnprovenFriendAssemblyProjects is { Count: > 0 }
-            ? c.UnprovenFriendAssemblyProjects.Count
-            : (int?)null,
-        unprovenFriendAssemblyProjectsTruncated = c.UnprovenFriendAssemblyProjects is { Count: > 0 } identities &&
-                                                   (identities.Count > 8 ||
-                                                    identities.Any(CoverageIdentityTruncated))
-            ? true
-            : (bool?)null,
-        frameworkRefsAvailable = c.FrameworkRefsAvailable,
-    };
+        var causeGroups = (c.FailedProjectCauses ??
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
+            .Where(pair => c.FailedProjects.Contains(pair.Key,
+                StringComparer.OrdinalIgnoreCase))
+            .GroupBy(pair => pair.Value, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .ToList();
+        var causeSample = causeGroups.Take(8).Select(group =>
+        {
+            List<string> projects = group.Select(pair => pair.Key)
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
+            return new
+            {
+                cause = group.Key,
+                projectCount = projects.Count,
+                projects = projects.Take(4).Select(CoverageIdentity).ToList(),
+                projectsTruncated = projects.Count > 4 ||
+                                    projects.Any(CoverageIdentityTruncated)
+                    ? true
+                    : (bool?)null,
+            };
+        }).ToList();
+        int resourceBudgetFailures = causeGroups
+            .Where(group => group.Key == SemanticCoverageReasons.ResourceBudgetExhausted)
+            .Sum(group => group.Count());
+        return new
+        {
+            loadedProjects = c.LoadedProjects,
+            requestedProjects = c.RequestedProjects,
+            // Field 0.7.0: SymbolFinder scans the WHOLE solution (including projects loaded by earlier
+            // calls), so hits can legitimately exceed the requested set — this makes that legible
+            // instead of "coverage 1/1 but 8 hits from 8 projects".
+            solutionProjects = c.SolutionProjects > 0 ? c.SolutionProjects : (int?)null,
+            skippedProjects = c.SkippedProjects.Count > 0
+                ? c.SkippedProjects.Take(8).Select(CoverageIdentity).ToList()
+                : null,
+            skippedProjectCount = c.SkippedProjects.Count > 0 ? c.SkippedProjects.Count : (int?)null,
+            skippedProjectsTruncated = c.SkippedProjects.Count > 8 ||
+                                       c.SkippedProjects.Any(CoverageIdentityTruncated)
+                ? true
+                : (bool?)null,
+            failedProjects = c.FailedProjects.Count > 0
+                ? c.FailedProjects.Take(8).Select(CoverageIdentity).ToList()
+                : null,
+            failedProjectCount = c.FailedProjects.Count > 0 ? c.FailedProjects.Count : (int?)null,
+            failedProjectsTruncated = c.FailedProjects.Count > 8 ||
+                                      c.FailedProjects.Any(CoverageIdentityTruncated)
+                ? true
+                : (bool?)null,
+            failedProjectCauses = causeSample.Count > 0 ? causeSample : null,
+            failedProjectCauseCount = causeGroups.Count > 0 ? causeGroups.Count : (int?)null,
+            failedProjectCausesTruncated = causeGroups.Count > 8 ? true : (bool?)null,
+            resourceBudgetFailedProjectCount = resourceBudgetFailures > 0
+                ? resourceBudgetFailures
+                : (int?)null,
+            unprovenFriendAssemblyProjects = c.UnprovenFriendAssemblyProjects is { Count: > 0 } unproven
+                ? unproven.Take(8).Select(CoverageIdentity).ToList()
+                : null,
+            unprovenFriendAssemblyProjectCount = c.UnprovenFriendAssemblyProjects is { Count: > 0 }
+                ? c.UnprovenFriendAssemblyProjects.Count
+                : (int?)null,
+            unprovenFriendAssemblyProjectsTruncated = c.UnprovenFriendAssemblyProjects is { Count: > 0 } identities &&
+                                                       (identities.Count > 8 ||
+                                                        identities.Any(CoverageIdentityTruncated))
+                ? true
+                : (bool?)null,
+            frameworkRefsAvailable = c.FrameworkRefsAvailable,
+        };
+    }
 
     private string UnsupportedLanguage(string path, string language, string operation)
     {

@@ -128,7 +128,8 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
         try
         {
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Acme.Platform.Common", dependent };
-            var (sol1, _) = await workspace.EnsureLoadedAsync(set, CancellationToken.None);
+            using var firstLoad = await workspace.EnsureLoadedAsync(set, CancellationToken.None);
+            var sol1 = firstLoad.Solution;
             Assert.True(await DependentSeesGuard(sol1, dependent), "dependent should see Guard before reload");
 
             // Change Platform.Common's fingerprint via delta refresh, then re-ensure.
@@ -145,7 +146,8 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
                     new[] { guard.FilePath },
                     q => q.ContentByPath(guard.FilePath)?.Contains("ReloadMarker2", StringComparison.Ordinal) == true,
                     "the dependent reload edit was not indexed");
-                var (sol2, _) = await workspace.EnsureLoadedAsync(set, CancellationToken.None);
+                using var secondLoad = await workspace.EnsureLoadedAsync(set, CancellationToken.None);
+                var sol2 = secondLoad.Solution;
                 Assert.True(await DependentSeesGuard(sol2, dependent),
                     "dependent lost visibility of Guard after Platform.Common reload (hja)");
             }

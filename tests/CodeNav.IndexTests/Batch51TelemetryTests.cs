@@ -81,6 +81,16 @@ public class Batch51TelemetryTests
                 // the wusi (index-first text) question from field data.
                 Assert.Contains("\"sourceReadMs\":", exactLine);
                 Assert.Contains("\"metadataResolveMs\":", exactLine);
+                Assert.Contains("\"planMs\":", exactLine);
+                Assert.Contains("\"preparationMs\":", exactLine);
+                Assert.Contains("\"preparationQueueMs\":", exactLine);
+                Assert.Contains("\"preparedProjects\":", exactLine);
+                Assert.Contains("\"committedProjects\":", exactLine);
+                Assert.Contains("\"effectiveProjectConcurrency\":", exactLine);
+                Assert.Contains("\"admittedBytesHighWater\":", exactLine);
+                Assert.Contains("\"retainedBytes\":", exactLine);
+                Assert.Contains("\"replanCount\":", exactLine);
+                Assert.Contains("\"totalElapsedMs\":", exactLine);
 
                 // (2) privacy: no drive-rooted path may appear in any record —
                 // neither drive-letter (C:\\) nor UNC (\\\\server\\share) shaped.

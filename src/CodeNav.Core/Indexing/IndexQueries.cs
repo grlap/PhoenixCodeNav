@@ -63,6 +63,8 @@ public sealed record SemanticProjectEdge(
     long ToId, string ToPath, string ToProject, string ToLanguage,
     string Kind = "project");
 
+public sealed record DirectoryBuildSemanticAuthority(bool HasPotentialAuthority, string Identity);
+
 public sealed record ReferenceGroup(string Project, bool IsTestProject, int Count, List<TextHit> Samples);
 
 public sealed record OverviewStats(
@@ -100,6 +102,7 @@ public sealed partial class IndexQueries : IDisposable
     private readonly SqliteConnection _conn;
     private readonly SqliteTransaction? _readSnapshot;
     private readonly Action<string>? _afterQueryForTest;
+    private readonly Action<string>? _beforeQueryForTest;
     private readonly Dictionary<(string Path, string Name),
         (byte[] ContentHash, List<(int Start, int End)> Offsets)>
         _declarationOffsets = new();
@@ -160,13 +163,17 @@ public sealed partial class IndexQueries : IDisposable
     }
 
     internal IndexQueries(string dbPath, bool pinReadSnapshot,
-        Action<string>? afterQueryForTest = null, bool pooling = true)
+        Action<string>? afterQueryForTest = null, Action<string>? beforeQueryForTest = null,
+        bool pooling = true, CancellationToken cancellationToken = default)
     {
         _conn = new SqliteConnection(ReadConnectionString(dbPath, pinReadSnapshot, pooling));
         _afterQueryForTest = afterQueryForTest;
+        _beforeQueryForTest = beforeQueryForTest;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             _conn.Open();
+            cancellationToken.ThrowIfCancellationRequested();
             if (pinReadSnapshot)
             {
                 // A deferred WAL read transaction allows the refresh writer to keep committing while
@@ -176,7 +183,22 @@ public sealed partial class IndexQueries : IDisposable
                 _readSnapshot = _conn.BeginTransaction(deferred: true);
                 using var pin = CreateCommand();
                 pin.CommandText = "SELECT value FROM meta WHERE key='schema_version'";
-                _ = pin.ExecuteScalar();
+                using CancellationTokenRegistration registration = cancellationToken.Register(
+                    static state =>
+                    {
+                        try { ((SqliteCommand)state!).Cancel(); } catch { }
+                    }, pin);
+                _beforeQueryForTest?.Invoke(pin.CommandText);
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    _ = pin.ExecuteScalar();
+                }
+                catch (SqliteException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException(cancellationToken);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
             }
         }
         catch
@@ -192,21 +214,18 @@ public sealed partial class IndexQueries : IDisposable
     /// <summary>Reads the persisted index identity through this connection (and therefore through
     /// the same pinned transaction when this is a review snapshot). Followers use this instead of
     /// a writer-process cache, which cannot observe another process's refresh epoch.</summary>
-    internal IndexMetadataSnapshot ReadMetadata()
+    internal IndexMetadataSnapshot ReadMetadata(CancellationToken cancellationToken = default)
     {
-        using var cmd = CreateCommand();
-        cmd.CommandText =
+        const string sql =
             "SELECT key, value FROM meta WHERE key IN " +
             "('schema_version','workspace_root','index_version','indexed_at_utc'," +
             "'last_refresh_utc','indexed_commit','indexed_branch'," +
             "'refresh_incomplete_reason','refresh_incomplete_paths'," +
             "'refresh_incomplete_path_count','refresh_incomplete_path_count_lower_bound')";
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        using (var reader = cmd.ExecuteReader())
-        {
-            while (reader.Read()) values[reader.GetString(0)] = reader.GetString(1);
-        }
-        _afterQueryForTest?.Invoke(cmd.CommandText);
+        Dictionary<string, string> values = QueryCancellable(sql,
+                reader => (Key: reader.GetString(0), Value: reader.GetString(1)),
+                cancellationToken)
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
         string[]? incompletePaths = null;
         if (values.GetValueOrDefault("refresh_incomplete_paths") is { } pathsJson)
         {
@@ -985,6 +1004,36 @@ public sealed partial class IndexQueries : IDisposable
         "WHERE name = $n COLLATE NOCASE ORDER BY path",
         ReadProject, ("$n", name));
 
+    /// <summary>All physical rows for many logical project names in bounded grouped queries.</summary>
+    public Dictionary<string, List<ProjectRow>> ProjectsByNames(
+        IReadOnlyCollection<string> projectNames,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<string, List<ProjectRow>>(StringComparer.OrdinalIgnoreCase);
+        foreach (string[] chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(200))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$n{i}");
+                args.Add(($"$n{i}", chunk[i]));
+            }
+            foreach (ProjectRow row in QueryCancellable(
+                         "SELECT id, path, name, style, tfms, is_test, load_status, lang " +
+                         $"FROM projects WHERE name COLLATE NOCASE IN ({string.Join(",", parameters)}) " +
+                         "ORDER BY name, path",
+                         ReadProject, cancellationToken, args.ToArray()))
+            {
+                if (!result.TryGetValue(row.Name, out List<ProjectRow>? rows))
+                    result[row.Name] = rows = [];
+                rows.Add(row);
+            }
+        }
+        return result;
+    }
+
     /// <summary>Language summary for only the requested logical project names. A logical name
     /// backed by both C# and F# physical projects is reported as mixed instead of whichever row
     /// happened to be read first.</summary>
@@ -1163,17 +1212,20 @@ public sealed partial class IndexQueries : IDisposable
     /// name. Target language/path remain physical facts. This deliberately does not replace the
     /// public language-neutral graph: Roslyn wiring is the only consumer that must exclude F#
     /// targets while preserving established same-name C# unions.</summary>
-    public List<SemanticProjectEdge> SemanticProjectEdges(string projectName) =>
-        SemanticProjectEdges([projectName]);
+    public List<SemanticProjectEdge> SemanticProjectEdges(string projectName,
+        CancellationToken cancellationToken = default) =>
+        SemanticProjectEdges([projectName], cancellationToken);
 
     /// <summary>Batched form used by coverage reporting so physical unsupported targets are read
     /// from the current index epoch on every request rather than cached in a warm Roslyn project.</summary>
     public List<SemanticProjectEdge> SemanticProjectEdges(
-        IReadOnlyCollection<string> projectNames)
+        IReadOnlyCollection<string> projectNames,
+        CancellationToken cancellationToken = default)
     {
         var result = new List<SemanticProjectEdge>();
         foreach (string[] chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(200))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var args = new List<(string, object)>();
             var parameters = new List<string>();
             for (int i = 0; i < chunk.Length; i++)
@@ -1181,7 +1233,7 @@ public sealed partial class IndexQueries : IDisposable
                 parameters.Add($"$n{i}");
                 args.Add(($"$n{i}", chunk[i]));
             }
-            result.AddRange(Query(
+            result.AddRange(QueryCancellable(
                 $"""
                 SELECT pf.id, pf.path, pf.name, pf.lang,
                        pt.id, pt.path, pt.name, pt.lang, r.kind
@@ -1196,7 +1248,7 @@ public sealed partial class IndexQueries : IDisposable
                     reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
                     reader.GetString(3), reader.GetInt64(4), reader.GetString(5),
                     reader.GetString(6), reader.GetString(7), reader.GetString(8)),
-                args.ToArray()));
+                cancellationToken, args.ToArray()));
         }
         return result;
     }
@@ -1585,6 +1637,138 @@ public sealed partial class IndexQueries : IDisposable
             r => r.GetString(0), ("$n", projectName));
     }
 
+    /// <summary>Ordered compiled C# inputs plus their indexed byte sizes. Semantic cold-start
+    /// planning uses the size as a conservative, snapshot-pinned admission input before any live
+    /// file is opened. Keeping the path and size in one query also avoids a point lookup per file.</summary>
+    public List<(string Path, long Size)> ProjectFilesWithSizes(string projectName,
+        CancellationToken cancellationToken = default)
+    {
+        return QueryCancellable(
+            """
+            SELECT DISTINCT f.path, f.size FROM compile_items ci
+            JOIN projects p ON p.id = ci.project_id
+            JOIN files f ON f.id = ci.file_id
+            WHERE p.name = $n COLLATE NOCASE AND f.lang = 'cs'
+            ORDER BY f.path
+            """,
+            r => (r.GetString(0), r.GetInt64(1)), cancellationToken, ("$n", projectName));
+    }
+
+    /// <summary>Batched compiled-input descriptors for semantic cold-start planning.</summary>
+    public Dictionary<string, List<(string Path, long Size)>> ProjectFilesWithSizes(
+        IReadOnlyCollection<string> projectNames,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<string, List<(string, long)>>(StringComparer.OrdinalIgnoreCase);
+        foreach (string[] chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(200))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$n{i}");
+                args.Add(($"$n{i}", chunk[i]));
+            }
+            foreach (var row in QueryCancellable(
+                         $"""
+                         SELECT DISTINCT p.name, f.path, f.size FROM compile_items ci
+                         JOIN projects p ON p.id = ci.project_id
+                         JOIN files f ON f.id = ci.file_id
+                         WHERE p.name COLLATE NOCASE IN ({string.Join(",", parameters)})
+                           AND f.lang = 'cs'
+                         ORDER BY p.name, f.path
+                         """,
+                         reader => (Name: reader.GetString(0), Path: reader.GetString(1),
+                             Size: reader.GetInt64(2)), cancellationToken, args.ToArray()))
+            {
+                if (!result.TryGetValue(row.Name, out List<(string, long)>? files))
+                    result[row.Name] = files = [];
+                files.Add((row.Path, row.Size));
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Conservative retained-byte charge for the project/file/edge descriptors that a
+    /// cold-start plan will materialize. The aggregate query itself returns one tiny row per chunk,
+    /// allowing admission to happen before any workspace-sized descriptor collection exists.</summary>
+    public long SemanticPlanningDescriptorBytes(IReadOnlyCollection<string> projectNames,
+        CancellationToken cancellationToken = default)
+    {
+        long bytes = 0;
+        foreach (string[] chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(180))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$n{i}");
+                args.Add(($"$n{i}", chunk[i]));
+            }
+            var totals = QueryCancellable(
+                $"""
+                WITH wanted_projects AS (
+                    SELECT id, path, name, style, tfms, load_status, lang
+                    FROM projects
+                    WHERE name COLLATE NOCASE IN ({string.Join(",", parameters)})
+                ), compiled AS (
+                    SELECT p.name, f.path
+                    FROM compile_items ci
+                    JOIN wanted_projects p ON p.id = ci.project_id
+                    JOIN files f ON f.id = ci.file_id
+                    WHERE f.lang = 'cs'
+                ), edges AS (
+                    SELECT pf.path AS from_path, pf.name AS from_name,
+                           pt.path AS to_path, pt.name AS to_name, r.kind
+                    FROM project_refs r
+                    JOIN wanted_projects pf ON pf.id = r.from_id
+                    JOIN projects pt ON pt.id = r.to_id
+                    WHERE pf.lang = 'cs'
+                )
+                SELECT
+                    (SELECT COUNT(*) FROM wanted_projects),
+                    (SELECT COALESCE(SUM(length(path) + length(name) + length(style) +
+                                         length(tfms) + length(load_status) + length(lang)), 0)
+                       FROM wanted_projects),
+                    (SELECT COUNT(*) FROM compiled),
+                    (SELECT COALESCE(SUM(length(path) + length(name)), 0) FROM compiled),
+                    (SELECT COUNT(*) FROM edges),
+                    (SELECT COALESCE(SUM(length(from_path) + length(from_name) +
+                                         length(to_path) + length(to_name) + length(kind)), 0)
+                       FROM edges),
+                    (SELECT COALESCE(SUM(2 *
+                        ((length(path) - length(replace(path, '/', ''))) + 1)), 0)
+                       FROM wanted_projects),
+                    (SELECT COALESCE(SUM(2 *
+                        ((length(path) - length(replace(path, '/', ''))) + 1) *
+                        (length(path) + 32)), 0)
+                       FROM wanted_projects)
+                """,
+                reader => (ProjectCount: reader.GetInt64(0), ProjectChars: reader.GetInt64(1),
+                    FileCount: reader.GetInt64(2), FileChars: reader.GetInt64(3),
+                    EdgeCount: reader.GetInt64(4), EdgeChars: reader.GetInt64(5),
+                    AuthorityCandidateCount: reader.GetInt64(6),
+                    AuthorityCandidateChars: reader.GetInt64(7)),
+                cancellationToken, args.ToArray()).Single();
+            try
+            {
+                bytes = checked(bytes +
+                    totals.ProjectCount * 4096 + totals.ProjectChars * sizeof(char) +
+                    totals.FileCount * 512 + totals.FileChars * sizeof(char) +
+                    totals.EdgeCount * 768 + totals.EdgeChars * sizeof(char) +
+                    totals.AuthorityCandidateCount * 128 +
+                    totals.AuthorityCandidateChars * sizeof(char));
+            }
+            catch (OverflowException)
+            {
+                return long.MaxValue;
+            }
+        }
+        return Math.Max(4096, bytes);
+    }
+
     /// <summary>Returns the nearest indexed Directory.Build.props and Directory.Build.targets
     /// applicable to a project. Each filename is searched independently, matching MSBuild's
     /// ancestor discovery rule. The lookup uses only the pinned index: Unix is case-sensitive;
@@ -1676,18 +1860,131 @@ public sealed partial class IndexQueries : IDisposable
         return authority.HasPotentialAuthority;
     }
 
+    /// <summary>Batched form of <see cref="HasApplicableDirectoryBuildAuthority"/>. All possible
+    /// ancestor authority paths are probed together; a Windows case ambiguity remains potential
+    /// authority and therefore still forces the semantic evaluator to fail closed.</summary>
+    public HashSet<string> ProjectsWithApplicableDirectoryBuildAuthority(
+        IReadOnlyCollection<ProjectRow> projects,
+        CancellationToken cancellationToken = default) =>
+        ProjectDirectoryBuildSemanticAuthorities(projects, cancellationToken)
+            .Where(pair => pair.Value.HasPotentialAuthority)
+            .Select(pair => pair.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Potential authority plus a targeted identity for the two nearest applicable
+    /// Directory.Build files. This lets semantic commit reject relevant model changes without
+    /// invalidating a cold load for an unrelated workspace refresh.</summary>
+    public Dictionary<string, DirectoryBuildSemanticAuthority>
+        ProjectDirectoryBuildSemanticAuthorities(IReadOnlyCollection<ProjectRow> projects,
+            CancellationToken cancellationToken = default)
+    {
+        bool windows = OperatingSystem.IsWindows();
+        var candidatesByProject = new Dictionary<string, List<string>>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (ProjectRow project in projects)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string projectPath = WorkspacePaths.Normalize(project.Path);
+            int slash = projectPath.LastIndexOf('/');
+            string directory = slash < 0 ? "" : projectPath[..slash];
+            var candidates = new List<string>();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string prefix = directory.Length == 0 ? "" : directory + "/";
+                candidates.Add(prefix + "Directory.Build.props");
+                candidates.Add(prefix + "Directory.Build.targets");
+                if (directory.Length == 0) break;
+                int parentSlash = directory.LastIndexOf('/');
+                directory = parentSlash < 0 ? "" : directory[..parentSlash];
+            }
+            candidatesByProject[project.Name] = candidates;
+        }
+
+        var indexed = new List<(string Path, long Hash)>();
+        foreach (string[] chunk in candidatesByProject.Values.SelectMany(value => value)
+                     .Distinct(windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+                     .Chunk(300))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$p{i}");
+                args.Add(($"$p{i}", chunk[i]));
+            }
+            string lhs = windows ? "path COLLATE NOCASE" : "path";
+            indexed.AddRange(QueryCancellable(
+                $"SELECT path, hash FROM files WHERE {lhs} IN ({string.Join(",", parameters)})",
+                reader => (reader.GetString(0), reader.GetInt64(1)), cancellationToken,
+                args.ToArray()));
+        }
+
+        var exact = indexed.ToDictionary(row => row.Path, row => row.Hash,
+            StringComparer.Ordinal);
+        Dictionary<string, List<(string Path, long Hash)>>? aliases = windows
+            ? indexed.GroupBy(row => row.Path, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.ToList(),
+                    StringComparer.OrdinalIgnoreCase)
+            : null;
+        var result = new Dictionary<string, DirectoryBuildSemanticAuthority>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach ((string name, List<string> candidates) in candidatesByProject)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            (string? Path, long Hash, bool Ambiguous) Resolve(string candidate)
+            {
+                if (exact.TryGetValue(candidate, out long hash))
+                    return (candidate, hash, false);
+                if (aliases is null || !aliases.TryGetValue(candidate, out var matches))
+                    return (null, 0, false);
+                return matches.Count switch
+                {
+                    1 => (matches[0].Path, matches[0].Hash, false),
+                    _ => (null, 0, true),
+                };
+            }
+
+            (string? Path, long Hash, bool Ambiguous) Nearest(int offset)
+            {
+                for (int i = offset; i < candidates.Count; i += 2)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var resolved = Resolve(candidates[i]);
+                    if (resolved.Path is not null || resolved.Ambiguous) return resolved;
+                }
+                return (null, 0, false);
+            }
+
+            var props = Nearest(0);
+            var targets = Nearest(1);
+            bool potential = props.Path is not null || props.Ambiguous ||
+                             targets.Path is not null || targets.Ambiguous;
+            string identity = string.Join('\u001e',
+                props.Ambiguous ? "props:ambiguous" : $"props:{props.Path}:{props.Hash}",
+                targets.Ambiguous ? "targets:ambiguous" :
+                    $"targets:{targets.Path}:{targets.Hash}");
+            result[name] = new DirectoryBuildSemanticAuthority(potential, identity);
+        }
+        return result;
+    }
+
     /// <summary>Fingerprints for MANY projects in one grouped query. Includes each project file
     /// and associated packages.config because both contribute semantic compiler inputs (for
     /// example generated IVT attributes and package metadata references).
     /// The warm-cache check in
     /// EnsureLoadedAsync ran ProjectFingerprint once per already-loaded project on EVERY semantic
     /// call — dozens to hundreds of point queries per references/implementations invocation (dz3).</summary>
-    public Dictionary<string, (long FileCount, long HashSum)> ProjectFingerprints(IReadOnlyCollection<string> projectNames)
+    public Dictionary<string, (long FileCount, long HashSum)> ProjectFingerprints(
+        IReadOnlyCollection<string> projectNames,
+        CancellationToken cancellationToken = default)
     {
         var result = new Dictionary<string, (long, long)>(StringComparer.OrdinalIgnoreCase);
         if (projectNames.Count == 0) return result;
         foreach (var chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(200))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var args = new List<(string, object)>();
             var ph = new List<string>();
             for (int i = 0; i < chunk.Length; i++)
@@ -1695,7 +1992,7 @@ public sealed partial class IndexQueries : IDisposable
                 ph.Add($"$n{i}");
                 args.Add(($"$n{i}", chunk[i]));
             }
-            foreach (var row in Query(
+            foreach (var row in QueryCancellable(
                 $"""
                 SELECT input.name, COUNT(*),
                        SUM(input.hash & 4294967295),
@@ -1721,7 +2018,8 @@ public sealed partial class IndexQueries : IDisposable
                                                -- project reloads on EVERY semantic call (review repro)
                 """,
                 r => (Name: r.GetString(0), Count: r.GetInt64(1),
-                    LowSum: r.GetInt64(2), HighSum: r.GetInt64(3)), args.ToArray()))
+                    LowSum: r.GetInt64(2), HighSum: r.GetInt64(3)), cancellationToken,
+                args.ToArray()))
             {
                 result[row.Name] = (row.Count, CombineFingerprintSums(row.LowSum, row.HighSum));
             }
@@ -2159,6 +2457,34 @@ public sealed partial class IndexQueries : IDisposable
         return rows.Count > 0 ? rows[0] : null;
     }
 
+    /// <summary>Returns indexed sizes for the exact workspace-relative paths supplied. Callers
+    /// that also consult the live filesystem can use a missing entry as a zero lower bound.</summary>
+    public Dictionary<string, long> FileSizesByExactPath(IReadOnlyCollection<string> filePaths,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (string[] chunk in filePaths.Distinct(StringComparer.Ordinal).Chunk(400))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var placeholders = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                string parameter = $"$p{i}";
+                placeholders.Add(parameter);
+                args.Add((parameter, chunk[i]));
+            }
+
+            foreach ((string path, long size) in QueryCancellable(
+                $"SELECT path, size FROM files WHERE path IN ({string.Join(",", placeholders)})",
+                row => (row.GetString(0), row.GetInt64(1)), cancellationToken, args.ToArray()))
+            {
+                result[path] = size;
+            }
+        }
+        return result;
+    }
+
     /// <summary>Looks up a pinned-index path using this host's repository path policy without
     /// consulting the mutable live filesystem. Exact lookup is universal; Windows additionally
     /// permits one unambiguous ASCII-case-equivalent indexed path. Non-ASCII aliases that SQLite's
@@ -2181,12 +2507,17 @@ public sealed partial class IndexQueries : IDisposable
     }
 
     public string? ContentByPathBounded(string filePath, int maxChars)
+        => ContentByPathBounded(filePath, maxChars, CancellationToken.None);
+
+    public string? ContentByPathBounded(string filePath, int maxChars,
+        CancellationToken cancellationToken)
     {
         if (maxChars < 0) return null;
-        var rows = Query(
+        var rows = QueryCoreCancellable(_readSnapshot,
             "SELECT CASE WHEN length(c.content) <= $max THEN c.content END " +
             "FROM file_contents c JOIN files f ON f.id = c.file_id WHERE f.path = $p",
-            r => r.IsDBNull(0) ? null : r.GetString(0), ("$p", filePath), ("$max", maxChars));
+            r => r.IsDBNull(0) ? null : r.GetString(0), cancellationToken,
+            ("$p", filePath), ("$max", maxChars));
         return rows.Count > 0 ? rows[0] : null;
     }
 
@@ -2300,6 +2631,10 @@ public sealed partial class IndexQueries : IDisposable
     private List<T> Query<T>(string sql, Func<SqliteDataReader, T> map, params (string, object)[] args) =>
         QueryCore(_readSnapshot, sql, map, args);
 
+    private List<T> QueryCancellable<T>(string sql, Func<SqliteDataReader, T> map,
+        CancellationToken cancellationToken, params (string, object)[] args) =>
+        QueryCoreCancellable(_readSnapshot, sql, map, cancellationToken, args);
+
     private List<T> QueryCore<T>(SqliteTransaction? transaction, string sql,
         Func<SqliteDataReader, T> map, params (string, object)[] args)
         => QueryCoreCancellable(transaction, sql, map, CancellationToken.None, args);
@@ -2318,6 +2653,7 @@ public sealed partial class IndexQueries : IDisposable
             {
                 try { ((SqliteCommand)state!).Cancel(); } catch { }
             }, cmd);
+        _beforeQueryForTest?.Invoke(sql);
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
