@@ -22,6 +22,59 @@ public sealed class Batch45IndexFollowerCollection;
 public sealed class Batch45IndexFollowerTests
 {
     [Fact]
+    public void OnlyContentionProvesFollowerWriterPresent()
+    {
+        Assert.True(IndexManager.IsFollowerWriterPresent(IndexLeaseAcquireResult.Contended));
+        Assert.False(IndexManager.IsFollowerWriterPresent(IndexLeaseAcquireResult.Acquired));
+        Assert.False(IndexManager.IsFollowerWriterPresent(IndexLeaseAcquireResult.Failed));
+        Assert.Contains("liveness could not be verified",
+            IndexManager.FollowerWriterUnavailableErrorFor(IndexLeaseAcquireResult.Failed),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("writer is no longer running",
+            IndexManager.FollowerWriterUnavailableErrorFor(IndexLeaseAcquireResult.Acquired),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PeerFollowerProbeDoesNotMasqueradeAsDurableWriter()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-45-peer-probe").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(database)!);
+        using var firstAcquired = new ManualResetEventSlim(false);
+        using var releaseFirst = new ManualResetEventSlim(false);
+        using var secondCompleted = new ManualResetEventSlim(false);
+        try
+        {
+            Task<IndexLeaseAcquireResult> first = Task.Run(() =>
+                IndexOwnershipLease.ProbeOwnerDetailed(root, database, result =>
+                {
+                    if (result == IndexLeaseAcquireResult.Acquired) firstAcquired.Set();
+                    releaseFirst.Wait(TimeSpan.FromSeconds(5));
+                }));
+            Assert.True(firstAcquired.Wait(TimeSpan.FromSeconds(5)));
+
+            Task<IndexLeaseAcquireResult> second = Task.Run(() =>
+                IndexOwnershipLease.ProbeOwnerDetailed(root, database, _ =>
+                    secondCompleted.Set()));
+            bool completedWhilePeerHeldProbe = secondCompleted.Wait(TimeSpan.FromSeconds(1));
+            releaseFirst.Set();
+
+            IndexLeaseAcquireResult[] results = await Task.WhenAll(first, second);
+            Assert.False(completedWhilePeerHeldProbe);
+            Assert.All(results, result =>
+                Assert.Equal(IndexLeaseAcquireResult.Acquired, result));
+            Assert.All(results, result =>
+                Assert.False(IndexManager.IsFollowerWriterPresent(result)));
+        }
+        finally
+        {
+            releaseFirst.Set();
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
     public void TransientLivenessProbeContentionDoesNotTurnSuccessorIntoFollower()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -138,6 +191,49 @@ public sealed class Batch45IndexFollowerTests
         }
         finally
         {
+            follower?.Dispose();
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void FollowerCoordinationFailurePublishesUnavailableInsteadOfWriterPresent()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        string root = Directory.CreateTempSubdirectory("codenav-45-probe-failure").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        IndexManager? follower = null;
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            using var writer = new IndexManager(root, database);
+            writer.Start();
+            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000), writer.Health().Error);
+
+            follower = new IndexManager(root, database);
+            follower.Start();
+            Assert.True(WaitUntil(() => follower.IsQueryable, 20_000), follower.Health().Error);
+            follower.FollowerWriterProbeForTest = () => IndexLeaseAcquireResult.Failed;
+
+            IOException failure = Assert.Throws<IOException>(() =>
+            {
+                using var queries = follower.OpenQueries();
+            });
+            Assert.Contains("liveness could not be verified", failure.Message,
+                StringComparison.OrdinalIgnoreCase);
+
+            IndexHealth health = follower.Health();
+            Assert.Equal("failed", health.State);
+            Assert.False(follower.IsQueryable);
+            Assert.Contains("liveness could not be verified", health.Error ?? "",
+                StringComparison.OrdinalIgnoreCase);
+            Assert.True(writer.IsQueryable, writer.Health().Error);
+        }
+        finally
+        {
+            if (follower is not null) follower.FollowerWriterProbeForTest = null;
             follower?.Dispose();
             Cleanup(root);
         }

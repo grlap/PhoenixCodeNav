@@ -112,9 +112,11 @@ semantic operations may read newer workspace bytes. Followers cannot observe the
 pending watcher queue, so capabilities report `pendingChangesKnown: false` rather than presenting
   a local zero as freshness evidence. Review snapshots and semantic loads retain scalable shared
   Windows reader handles; a full rebuild takes a writer-intent turnstile and drains those readers
-  before replacing the database. The queued rebuild resumes automatically after release. If the writer exits, followers
-stop reporting query-ready until another writer appears; they never silently promote themselves,
-so restart a follower when it should take writer ownership.
+  before replacing the database. The queued rebuild resumes automatically after release. If the
+writer exits, followers stop reporting query-ready until another writer appears; they never silently
+promote themselves, so restart a follower when it should take writer ownership. If writer liveness
+cannot be verified safely, the follower reports unavailable instead of serving writer-backed
+evidence; retry the operation or restart that follower.
 
 ## Install (work machine)
 

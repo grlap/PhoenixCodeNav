@@ -67,6 +67,8 @@ public sealed class IndexManager : IDisposable
         "read-only follower requires a compatible index from the writer; wait for the writer to finish building or rebuilding, then retry or restart this process";
     private const string FollowerWriterUnavailable =
         "the index writer is no longer running; restart this follower to acquire writer mode, or start another writer process";
+    private const string FollowerWriterCoordinationUnavailable =
+        "index writer liveness could not be verified safely; retry or restart this follower";
     private const string FullRebuildDeferredForReaders =
         "full rebuild is waiting for active index readers; the queued rebuild remains pending";
     private const int RefreshIncompletePathLimit = 32;
@@ -135,7 +137,7 @@ public sealed class IndexManager : IDisposable
     private readonly object _followerMetadataGate = new();
     private long _nextFollowerMetadataRefresh;
     private int _followerMetadataRefreshActive;
-    private volatile bool _followerWriterPresent;
+    private int _followerWriterProbeResult = (int)IndexLeaseAcquireResult.Failed;
     private long _nextFollowerWriterProbe;
     private int _followerWriterProbeActive;
     private long _pendingProcessed; // z4c: lifetime count of applied file deltas (see IndexHealth)
@@ -168,6 +170,7 @@ public sealed class IndexManager : IDisposable
     internal Action? RefreshInputFailureBeforeLatchForTest { get; set; }
     internal Action? StartupAfterLeaseAcquiredForTest { get; set; }
     internal Action? StartupAfterLeaseContentionForTest { get; set; }
+    internal Func<IndexLeaseAcquireResult>? FollowerWriterProbeForTest { get; set; }
     internal Action? CleanupBeforePoolClearForTest { get; set; }
     internal TimeSpan DisposeWaitTimeoutForTest { get; set; } = TimeSpan.FromSeconds(5);
     internal TimeSpan FullRebuildReviewWaitTimeoutForTest { get; set; } =
@@ -493,7 +496,10 @@ public sealed class IndexManager : IDisposable
                     // follower: retain only the no-follow directory authority and open short-lived,
                     // nonpooled read-only connections. It never starts a store, pump, or watcher.
                     _accessMode = FollowerAccessMode;
-                    _followerWriterPresent = true; // the contended mutex is direct owner evidence
+                    // The contended mutex is direct owner evidence. Preserve the detailed result
+                    // so a later probe failure cannot be mistaken for the same healthy state.
+                    Volatile.Write(ref _followerWriterProbeResult,
+                        (int)IndexLeaseAcquireResult.Contended);
                     Volatile.Write(ref _nextFollowerWriterProbe,
                         Environment.TickCount64 + 1000);
                     _error = FollowerIndexUnavailable;
@@ -777,19 +783,34 @@ public sealed class IndexManager : IDisposable
         metadata.WorkspaceRoot is { Length: > 0 } storedRoot &&
         CodeNav.Core.WorkspacePaths.FullPathsEqual(storedRoot, _workspaceRoot);
 
-    private bool HasActiveFollowerWriter()
+    internal static bool IsFollowerWriterPresent(IndexLeaseAcquireResult result) =>
+        result == IndexLeaseAcquireResult.Contended;
+
+    internal static string FollowerWriterUnavailableErrorFor(
+        IndexLeaseAcquireResult result) => result switch
+        {
+            IndexLeaseAcquireResult.Failed => FollowerWriterCoordinationUnavailable,
+            IndexLeaseAcquireResult.Acquired => FollowerWriterUnavailable,
+            _ => FollowerIndexUnavailable,
+        };
+
+    private IndexLeaseAcquireResult ProbeFollowerWriter()
     {
         long now = Environment.TickCount64;
-        if (now < Volatile.Read(ref _nextFollowerWriterProbe))
-            return _followerWriterPresent;
+        Func<IndexLeaseAcquireResult>? probeForTest = FollowerWriterProbeForTest;
+        if (probeForTest is null && now < Volatile.Read(ref _nextFollowerWriterProbe))
+            return (IndexLeaseAcquireResult)Volatile.Read(ref _followerWriterProbeResult);
         if (Interlocked.CompareExchange(ref _followerWriterProbeActive, 1, 0) != 0)
-            return _followerWriterPresent;
+            return (IndexLeaseAcquireResult)Volatile.Read(ref _followerWriterProbeResult);
         try
         {
-            bool held = IndexOwnershipLease.IsHeld(_workspaceRoot, _dbPath);
-            _followerWriterPresent = held;
-            Volatile.Write(ref _nextFollowerWriterProbe, now + 1000);
-            return held;
+            IndexLeaseAcquireResult result = probeForTest is not null
+                ? probeForTest()
+                : IndexOwnershipLease.ProbeOwnerDetailed(_workspaceRoot, _dbPath);
+            Volatile.Write(ref _followerWriterProbeResult, (int)result);
+            Volatile.Write(ref _nextFollowerWriterProbe,
+                Environment.TickCount64 + 1000);
+            return result;
         }
         finally
         {
@@ -814,8 +835,10 @@ public sealed class IndexManager : IDisposable
             Volatile.Write(ref _nextFollowerMetadataRefresh, now + 250);
             lock (_followerMetadataGate)
             {
-                if (!HasActiveFollowerWriter())
-                    return PublishFollowerUnavailable(FollowerWriterUnavailable);
+                IndexLeaseAcquireResult writerProbe = ProbeFollowerWriter();
+                if (!IsFollowerWriterPresent(writerProbe))
+                    return PublishFollowerUnavailable(
+                        FollowerWriterUnavailableErrorFor(writerProbe));
                 if (!TryGetSafeDatabaseStatus(out IndexLeaseIdentity? before, out _) ||
                     before?.DatabaseIdentity is null)
                     return PublishFollowerUnavailable();
@@ -1548,8 +1571,9 @@ public sealed class IndexManager : IDisposable
             try
             {
                 EnsureDatabaseAuthority();
-                if (!HasActiveFollowerWriter())
-                    throw new IOException(FollowerWriterUnavailable);
+                IndexLeaseAcquireResult writerProbe = ProbeFollowerWriter();
+                if (!IsFollowerWriterPresent(writerProbe))
+                    throw new IOException(FollowerWriterUnavailableErrorFor(writerProbe));
                 if (!TryGetSafeDatabaseStatus(out IndexLeaseIdentity? before, out _) ||
                     before?.DatabaseIdentity is null)
                     throw new IOException(FollowerIndexUnavailable);
@@ -1566,9 +1590,8 @@ public sealed class IndexManager : IDisposable
             catch
             {
                 queries?.Dispose();
-                PublishFollowerUnavailable(HasActiveFollowerWriter()
-                    ? FollowerIndexUnavailable
-                    : FollowerWriterUnavailable);
+                PublishFollowerUnavailable(
+                    FollowerWriterUnavailableErrorFor(ProbeFollowerWriter()));
                 throw;
             }
         }

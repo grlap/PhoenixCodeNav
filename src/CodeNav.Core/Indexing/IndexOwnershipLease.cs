@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -115,6 +116,36 @@ internal sealed class IndexOwnershipLease : IDisposable
         }
         lease = candidate;
         return IndexLeaseAcquireResult.Acquired;
+    }
+
+    /// <summary>Probes writable ownership for follower liveness. The probe lease is always
+    /// released before returning. Cross-process probe gates serialize probes that share any
+    /// ownership identity, so one follower's temporary lease cannot masquerade as a writer to
+    /// another follower.</summary>
+    internal static IndexLeaseAcquireResult ProbeOwnerDetailed(string ownershipRoot,
+        string dbPath, Action<IndexLeaseAcquireResult>? afterAcquisitionForTest = null)
+    {
+        if (!TryAcquireProbeGates(dbPath, out Mutex[] probeGates,
+                out int acquiredGateCount))
+            return IndexLeaseAcquireResult.Failed;
+        try
+        {
+            IndexLeaseAcquireResult result = TryAcquireDetailed(ownershipRoot, dbPath,
+                anchoredIdentity: null, out IndexOwnershipLease? probe);
+            try
+            {
+                afterAcquisitionForTest?.Invoke(result);
+                return result;
+            }
+            finally
+            {
+                probe?.Dispose();
+            }
+        }
+        finally
+        {
+            ReleaseProbeGates(probeGates, acquiredGateCount);
+        }
     }
 
     internal static bool IsHeld(string ownershipRoot, string dbPath)
@@ -254,6 +285,79 @@ internal sealed class IndexOwnershipLease : IDisposable
                 Hash(existingDatabaseIdentity));
         }
         return names.OrderBy(name => name, StringComparer.Ordinal).ToArray();
+    }
+
+    private static bool TryAcquireProbeGates(string dbPath, out Mutex[] gates,
+        out int acquiredCount)
+    {
+        gates = [];
+        acquiredCount = 0;
+        string[] names;
+        try
+        {
+            names = BuildMutexNames(dbPath, anchoredIdentity: null)
+                .Select(name =>
+                {
+                    string prefix = name.StartsWith("Global\\", StringComparison.Ordinal)
+                        ? "Global\\"
+                        : "";
+                    return prefix + "PhoenixCodeNav.Index.Probe." + Hash(name);
+                })
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            gates = new Mutex[names.Length];
+            for (int i = 0; i < names.Length; i++)
+                gates[i] = new Mutex(initiallyOwned: false, names[i]);
+        }
+        catch
+        {
+            ReleaseProbeGates(gates, acquiredCount);
+            gates = [];
+            acquiredCount = 0;
+            return false;
+        }
+
+        long started = Stopwatch.GetTimestamp();
+        for (; acquiredCount < gates.Length; acquiredCount++)
+        {
+            TimeSpan remaining = CoordinationTimeout - Stopwatch.GetElapsedTime(started);
+            if (remaining <= TimeSpan.Zero)
+            {
+                ReleaseProbeGates(gates, acquiredCount);
+                gates = [];
+                acquiredCount = 0;
+                return false;
+            }
+
+            bool acquired;
+            try { acquired = gates[acquiredCount].WaitOne(remaining); }
+            catch (AbandonedMutexException) { acquired = true; }
+            catch
+            {
+                ReleaseProbeGates(gates, acquiredCount);
+                gates = [];
+                acquiredCount = 0;
+                return false;
+            }
+            if (acquired) continue;
+            ReleaseProbeGates(gates, acquiredCount);
+            gates = [];
+            acquiredCount = 0;
+            return false;
+        }
+        return true;
+    }
+
+    private static void ReleaseProbeGates(Mutex[] gates, int acquiredCount)
+    {
+        for (int i = acquiredCount - 1; i >= 0; i--)
+        {
+            try { gates[i].ReleaseMutex(); } catch { }
+        }
+        foreach (Mutex? gate in gates)
+        {
+            try { gate?.Dispose(); } catch { }
+        }
     }
 
     private static string NormalizeForHost(string value) =>
