@@ -166,6 +166,8 @@ public sealed partial class SemanticService : IDisposable
     /// paths. Mutable so cancellation can publish the stages completed before the deadline.</summary>
     internal sealed class ReferenceQueryStats
     {
+        internal SemanticWorkspace.CompilationPreparationStatsBox CompilationPreparation { get; } =
+            new();
         public double FindReferencesMs { get; set; }
         public double PostProcessMs { get; set; }
         public double SyntaxRootLoadMs { get; set; }
@@ -180,12 +182,30 @@ public sealed partial class SemanticService : IDisposable
 
         internal object Shape(double queryMs)
         {
+            SemanticWorkspace.CompilationPreparationStats? compilationPreparation =
+                CompilationPreparation.Stats;
             double postProcessOtherMs = Math.Max(0,
                 PostProcessMs - SyntaxRootLoadMs - ClassificationMs - SampleTextMs);
-            double otherMs = Math.Max(0, queryMs - FindReferencesMs - PostProcessMs);
+            double otherMs = Math.Max(0, queryMs - FindReferencesMs - PostProcessMs -
+                (compilationPreparation?.TotalMs ?? 0));
             return new
             {
                 path = "symbol_finder",
+                compilationPreparation = compilationPreparation is null ? null : new
+                {
+                    totalMs = Math.Round(compilationPreparation.TotalMs, 1),
+                    queueMs = Math.Round(compilationPreparation.QueueMs, 1),
+                    requestedProjects = compilationPreparation.RequestedProjects,
+                    graphProjects = compilationPreparation.GraphProjects,
+                    cacheHits = compilationPreparation.CacheHits,
+                    preparedProjects = compilationPreparation.PreparedProjects,
+                    failedProjects = compilationPreparation.FailedProjects,
+                    skippedProjects = compilationPreparation.SkippedProjects,
+                    unfinishedProjects = compilationPreparation.UnfinishedProjects,
+                    waves = compilationPreparation.Waves,
+                    laneLimit = compilationPreparation.LaneLimit,
+                    effectiveConcurrency = compilationPreparation.EffectiveConcurrency,
+                },
                 findReferencesMs = Math.Round(FindReferencesMs, 1),
                 postProcessMs = Math.Round(PostProcessMs, 1),
                 syntaxRootLoadMs = Math.Round(SyntaxRootLoadMs, 1),
@@ -485,6 +505,12 @@ public sealed partial class SemanticService : IDisposable
                     ownerBox.Stats, scanBox.Stats, planning: planning); // epuc.1 + epuc.4
                 return (null, reason);
             }
+
+            // epuc.5: materialize this operation's selected project compilations in dependency-first
+            // waves before SymbolFinder. The exact leased Solution is reused below, so Roslyn's
+            // CompilationTracker turns this into parallel preparation rather than duplicate work.
+            await Workspace.PrepareCompilationsAsync(scanLease, owningProject,
+                queryStages.CompilationPreparation, cts.Token).ConfigureAwait(false);
 
             IEnumerable<ReferencedSymbol> found;
             long findStarted = System.Diagnostics.Stopwatch.GetTimestamp();

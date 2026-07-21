@@ -110,6 +110,22 @@ public class Batch51TelemetryTests
 
                 var queryStages = referencesRoot.GetProperty("queryStages");
                 Assert.Equal("symbol_finder", queryStages.GetProperty("path").GetString());
+                var compilationPreparation = queryStages.GetProperty("compilationPreparation");
+                Assert.True(compilationPreparation.GetProperty("totalMs").GetDouble() >= 0);
+                Assert.True(compilationPreparation.GetProperty("requestedProjects").GetInt32() >= 1);
+                Assert.True(compilationPreparation.GetProperty("graphProjects").GetInt32() >= 1);
+                Assert.True(compilationPreparation.GetProperty("laneLimit").GetInt32() >= 1);
+                Assert.True(compilationPreparation.GetProperty("effectiveConcurrency").GetInt32() >= 0);
+                foreach (string countField in new[]
+                         {
+                             "cacheHits", "preparedProjects", "failedProjects", "skippedProjects",
+                             "waves",
+                         })
+                {
+                    Assert.True(compilationPreparation.GetProperty(countField).GetInt32() >= 0,
+                        countField);
+                }
+                Assert.Equal(0, compilationPreparation.GetProperty("unfinishedProjects").GetInt32());
                 foreach (string field in new[]
                          {
                              "findReferencesMs", "postProcessMs", "syntaxRootLoadMs",
@@ -148,6 +164,13 @@ public class Batch51TelemetryTests
         var stats = new SemanticService.ReferenceQueryStats
         {
             FindReferencesMs = 100,
+            CompilationPreparation =
+            {
+                Stats = new CodeNav.Core.Semantic.SemanticWorkspace.CompilationPreparationStats(
+                    TotalMs: 20, QueueMs: 3, RequestedProjects: 2, GraphProjects: 4,
+                    CacheHits: 1, PreparedProjects: 3, FailedProjects: 0, SkippedProjects: 0,
+                    UnfinishedProjects: 0, Waves: 2, LaneLimit: 8, EffectiveConcurrency: 3),
+            },
             PostProcessMs = 50,
             SyntaxRootLoadMs = 10,
             ClassificationMs = 5,
@@ -160,7 +183,7 @@ public class Batch51TelemetryTests
             SamplesRead = 2,
         };
 
-        string json = System.Text.Json.JsonSerializer.Serialize(stats.Shape(queryMs: 175));
+        string json = System.Text.Json.JsonSerializer.Serialize(stats.Shape(queryMs: 195));
         using var document = System.Text.Json.JsonDocument.Parse(json);
         var root = document.RootElement;
         Assert.Equal("symbol_finder", root.GetProperty("path").GetString());
@@ -168,6 +191,14 @@ public class Batch51TelemetryTests
         Assert.Equal(50, root.GetProperty("postProcessMs").GetDouble());
         Assert.Equal(20, root.GetProperty("postProcessOtherMs").GetDouble());
         Assert.Equal(25, root.GetProperty("otherMs").GetDouble());
+        var preparation = root.GetProperty("compilationPreparation");
+        Assert.Equal(20, preparation.GetProperty("totalMs").GetDouble());
+        Assert.Equal(4, preparation.GetProperty("graphProjects").GetInt32());
+        Assert.Equal(3, preparation.GetProperty("preparedProjects").GetInt32());
+        Assert.Equal(1, preparation.GetProperty("cacheHits").GetInt32());
+        Assert.Equal(2, preparation.GetProperty("waves").GetInt32());
+        Assert.Equal(8, preparation.GetProperty("laneLimit").GetInt32());
+        Assert.Equal(3, preparation.GetProperty("effectiveConcurrency").GetInt32());
         Assert.Equal(3, root.GetProperty("referencedSymbols").GetInt32());
         Assert.Equal(9, root.GetProperty("rawLocations").GetInt32());
         Assert.Equal(8, root.GetProperty("sourceLocations").GetInt32());

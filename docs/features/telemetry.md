@@ -1,6 +1,6 @@
-# Semantic Operation Telemetry (epuc.1, epuc.3, epuc.4)
+# Semantic Operation Telemetry (epuc.1, epuc.3, epuc.4, epuc.5)
 
-Beads: `PhoenixCodeNav-epuc.1`, `PhoenixCodeNav-epuc.3`, `PhoenixCodeNav-epuc.4` · Consumed by: [`../internal-operations-portal.md`](../internal-operations-portal.md) (x5ls, design-frozen)
+Beads: `PhoenixCodeNav-epuc.1`, `PhoenixCodeNav-epuc.3`, `PhoenixCodeNav-epuc.4`, `PhoenixCodeNav-epuc.5` · Consumed by: [`../internal-operations-portal.md`](../internal-operations-portal.md) (x5ls, design-frozen)
 
 Phoenix writes one JSONL record per semantic operation to a bounded, privacy-safe,
 per-process file. This is the data layer the operations portal renders later; it is useful
@@ -60,7 +60,12 @@ resolution. `references` emits the same `seedDiscovery`/`scanSet` shape (with
 the remaining dominant wall:
 
 ```json
-"queryStages":{"path":"symbol_finder","findReferencesMs":9234.1,
+"queryStages":{"path":"symbol_finder",
+  "compilationPreparation":{"totalMs":2410.7,"queueMs":386.2,
+    "requestedProjects":41,"graphProjects":41,"cacheHits":1,"preparedProjects":40,
+    "failedProjects":0,"skippedProjects":0,"unfinishedProjects":0,"waves":7,
+    "laneLimit":8,"effectiveConcurrency":8},
+  "findReferencesMs":6823.4,
   "postProcessMs":947.6,"syntaxRootLoadMs":621.4,"classificationMs":42.8,
   "sampleTextMs":18.2,"postProcessOtherMs":265.2,"otherMs":186.3,
   "referencedSymbols":4,"rawLocations":531,"sourceLocations":525,
@@ -79,9 +84,9 @@ load ran).
 | `tool` | `references` \| `implementations` \| `type_hierarchy` \| `definition` \| `callers` \| `callees` |
 | `accessMode` | `writer` \| `follower` \| `unattached`; compare planning samples within the same mode |
 | `result` | `exact` (success) \| `degraded` (deadline died: see `reason`) \| `unresolved` (position/symbol didn't resolve; see `reason`) \| `error` |
-| `reason` | Stable primary cause, including `cluster_cold_load`, `semantic_timeout`, `project_load_failed`, `index_snapshot_unavailable`, symbol-resolution causes, or an exception type name |
+| `reason` | Stable primary cause, including `cluster_cold_load`, `semantic_timeout`, `project_load_failed`, `index_snapshot_unavailable`, symbol-resolution causes, or an exception type name. A `semantic_timeout` with `queryStages.compilationPreparation.unfinishedProjects > 0` expired during eager preparation |
 | `clusterLoadMs` | the op's LOAD+RESOLVE wall (all phases through symbol resolution) — restored after a field regression hid a 48s query behind load-only telemetry |
-| `queryMs` | the op's FIND wall after scan-set planning/loading/resolution (SymbolFinder plus result processing; includes lazy Roslyn compilation on cold ops — the v1 caveat below). Null when the op died during load |
+| `queryMs` | the op's FIND wall after scan-set planning/loading/resolution (compilation preparation, SymbolFinder, and result processing). Null when the op died during load |
 | `cold` | present+true when phase 1 found zero projects already loaded — the workspace was cold before this op |
 | `ownerLoad` | stage split of phase 1: loading the owning project's dependency closure (all six tools) |
 | `scanLoad` | stage split of phase 2: loading the dependent scan set (`references`/`implementations`/`callers`/`type_hierarchy` only) |
@@ -94,8 +99,13 @@ load ran).
 | `planning.scanSet.totalMs` | complete scan-set planning wall before `EnsureLoadedAsync` |
 | `planning.scanSet.dependentGraphMs/candidateDiscoveryMs/dependencyGraphMs/otherMs` | dependent-graph query+walk, text-candidate discovery, mandatory dependency-graph query+walk, and remaining selection/set bookkeeping |
 | `planning.scanSet.*Projects` | privacy-safe input/output counts for seed, candidate, selected, final scan, skipped, out-of-graph, and unsupported-language project sets |
-| `queryStages` | `references` post-resolution attribution; emitted on exact/partial success and on post-load degraded/error records when query wall is available |
-| `queryStages.findReferencesMs/postProcessMs/otherMs` | Roslyn `SymbolFinder.FindReferencesAsync` wall, complete filtering/counting/sampling wall, and remaining response/coverage shaping residue; together explain `queryMs` subject to 0.1 ms rounding |
+| `queryStages` | Per-tool post-resolution attribution discriminated by `path`: `symbol_finder` (`references`), `closure_verified`, or `exhaustive_fallback` (`implementations`/`type_hierarchy`). Emitted on exact/partial success and on post-load degraded/error records when query wall is available |
+| `queryStages.compilationPreparation` | `references` only: dependency-first eager preparation on the same pinned `Solution` later passed to SymbolFinder; omitted if the operation never reached preparation |
+| `queryStages.compilationPreparation.totalMs/queueMs` | preparation wall and summed project time queued for the shared process-wide project lanes; summed queue time may exceed wall time |
+| `queryStages.compilationPreparation.requestedProjects/graphProjects` | successfully loaded projects requested by this operation and their closure over actual Roslyn project dependencies; unrelated warm resident projects are excluded |
+| `queryStages.compilationPreparation.cacheHits/preparedProjects/failedProjects/skippedProjects/unfinishedProjects` | terminal work counts. Failures do not change the search contract: SymbolFinder remains authoritative. `unfinishedProjects` is nonzero when cancellation stops preparation |
+| `queryStages.compilationPreparation.waves/laneLimit/effectiveConcurrency` | dependency waves, process-wide concurrency cap, and this operation's observed concurrent compilation high-water |
+| `queryStages.findReferencesMs/postProcessMs/otherMs` | Roslyn `SymbolFinder.FindReferencesAsync` wall, complete filtering/counting/sampling wall, and remaining response/coverage shaping residue; together with `compilationPreparation.totalMs` explain `queryMs` subject to 0.1 ms rounding |
 | `queryStages.syntaxRootLoadMs/classificationMs/sampleTextMs/postProcessOtherMs` | nested subsets of `postProcessMs`: syntax-root fetches, usage-kind classification, sampled line fetches, and remaining filter/dedup/group bookkeeping |
 | `queryStages.referencedSymbols/rawLocations/sourceLocations` | returned Roslyn work volume before Phoenix filtering; scalar counts only |
 | `queryStages.uniqueSyntaxTrees/uniqueSites/samplesRead` | post-filter trees visited, deduplicated physical sites, and sample lines fetched; scalar counts only |
@@ -122,9 +132,12 @@ One special shape remains: a load cancelled before it acquires its first brief w
 reports `gateWaitMs` as the whole wall, all other phase times 0, and omits `loadedBefore`.
 Absent `loadedBefore` means unknown, not 0, and such records carry no `cold` flag.
 
-Known v1 attribution caveat: Roslyn compiles lazily inside the find stage, so on a cold op
-the find/query time (outside the load blocks) includes compilation of the scan set; the
-cold-vs-warm delta attributes it numerically. Splitting compile out is the flagged v2 item.
+Since v0.12.16, `references` forces the operation-selected scan set's compilations before
+`FindReferencesAsync`. The same immutable `Solution` instance is used for preparation and search,
+so Roslyn's `CompilationTracker` reuses the work; dependencies finish before their dependents and
+ready siblings share one bounded process-wide lane. Unrelated projects resident from earlier calls
+are deliberately not prepared. If SymbolFinder needs one of those, its residual lazy work remains
+honestly inside `findReferencesMs`.
 
 `dbQueryAndMapMs` was the decision field for `epuc.3`. Field captures showed roughly
 600–700 ms per frontier query even when only 5–322 rows were returned, and an identical warm

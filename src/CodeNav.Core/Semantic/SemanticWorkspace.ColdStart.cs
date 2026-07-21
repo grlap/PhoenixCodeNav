@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using CodeNav.Core.Discovery;
 using CodeNav.Core.Indexing;
 using Microsoft.CodeAnalysis;
@@ -13,15 +14,18 @@ public sealed class SemanticSolutionLease : IDisposable
 {
     private Action? _release;
 
-    internal SemanticSolutionLease(Solution solution, ClusterCoverage coverage, Action release)
+    internal SemanticSolutionLease(Solution solution, ClusterCoverage coverage,
+        IEnumerable<ProjectId> requestedProjectIds, Action release)
     {
         Solution = solution;
         Coverage = coverage;
+        RequestedProjectIds = requestedProjectIds.ToImmutableArray();
         _release = release;
     }
 
     public Solution Solution { get; }
     public ClusterCoverage Coverage { get; }
+    internal ImmutableArray<ProjectId> RequestedProjectIds { get; }
 
     public void Deconstruct(out Solution solution, out ClusterCoverage coverage)
     {
@@ -1230,7 +1234,7 @@ public sealed partial class SemanticWorkspace
                                     : null);
                             loadedResult = coverage.LoadedProjects;
                             failedResult = coverage.FailedProjects.Count;
-                            SemanticSolutionLease lease = CreateSolutionLease(coverage);
+                            SemanticSolutionLease lease = CreateSolutionLease(coverage, requested);
                             PublishStats();
                             return lease;
                         }
@@ -1285,15 +1289,24 @@ public sealed partial class SemanticWorkspace
         }
     }
 
-    private SemanticSolutionLease CreateSolutionLease(ClusterCoverage coverage)
+    private SemanticSolutionLease CreateSolutionLease(ClusterCoverage coverage,
+        IReadOnlyCollection<string> requested)
     {
+        Solution solution = _workspace.CurrentSolution;
+        ProjectId[] requestedProjectIds = requested
+            .Where(name => _loaded.TryGetValue(name, out LoadedProject? loaded) &&
+                           solution.GetProject(loaded.Id) is not null)
+            .Select(name => _loaded[name].Id)
+            .Distinct()
+            .OrderBy(id => solution.GetProject(id)?.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         ProjectResources[] resources = _loaded.Values
             .Select(project => project.Resources)
             .Where(resource => resource is not null)
             .Cast<ProjectResources>()
             .ToArray();
         foreach (ProjectResources resource in resources) resource.AddRef();
-        return new SemanticSolutionLease(_workspace.CurrentSolution, coverage, () =>
+        return new SemanticSolutionLease(solution, coverage, requestedProjectIds, () =>
         {
             foreach (ProjectResources resource in resources) resource.Release();
         });

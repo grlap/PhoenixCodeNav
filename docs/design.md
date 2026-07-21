@@ -187,6 +187,11 @@ This is the part designed specifically for net472 enterprise scale.
 - **One snapshot per operation.** Each op resolves the symbol against, *and* runs
   `SymbolFinder` against, a single pinned `Solution` — so a background reload/eviction can't
   orphan the symbol mid-query (which previously produced empty "exact" results).
+- **Dependency-first compilation preparation for references.** Before a `references` search,
+  the operation prepares only its selected scan projects and their actual Roslyn dependencies in
+  topological waves. Ready siblings share the loader's bounded process-wide project lanes. The
+  exact leased `Solution` is then passed to `SymbolFinder`, so its `CompilationTracker` reuses the
+  work; no cross-snapshot compilation cache or result-set narrowing is introduced.
 - **Rebuild-coordinated long scans.** Candidate enumeration and semantic cluster loading hold a
   shared cross-process reader guard, so a destructive Windows rebuild drains them before replacing
   the SQLite database.
