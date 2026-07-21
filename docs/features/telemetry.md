@@ -62,6 +62,8 @@ the remaining dominant wall:
 ```json
 "queryStages":{"path":"symbol_finder",
   "compilationPreparation":{"totalMs":2410.7,"queueMs":386.2,
+    "busySumMs":8234.5,"maxProjectBusyMs":712.1,
+    "waveMaxSumMs":1924.6,"criticalPathMs":1540.3,
     "requestedProjects":41,"graphProjects":41,"cacheHits":1,"preparedProjects":40,
     "failedProjects":0,"skippedProjects":0,"unfinishedProjects":0,"waves":7,
     "laneLimit":8,"effectiveConcurrency":8},
@@ -102,6 +104,8 @@ load ran).
 | `queryStages` | Per-tool post-resolution attribution discriminated by `path`: `symbol_finder` (`references`), `closure_verified`, or `exhaustive_fallback` (`implementations`/`type_hierarchy`). Emitted on exact/partial success and on post-load degraded/error records when query wall is available |
 | `queryStages.compilationPreparation` | `references` only: dependency-first eager preparation on the same pinned `Solution` later passed to SymbolFinder; omitted if the operation never reached preparation |
 | `queryStages.compilationPreparation.totalMs/queueMs` | preparation wall and summed project time queued for the shared process-wide project lanes; summed queue time may exceed wall time |
+| `queryStages.compilationPreparation.busySumMs/maxProjectBusyMs` | sum of slot-held compilation-call wall across projects, and its single-project maximum. `busySumMs / totalMs` is the observed work parallelism; cache hits and lane wait are excluded |
+| `queryStages.compilationPreparation.waveMaxSumMs/criticalPathMs` | measured scheduling floors over the same project busy times: the sum of the slowest project in each current barrier wave, and the longest weighted dependency path. A lane-aware ready-queue floor is `max(criticalPathMs, busySumMs / laneLimit)`; subtract it from `waveMaxSumMs` to estimate recoverable barrier wall. When `unfinishedProjects > 0`, all four busy-work scalars are lower bounds because unmeasured projects contribute zero |
 | `queryStages.compilationPreparation.requestedProjects/graphProjects` | successfully loaded projects requested by this operation, narrowed to the owner and its graph dependents when available, then closed over actual Roslyn project dependencies; unrelated warm resident projects are excluded |
 | `queryStages.compilationPreparation.cacheHits/preparedProjects/failedProjects/skippedProjects/unfinishedProjects` | terminal work counts. Failures do not change the search contract: SymbolFinder remains authoritative. `unfinishedProjects` is nonzero when cancellation stops preparation |
 | `queryStages.compilationPreparation.waves/laneLimit/effectiveConcurrency` | dependency waves, process-wide concurrency cap, and this operation's observed concurrent compilation high-water |
@@ -164,6 +168,14 @@ SQLite persistent storage to reuse checksum-validated `SyntaxTreeIndex` data acr
 The synthetic path is never opened and grants no solution/build authority; Phoenix continues to
 derive project, source, reference, and live-text truth from its existing index/workspace model.
 Changed source bytes and parse options retain Roslyn's normal checksum invalidation.
+
+Since v0.12.19, preparation records measured compilation-work floors without changing the
+scheduler. `waveMaxSumMs - max(criticalPathMs, busySumMs / laneLimit)` is the lane-aware ready-queue
+headroom on a completed capture: a gap below roughly 15% of `totalMs` is treated as structure-bound,
+while a larger gap justifies testing a completion-driven scheduler against that floor. A wave wider
+than the lane limit can make `totalMs` exceed `waveMaxSumMs`; that is expected lane serialization,
+not unexplained residue. This is a decision signal, not a promise that scheduling overhead can
+reach the theoretical floor.
 
 `dbQueryAndMapMs` was the decision field for `epuc.3`. Field captures showed roughly
 600–700 ms per frontier query even when only 5–322 rows were returned, and an identical warm

@@ -632,8 +632,13 @@ try {
         warm = $writerReferenceWarmTelemetry
     }
     Test-IntegrationCase "semantic references document-scope telemetry" {
+        $coldPreparation = $writerReferenceColdTelemetry.queryStages.compilationPreparation
         $coldScope = $writerReferenceColdTelemetry.queryStages.documentScope
         $warmScope = $writerReferenceWarmTelemetry.queryStages.documentScope
+        Assert-True ([double]$coldPreparation.busySumMs -ge [double]$coldPreparation.maxProjectBusyMs) "Compilation busy sum is below its project maximum"
+        Assert-True ([double]$coldPreparation.maxProjectBusyMs -le ([double]$coldPreparation.criticalPathMs + 0.2)) "Compilation critical path is below its project maximum"
+        Assert-True ([double]$coldPreparation.criticalPathMs -le ([double]$coldPreparation.waveMaxSumMs + 0.2)) "Compilation critical path exceeds the current wave floor"
+        Assert-True ([double]$coldPreparation.waveMaxSumMs -le ([double]$coldPreparation.totalMs + 0.2)) "Compilation wave floor exceeds preparation wall"
         Assert-Equal "documentScoped" ([string]$coldScope.mode) "Cold references did not use document scoping"
         Assert-True ([int]$coldScope.candidateDocuments -lt [int]$coldScope.solutionDocuments) "Cold candidate documents did not reduce the solution"
         Assert-True ([int]$coldScope.scopedDocuments -lt [int]$coldScope.solutionDocuments) "Cold scoped documents did not reduce the solution"

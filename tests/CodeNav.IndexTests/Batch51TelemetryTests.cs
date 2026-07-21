@@ -113,6 +113,18 @@ public class Batch51TelemetryTests
                 var compilationPreparation = queryStages.GetProperty("compilationPreparation");
                 Assert.True(compilationPreparation.GetProperty("totalMs").GetDouble() >= 0);
                 Assert.True(compilationPreparation.GetProperty("queueMs").GetDouble() >= 0);
+                double busySumMs = compilationPreparation.GetProperty("busySumMs").GetDouble();
+                double maxProjectBusyMs =
+                    compilationPreparation.GetProperty("maxProjectBusyMs").GetDouble();
+                double waveMaxSumMs =
+                    compilationPreparation.GetProperty("waveMaxSumMs").GetDouble();
+                double criticalPathMs =
+                    compilationPreparation.GetProperty("criticalPathMs").GetDouble();
+                Assert.True(busySumMs >= maxProjectBusyMs);
+                Assert.True(maxProjectBusyMs <= criticalPathMs + 0.1);
+                Assert.True(criticalPathMs <= waveMaxSumMs + 0.1);
+                Assert.True(waveMaxSumMs <=
+                    compilationPreparation.GetProperty("totalMs").GetDouble() + 0.1);
                 Assert.True(compilationPreparation.GetProperty("requestedProjects").GetInt32() >= 1);
                 Assert.True(compilationPreparation.GetProperty("graphProjects").GetInt32() >= 1);
                 Assert.True(compilationPreparation.GetProperty("laneLimit").GetInt32() >= 1);
@@ -183,7 +195,9 @@ public class Batch51TelemetryTests
             CompilationPreparation =
             {
                 Stats = new CodeNav.Core.Semantic.SemanticWorkspace.CompilationPreparationStats(
-                    TotalMs: 20, QueueMs: 3, RequestedProjects: 2, GraphProjects: 4,
+                    TotalMs: 20, QueueMs: 3, BusySumMs: 30, MaxProjectBusyMs: 8,
+                    WaveMaxSumMs: 15, CriticalPathMs: 12,
+                    RequestedProjects: 2, GraphProjects: 4,
                     CacheHits: 1, PreparedProjects: 3, FailedProjects: 0, SkippedProjects: 0,
                     UnfinishedProjects: 0, Waves: 2, LaneLimit: 8, EffectiveConcurrency: 3),
             },
@@ -220,6 +234,10 @@ public class Batch51TelemetryTests
         var preparation = root.GetProperty("compilationPreparation");
         Assert.Equal(20, preparation.GetProperty("totalMs").GetDouble());
         Assert.Equal(3, preparation.GetProperty("queueMs").GetDouble());
+        Assert.Equal(30, preparation.GetProperty("busySumMs").GetDouble());
+        Assert.Equal(8, preparation.GetProperty("maxProjectBusyMs").GetDouble());
+        Assert.Equal(15, preparation.GetProperty("waveMaxSumMs").GetDouble());
+        Assert.Equal(12, preparation.GetProperty("criticalPathMs").GetDouble());
         Assert.Equal(4, preparation.GetProperty("graphProjects").GetInt32());
         Assert.Equal(3, preparation.GetProperty("preparedProjects").GetInt32());
         Assert.Equal(1, preparation.GetProperty("cacheHits").GetInt32());

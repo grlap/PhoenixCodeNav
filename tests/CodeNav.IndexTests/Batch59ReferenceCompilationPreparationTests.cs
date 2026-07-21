@@ -76,12 +76,54 @@ public sealed class Batch59ReferenceCompilationPreparationTests
             Assert.Equal(2, measured.EffectiveConcurrency);
             Assert.Equal(2, highWater);
             Assert.Equal(0, measured.UnfinishedProjects);
+            Assert.True(measured.BusySumMs >= measured.MaxProjectBusyMs);
+            Assert.True(measured.MaxProjectBusyMs <= measured.CriticalPathMs);
+            Assert.True(measured.CriticalPathMs <= measured.WaveMaxSumMs);
+            Assert.True(measured.WaveMaxSumMs <= measured.TotalMs);
         }
         finally
         {
             semantic.TestOnlyGetCompilationAsync = null;
             TestWorkspaceCleanup.DeleteWorkspace(root);
         }
+    }
+
+    [Fact]
+    public void AttributionSeparatesWaveBarrierFloorFromWeightedDagCriticalPath()
+    {
+        using var workspace = new AdhocWorkspace();
+        var ids = new[] { "FastRoot", "SlowRoot", "SlowChild", "FastChild" }
+            .ToDictionary(name => name, ProjectId.CreateNewId);
+        Solution solution = workspace.CurrentSolution;
+        foreach ((string name, ProjectId id) in ids) solution = AddProject(solution, id, name);
+        solution = solution
+            .AddProjectReference(ids["SlowChild"], new ProjectReference(ids["FastRoot"]))
+            .AddProjectReference(ids["FastChild"], new ProjectReference(ids["SlowRoot"]));
+
+        var busyTicks = new Dictionary<ProjectId, long>
+        {
+            [ids["FastRoot"]] = 10,
+            [ids["SlowRoot"]] = 100,
+            [ids["SlowChild"]] = 100,
+            [ids["FastChild"]] = 10,
+        };
+        var waveByProject = new Dictionary<ProjectId, int>
+        {
+            [ids["FastRoot"]] = 1,
+            [ids["SlowRoot"]] = 1,
+            [ids["SlowChild"]] = 2,
+            [ids["FastChild"]] = 2,
+        };
+
+        var measured = CodeNav.Core.Semantic.SemanticWorkspace
+            .ComputeCompilationWorkAttribution(
+                solution.GetProjectDependencyGraph(), ids.Values.ToHashSet(), busyTicks,
+                waveByProject);
+
+        Assert.Equal(220, measured.BusySumTicks);
+        Assert.Equal(100, measured.MaxProjectBusyTicks);
+        Assert.Equal(200, measured.WaveMaxSumTicks);
+        Assert.Equal(110, measured.CriticalPathTicks);
     }
 
     [Fact]
@@ -109,6 +151,10 @@ public sealed class Batch59ReferenceCompilationPreparationTests
             Assert.Equal(0, second.Stats?.PreparedProjects);
             Assert.Equal(1, second.Stats?.CacheHits);
             Assert.Equal(0, second.Stats?.UnfinishedProjects);
+            Assert.Equal(0, second.Stats?.BusySumMs);
+            Assert.Equal(0, second.Stats?.MaxProjectBusyMs);
+            Assert.Equal(0, second.Stats?.WaveMaxSumMs);
+            Assert.Equal(0, second.Stats?.CriticalPathMs);
         }
         finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
     }
@@ -278,6 +324,12 @@ public sealed class Batch59ReferenceCompilationPreparationTests
 
             Assert.Equal(1, cancelledStats.Stats?.UnfinishedProjects);
             Assert.Equal(1, cancelledStats.Stats?.EffectiveConcurrency);
+            Assert.True(cancelledStats.Stats!.BusySumMs >=
+                cancelledStats.Stats.MaxProjectBusyMs);
+            Assert.True(cancelledStats.Stats.MaxProjectBusyMs <=
+                cancelledStats.Stats.CriticalPathMs);
+            Assert.True(cancelledStats.Stats.CriticalPathMs <=
+                cancelledStats.Stats.WaveMaxSumMs);
 
             semantic.TestOnlyGetCompilationAsync = (project, _) =>
                 Task.FromResult<Compilation?>(CSharpCompilation.Create(project.Name));
@@ -332,6 +384,9 @@ public sealed class Batch59ReferenceCompilationPreparationTests
             Assert.Equal(1, stats.Stats?.PreparedProjects);
             Assert.Equal(0, stats.Stats?.UnfinishedProjects);
             Assert.Equal(2, stats.Stats?.Waves);
+            Assert.True(stats.Stats!.BusySumMs >= stats.Stats.MaxProjectBusyMs);
+            Assert.True(stats.Stats.MaxProjectBusyMs <= stats.Stats.CriticalPathMs);
+            Assert.True(stats.Stats.CriticalPathMs <= stats.Stats.WaveMaxSumMs);
         }
         finally
         {

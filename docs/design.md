@@ -192,6 +192,12 @@ This is the part designed specifically for net472 enterprise scale.
   plus their actual Roslyn dependencies, in topological waves. Ready siblings share the loader's
   bounded process-wide project lanes. The exact leased `Solution` is then passed to `SymbolFinder`,
   so its `CompilationTracker` reuses the work; no cross-snapshot compilation cache is introduced.
+  Privacy-safe work attribution records the summed slot-held compilation wall, slowest project,
+  current wave-barrier floor, and measured weighted dependency critical path. The difference
+  between the wave floor and the lane-aware ready-queue floor — the greater of the dependency
+  critical path and summed work divided by the lane limit — decides whether a completion-driven
+  queue has material headroom; the scheduler itself remains unchanged until field evidence
+  establishes that gap.
 - **Exact document narrowing for references.** After preparation, eligible name-addressable
   symbols use a conservative candidate-document superset derived from the cached text of that
   same leased `Solution`. This is intentionally not committed FTS: followers cannot see a

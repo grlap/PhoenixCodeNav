@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.CodeAnalysis;
 
 namespace CodeNav.Core.Semantic;
@@ -11,6 +12,10 @@ public sealed partial class SemanticWorkspace
     internal sealed record CompilationPreparationStats(
         double TotalMs,
         double QueueMs,
+        double BusySumMs,
+        double MaxProjectBusyMs,
+        double WaveMaxSumMs,
+        double CriticalPathMs,
         int RequestedProjects,
         int GraphProjects,
         int CacheHits,
@@ -21,6 +26,12 @@ public sealed partial class SemanticWorkspace
         int Waves,
         int LaneLimit,
         int EffectiveConcurrency);
+
+    internal readonly record struct CompilationWorkAttribution(
+        long BusySumTicks,
+        long MaxProjectBusyTicks,
+        long WaveMaxSumTicks,
+        long CriticalPathTicks);
 
     internal sealed class CompilationPreparationStatsBox
     {
@@ -90,6 +101,8 @@ public sealed partial class SemanticWorkspace
         int effectiveConcurrency = 0;
         var completed = new HashSet<ProjectId>();
         var remaining = new HashSet<ProjectId>(selected);
+        var busyTicksByProject = new ConcurrentDictionary<ProjectId, long>();
+        var waveByProject = new Dictionary<ProjectId, int>();
 
         static void Max(ref int target, int value)
         {
@@ -140,9 +153,19 @@ public sealed partial class SemanticWorkspace
                 activeEntered = true;
                 int nowActive = Interlocked.Increment(ref active);
                 Max(ref effectiveConcurrency, nowActive);
-                Compilation? compilation = TestOnlyGetCompilationAsync is { } testCompile
-                    ? await testCompile(project, cancellationToken).ConfigureAwait(false)
-                    : await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+                Compilation? compilation;
+                long busyStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                try
+                {
+                    compilation = TestOnlyGetCompilationAsync is { } testCompile
+                        ? await testCompile(project, cancellationToken).ConfigureAwait(false)
+                        : await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    busyTicksByProject[projectId] =
+                        System.Diagnostics.Stopwatch.GetTimestamp() - busyStarted;
+                }
                 if (compilation is null) Interlocked.Increment(ref skipped);
                 else Interlocked.Increment(ref prepared);
                 Interlocked.Increment(ref completedCount);
@@ -198,6 +221,7 @@ public sealed partial class SemanticWorkspace
                 }
 
                 waves++;
+                foreach (ProjectId projectId in ready) waveByProject[projectId] = waves;
                 await Task.WhenAll(ready.Select(PrepareOneAsync)).ConfigureAwait(false);
                 foreach (ProjectId projectId in ready)
                 {
@@ -208,9 +232,15 @@ public sealed partial class SemanticWorkspace
         }
         finally
         {
+            CompilationWorkAttribution work = ComputeCompilationWorkAttribution(
+                graph, selected, busyTicksByProject, waveByProject);
             statsBox.Stats = new CompilationPreparationStats(
                 TotalMs: System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds,
                 QueueMs: ToMs(Interlocked.Read(ref queueTicks)),
+                BusySumMs: ToMs(work.BusySumTicks),
+                MaxProjectBusyMs: ToMs(work.MaxProjectBusyTicks),
+                WaveMaxSumMs: ToMs(work.WaveMaxSumTicks),
+                CriticalPathMs: ToMs(work.CriticalPathTicks),
                 RequestedProjects: requested.Count,
                 GraphProjects: selected.Count,
                 CacheHits: Volatile.Read(ref cacheHits),
@@ -222,5 +252,63 @@ public sealed partial class SemanticWorkspace
                 LaneLimit: _coldStartRuntime.Concurrency,
                 EffectiveConcurrency: Volatile.Read(ref effectiveConcurrency));
         }
+    }
+
+    internal static CompilationWorkAttribution ComputeCompilationWorkAttribution(
+        ProjectDependencyGraph graph,
+        IReadOnlySet<ProjectId> selected,
+        IReadOnlyDictionary<ProjectId, long> busyTicksByProject,
+        IReadOnlyDictionary<ProjectId, int> waveByProject)
+    {
+        long busySumTicks = 0;
+        long maxProjectBusyTicks = 0;
+        foreach ((ProjectId projectId, long rawTicks) in busyTicksByProject)
+        {
+            if (!selected.Contains(projectId)) continue;
+            long ticks = Math.Max(0, rawTicks);
+            busySumTicks += ticks;
+            maxProjectBusyTicks = Math.Max(maxProjectBusyTicks, ticks);
+        }
+
+        var waveMaxima = new Dictionary<int, long>();
+        foreach ((ProjectId projectId, int wave) in waveByProject)
+        {
+            long ticks = busyTicksByProject.TryGetValue(projectId, out long rawTicks)
+                ? Math.Max(0, rawTicks)
+                : 0;
+            if (!waveMaxima.TryGetValue(wave, out long maximum) || ticks > maximum)
+                waveMaxima[wave] = ticks;
+        }
+        long waveMaxSumTicks = waveMaxima.Values.Sum();
+
+        long criticalPathTicks = 0;
+        var longestPath = new Dictionary<ProjectId, long>();
+        foreach (ProjectId projectId in graph.GetTopologicallySortedProjects())
+        {
+            if (!selected.Contains(projectId)) continue;
+            long dependencyPathTicks = 0;
+            foreach (ProjectId dependencyId in
+                     graph.GetProjectsThatThisProjectDirectlyDependsOn(projectId))
+            {
+                if (selected.Contains(dependencyId) &&
+                    longestPath.TryGetValue(dependencyId, out long pathTicks))
+                {
+                    dependencyPathTicks = Math.Max(dependencyPathTicks, pathTicks);
+                }
+            }
+
+            long projectTicks = busyTicksByProject.TryGetValue(projectId, out long rawTicks)
+                ? Math.Max(0, rawTicks)
+                : 0;
+            long projectPathTicks = dependencyPathTicks + projectTicks;
+            longestPath[projectId] = projectPathTicks;
+            criticalPathTicks = Math.Max(criticalPathTicks, projectPathTicks);
+        }
+
+        return new CompilationWorkAttribution(
+            busySumTicks,
+            maxProjectBusyTicks,
+            waveMaxSumTicks,
+            criticalPathTicks);
     }
 }

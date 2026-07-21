@@ -203,6 +203,10 @@ public sealed partial class SemanticService : IDisposable
                 {
                     totalMs = Math.Round(compilationPreparation.TotalMs, 1),
                     queueMs = Math.Round(compilationPreparation.QueueMs, 1),
+                    busySumMs = Math.Round(compilationPreparation.BusySumMs, 1),
+                    maxProjectBusyMs = Math.Round(compilationPreparation.MaxProjectBusyMs, 1),
+                    waveMaxSumMs = Math.Round(compilationPreparation.WaveMaxSumMs, 1),
+                    criticalPathMs = Math.Round(compilationPreparation.CriticalPathMs, 1),
                     requestedProjects = compilationPreparation.RequestedProjects,
                     graphProjects = compilationPreparation.GraphProjects,
                     cacheHits = compilationPreparation.CacheHits,
