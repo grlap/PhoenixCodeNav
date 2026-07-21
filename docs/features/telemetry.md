@@ -102,10 +102,14 @@ load ran).
 | `queryStages` | Per-tool post-resolution attribution discriminated by `path`: `symbol_finder` (`references`), `closure_verified`, or `exhaustive_fallback` (`implementations`/`type_hierarchy`). Emitted on exact/partial success and on post-load degraded/error records when query wall is available |
 | `queryStages.compilationPreparation` | `references` only: dependency-first eager preparation on the same pinned `Solution` later passed to SymbolFinder; omitted if the operation never reached preparation |
 | `queryStages.compilationPreparation.totalMs/queueMs` | preparation wall and summed project time queued for the shared process-wide project lanes; summed queue time may exceed wall time |
-| `queryStages.compilationPreparation.requestedProjects/graphProjects` | successfully loaded projects requested by this operation and their closure over actual Roslyn project dependencies; unrelated warm resident projects are excluded |
+| `queryStages.compilationPreparation.requestedProjects/graphProjects` | successfully loaded projects requested by this operation, narrowed to the owner and its graph dependents when available, then closed over actual Roslyn project dependencies; unrelated warm resident projects are excluded |
 | `queryStages.compilationPreparation.cacheHits/preparedProjects/failedProjects/skippedProjects/unfinishedProjects` | terminal work counts. Failures do not change the search contract: SymbolFinder remains authoritative. `unfinishedProjects` is nonzero when cancellation stops preparation |
 | `queryStages.compilationPreparation.waves/laneLimit/effectiveConcurrency` | dependency waves, process-wide concurrency cap, and this operation's observed concurrent compilation high-water |
-| `queryStages.findReferencesMs/postProcessMs/otherMs` | Roslyn `SymbolFinder.FindReferencesAsync` wall, complete filtering/counting/sampling wall, and remaining response/coverage shaping residue; together with `compilationPreparation.totalMs` explain `queryMs` subject to 0.1 ms rounding |
+| `queryStages.documentScope` | `references` only: exact document-scope planning after compilation preparation; always emitted once reached, including full-solution fallbacks |
+| `queryStages.documentScope.mode/reason/candidateSource` | `documentScoped`, `fullSolution`, or `notCompleted`; a stable decision reason (`eligible`, `ineligible_kind`, `forced_full_solution`, `unsupported_language`, `no_documents`, `no_candidates`, `no_reduction`, `planning_error`, or `cancelled`); and `leasedSolutionText` as the exact live-snapshot candidate authority |
+| `queryStages.documentScope.totalMs/cacheHit` | cached leased-solution text scan plus conservative global-alias inspection, separate from Roslyn finding; repeated queries on the same immutable `Solution` reuse the exact scope and report `cacheHit:true` |
+| `queryStages.documentScope.solutionDocuments/candidateDocuments/scopedDocuments/aliasWidenedProjects/transformedIncludedDocuments` | privacy-safe scope volume. Document counts are omitted on early full-solution fallbacks that do not enumerate the complete regular-plus-generated universe. Candidate documents contain a case-exact, identifier-bounded candidate name or a lexical transformation Roslyn can decode into one: complete C# `\\u`/`\\U`/`\\x` escapes, numeric XML entities, or Unicode `Format` scalars; scoped documents also include whole projects widened for global using aliases |
+| `queryStages.findReferencesMs/postProcessMs/otherMs` | Roslyn `SymbolFinder.FindReferencesAsync` wall, complete filtering/counting/sampling wall, and remaining response/coverage shaping residue; together with `compilationPreparation.totalMs` and `documentScope.totalMs` explain `queryMs` subject to 0.1 ms rounding |
 | `queryStages.syntaxRootLoadMs/classificationMs/sampleTextMs/postProcessOtherMs` | nested subsets of `postProcessMs`: syntax-root fetches, usage-kind classification, sampled line fetches, and remaining filter/dedup/group bookkeeping |
 | `queryStages.referencedSymbols/rawLocations/sourceLocations` | returned Roslyn work volume before Phoenix filtering; scalar counts only |
 | `queryStages.uniqueSyntaxTrees/uniqueSites/samplesRead` | post-filter trees visited, deduplicated physical sites, and sample lines fetched; scalar counts only |
@@ -138,6 +142,17 @@ so Roslyn's `CompilationTracker` reuses the work; dependencies finish before the
 ready siblings share one bounded process-wide lane. Unrelated projects resident from earlier calls
 are deliberately not prepared. If SymbolFinder needs one of those, its residual lazy work remains
 honestly inside `findReferencesMs`.
+
+Since v0.12.17, eligible reference searches narrow Roslyn to a conservative document superset
+derived from the exact leased `Solution` text already materialized by compilation preparation.
+Committed FTS is deliberately not the authority because follower pending state and live edits can
+diverge from the pinned index. FTS remains the project-discovery authority, while exact leased text
+is the document-narrowing authority. The planner retains every document containing the case-exact,
+identifier-bounded candidate name or a conservative Roslyn `ValueText` transformation hazard,
+scans source-generated documents, and widens a whole project when a candidate document declares a global using alias. Unsafe symbol
+kinds and every uncertain/error case silently retain the existing full-solution search.
+`documentScope` makes both the exclusion ratio and the fallback reason visible without exposing
+names, text, or paths.
 
 `dbQueryAndMapMs` was the decision field for `epuc.3`. Field captures showed roughly
 600–700 ms per frontier query even when only 5–322 rows were returned, and an identical warm

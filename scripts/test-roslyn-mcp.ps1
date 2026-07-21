@@ -191,6 +191,35 @@ function Get-TypeResultName($Item) {
     return $display
 }
 
+function Get-ReferenceContractSignature($Payload) {
+    $kinds = @($Payload.kinds.PSObject.Properties | Sort-Object Name | ForEach-Object {
+        "$([string]$_.Name)|$([int]$_.Value)"
+    })
+    $groups = @($Payload.groups | ForEach-Object {
+        $samples = @($_.samples | ForEach-Object {
+            "$([string]$_.path)|$([int]$_.line)|$([string]$_.kind)"
+        } | Sort-Object)
+        "$([string]$_.project)|$([bool]$_.isTest)|$([int]$_.count)|$($samples -join ';')"
+    } | Sort-Object)
+    $partialReason = if ($null -ne $Payload.PSObject.Properties["partialReason"]) {
+        [string]$Payload.partialReason
+    } else { "" }
+    return ([ordered]@{
+        symbol = [string]$Payload.symbol.documentationCommentId
+        total = [int]$Payload.totalReferences
+        partial = [bool]$Payload.partial
+        partialReason = $partialReason
+        truncated = [bool]$Payload.truncated
+        kinds = $kinds
+        groups = $groups
+        coverage = [ordered]@{
+            loaded = [int]$Payload.coverage.loadedProjects
+            requested = [int]$Payload.coverage.requestedProjects
+            solution = [int]$Payload.coverage.solutionProjects
+        }
+    } | ConvertTo-Json -Compress -Depth 20)
+}
+
 function Quote-ProcessArgument([string]$Value) {
     return '"' + $Value.Replace('"', '\"') + '"'
 }
@@ -212,18 +241,54 @@ function Start-McpClient([string]$Label, [string]$WorkspaceRoot, [string]$Databa
     $start.CreateNoWindow = $true
     $start.EnvironmentVariables["PHOENIX_TELEMETRY_IPC"] = "0"
 
+    $telemetryDirectory = Join-Path $WorkspaceRoot ".codenav\telemetry"
+    $telemetryFilesBefore = @(
+        Get-ChildItem -LiteralPath $telemetryDirectory -Filter "phoenix-*.jsonl" -File `
+            -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+    )
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $start
     if (-not $process.Start()) { throw "Failed to start MCP $Label process" }
     $stderrTail = [PhoenixCodeNav.Integration.BoundedTextTail]::new(65536)
     return [pscustomobject]@{
         Label = $Label
+        WorkspaceRoot = $WorkspaceRoot
+        TelemetryFilesBefore = $telemetryFilesBefore
         Process = $process
         NextId = 0
         StderrTail = $stderrTail
         StderrTask = $stderrTail.DrainAsync($process.StandardError)
         AllowNonZeroExit = $false
     }
+}
+
+function Wait-ReferenceTelemetry($Client, [int]$ExpectedCount, [int]$TimeoutMs = 10000) {
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    $telemetryDirectory = Join-Path $Client.WorkspaceRoot ".codenav\telemetry"
+    $pattern = "phoenix-$($Client.Process.Id)-*.jsonl"
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $records = @()
+        $files = @(Get-ChildItem -LiteralPath $telemetryDirectory -Filter $pattern -File `
+                -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notin $Client.TelemetryFilesBefore } |
+            Sort-Object Name)
+        foreach ($file in $files) {
+            foreach ($line in @(Get-Content -LiteralPath $file.FullName -ErrorAction SilentlyContinue)) {
+                try {
+                    $record = $line | ConvertFrom-Json
+                    if ([string]$record.tool -eq "references" -and
+                        [string]$record.result -eq "exact" -and
+                        $null -ne $record.queryStages -and
+                        $null -ne $record.queryStages.documentScope) {
+                        $records += $record
+                    }
+                } catch { }
+            }
+        }
+        if ($records.Count -ge $ExpectedCount) { return $records }
+        Start-Sleep -Milliseconds 50
+    }
+    throw "$($Client.Label): timed out waiting for $ExpectedCount references telemetry records"
 }
 
 function Send-McpRequest($Client, [string]$Method, $Parameters, [int]$TimeoutMs = 30000) {
@@ -539,6 +604,44 @@ try {
     }
     $targetHandle = [string]$targetSymbols[0].symbolId
 
+    # Run the exact references canary as the first semantic operation. Besides preserving the
+    # correctness gate, this makes the emitted semanticOp record a reproducible cold-path sample
+    # for compilationPreparation/documentScope/findReferences attribution on the pinned corpus.
+    $references = Invoke-SemanticWithRetry $writer "references" @{ symbolId = $targetHandle; mode = "auto"; maxProjects = 0; maxFiles = 1000; samplesPerGroup = 20; timeoutMs = 60000 }
+    $evidence.results.references = $references
+    Test-IntegrationCase "semantic references" {
+        Assert-True ($null -eq $references.error) "references returned $($references.error): $($references.reason)"
+        Assert-Equal "exact" ([string]$references.meta.confidence) "references lost compiler-exact confidence"
+        Assert-True (-not [bool]$references.partial) "references unexpectedly became partial: $($references.partialReason)"
+        Assert-Equal ([int]$baseline.target.exactReferences) ([int]$references.totalReferences) "Reference count changed"
+        Assert-Equal ([int]$baseline.target.exactReferenceProjects) @($references.groups).Count "Reference-project count changed"
+    }
+    $referencesWarm = Invoke-SemanticWithRetry $writer "references" @{ symbolId = $targetHandle; mode = "auto"; maxProjects = 0; maxFiles = 1000; samplesPerGroup = 20; timeoutMs = 60000 }
+    $evidence.results.referencesWarm = $referencesWarm
+    Test-IntegrationCase "warm semantic references parity" {
+        Assert-True ($null -eq $referencesWarm.error) "warm references returned $($referencesWarm.error): $($referencesWarm.reason)"
+        Assert-Equal "exact" ([string]$referencesWarm.meta.confidence) "warm references lost compiler-exact confidence"
+        Assert-True (-not [bool]$referencesWarm.partial) "warm references unexpectedly became partial: $($referencesWarm.partialReason)"
+        Assert-Equal (Get-ReferenceContractSignature $references) (Get-ReferenceContractSignature $referencesWarm) "Cold/warm reference contract diverged"
+    }
+    $writerReferenceTelemetry = @(Wait-ReferenceTelemetry $writer 2)
+    $writerReferenceColdTelemetry = $writerReferenceTelemetry[-2]
+    $writerReferenceWarmTelemetry = $writerReferenceTelemetry[-1]
+    $evidence.results.referencesTelemetry = [ordered]@{
+        cold = $writerReferenceColdTelemetry
+        warm = $writerReferenceWarmTelemetry
+    }
+    Test-IntegrationCase "semantic references document-scope telemetry" {
+        $coldScope = $writerReferenceColdTelemetry.queryStages.documentScope
+        $warmScope = $writerReferenceWarmTelemetry.queryStages.documentScope
+        Assert-Equal "documentScoped" ([string]$coldScope.mode) "Cold references did not use document scoping"
+        Assert-True ([int]$coldScope.candidateDocuments -lt [int]$coldScope.solutionDocuments) "Cold candidate documents did not reduce the solution"
+        Assert-True ([int]$coldScope.scopedDocuments -lt [int]$coldScope.solutionDocuments) "Cold scoped documents did not reduce the solution"
+        Assert-Equal "documentScoped" ([string]$warmScope.mode) "Warm references did not retain document scoping"
+        Assert-True ([bool]$warmScope.cacheHit) "Warm references did not reuse the leased-solution scope"
+        Assert-Equal ([int]$coldScope.scopedDocuments) ([int]$warmScope.scopedDocuments) "Cold/warm scoped document counts diverged"
+    }
+
     $outline = Invoke-McpTool $writer "outline" @{ path = [string]$baseline.target.path; depth = 2 }
     $evidence.results.outline = $outline
     Test-IntegrationCase "outline" {
@@ -629,16 +732,6 @@ try {
         }
     }
     $evidence.results.implementationBindings = $implementationBindings
-
-    $references = Invoke-SemanticWithRetry $writer "references" @{ symbolId = $targetHandle; mode = "auto"; maxProjects = 0; maxFiles = 1000; samplesPerGroup = 1; timeoutMs = 60000 }
-    $evidence.results.references = $references
-    Test-IntegrationCase "semantic references" {
-        Assert-True ($null -eq $references.error) "references returned $($references.error): $($references.reason)"
-        Assert-Equal "exact" ([string]$references.meta.confidence) "references lost compiler-exact confidence"
-        Assert-True (-not [bool]$references.partial) "references unexpectedly became partial: $($references.partialReason)"
-        Assert-Equal ([int]$baseline.target.exactReferences) ([int]$references.totalReferences) "Reference count changed"
-        Assert-Equal ([int]$baseline.target.exactReferenceProjects) @($references.groups).Count "Reference-project count changed"
-    }
 
     $text = Invoke-McpTool $writer "search_text" @{ query = "ICompilationFactoryService"; pathGlob = "src/Workspaces/**"; limit = 20 }
     $evidence.results.searchText = $text
@@ -843,6 +936,19 @@ try {
         Test-IntegrationCase "follower symbol identity" {
             Assert-Equal 1 $followerTarget.Count "Follower target declaration is missing or ambiguous"
             Assert-Equal $targetHandle ([string]$followerTarget[0].symbolId) "Follower saw a different index handle"
+        }
+
+        $followerReferences = Invoke-SemanticWithRetry $follower "references" @{ symbolId = [string]$followerTarget[0].symbolId; mode = "auto"; maxProjects = 0; maxFiles = 1000; samplesPerGroup = 20; timeoutMs = 60000 }
+        $evidence.results.followerReferences = $followerReferences
+        $followerReferenceTelemetryRecords = @(Wait-ReferenceTelemetry $follower 1)
+        $followerReferenceTelemetry = $followerReferenceTelemetryRecords[-1]
+        $evidence.results.followerReferenceTelemetry = $followerReferenceTelemetry
+        Test-IntegrationCase "follower semantic references parity" {
+            Assert-True ($null -eq $followerReferences.error) "Follower references returned $($followerReferences.error): $($followerReferences.reason)"
+            Assert-Equal ([string]$references.meta.confidence) ([string]$followerReferences.meta.confidence) "Writer/follower references confidence diverged"
+            Assert-Equal (Get-ReferenceContractSignature $references) (Get-ReferenceContractSignature $followerReferences) "Writer/follower reference contract diverged"
+            Assert-Equal "documentScoped" ([string]$followerReferenceTelemetry.queryStages.documentScope.mode) "Follower references did not use live-text document scoping"
+            Assert-True ([int]$followerReferenceTelemetry.queryStages.documentScope.scopedDocuments -lt [int]$followerReferenceTelemetry.queryStages.documentScope.solutionDocuments) "Follower document scope did not reduce the solution"
         }
 
         $followerImplementations = Invoke-SemanticWithRetry $follower "implementations" @{ symbolId = [string]$followerTarget[0].symbolId; maxProjects = 0; timeoutMs = 60000 }

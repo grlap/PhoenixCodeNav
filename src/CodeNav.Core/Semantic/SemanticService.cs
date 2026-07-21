@@ -62,8 +62,9 @@ public sealed record SemanticImplementations(
 
 /// <summary>
 /// Owns: exact (compiler-backed) navigation operations with deadlines — symbol
-/// resolution, definitions incl. partials, FindReferences scoped to FTS-candidate
-/// dependent projects, implementations. Every operation returns null on timeout or
+/// resolution, definitions incl. partials, FindReferences scoped to candidate
+/// dependent projects and (when exactness permits) leased-snapshot documents,
+/// implementations. Every operation returns null on timeout or
 /// resolution failure with a reason, so callers can fall back to the indexed layer.
 /// Does not own: cluster loading mechanics (SemanticWorkspace) or MCP shaping.
 /// </summary>
@@ -107,6 +108,11 @@ public sealed partial class SemanticService : IDisposable
     /// closure cap so the semantic fallback and its project-coverage contract can be exercised
     /// with a tiny deterministic graph. Never set in production; instance-scoped.</summary>
     internal int? TestOnlyImplementationClosureMaxTypes;
+
+    /// <summary>TEST SEAM (epuc.6): keeps project loading and compilation preparation identical
+    /// while forcing the legacy full-solution SymbolFinder overload. Parity tests compare this
+    /// authority path with document narrowing without changing any other semantic input.</summary>
+    internal bool TestOnlyForceFullSolutionReferences;
 
     public bool FrameworkRefsAvailable
     {
@@ -168,6 +174,7 @@ public sealed partial class SemanticService : IDisposable
     {
         internal SemanticWorkspace.CompilationPreparationStatsBox CompilationPreparation { get; } =
             new();
+        internal ReferenceDocumentScopeStatsBox DocumentScope { get; } = new();
         public double FindReferencesMs { get; set; }
         public double PostProcessMs { get; set; }
         public double SyntaxRootLoadMs { get; set; }
@@ -184,10 +191,11 @@ public sealed partial class SemanticService : IDisposable
         {
             SemanticWorkspace.CompilationPreparationStats? compilationPreparation =
                 CompilationPreparation.Stats;
+            ReferenceDocumentScopeStats? documentScope = DocumentScope.Stats;
             double postProcessOtherMs = Math.Max(0,
                 PostProcessMs - SyntaxRootLoadMs - ClassificationMs - SampleTextMs);
             double otherMs = Math.Max(0, queryMs - FindReferencesMs - PostProcessMs -
-                (compilationPreparation?.TotalMs ?? 0));
+                (compilationPreparation?.TotalMs ?? 0) - (documentScope?.TotalMs ?? 0));
             return new
             {
                 path = "symbol_finder",
@@ -205,6 +213,19 @@ public sealed partial class SemanticService : IDisposable
                     waves = compilationPreparation.Waves,
                     laneLimit = compilationPreparation.LaneLimit,
                     effectiveConcurrency = compilationPreparation.EffectiveConcurrency,
+                },
+                documentScope = documentScope is null ? null : new
+                {
+                    mode = documentScope.Mode,
+                    reason = documentScope.Reason,
+                    candidateSource = documentScope.CandidateSource,
+                    totalMs = Math.Round(documentScope.TotalMs, 1),
+                    cacheHit = documentScope.CacheHit,
+                    solutionDocuments = documentScope.SolutionDocuments,
+                    candidateDocuments = documentScope.CandidateDocuments,
+                    scopedDocuments = documentScope.ScopedDocuments,
+                    aliasWidenedProjects = documentScope.AliasWidenedProjects,
+                    transformedIncludedDocuments = documentScope.TransformedIncludedDocuments,
                 },
                 findReferencesMs = Math.Round(FindReferencesMs, 1),
                 postProcessMs = Math.Round(PostProcessMs, 1),
@@ -512,12 +533,18 @@ public sealed partial class SemanticService : IDisposable
             await Workspace.PrepareCompilationsAsync(scanLease, owningProject,
                 queryStages.CompilationPreparation, cts.Token).ConfigureAwait(false);
 
+            ReferenceDocumentScope documentScope = await PlanReferenceDocumentScopeAsync(
+                symbol, solution, queryStages.DocumentScope, cts.Token).ConfigureAwait(false);
+
             IEnumerable<ReferencedSymbol> found;
             long findStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
-                found = await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token)
-                    .ConfigureAwait(false);
+                found = documentScope.Documents is null
+                    ? await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token)
+                        .ConfigureAwait(false)
+                    : await SymbolFinder.FindReferencesAsync(symbol, solution,
+                        documentScope.Documents, cts.Token).ConfigureAwait(false);
             }
             finally
             {

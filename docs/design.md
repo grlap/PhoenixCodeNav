@@ -188,10 +188,21 @@ This is the part designed specifically for net472 enterprise scale.
   `SymbolFinder` against, a single pinned `Solution` — so a background reload/eviction can't
   orphan the symbol mid-query (which previously produced empty "exact" results).
 - **Dependency-first compilation preparation for references.** Before a `references` search,
-  the operation prepares only its selected scan projects and their actual Roslyn dependencies in
-  topological waves. Ready siblings share the loader's bounded process-wide project lanes. The
-  exact leased `Solution` is then passed to `SymbolFinder`, so its `CompilationTracker` reuses the
-  work; no cross-snapshot compilation cache or result-set narrowing is introduced.
+  the operation prepares the owner and its graph dependents among the selected scan projects,
+  plus their actual Roslyn dependencies, in topological waves. Ready siblings share the loader's
+  bounded process-wide project lanes. The exact leased `Solution` is then passed to `SymbolFinder`,
+  so its `CompilationTracker` reuses the work; no cross-snapshot compilation cache is introduced.
+- **Exact document narrowing for references.** After preparation, eligible name-addressable
+  symbols use a conservative candidate-document superset derived from the cached text of that
+  same leased `Solution`. This is intentionally not committed FTS: followers cannot see a
+  writer's pending queue and live bytes can move after an index snapshot is pinned. FTS chooses the
+  candidate projects; case-exact, identifier-bounded live-text matches choose documents inside the
+  leased solution. Global using aliases widen their entire project; documents with C# escapes, numeric
+  XML entities, or Unicode format scalars are retained because Roslyn transforms them in token
+  `ValueText`; and constructors, instantiable types, operators, accessors, indexers,
+  compiler-pattern members, unsupported kinds, or any planning uncertainty silently use
+  full-solution `SymbolFinder`. Confidence and candidate project coverage are unchanged; only
+  documents inside the already selected solution are narrowed.
 - **Rebuild-coordinated long scans.** Candidate enumeration and semantic cluster loading hold a
   shared cross-process reader guard, so a destructive Windows rebuild drains them before replacing
   the SQLite database.

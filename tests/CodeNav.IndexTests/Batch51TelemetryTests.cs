@@ -112,6 +112,7 @@ public class Batch51TelemetryTests
                 Assert.Equal("symbol_finder", queryStages.GetProperty("path").GetString());
                 var compilationPreparation = queryStages.GetProperty("compilationPreparation");
                 Assert.True(compilationPreparation.GetProperty("totalMs").GetDouble() >= 0);
+                Assert.True(compilationPreparation.GetProperty("queueMs").GetDouble() >= 0);
                 Assert.True(compilationPreparation.GetProperty("requestedProjects").GetInt32() >= 1);
                 Assert.True(compilationPreparation.GetProperty("graphProjects").GetInt32() >= 1);
                 Assert.True(compilationPreparation.GetProperty("laneLimit").GetInt32() >= 1);
@@ -126,6 +127,19 @@ public class Batch51TelemetryTests
                         countField);
                 }
                 Assert.Equal(0, compilationPreparation.GetProperty("unfinishedProjects").GetInt32());
+                var documentScope = queryStages.GetProperty("documentScope");
+                Assert.Equal("fullSolution", documentScope.GetProperty("mode").GetString());
+                Assert.Equal("ineligible_kind", documentScope.GetProperty("reason").GetString());
+                Assert.Equal("leasedSolutionText",
+                    documentScope.GetProperty("candidateSource").GetString());
+                Assert.True(documentScope.GetProperty("totalMs").GetDouble() >= 0);
+                Assert.False(documentScope.GetProperty("cacheHit").GetBoolean());
+                Assert.False(documentScope.TryGetProperty("solutionDocuments", out _));
+                Assert.False(documentScope.TryGetProperty("candidateDocuments", out _));
+                Assert.False(documentScope.TryGetProperty("scopedDocuments", out _));
+                Assert.Equal(0, documentScope.GetProperty("aliasWidenedProjects").GetInt32());
+                Assert.Equal(0,
+                    documentScope.GetProperty("transformedIncludedDocuments").GetInt32());
                 foreach (string field in new[]
                          {
                              "findReferencesMs", "postProcessMs", "syntaxRootLoadMs",
@@ -171,6 +185,15 @@ public class Batch51TelemetryTests
                     CacheHits: 1, PreparedProjects: 3, FailedProjects: 0, SkippedProjects: 0,
                     UnfinishedProjects: 0, Waves: 2, LaneLimit: 8, EffectiveConcurrency: 3),
             },
+            DocumentScope =
+            {
+                Stats = new SemanticService.ReferenceDocumentScopeStats(
+                    Mode: "documentScoped", Reason: "eligible",
+                    CandidateSource: "leasedSolutionText", TotalMs: 5,
+                    CacheHit: false,
+                    SolutionDocuments: 20, CandidateDocuments: 6, ScopedDocuments: 8,
+                    AliasWidenedProjects: 1, TransformedIncludedDocuments: 2),
+            },
             PostProcessMs = 50,
             SyntaxRootLoadMs = 10,
             ClassificationMs = 5,
@@ -183,7 +206,7 @@ public class Batch51TelemetryTests
             SamplesRead = 2,
         };
 
-        string json = System.Text.Json.JsonSerializer.Serialize(stats.Shape(queryMs: 195));
+        string json = System.Text.Json.JsonSerializer.Serialize(stats.Shape(queryMs: 200));
         using var document = System.Text.Json.JsonDocument.Parse(json);
         var root = document.RootElement;
         Assert.Equal("symbol_finder", root.GetProperty("path").GetString());
@@ -193,12 +216,25 @@ public class Batch51TelemetryTests
         Assert.Equal(25, root.GetProperty("otherMs").GetDouble());
         var preparation = root.GetProperty("compilationPreparation");
         Assert.Equal(20, preparation.GetProperty("totalMs").GetDouble());
+        Assert.Equal(3, preparation.GetProperty("queueMs").GetDouble());
         Assert.Equal(4, preparation.GetProperty("graphProjects").GetInt32());
         Assert.Equal(3, preparation.GetProperty("preparedProjects").GetInt32());
         Assert.Equal(1, preparation.GetProperty("cacheHits").GetInt32());
         Assert.Equal(2, preparation.GetProperty("waves").GetInt32());
         Assert.Equal(8, preparation.GetProperty("laneLimit").GetInt32());
         Assert.Equal(3, preparation.GetProperty("effectiveConcurrency").GetInt32());
+        var documentScope = root.GetProperty("documentScope");
+        Assert.Equal("documentScoped", documentScope.GetProperty("mode").GetString());
+        Assert.Equal("eligible", documentScope.GetProperty("reason").GetString());
+        Assert.Equal("leasedSolutionText",
+            documentScope.GetProperty("candidateSource").GetString());
+        Assert.Equal(5, documentScope.GetProperty("totalMs").GetDouble());
+        Assert.False(documentScope.GetProperty("cacheHit").GetBoolean());
+        Assert.Equal(20, documentScope.GetProperty("solutionDocuments").GetInt32());
+        Assert.Equal(6, documentScope.GetProperty("candidateDocuments").GetInt32());
+        Assert.Equal(8, documentScope.GetProperty("scopedDocuments").GetInt32());
+        Assert.Equal(1, documentScope.GetProperty("aliasWidenedProjects").GetInt32());
+        Assert.Equal(2, documentScope.GetProperty("transformedIncludedDocuments").GetInt32());
         Assert.Equal(3, root.GetProperty("referencedSymbols").GetInt32());
         Assert.Equal(9, root.GetProperty("rawLocations").GetInt32());
         Assert.Equal(8, root.GetProperty("sourceLocations").GetInt32());
