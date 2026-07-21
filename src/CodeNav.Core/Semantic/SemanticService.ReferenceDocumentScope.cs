@@ -86,6 +86,8 @@ public sealed partial class SemanticService
         int? SolutionDocuments,
         int? CandidateDocuments,
         int? ScopedDocuments,
+        int? ScopedProjects,
+        int? DocumentsInScopedProjects,
         int AliasWidenedProjects,
         int TransformedIncludedDocuments);
 
@@ -125,12 +127,15 @@ public sealed partial class SemanticService
         int? observedSolutionDocuments = null;
         int? observedCandidateDocuments = null;
         int? observedScopedDocuments = null;
+        int? observedScopedProjects = null;
+        int? observedDocumentsInScopedProjects = null;
         int observedAliasWidenedProjects = 0;
         int observedTransformedIncludedDocuments = 0;
 
         ReferenceDocumentScope Full(string reason, int? solutionDocuments = null,
             int? candidateDocuments = null, int aliasWidenedProjects = 0,
-            int transformedIncludedDocuments = 0)
+            int transformedIncludedDocuments = 0, int? scopedProjects = null,
+            int? documentsInScopedProjects = null)
         {
             var stats = new ReferenceDocumentScopeStats(
                 Mode: "fullSolution",
@@ -141,6 +146,8 @@ public sealed partial class SemanticService
                 SolutionDocuments: solutionDocuments,
                 CandidateDocuments: candidateDocuments,
                 ScopedDocuments: solutionDocuments,
+                ScopedProjects: scopedProjects,
+                DocumentsInScopedProjects: documentsInScopedProjects,
                 AliasWidenedProjects: aliasWidenedProjects,
                 TransformedIncludedDocuments: transformedIncludedDocuments);
             statsBox.Stats = stats;
@@ -191,7 +198,8 @@ public sealed partial class SemanticService
             ImmutableArray<Document> solutionDocuments = allDocuments.ToImmutable();
             observedSolutionDocuments = solutionDocuments.Length;
             if (solutionDocuments.IsEmpty)
-                return Full("no_documents", solutionDocuments: 0, candidateDocuments: 0);
+                return Full("no_documents", solutionDocuments: 0, candidateDocuments: 0,
+                    scopedProjects: 0, documentsInScopedProjects: 0);
 
             var probes = new DocumentProbe[solutionDocuments.Length];
             await Parallel.ForEachAsync(Enumerable.Range(0, solutionDocuments.Length),
@@ -239,7 +247,8 @@ public sealed partial class SemanticService
             if (candidateDocuments.Count == 0)
             {
                 ReferenceDocumentScope full = Full("no_candidates", solutionDocuments.Length,
-                    candidateDocuments: 0);
+                    candidateDocuments: 0, scopedProjects: projectDocuments.Count,
+                    documentsInScopedProjects: solutionDocuments.Length);
                 solutionCache.Add(cacheKey, full);
                 return full;
             }
@@ -265,11 +274,17 @@ public sealed partial class SemanticService
             int scopedCount = scopedDocuments.Count;
             observedScopedDocuments = scopedCount;
             observedAliasWidenedProjects = widenedProjects.Count;
+            ProjectId[] scopedProjectIds = scopedDocuments.Select(document => document.Project.Id)
+                .Distinct().ToArray();
+            observedScopedProjects = scopedProjectIds.Length;
+            observedDocumentsInScopedProjects = scopedProjectIds.Sum(projectId =>
+                projectDocuments.GetValueOrDefault(projectId).Length);
             if (scopedCount >= solutionDocuments.Length)
             {
                 ReferenceDocumentScope full = Full("no_reduction", solutionDocuments.Length,
                     candidateDocuments.Count, widenedProjects.Count,
-                    observedTransformedIncludedDocuments);
+                    observedTransformedIncludedDocuments, projectDocuments.Count,
+                    solutionDocuments.Length);
                 solutionCache.Add(cacheKey, full);
                 return full;
             }
@@ -283,6 +298,8 @@ public sealed partial class SemanticService
                     SolutionDocuments: solutionDocuments.Length,
                     CandidateDocuments: candidateDocuments.Count,
                     ScopedDocuments: scopedCount,
+                    ScopedProjects: observedScopedProjects,
+                    DocumentsInScopedProjects: observedDocumentsInScopedProjects,
                     AliasWidenedProjects: widenedProjects.Count,
                     TransformedIncludedDocuments: observedTransformedIncludedDocuments);
             statsBox.Stats = scopedStats;
@@ -301,6 +318,8 @@ public sealed partial class SemanticService
                 SolutionDocuments: observedSolutionDocuments,
                 CandidateDocuments: observedCandidateDocuments,
                 ScopedDocuments: observedScopedDocuments,
+                ScopedProjects: observedScopedProjects,
+                DocumentsInScopedProjects: observedDocumentsInScopedProjects,
                 AliasWidenedProjects: observedAliasWidenedProjects,
                 TransformedIncludedDocuments: observedTransformedIncludedDocuments);
             throw;
@@ -312,7 +331,8 @@ public sealed partial class SemanticService
             _log($"Semantic reference document scoping fell back: {ex.Message}");
             return Full("planning_error", observedSolutionDocuments,
                 observedCandidateDocuments, observedAliasWidenedProjects,
-                observedTransformedIncludedDocuments);
+                observedTransformedIncludedDocuments, observedScopedProjects,
+                observedDocumentsInScopedProjects);
         }
     }
 

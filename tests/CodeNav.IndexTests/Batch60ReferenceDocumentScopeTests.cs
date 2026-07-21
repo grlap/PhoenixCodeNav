@@ -63,6 +63,9 @@ public sealed class Batch60ReferenceDocumentScopeTests
                         documentScope.GetProperty("solutionDocuments").GetInt32());
             Assert.True(documentScope.GetProperty("scopedDocuments").GetInt32() <
                         documentScope.GetProperty("solutionDocuments").GetInt32());
+            Assert.Equal(2, documentScope.GetProperty("scopedProjects").GetInt32());
+            Assert.Equal(documentScope.GetProperty("solutionDocuments").GetInt32(),
+                documentScope.GetProperty("documentsInScopedProjects").GetInt32());
         }
         finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
     }

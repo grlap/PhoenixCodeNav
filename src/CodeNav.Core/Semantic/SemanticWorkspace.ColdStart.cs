@@ -200,7 +200,7 @@ public sealed partial class SemanticWorkspace
                     retained = SaturatingAdd(retained,
                         SaturatingAdd((long)source.Text.Length * sizeof(char), PerDocumentOverheadBytes));
                     documents.Add(DocumentInfo.Create(
-                        DocumentId.CreateNewId(Identity.ProjectId, debugName: source.RelativePath),
+                        StableDocumentId(Identity.ProjectId, source.RelativePath),
                         name: Path.GetFileName(source.RelativePath),
                         loader: TextLoader.From(TextAndVersion.Create(
                             source.Text, VersionStamp.Create(), source.FullPath)),
@@ -215,7 +215,7 @@ public sealed partial class SemanticWorkspace
                         SaturatingAdd((long)text.Length * sizeof(char), PerDocumentOverheadBytes));
                     const string generatedName = "__PhoenixCodeNav.InternalsVisibleTo.g.cs";
                     documents.Add(DocumentInfo.Create(
-                        DocumentId.CreateNewId(Identity.ProjectId, debugName: generatedName),
+                        StableDocumentId(Identity.ProjectId, $"generated:{generatedName}"),
                         name: generatedName,
                         loader: TextLoader.From(TextAndVersion.Create(text, VersionStamp.Create()))));
                 }
@@ -716,7 +716,7 @@ public sealed partial class SemanticWorkspace
                         foreach (string name in requested)
                         {
                             if (!resident.ContainsKey(name) && !_plannedProjectIds.ContainsKey(name))
-                                _plannedProjectIds[name] = ProjectId.CreateNewId(debugName: name);
+                                _plannedProjectIds[name] = StableProjectId(name);
                         }
                         plannedIds = requested.ToDictionary(
                             name => name,

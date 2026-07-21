@@ -224,6 +224,8 @@ public sealed partial class SemanticService : IDisposable
                     solutionDocuments = documentScope.SolutionDocuments,
                     candidateDocuments = documentScope.CandidateDocuments,
                     scopedDocuments = documentScope.ScopedDocuments,
+                    scopedProjects = documentScope.ScopedProjects,
+                    documentsInScopedProjects = documentScope.DocumentsInScopedProjects,
                     aliasWidenedProjects = documentScope.AliasWidenedProjects,
                     transformedIncludedDocuments = documentScope.TransformedIncludedDocuments,
                 },

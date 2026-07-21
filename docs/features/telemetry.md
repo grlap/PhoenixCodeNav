@@ -108,7 +108,7 @@ load ran).
 | `queryStages.documentScope` | `references` only: exact document-scope planning after compilation preparation; always emitted once reached, including full-solution fallbacks |
 | `queryStages.documentScope.mode/reason/candidateSource` | `documentScoped`, `fullSolution`, or `notCompleted`; a stable decision reason (`eligible`, `ineligible_kind`, `forced_full_solution`, `unsupported_language`, `no_documents`, `no_candidates`, `no_reduction`, `planning_error`, or `cancelled`); and `leasedSolutionText` as the exact live-snapshot candidate authority |
 | `queryStages.documentScope.totalMs/cacheHit` | cached leased-solution text scan plus conservative global-alias inspection, separate from Roslyn finding; repeated queries on the same immutable `Solution` reuse the exact scope and report `cacheHit:true` |
-| `queryStages.documentScope.solutionDocuments/candidateDocuments/scopedDocuments/aliasWidenedProjects/transformedIncludedDocuments` | privacy-safe scope volume. Document counts are omitted on early full-solution fallbacks that do not enumerate the complete regular-plus-generated universe. Candidate documents contain a case-exact, identifier-bounded candidate name or a lexical transformation Roslyn can decode into one: complete C# `\\u`/`\\U`/`\\x` escapes, numeric XML entities, or Unicode `Format` scalars; scoped documents also include whole projects widened for global using aliases |
+| `queryStages.documentScope.solutionDocuments/candidateDocuments/scopedDocuments/scopedProjects/documentsInScopedProjects/aliasWidenedProjects/transformedIncludedDocuments` | privacy-safe scope volume. Document/project counts are omitted on early full-solution fallbacks that do not enumerate the complete regular-plus-generated universe. Candidate documents contain a case-exact, identifier-bounded candidate name or a lexical transformation Roslyn can decode into one: complete C# `\\u`/`\\U`/`\\x` escapes, numeric XML entities, or Unicode `Format` scalars; scoped documents also include whole projects widened for global using aliases. `documentsInScopedProjects` is the project-wide named-type global-alias index census, not the binding scope |
 | `queryStages.findReferencesMs/postProcessMs/otherMs` | Roslyn `SymbolFinder.FindReferencesAsync` wall, complete filtering/counting/sampling wall, and remaining response/coverage shaping residue; together with `compilationPreparation.totalMs` and `documentScope.totalMs` explain `queryMs` subject to 0.1 ms rounding |
 | `queryStages.syntaxRootLoadMs/classificationMs/sampleTextMs/postProcessOtherMs` | nested subsets of `postProcessMs`: syntax-root fetches, usage-kind classification, sampled line fetches, and remaining filter/dedup/group bookkeeping |
 | `queryStages.referencedSymbols/rawLocations/sourceLocations` | returned Roslyn work volume before Phoenix filtering; scalar counts only |
@@ -152,7 +152,18 @@ identifier-bounded candidate name or a conservative Roslyn `ValueText` transform
 scans source-generated documents, and widens a whole project when a candidate document declares a global using alias. Unsafe symbol
 kinds and every uncertain/error case silently retain the existing full-solution search.
 `documentScope` makes both the exclusion ratio and the fallback reason visible without exposing
-names, text, or paths.
+names, text, or paths. `scopedProjects` is the number of Roslyn projects containing the final
+document set; `documentsInScopedProjects` is the complete regular-plus-generated document census
+inside those projects. For named types, Roslyn proves global-alias completeness across that latter
+project-wide census before honoring its document filter, so it is the cold syntax-index work
+predictor while `scopedDocuments` describes the later binding scope.
+
+Since v0.12.18, the semantic `AdhocWorkspace` has deterministic storage-only solution, project,
+and document identities plus a stable synthetic solution path. This enables Roslyn's shipped
+SQLite persistent storage to reuse checksum-validated `SyntaxTreeIndex` data across MCP processes.
+The synthetic path is never opened and grants no solution/build authority; Phoenix continues to
+derive project, source, reference, and live-text truth from its existing index/workspace model.
+Changed source bytes and parse options retain Roslyn's normal checksum invalidation.
 
 `dbQueryAndMapMs` was the decision field for `epuc.3`. Field captures showed roughly
 600–700 ms per frontier query even when only 5–322 rows were returned, and an identical warm

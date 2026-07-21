@@ -203,6 +203,13 @@ This is the part designed specifically for net472 enterprise scale.
   compiler-pattern members, unsupported kinds, or any planning uncertainty silently use
   full-solution `SymbolFinder`. Confidence and candidate project coverage are unchanged; only
   documents inside the already selected solution are narrowed.
+- **Persistent Roslyn syntax indexes.** The semantic `AdhocWorkspace` uses a stable synthetic
+  solution path and deterministic solution/project/document ids solely as Roslyn cache identity.
+  Roslyn can therefore reload checksum-validated `SyntaxTreeIndex` records from its local
+  application-data SQLite store after an MCP process restart instead of rebuilding them across
+  every project touched by named-type global-alias discovery. The synthetic path is never read,
+  solution files remain non-authoritative, and changed bytes or parse options invalidate through
+  Roslyn's existing checksums.
 - **Rebuild-coordinated long scans.** Candidate enumeration and semantic cluster loading hold a
   shared cross-process reader guard, so a destructive Windows rebuild drains them before replacing
   the SQLite database.

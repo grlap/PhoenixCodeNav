@@ -137,6 +137,8 @@ public class Batch51TelemetryTests
                 Assert.False(documentScope.TryGetProperty("solutionDocuments", out _));
                 Assert.False(documentScope.TryGetProperty("candidateDocuments", out _));
                 Assert.False(documentScope.TryGetProperty("scopedDocuments", out _));
+                Assert.False(documentScope.TryGetProperty("scopedProjects", out _));
+                Assert.False(documentScope.TryGetProperty("documentsInScopedProjects", out _));
                 Assert.Equal(0, documentScope.GetProperty("aliasWidenedProjects").GetInt32());
                 Assert.Equal(0,
                     documentScope.GetProperty("transformedIncludedDocuments").GetInt32());
@@ -192,6 +194,7 @@ public class Batch51TelemetryTests
                     CandidateSource: "leasedSolutionText", TotalMs: 5,
                     CacheHit: false,
                     SolutionDocuments: 20, CandidateDocuments: 6, ScopedDocuments: 8,
+                    ScopedProjects: 3, DocumentsInScopedProjects: 17,
                     AliasWidenedProjects: 1, TransformedIncludedDocuments: 2),
             },
             PostProcessMs = 50,
@@ -233,6 +236,8 @@ public class Batch51TelemetryTests
         Assert.Equal(20, documentScope.GetProperty("solutionDocuments").GetInt32());
         Assert.Equal(6, documentScope.GetProperty("candidateDocuments").GetInt32());
         Assert.Equal(8, documentScope.GetProperty("scopedDocuments").GetInt32());
+        Assert.Equal(3, documentScope.GetProperty("scopedProjects").GetInt32());
+        Assert.Equal(17, documentScope.GetProperty("documentsInScopedProjects").GetInt32());
         Assert.Equal(1, documentScope.GetProperty("aliasWidenedProjects").GetInt32());
         Assert.Equal(2, documentScope.GetProperty("transformedIncludedDocuments").GetInt32());
         Assert.Equal(3, root.GetProperty("referencedSymbols").GetInt32());

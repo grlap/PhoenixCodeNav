@@ -637,9 +637,12 @@ try {
         Assert-Equal "documentScoped" ([string]$coldScope.mode) "Cold references did not use document scoping"
         Assert-True ([int]$coldScope.candidateDocuments -lt [int]$coldScope.solutionDocuments) "Cold candidate documents did not reduce the solution"
         Assert-True ([int]$coldScope.scopedDocuments -lt [int]$coldScope.solutionDocuments) "Cold scoped documents did not reduce the solution"
+        Assert-True ([int]$coldScope.scopedProjects -ge 1) "Cold scope omitted its Roslyn project breadth"
+        Assert-True ([int]$coldScope.documentsInScopedProjects -ge [int]$coldScope.scopedDocuments) "Cold scope understated documents in its selected projects"
         Assert-Equal "documentScoped" ([string]$warmScope.mode) "Warm references did not retain document scoping"
         Assert-True ([bool]$warmScope.cacheHit) "Warm references did not reuse the leased-solution scope"
         Assert-Equal ([int]$coldScope.scopedDocuments) ([int]$warmScope.scopedDocuments) "Cold/warm scoped document counts diverged"
+        Assert-Equal ([int]$coldScope.documentsInScopedProjects) ([int]$warmScope.documentsInScopedProjects) "Cold/warm project document breadth diverged"
     }
 
     $outline = Invoke-McpTool $writer "outline" @{ path = [string]$baseline.target.path; depth = 2 }

@@ -76,7 +76,7 @@ public sealed partial class SemanticWorkspace : IDisposable
     private readonly string _dbPath;
     private readonly Action<string> _log;
     private readonly bool _poolIndexConnections;
-    private readonly AdhocWorkspace _workspace = new();
+    private readonly AdhocWorkspace _workspace;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, LoadedProject> _loaded = new(StringComparer.OrdinalIgnoreCase);
     private long _useCounter;
@@ -105,6 +105,17 @@ public sealed partial class SemanticWorkspace : IDisposable
         _dbPath = dbPath;
         _log = log ?? (_ => { });
         _poolIndexConnections = poolIndexConnections;
+
+        // Roslyn's SyntaxTreeIndex persistence is disabled when Solution.FilePath is null.
+        // AdhocWorkspace starts with such an anonymous solution, so replace it with a stable
+        // storage identity before adding projects. The synthetic path is never read and is not
+        // solution/build authority; it only selects Roslyn's local application-data cache.
+        _workspace = new AdhocWorkspace();
+        string solutionIdentityPath = PersistentSolutionIdentityPath(workspaceRoot);
+        _workspace.AddSolution(SolutionInfo.Create(
+            StableSolutionId(workspaceRoot),
+            VersionStamp.Create(),
+            filePath: solutionIdentityPath));
     }
 
     /// <summary>LoadedBefore is null when the load died QUEUED for the gate — the warm-set
