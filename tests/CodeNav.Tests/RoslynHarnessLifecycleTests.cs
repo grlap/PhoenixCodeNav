@@ -127,7 +127,9 @@ public sealed class RoslynHarnessLifecycleTests
     [Fact]
     public async Task TeardownBoundsStderrAndKillsDescendantProcessTree()
     {
-        string output = await RunSelfTest("-SelfTestProcessLifecycle", TimeSpan.FromSeconds(20));
+        // The PowerShell self-test independently enforces the 15-second teardown bound.
+        // Leave enough outer-watchdog margin for process startup under solution-wide test contention.
+        string output = await RunSelfTest("-SelfTestProcessLifecycle", TimeSpan.FromSeconds(45));
         Assert.Contains("Process lifecycle self-test passed", output, StringComparison.Ordinal);
     }
 

@@ -453,14 +453,22 @@ function Start-ProcessLifecycleSelfTestClient {
 
 if ($SelfTestProcessLifecycle) {
     $client = Start-ProcessLifecycleSelfTestClient
+    $readyDeadline = [DateTime]::UtcNow.AddSeconds(15)
+    $pidMatch = $null
+    while ([DateTime]::UtcNow -lt $readyDeadline) {
+        $stderr = [string]$client.StderrTail.Snapshot()
+        $pidMatch = [regex]::Match($stderr, "GRANDCHILD_PID=(\d+)")
+        if ($pidMatch.Success -or $client.Process.HasExited) { break }
+        Start-Sleep -Milliseconds 50
+    }
+    Assert-True $pidMatch.Success "Lifecycle host did not report its descendant pid"
+    $grandchildPid = [int]$pidMatch.Groups[1].Value
+
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
     Stop-McpClient $client
     $stderr = [string]$client.StderrTail.Snapshot()
     Assert-True ($stopwatch.Elapsed -lt [TimeSpan]::FromSeconds(15)) "Lifecycle teardown exceeded its hard bound"
     Assert-True ($stderr.Length -le 65536) "Captured stderr exceeded the rolling-tail bound"
-    $pidMatch = [regex]::Match($stderr, "GRANDCHILD_PID=(\d+)")
-    Assert-True $pidMatch.Success "Lifecycle host did not report its descendant pid"
-    $grandchildPid = [int]$pidMatch.Groups[1].Value
     $deadline = [DateTime]::UtcNow.AddSeconds(2)
     while ([DateTime]::UtcNow -lt $deadline -and
            $null -ne (Get-Process -Id $grandchildPid -ErrorAction SilentlyContinue)) {

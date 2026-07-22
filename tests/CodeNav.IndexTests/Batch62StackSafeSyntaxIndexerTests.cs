@@ -27,7 +27,11 @@ public sealed class Batch62StackSafeSyntaxIndexerTests
             {
                 failure = ex;
             }
-        }, maxStackSize: 1024 * 1024);
+        }, maxStackSize: 1024 * 1024)
+        {
+            // A regression that hangs after Join's deadline must not keep the test host alive.
+            IsBackground = true,
+        };
 
         thread.Start();
         Assert.True(thread.Join(TimeSpan.FromSeconds(30)), "syntax indexing did not complete");
