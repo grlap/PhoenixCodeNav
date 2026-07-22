@@ -66,121 +66,157 @@ public static class SyntaxIndexer
         // memberDefault = the default accessibility for MEMBERS of the current container:
         // "public" inside an interface, "private" inside a class/struct/record (unused at the top
         // level / in a namespace, where only types live and each computes its own default).
-        void Walk(SyntaxNode node, int parentOrdinal, string? ns, string? container, string memberDefault)
+        // Keep traversal state on the heap. Machine-generated sources can contain hundreds of
+        // nested declarations; a recursive walk overflows the small stacks used by parallel index
+        // workers even though Roslyn parsed the file successfully.
+        var pending = new Stack<(
+            SyntaxNode Member,
+            int ParentOrdinal,
+            string? Namespace,
+            string? Container,
+            string MemberDefault)>();
+
+        void PushMembers(
+            SyntaxNode node, int parentOrdinal, string? ns, string? container,
+            string memberDefault)
         {
-            foreach (var member in Members(node))
+            if (node is EnumDeclarationSyntax enumDeclaration)
             {
-                switch (member)
+                for (int i = enumDeclaration.Members.Count - 1; i >= 0; i--)
                 {
-                    case BaseNamespaceDeclarationSyntax nsDecl:
-                        {
-                            string name = nsDecl.Name.ToString();
-                            string full = ns is null ? name : $"{ns}.{name}";
-                            int ord = Add(symbols, text, member, parentOrdinal, "namespace", full, ns, null,
-                                $"namespace {full}", "public", isPartial: false, arity: 0, attrs: null);
-                            Walk(nsDecl, ord, full, null, memberDefault);
-                            break;
-                        }
-                    case BaseTypeDeclarationSyntax typeDecl:
-                        {
-                            string kind = typeDecl switch
-                            {
-                                ClassDeclarationSyntax => "class",
-                                InterfaceDeclarationSyntax => "interface",
-                                StructDeclarationSyntax => "struct",
-                                RecordDeclarationSyntax r =>
-                                    r.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword) ? "record_struct" : "record",
-                                EnumDeclarationSyntax => "enum",
-                                _ => "type",
-                            };
-                            int arity = (typeDecl as TypeDeclarationSyntax)?.TypeParameterList?.Parameters.Count ?? 0;
-                            bool partial = typeDecl.Modifiers.Any(SyntaxKind.PartialKeyword);
-                            string name = typeDecl.Identifier.ValueText;
-                            string? attrs = AttrMarkers(typeDecl.AttributeLists, ref hasTestAttrs);
-                            string baseList = typeDecl.BaseList is { } bl ? $" : {Compact(bl.Types.ToString())}" : "";
-                            string sig = $"{kind} {name}{TypeParams(typeDecl)}{baseList}";
-                            IReadOnlyList<BaseTypeIdentity>? baseTypes =
-                                BaseTypeIdentities(typeDecl.BaseList);
-
-                            int ord = Add(symbols, text, member, parentOrdinal, kind, name, ns, container,
-                                // A nested type's default follows its container: public inside an interface
-                                // (memberDefault), private inside a class/struct/record; internal at top level.
-                                sig, Access(typeDecl.Modifiers, defaultAcc: container is null ? "internal" : memberDefault),
-                                partial, arity, attrs, baseTypes);
-
-                            string childContainer = container is null ? name : $"{container}.{name}";
-                            // Interface members are implicitly public; other type members default to private.
-                            string childMemberDefault = kind == "interface" ? "public" : "private";
-                            Walk(typeDecl, ord, ns, childContainer, childMemberDefault);
-                            break;
-                        }
-                    case DelegateDeclarationSyntax del:
-                        Add(symbols, text, member, parentOrdinal, "delegate", del.Identifier.ValueText, ns, container,
-                            $"delegate {Compact(del.ReturnType.ToString())} {del.Identifier.ValueText}{ParamSig(del.ParameterList)}",
-                            Access(del.Modifiers, container is null ? "internal" : memberDefault), false,
-                            del.TypeParameterList?.Parameters.Count ?? 0, null);
-                        break;
-                    case EnumMemberDeclarationSyntax enumMember:
-                        Add(symbols, text, member, parentOrdinal, "enum_member", enumMember.Identifier.ValueText, ns, container,
-                            enumMember.Identifier.ValueText, "public", false, 0, null);
-                        break;
-                    case MethodDeclarationSyntax method:
-                        {
-                            string? attrs = AttrMarkers(method.AttributeLists, ref hasTestAttrs);
-                            Add(symbols, text, member, parentOrdinal, "method", method.Identifier.ValueText, ns, container,
-                                $"{Compact(method.ReturnType.ToString())} {ExplicitInterface(method.ExplicitInterfaceSpecifier)}{method.Identifier.ValueText}{TypeParams(method)}{ParamSig(method.ParameterList)}",
-                                Access(method.Modifiers, memberDefault),
-                                method.Modifiers.Any(SyntaxKind.PartialKeyword),
-                                method.TypeParameterList?.Parameters.Count ?? 0, attrs);
-                            break;
-                        }
-                    case ConstructorDeclarationSyntax ctor:
-                        Add(symbols, text, member, parentOrdinal, "constructor", ctor.Identifier.ValueText, ns, container,
-                            $"{ctor.Identifier.ValueText}{ParamSig(ctor.ParameterList)}",
-                            Access(ctor.Modifiers, memberDefault), false, 0, null);
-                        break;
-                    case PropertyDeclarationSyntax prop:
-                        Add(symbols, text, member, parentOrdinal, "property", prop.Identifier.ValueText, ns, container,
-                            $"{Compact(prop.Type.ToString())} {ExplicitInterface(prop.ExplicitInterfaceSpecifier)}{prop.Identifier.ValueText}",
-                            Access(prop.Modifiers, memberDefault), false, 0, null);
-                        break;
-                    case IndexerDeclarationSyntax indexer:
-                        Add(symbols, text, member, parentOrdinal, "indexer", "this[]", ns, container,
-                            $"{Compact(indexer.Type.ToString())} {ExplicitInterface(indexer.ExplicitInterfaceSpecifier)}this{ParamSig(indexer.ParameterList)}",
-                            Access(indexer.Modifiers, memberDefault), false, 0, null);
-                        break;
-                    case EventDeclarationSyntax evt:
-                        Add(symbols, text, member, parentOrdinal, "event", evt.Identifier.ValueText, ns, container,
-                            $"event {Compact(evt.Type.ToString())} {ExplicitInterface(evt.ExplicitInterfaceSpecifier)}{evt.Identifier.ValueText}",
-                            Access(evt.Modifiers, memberDefault), false, 0, null);
-                        break;
-                    case EventFieldDeclarationSyntax evtField:
-                        foreach (var v in evtField.Declaration.Variables)
-                        {
-                            Add(symbols, text, member, parentOrdinal, "event", v.Identifier.ValueText, ns, container,
-                                $"event {Compact(evtField.Declaration.Type.ToString())} {v.Identifier.ValueText}",
-                                Access(evtField.Modifiers, memberDefault), false, 0, null);
-                        }
-                        break;
-                    case FieldDeclarationSyntax field:
-                        foreach (var v in field.Declaration.Variables)
-                        {
-                            Add(symbols, text, member, parentOrdinal, "field", v.Identifier.ValueText, ns, container,
-                                $"{Compact(field.Declaration.Type.ToString())} {v.Identifier.ValueText}",
-                                Access(field.Modifiers, memberDefault), false, 0, null);
-                        }
-                        break;
-                    case OperatorDeclarationSyntax op:
-                        string operatorName = OperatorName(op);
-                        Add(symbols, text, member, parentOrdinal, "operator", operatorName, ns, container,
-                            $"{Compact(op.ReturnType.ToString())} {ExplicitInterface(op.ExplicitInterfaceSpecifier)}{operatorName}{ParamSig(op.ParameterList)}",
-                            Access(op.Modifiers, "public"), false, 0, null);
-                        break;
+                    pending.Push((enumDeclaration.Members[i], parentOrdinal, ns, container,
+                        memberDefault));
                 }
+                return;
             }
+
+            SyntaxList<MemberDeclarationSyntax> members = node switch
+            {
+                CompilationUnitSyntax compilationUnit => compilationUnit.Members,
+                BaseNamespaceDeclarationSyntax namespaceDeclaration => namespaceDeclaration.Members,
+                TypeDeclarationSyntax typeDeclaration => typeDeclaration.Members,
+                _ => default,
+            };
+            for (int i = members.Count - 1; i >= 0; i--)
+                pending.Push((members[i], parentOrdinal, ns, container, memberDefault));
         }
 
-        Walk(root, -1, null, null, "private");
+        PushMembers(root, -1, null, null, "private");
+        while (pending.TryPop(out var next))
+        {
+            SyntaxNode member = next.Member;
+            int parentOrdinal = next.ParentOrdinal;
+            string? ns = next.Namespace;
+            string? container = next.Container;
+            string memberDefault = next.MemberDefault;
+            switch (member)
+            {
+                case BaseNamespaceDeclarationSyntax nsDecl:
+                    {
+                        string name = nsDecl.Name.ToString();
+                        string full = ns is null ? name : $"{ns}.{name}";
+                        int ord = Add(symbols, text, member, parentOrdinal, "namespace", full, ns, null,
+                            $"namespace {full}", "public", isPartial: false, arity: 0, attrs: null);
+                        PushMembers(nsDecl, ord, full, null, memberDefault);
+                        break;
+                    }
+                case BaseTypeDeclarationSyntax typeDecl:
+                    {
+                        string kind = typeDecl switch
+                        {
+                            ClassDeclarationSyntax => "class",
+                            InterfaceDeclarationSyntax => "interface",
+                            StructDeclarationSyntax => "struct",
+                            RecordDeclarationSyntax r =>
+                                r.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword) ? "record_struct" : "record",
+                            EnumDeclarationSyntax => "enum",
+                            _ => "type",
+                        };
+                        int arity = (typeDecl as TypeDeclarationSyntax)?.TypeParameterList?.Parameters.Count ?? 0;
+                        bool partial = typeDecl.Modifiers.Any(SyntaxKind.PartialKeyword);
+                        string name = typeDecl.Identifier.ValueText;
+                        string? attrs = AttrMarkers(typeDecl.AttributeLists, ref hasTestAttrs);
+                        string baseList = typeDecl.BaseList is { } bl ? $" : {Compact(bl.Types.ToString())}" : "";
+                        string sig = $"{kind} {name}{TypeParams(typeDecl)}{baseList}";
+                        IReadOnlyList<BaseTypeIdentity>? baseTypes =
+                            BaseTypeIdentities(typeDecl.BaseList);
+
+                        int ord = Add(symbols, text, member, parentOrdinal, kind, name, ns, container,
+                            // A nested type's default follows its container: public inside an interface
+                            // (memberDefault), private inside a class/struct/record; internal at top level.
+                            sig, Access(typeDecl.Modifiers, defaultAcc: container is null ? "internal" : memberDefault),
+                            partial, arity, attrs, baseTypes);
+
+                        string childContainer = container is null ? name : $"{container}.{name}";
+                        // Interface members are implicitly public; other type members default to private.
+                        string childMemberDefault = kind == "interface" ? "public" : "private";
+                        PushMembers(typeDecl, ord, ns, childContainer, childMemberDefault);
+                        break;
+                    }
+                case DelegateDeclarationSyntax del:
+                    Add(symbols, text, member, parentOrdinal, "delegate", del.Identifier.ValueText, ns, container,
+                        $"delegate {Compact(del.ReturnType.ToString())} {del.Identifier.ValueText}{ParamSig(del.ParameterList)}",
+                        Access(del.Modifiers, container is null ? "internal" : memberDefault), false,
+                        del.TypeParameterList?.Parameters.Count ?? 0, null);
+                    break;
+                case EnumMemberDeclarationSyntax enumMember:
+                    Add(symbols, text, member, parentOrdinal, "enum_member", enumMember.Identifier.ValueText, ns, container,
+                        enumMember.Identifier.ValueText, "public", false, 0, null);
+                    break;
+                case MethodDeclarationSyntax method:
+                    {
+                        string? attrs = AttrMarkers(method.AttributeLists, ref hasTestAttrs);
+                        Add(symbols, text, member, parentOrdinal, "method", method.Identifier.ValueText, ns, container,
+                            $"{Compact(method.ReturnType.ToString())} {ExplicitInterface(method.ExplicitInterfaceSpecifier)}{method.Identifier.ValueText}{TypeParams(method)}{ParamSig(method.ParameterList)}",
+                            Access(method.Modifiers, memberDefault),
+                            method.Modifiers.Any(SyntaxKind.PartialKeyword),
+                            method.TypeParameterList?.Parameters.Count ?? 0, attrs);
+                        break;
+                    }
+                case ConstructorDeclarationSyntax ctor:
+                    Add(symbols, text, member, parentOrdinal, "constructor", ctor.Identifier.ValueText, ns, container,
+                        $"{ctor.Identifier.ValueText}{ParamSig(ctor.ParameterList)}",
+                        Access(ctor.Modifiers, memberDefault), false, 0, null);
+                    break;
+                case PropertyDeclarationSyntax prop:
+                    Add(symbols, text, member, parentOrdinal, "property", prop.Identifier.ValueText, ns, container,
+                        $"{Compact(prop.Type.ToString())} {ExplicitInterface(prop.ExplicitInterfaceSpecifier)}{prop.Identifier.ValueText}",
+                        Access(prop.Modifiers, memberDefault), false, 0, null);
+                    break;
+                case IndexerDeclarationSyntax indexer:
+                    Add(symbols, text, member, parentOrdinal, "indexer", "this[]", ns, container,
+                        $"{Compact(indexer.Type.ToString())} {ExplicitInterface(indexer.ExplicitInterfaceSpecifier)}this{ParamSig(indexer.ParameterList)}",
+                        Access(indexer.Modifiers, memberDefault), false, 0, null);
+                    break;
+                case EventDeclarationSyntax evt:
+                    Add(symbols, text, member, parentOrdinal, "event", evt.Identifier.ValueText, ns, container,
+                        $"event {Compact(evt.Type.ToString())} {ExplicitInterface(evt.ExplicitInterfaceSpecifier)}{evt.Identifier.ValueText}",
+                        Access(evt.Modifiers, memberDefault), false, 0, null);
+                    break;
+                case EventFieldDeclarationSyntax evtField:
+                    foreach (var v in evtField.Declaration.Variables)
+                    {
+                        Add(symbols, text, member, parentOrdinal, "event", v.Identifier.ValueText, ns, container,
+                            $"event {Compact(evtField.Declaration.Type.ToString())} {v.Identifier.ValueText}",
+                            Access(evtField.Modifiers, memberDefault), false, 0, null);
+                    }
+                    break;
+                case FieldDeclarationSyntax field:
+                    foreach (var v in field.Declaration.Variables)
+                    {
+                        Add(symbols, text, member, parentOrdinal, "field", v.Identifier.ValueText, ns, container,
+                            $"{Compact(field.Declaration.Type.ToString())} {v.Identifier.ValueText}",
+                            Access(field.Modifiers, memberDefault), false, 0, null);
+                    }
+                    break;
+                case OperatorDeclarationSyntax op:
+                    string operatorName = OperatorName(op);
+                    Add(symbols, text, member, parentOrdinal, "operator", operatorName, ns, container,
+                        $"{Compact(op.ReturnType.ToString())} {ExplicitInterface(op.ExplicitInterfaceSpecifier)}{operatorName}{ParamSig(op.ParameterList)}",
+                        Access(op.Modifiers, "public"), false, 0, null);
+                    break;
+            }
+        }
 
         int lineCount = text.Lines.Count;
         bool looksGenerated = FileClassifier.LooksGenerated(relPath, content);
@@ -318,15 +354,6 @@ public static class SyntaxIndexer
             if (identifier is { } identifierToken) VisitToken(identifierToken);
         }
     }
-
-    private static IEnumerable<SyntaxNode> Members(SyntaxNode node) => node switch
-    {
-        CompilationUnitSyntax cu => cu.Members,
-        BaseNamespaceDeclarationSyntax ns => ns.Members,
-        EnumDeclarationSyntax e => e.Members,
-        TypeDeclarationSyntax t => t.Members,
-        _ => Enumerable.Empty<SyntaxNode>(),
-    };
 
     /// <summary>Persists the right-most simple identity of every direct base-list entry. The
     /// closure intentionally over-includes same-named types across namespaces and lets Roslyn

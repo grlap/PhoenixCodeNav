@@ -408,7 +408,10 @@ project cannot contain another C# declaration for that symbol. Failed C# loads, 
 coverage, and unproven project-model authority still downgrade the result.
 
 This implementation changes only C# semantic cluster materialization. Initial indexing already uses
-parallel file capture/parsing with a single SQLite writer and is a separate pipeline. F# semantic
+parallel file capture/parsing with a single SQLite writer and is a separate pipeline. Since v0.12.20,
+C# declaration extraction traverses nested namespaces and types with an explicit depth-first work
+stack rather than recursive calls, so machine-generated nesting remains fully indexed on bounded-stack
+parallel workers without changing symbol order or parent links. F# semantic
 resolution currently captures and type-checks one selected physical project behind its own
 single-slot gate; cross-project F# loading or parallel FCS requests require a separate design and
 must not be implied by this change.

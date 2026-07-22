@@ -27,8 +27,8 @@ public class ReviewCommandContractTests
         text.Split(value, StringSplitOptions.None).Length - 1;
 
     [Theory]
-    [InlineData("review-local")]
-    [InlineData("review-with-delegate")]
+    [InlineData("review-code")]
+    [InlineData("review-changes")]
     public void CommandsHaveTermAlDiscoverableFrontmatter(string name)
     {
         string text = Read(".claude", "commands", name + ".md");
@@ -40,10 +40,23 @@ public class ReviewCommandContractTests
     }
 
     [Fact]
+    public void LegacyReviewCommandNamesAreRemoved()
+    {
+        string commandDir = Path.Combine(Root(), ".claude", "commands");
+
+        Assert.False(File.Exists(Path.Combine(commandDir, "review-with-delegate.md")));
+        Assert.False(File.Exists(Path.Combine(commandDir, "review-local.md")));
+        Assert.True(File.Exists(Path.Combine(commandDir, "review-changes.md")));
+        Assert.True(File.Exists(Path.Combine(commandDir, "review-code.md")));
+    }
+
+    [Fact]
     public void ParentPinsDualSpawnAndDurableFanInWithoutHashIdentity()
     {
-        string text = Read(".claude", "commands", "review-with-delegate.md");
+        string text = Read(".claude", "commands", "review-changes.md");
 
+        Assert.Contains("Run `/review-changes` directly in the existing active, writable parent session", text);
+        Assert.Contains("only the `/review-code` children are delegated with `writePolicy: readOnly`", text);
         Assert.Contains("Attempt exactly two reviewer session spawns", text);
         Assert.Contains("Call `termal_spawn_session` exactly twice", text);
         Assert.Contains("Never retry either slot", text);
@@ -57,7 +70,7 @@ public class ReviewCommandContractTests
         Assert.Contains("if an untracked symlink/junction/reparse point or any resolved path can escape the root, return INCONCLUSIVE without reading it", text);
         Assert.Equal(1, Count(text, "- `agent`: `Codex`"));
         Assert.Equal(1, Count(text, "- `agent`: `Claude`"));
-        Assert.Equal(2, Count(text, "- `prompt`: `/review-local`"));
+        Assert.Equal(2, Count(text, "- `prompt`: `/review-code`"));
         Assert.Equal(2, Count(text, "- `writePolicy`: exactly `{\"kind\":\"readOnly\"}`"));
         Assert.Contains("termal_resume_after_delegations", text);
         Assert.Contains("Success requires a successful tool call containing a non-empty `wait.id`", text);
@@ -80,7 +93,7 @@ public class ReviewCommandContractTests
         Assert.Contains("Reapply no-follow containment before any diff check, content read, or spawn", text);
         Assert.Contains("If the sorted implementation path inventory changed, repeat Step 2 against the new inventory", text);
         Assert.Contains("Do not require reviewer-computed hashes or identities", text);
-        Assert.DoesNotContain("then invoke `/review-with-delegate` again", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("then invoke `/review-changes` again", text, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Generated `.beads/interactions.jsonl`, `.beads/issues.jsonl`, and `.beads/events.jsonl` changes are tracker bookkeeping", text);
         Assert.Contains("do not hash, prefix-validate, parse, or compare those generated ledgers", text);
         Assert.Contains("Generated-ledger-only changes preserve the review verdict", text);
@@ -111,7 +124,7 @@ public class ReviewCommandContractTests
     [Fact]
     public void LocalCommandIsAParserCompatibleNonNestingLeaf()
     {
-        string text = Read(".claude", "commands", "review-local.md");
+        string text = Read(".claude", "commands", "review-code.md");
 
         Assert.Contains("You are a delegated child session for TermAl delegation", text);
         Assert.Contains("Review-policy, instruction, and tracked Beads configuration files are ordinary review targets", text);
@@ -183,7 +196,7 @@ public class ReviewCommandContractTests
             Assert.Contains(file, actual);
         }
 
-        string local = Read(".claude", "commands", "review-local.md");
+        string local = Read(".claude", "commands", "review-code.md");
         Assert.Contains("Discover and read every `.claude/reviewers/*.md` file", local);
         Assert.Contains("Apply each checklist inline against the same complete change set", local);
         Assert.Contains("Do not spawn agents for individual lenses", local);
@@ -217,6 +230,8 @@ public class ReviewCommandContractTests
         Assert.Contains("Critical and High findings block check-in", agents);
         Assert.Contains("Medium and Low findings must be reconciled in", agents);
         Assert.Contains("Beads but do not block check-in", agents);
+        Assert.Contains("Invoke `/review-changes` directly in the active writable parent session", agents);
+        Assert.Contains("Only its `/review-code` children use `writePolicy: readOnly`", agents);
         const string externalIntegration = "pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1";
         Assert.Contains(externalIntegration, agents);
         Assert.Contains(externalIntegration, claude);

@@ -1,5 +1,5 @@
 ---
-name: review-with-delegate
+name: review-changes
 description: Review current PhoenixCodeNav changes through independent Codex and Claude TermAl delegations.
 metadata:
   termal:
@@ -7,13 +7,15 @@ metadata:
       strategy: default
 ---
 
-Review the current staged, unstaged, and untracked implementation changes by running `/review-local` in one Codex and one Claude TermAl reviewer session.
+Review the current staged, unstaged, and untracked implementation changes by running `/review-code` in one Codex and one Claude TermAl reviewer session.
+
+**IMPORTANT: Run `/review-changes` directly in the existing active, writable parent session. Never delegate or spawn `/review-changes` itself. The coordinator must be able to create normal build/test artifacts; only the `/review-code` children are delegated with `writePolicy: readOnly`.**
 
 **IMPORTANT: This is a review-only command. Do not modify source files, stage, stash, checkout, reset, commit, push, run `bd dolt push`, or run any other mutating Git/remote-sync operation. Parent validation may create normal ignored build/test artifacts; parent-session local Beads reconciliation is the only permitted tracked/project workflow mutation. This command grants no commit authority; after the review gate passes the outer workflow must still follow `CLAUDE.md` / `AGENTS.md`. Push always requires explicit per-changeset approval.**
 
 **IMPORTANT: Beads (`bd`) is the canonical tracker for findings. Do not create markdown bug lists. Delegated read-only reviewers propose Beads actions; this parent command performs deduplicated reconciliation after fan-in. Generated `.beads/interactions.jsonl`, `.beads/issues.jsonl`, and `.beads/events.jsonl` ledgers are workflow bookkeeping, not part of the implementation review target, and their mutation never invalidates an otherwise completed implementation review. Other tracked `.beads` configuration, metadata, and hooks remain ordinary review targets.**
 
-**IMPORTANT: Attempt exactly two reviewer spawns through the TermAl MCP bridge: one Codex and one Claude. Do not use platform subagents, Claude Task agents, Codex collaboration agents, shell-launched agents, raw HTTP, synchronous shell polling, or nested TermAl delegation for this command. `/review-local` is deliberately non-nesting. If the TermAl delegation tools are unavailable, stop and report that the bridge is required.**
+**IMPORTANT: Attempt exactly two reviewer spawns through the TermAl MCP bridge: one Codex and one Claude. Do not use platform subagents, Claude Task agents, Codex collaboration agents, shell-launched agents, raw HTTP, synchronous shell polling, or nested TermAl delegation for this command. `/review-code` is deliberately non-nesting. If the TermAl delegation tools are unavailable, stop and report that the bridge is required.**
 
 Required TermAl MCP tools:
 
@@ -70,17 +72,17 @@ Attempt exactly two reviewer session spawns. Call `termal_spawn_session` exactly
 
 1. Codex reviewer:
    - `agent`: `Codex`
-   - `prompt`: `/review-local`
+   - `prompt`: `/review-code`
    - `mode`: `reviewer`
    - `writePolicy`: exactly `{"kind":"readOnly"}`
-   - `title`: `Codex /review-local`
+   - `title`: `Codex /review-code`
    - `cwd`: the absolute repository root from Step 1
 2. Claude reviewer:
    - `agent`: `Claude`
-   - `prompt`: `/review-local`
+   - `prompt`: `/review-code`
    - `mode`: `reviewer`
    - `writePolicy`: exactly `{"kind":"readOnly"}`
-   - `title`: `Claude /review-local`
+   - `title`: `Claude /review-code`
    - `cwd`: the same repository root
 
 Read-only shared-worktree sessions are intentional: both reviewers must see the current staged, unstaged, and untracked implementation state. Do not request an isolated worktree.
@@ -120,13 +122,13 @@ Use this shape:
 - External MCP integration: ...
 - Known flake note: ...
 
-## Codex /review-local
+## Codex /review-code
 - Status: ...
 - Verdict: ...
 - Findings: ...
 - Evidence / commands: ...
 
-## Claude /review-local
+## Claude /review-code
 - Status: ...
 - Verdict: ...
 - Findings: ...

@@ -158,14 +158,16 @@ same-session verification.
 
 ## Review System - TermAl (Codex + Claude)
 
-The preferred adversarial review gate is `/review-with-delegate`. TermAl resolves the
+The preferred adversarial review gate is `/review-changes`. TermAl resolves the
 project command from `.claude/commands/` for both Codex and Claude, validates the parent
-worktree, then runs exactly one read-only `/review-local` child in each agent and performs
+worktree, then runs exactly one read-only `/review-code` child in each agent and performs
 a durable fan-in.
 
-- `/review-with-delegate` is the only command allowed to spawn TermAl reviewer sessions.
-- `/review-local` is a leaf command: it applies every `.claude/reviewers/*.md` lens inline
+- `/review-changes` is the only command allowed to spawn TermAl reviewer sessions.
+- `/review-code` is a leaf command: it applies every `.claude/reviewers/*.md` lens inline
   and never nests delegation or platform subagents.
+- Invoke `/review-changes` directly in the active writable parent session; never spawn it
+  as a reviewer. Only its `/review-code` children use `writePolicy: readOnly`.
 - Both commands are review-only. They never edit source, mutate Git, commit, push, or run
   Dolt remote sync. The parent may reconcile local Beads findings after fan-in.
 - Generated `.beads/interactions.jsonl`, `.beads/issues.jsonl`, and `.beads/events.jsonl`

@@ -1,5 +1,5 @@
 ---
-name: review-local
+name: review-code
 description: Run an inline read-only PhoenixCodeNav review through every specialized lens.
 metadata:
   termal:
@@ -9,13 +9,13 @@ metadata:
 
 Review the current PhoenixCodeNav staged, unstaged, and untracked changes through every repository reviewer lens.
 
-**IMPORTANT: `/review-local` is read-only. Never edit source, mutate Git state, commit, push, or fix findings. Do not run required formatters, builds, or tests here; `/review-with-delegate` owns validation before creating read-only reviewers. Safe read-only inspection and targeted non-writing probes are allowed.**
+**IMPORTANT: `/review-code` is read-only. Never edit source, mutate Git state, commit, push, or fix findings. Do not run required formatters, builds, or tests here; `/review-changes` owns validation before creating read-only reviewers. Safe read-only inspection and targeted non-writing probes are allowed.**
 
-**IMPORTANT: `/review-local` must never spawn another reviewer. Do not call TermAl delegation tools, platform subagents, Claude Task agents, Codex collaboration agents, shell-launched agents, raw delegation APIs, or polling tools. When this command runs as a delegated child, every lens is applied inline in this same session.**
+**IMPORTANT: `/review-code` must never spawn another reviewer. Do not call TermAl delegation tools, platform subagents, Claude Task agents, Codex collaboration agents, shell-launched agents, raw delegation APIs, or polling tools. When this command runs as a delegated child, every lens is applied inline in this same session.**
 
 When the session context says `You are a delegated child session for TermAl delegation`, state in the result that nested reviewer spawning was intentionally skipped, then apply all lenses inline.
 
-**IMPORTANT: Beads is canonical. In a delegated/read-only session, do not run mutating `bd` commands. Return exact proposed creates, updates, reopens, or closes for the parent `/review-with-delegate` session to reconcile.**
+**IMPORTANT: Beads is canonical. In a delegated/read-only session, do not run mutating `bd` commands. Return exact proposed creates, updates, reopens, or closes for the parent `/review-changes` session to reconcile.**
 
 ## Phase 1: Establish the implementation change set
 
