@@ -120,7 +120,9 @@ public sealed class RoslynHarnessLifecycleTests
     [Fact]
     public async Task SemanticRetryIncludesIndexedAutoFallbacks()
     {
-        string output = await RunSelfTest("-SelfTestSemanticRetryContract", TimeSpan.FromSeconds(15));
+        // The script body is immediate; this outer bound includes PowerShell startup while the
+        // solution gate is concurrently running the process-heavy index and Git test projects.
+        string output = await RunSelfTest("-SelfTestSemanticRetryContract", TimeSpan.FromSeconds(45));
         Assert.Contains("Semantic retry contract self-test passed", output, StringComparison.Ordinal);
     }
 
@@ -128,8 +130,9 @@ public sealed class RoslynHarnessLifecycleTests
     public async Task TeardownBoundsStderrAndKillsDescendantProcessTree()
     {
         // The PowerShell self-test independently enforces the 15-second teardown bound.
-        // Leave enough outer-watchdog margin for process startup under solution-wide test contention.
-        string output = await RunSelfTest("-SelfTestProcessLifecycle", TimeSpan.FromSeconds(45));
+        // Its outer watchdog also covers two process startups, a 15-second readiness bound, and
+        // descendant verification while other solution test projects are running concurrently.
+        string output = await RunSelfTest("-SelfTestProcessLifecycle", TimeSpan.FromSeconds(90));
         Assert.Contains("Process lifecycle self-test passed", output, StringComparison.Ordinal);
     }
 

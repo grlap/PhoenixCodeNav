@@ -208,7 +208,12 @@ This is the part designed specifically for net472 enterprise scale.
   `ValueText`; and constructors, instantiable types, operators, accessors, indexers,
   compiler-pattern members, unsupported kinds, or any planning uncertainty silently use
   full-solution `SymbolFinder`. Confidence and candidate project coverage are unchanged; only
-  documents inside the already selected solution are narrowed.
+  documents inside the already selected solution are narrowed. Since v0.12.21, large
+  `SourceText` instances are scanned through pooled bounded windows rather than virtual per-character
+  indexing, with exact state carried across windows for escapes, numeric entities, and Unicode
+  format scalars. Candidate syntax roots are materialized for alias widening only when raw text
+  contains the unordered case-sensitive `global`, `using`, and `=` token spellings; comments and
+  strings may conservatively over-admit, while the syntax tree remains the final authority.
 - **Persistent Roslyn syntax indexes.** The semantic `AdhocWorkspace` uses a stable synthetic
   solution path and deterministic solution/project/document ids solely as Roslyn cache identity.
   Roslyn can therefore reload checksum-validated `SyntaxTreeIndex` records from its local

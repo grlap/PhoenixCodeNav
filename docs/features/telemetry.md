@@ -162,6 +162,13 @@ inside those projects. For named types, Roslyn proves global-alias completeness 
 project-wide census before honoring its document filter, so it is the cold syntax-index work
 predictor while `scopedDocuments` describes the later binding scope.
 
+Since v0.12.21, this live-text pass scans large `SourceText` instances through pooled bounded
+windows with a streaming, boundary-exact `ValueText` hazard detector. It also avoids materializing
+a candidate document's syntax root unless the raw text contains the unordered case-sensitive
+`global`, `using`, and `=` spellings required by a global using alias. The check is deliberately
+substring-conservative; the syntax tree still decides whether an alias exists and whether the
+project must widen.
+
 Since v0.12.18, the semantic `AdhocWorkspace` has deterministic storage-only solution, project,
 and document identities plus a stable synthetic solution path. This enables Roslyn's shipped
 SQLite persistent storage to reuse checksum-validated `SyntaxTreeIndex` data across MCP processes.
