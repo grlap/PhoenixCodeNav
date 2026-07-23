@@ -1,6 +1,6 @@
-# Semantic Operation Telemetry (epuc.1, epuc.3, epuc.4, epuc.5)
+# Semantic Operation Telemetry (epuc.1, epuc.3, epuc.4, epuc.5, epuc.10)
 
-Beads: `PhoenixCodeNav-epuc.1`, `PhoenixCodeNav-epuc.3`, `PhoenixCodeNav-epuc.4`, `PhoenixCodeNav-epuc.5` · Consumed by: [`../internal-operations-portal.md`](../internal-operations-portal.md) (x5ls, design-frozen)
+Beads: `PhoenixCodeNav-epuc.1`, `PhoenixCodeNav-epuc.3`, `PhoenixCodeNav-epuc.4`, `PhoenixCodeNav-epuc.5`, `PhoenixCodeNav-epuc.10` · Consumed by: [`../internal-operations-portal.md`](../internal-operations-portal.md) (x5ls, design-frozen)
 
 Phoenix writes one JSONL record per semantic operation to a bounded, privacy-safe,
 per-process file. This is the data layer the operations portal renders later; it is useful
@@ -25,7 +25,8 @@ process is alive).
 
 ```json
 {"e":"semanticOp","ts":"2026-07-13T23:49:12.482Z","corr":"a1b2c3d4",
- "tool":"references","accessMode":"writer","result":"exact","clusterLoadMs":15400,"queryMs":47642,"cold":true,
+ "tool":"references","accessMode":"writer","result":"exact","clusterLoadMs":15400,
+ "clusterLoadProcessWideCpuMs":18920.4,"queryMs":47642,"cold":true,
  "ownerLoad":{"gateWaitMs":0.2,"fingerprintMs":1.5,"topoMs":48.0,"projectLoadMs":8917.3,
               "planMs":51.0,"preparationMs":8800.0,"preparationQueueMs":12.0,
               "preparedProjects":4,"committedProjects":4,"effectiveProjectConcurrency":4,
@@ -67,12 +68,12 @@ the remaining dominant wall:
 
 ```json
 "queryStages":{"path":"symbol_finder",
-  "compilationPreparation":{"totalMs":2410.7,"queueMs":386.2,
+  "compilationPreparation":{"totalMs":2410.7,"processWideCpuMs":5980.2,"queueMs":386.2,
     "busySumMs":8234.5,"maxProjectBusyMs":712.1,
     "waveMaxSumMs":1924.6,"criticalPathMs":1540.3,
     "requestedProjects":41,"graphProjects":41,"cacheHits":1,"preparedProjects":40,
     "failedProjects":0,"skippedProjects":0,"unfinishedProjects":0,"waves":7,
-    "laneLimit":8,"effectiveConcurrency":8},
+    "laneLimit":8,"processorCount":8,"effectiveConcurrency":8},
   "findReferencesMs":6823.4,
   "postProcessMs":947.6,"syntaxRootLoadMs":621.4,"classificationMs":42.8,
   "sampleTextMs":18.2,"postProcessOtherMs":265.2,"otherMs":186.3,
@@ -94,6 +95,7 @@ load ran).
 | `result` | `exact` (success) \| `degraded` (deadline died: see `reason`) \| `unresolved` (position/symbol didn't resolve; see `reason`) \| `error` |
 | `reason` | Stable primary cause, including `cluster_cold_load`, `semantic_timeout`, `project_load_failed`, `index_snapshot_unavailable`, symbol-resolution causes, or an exception type name. A `semantic_timeout` with `queryStages.compilationPreparation.unfinishedProjects > 0` expired during eager preparation |
 | `clusterLoadMs` | the op's LOAD+RESOLVE wall (all phases through symbol resolution) — restored after a field regression hid a 48s query behind load-only telemetry |
+| `clusterLoadProcessWideCpuMs` | `references` only: process-wide CPU consumed while `clusterLoadMs` was open. It includes GC, runtime, and every concurrent MCP thread; it is diagnostic attribution, never elapsed duration |
 | `queryMs` | the op's FIND wall after scan-set planning/loading/resolution (compilation preparation, SymbolFinder, and result processing). Null when the op died during load |
 | `cold` | present+true when phase 1 found zero projects already loaded — the workspace was cold before this op |
 | `ownerLoad` | stage split of phase 1: loading the owning project's dependency closure (all six tools) |
@@ -110,11 +112,12 @@ load ran).
 | `queryStages` | Per-tool post-resolution attribution discriminated by `path`: `symbol_finder` (`references`), `closure_verified`, or `exhaustive_fallback` (`implementations`/`type_hierarchy`). Emitted on exact/partial success and on post-load degraded/error records when query wall is available |
 | `queryStages.compilationPreparation` | `references` only: dependency-first eager preparation on the same pinned `Solution` later passed to SymbolFinder; omitted if the operation never reached preparation |
 | `queryStages.compilationPreparation.totalMs/queueMs` | preparation wall and summed project time queued for the shared process-wide project lanes; summed queue time may exceed wall time |
+| `queryStages.compilationPreparation.processWideCpuMs` | process-wide CPU between the exact preparation entry/exit brackets, including GC/runtime/concurrent work. Compare with `totalMs` and `busySumMs`; do not interpret it as a duration or as CPU owned exclusively by the query |
 | `queryStages.compilationPreparation.busySumMs/maxProjectBusyMs` | sum of slot-held compilation-call wall across projects, and its single-project maximum. `busySumMs / totalMs` is the observed work parallelism; cache hits and lane wait are excluded |
 | `queryStages.compilationPreparation.waveMaxSumMs/criticalPathMs` | measured scheduling floors over the same project busy times: the sum of the slowest project in each current barrier wave, and the longest weighted dependency path. A lane-aware ready-queue floor is `max(criticalPathMs, busySumMs / laneLimit)`; subtract it from `waveMaxSumMs` to estimate recoverable barrier wall. When `unfinishedProjects > 0`, all four busy-work scalars are lower bounds because unmeasured projects contribute zero |
 | `queryStages.compilationPreparation.requestedProjects/graphProjects` | successfully loaded projects requested by this operation, narrowed to the owner and its graph dependents when available, then closed over actual Roslyn project dependencies; unrelated warm resident projects are excluded |
 | `queryStages.compilationPreparation.cacheHits/preparedProjects/failedProjects/skippedProjects/unfinishedProjects` | terminal work counts. Failures do not change the search contract: SymbolFinder remains authoritative. `unfinishedProjects` is nonzero when cancellation stops preparation |
-| `queryStages.compilationPreparation.waves/laneLimit/effectiveConcurrency` | dependency waves, process-wide concurrency cap, and this operation's observed concurrent compilation high-water |
+| `queryStages.compilationPreparation.waves/laneLimit/processorCount/effectiveConcurrency` | dependency waves, configured process-wide preparation cap, raw `Environment.ProcessorCount`, and this operation's observed concurrent compilation high-water |
 | `queryStages.documentScope` | `references` only: exact document-scope planning after compilation preparation; always emitted once reached, including full-solution fallbacks |
 | `queryStages.documentScope.mode/reason/candidateSource` | `documentScoped`, `fullSolution`, or `notCompleted`; a stable decision reason (`eligible`, `ineligible_kind`, `forced_full_solution`, `unsupported_language`, `no_documents`, `no_candidates`, `no_reduction`, `planning_error`, or `cancelled`); and `leasedSolutionText` as the exact live-snapshot candidate authority |
 | `queryStages.documentScope.totalMs/cacheHit` | cached leased-solution text scan plus conservative global-alias inspection, separate from Roslyn finding; repeated queries on the same immutable `Solution` reuse the exact scope and report `cacheHit:true` |
@@ -199,6 +202,21 @@ while a larger gap justifies testing a completion-driven scheduler against that 
 than the lane limit can make `totalMs` exceed `waveMaxSumMs`; that is expected lane serialization,
 not unexplained residue. This is a decision signal, not a promise that scheduling overhead can
 reach the theoretical floor.
+
+Since v0.12.23, `references` also records process-wide CPU for two deliberately broad brackets:
+the exact `compilationPreparation` call and the complete `clusterLoad` interval. CPU can exceed
+wall time and can include unrelated work. A comparable capture therefore uses an otherwise idle
+host, waits for `refresh_sweep_pending` to clear, and runs one semantic operation at a time.
+`clusterLoadProcessWideCpuMs` covers the complete load+resolve interval through scan-set
+resolution, including intervening planning; `compilationPreparation.processWideCpuMs` covers its
+later preparation phase only, so the two brackets do not overlap. A missing CPU field means the
+process counter was unavailable; `0.0` means a measured near-zero interval.
+`PhoenixCodeNav-Semantic` EventSource emits `PhaseStart`/`PhaseStop` markers for `ownerLoad`,
+`scanLoad`, `compilationPreparation`, `documentScope`, and `findReferences`. Each marker carries
+the same privacy-safe operation id published as `semanticOp.corr`, so EventPipe samples can be
+joined to the JSON record without exposing symbols or paths. A phase is marked only when its
+start occurs while the provider is enabled; attaching mid-phase misses that phase, while detaching
+mid-phase can omit its stop marker.
 
 `dbQueryAndMapMs` was the decision field for `epuc.3`. Field captures showed roughly
 600–700 ms per frontier query even when only 5–322 rows were returned, and an identical warm

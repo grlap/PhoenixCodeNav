@@ -204,6 +204,9 @@ public sealed partial class SemanticService : IDisposable
                 compilationPreparation = compilationPreparation is null ? null : new
                 {
                     totalMs = Math.Round(compilationPreparation.TotalMs, 1),
+                    processWideCpuMs = compilationPreparation.ProcessWideCpuMs is { } processCpuMs
+                        ? Math.Round(processCpuMs, 1)
+                        : (double?)null,
                     queueMs = Math.Round(compilationPreparation.QueueMs, 1),
                     busySumMs = Math.Round(compilationPreparation.BusySumMs, 1),
                     maxProjectBusyMs = Math.Round(compilationPreparation.MaxProjectBusyMs, 1),
@@ -218,6 +221,7 @@ public sealed partial class SemanticService : IDisposable
                     unfinishedProjects = compilationPreparation.UnfinishedProjects,
                     waves = compilationPreparation.Waves,
                     laneLimit = compilationPreparation.LaneLimit,
+                    processorCount = compilationPreparation.ProcessorCount,
                     effectiveConcurrency = compilationPreparation.EffectiveConcurrency,
                 },
                 documentScope = documentScope is null ? null : new
@@ -266,7 +270,48 @@ public sealed partial class SemanticService : IDisposable
         SemanticWorkspace.LoadStats? scanLoad = null,
         long? clusterLoadMs = null, long? queryMs = null,
         object? queryStages = null,
-        SemanticPlanningStats? planning = null)
+        SemanticPlanningStats? planning = null) =>
+        EmitOpTelemetryCore(
+            correlationId: null,
+            tool,
+            result,
+            reason,
+            ownerLoad,
+            scanLoad,
+            clusterLoadMs,
+            queryMs,
+            queryStages,
+            planning,
+            clusterLoadProcessWideCpuMs: null);
+
+    private void EmitReferencesTelemetry(string operationId, string result, string? reason,
+        SemanticWorkspace.LoadStats? ownerLoad = null,
+        SemanticWorkspace.LoadStats? scanLoad = null,
+        long? clusterLoadMs = null, long? queryMs = null,
+        object? queryStages = null,
+        SemanticPlanningStats? planning = null,
+        double? clusterLoadProcessWideCpuMs = null) =>
+        EmitOpTelemetryCore(
+            operationId,
+            "references",
+            result,
+            reason,
+            ownerLoad,
+            scanLoad,
+            clusterLoadMs,
+            queryMs,
+            queryStages,
+            planning,
+            clusterLoadProcessWideCpuMs);
+
+    private void EmitOpTelemetryCore(string? correlationId,
+        string tool, string result, string? reason,
+        SemanticWorkspace.LoadStats? ownerLoad,
+        SemanticWorkspace.LoadStats? scanLoad,
+        long? clusterLoadMs, long? queryMs,
+        object? queryStages,
+        SemanticPlanningStats? planning,
+        double? clusterLoadProcessWideCpuMs)
     {
         _manager.Telemetry.Emit(new
         {
@@ -275,7 +320,7 @@ public sealed partial class SemanticService : IDisposable
             // locales like fi-FI it renders `.`, breaking ISO-8601 (x5ls.1 review F6).
             ts = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ",
                 System.Globalization.CultureInfo.InvariantCulture),
-            corr = Guid.NewGuid().ToString("N")[..8],
+            corr = correlationId ?? Guid.NewGuid().ToString("N")[..8],
             tool,
             accessMode = _manager.IsWriter
                 ? "writer"
@@ -286,6 +331,9 @@ public sealed partial class SemanticService : IDisposable
             // redesign dropped the op's own load/query wall split — the response envelope kept
             // it, the record lost it, and query became the dominant cost with zero telemetry.
             clusterLoadMs,
+            clusterLoadProcessWideCpuMs = clusterLoadProcessWideCpuMs is null
+                ? (double?)null
+                : Math.Round(clusterLoadProcessWideCpuMs.Value, 1),
             queryMs,
             // jj1q: the closure-verified find path reports its own stage split — the field's
             // "break down the 43.7s inside queryMs" ask, answered by owning the stages.
@@ -459,6 +507,9 @@ public sealed partial class SemanticService : IDisposable
         bool includeTests = true)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
+        string operationId = Guid.NewGuid().ToString("N")[..8];
+        TimeSpan? clusterLoadCpuStarted = SemanticProcessCpu.Snapshot();
+        double? clusterLoadProcessWideCpuMs = null;
         bool clusterLoadInProgress = true;
         var swPhase = System.Diagnostics.Stopwatch.StartNew();
         long clusterLoadMs = 0;
@@ -472,27 +523,41 @@ public sealed partial class SemanticService : IDisposable
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
             if (indexSnapshot is null)
             {
-                EmitOpTelemetry("references", "unresolved", "index_snapshot_unavailable"); // epuc.1
+                clusterLoadProcessWideCpuMs =
+                    SemanticProcessCpu.ElapsedMilliseconds(clusterLoadCpuStarted);
+                EmitReferencesTelemetry(operationId, "unresolved",
+                    "index_snapshot_unavailable",
+                    clusterLoadMs: swPhase.ElapsedMilliseconds,
+                    clusterLoadProcessWideCpuMs: clusterLoadProcessWideCpuMs); // epuc.1
                 return (null, "index_snapshot_unavailable");
             }
 
             // Phase 1: load the owner closure and resolve, to learn the symbol name.
             deferredRetentionPending = true;
-            var (ownerLease, symbolA, owningProject, ownerCoverage) = await LoadOwnerAndResolveAsync(
-                path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
-                statsBox: ownerBox, deferRetentionEviction: true).ConfigureAwait(false);
+            (SemanticSolutionLease? ownerLease, ISymbol? symbolA, string? owningProject,
+                ClusterCoverage? ownerCoverage) ownerResult;
+            using (SemanticPhaseEventSource.Log.Measure("ownerLoad", operationId))
+            {
+                ownerResult = await LoadOwnerAndResolveAsync(
+                    path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
+                    statsBox: ownerBox, deferRetentionEviction: true).ConfigureAwait(false);
+            }
+            var (ownerLease, symbolA, owningProject, ownerCoverage) = ownerResult;
             using var ownerOperation = ownerLease;
             clusterLoadInProgress = false; // candidate discovery is a query phase, not cold loading
             // Review q2 (progressive stamp): a deadline in the DISCOVERY window otherwise
             // reports clusterLoadMs 0 / queryMs = whole wall — the exact inverse of the truth
             // when phase-1 burned the budget. The post-phase-2 stamp overwrites cumulatively.
             clusterLoadMs = swPhase.ElapsedMilliseconds;
+            clusterLoadProcessWideCpuMs =
+                SemanticProcessCpu.ElapsedMilliseconds(clusterLoadCpuStarted);
             if (symbolA is null || owningProject is null)
             {
                 string reason = SemanticCoverageReasons.FailedProjects(ownerCoverage)
                     ?? "symbol_not_resolved";
-                EmitOpTelemetry("references", "unresolved", reason, ownerBox.Stats,
-                    planning: planning); // epuc.1 + epuc.4
+                EmitReferencesTelemetry(operationId, "unresolved", reason, ownerBox.Stats,
+                    clusterLoadMs: clusterLoadMs, planning: planning,
+                    clusterLoadProcessWideCpuMs: clusterLoadProcessWideCpuMs); // epuc.1 + epuc.4
                 return (null, reason);
             }
 
@@ -523,24 +588,34 @@ public sealed partial class SemanticService : IDisposable
             // resolve + search against the SAME solution (no snapshot drift).
             clusterLoadInProgress = true;
             TestOnlyPhaseHook?.Invoke("beforeScanSetLoad");
-            var (scanLease, symbol, coverage, skipped, outOfGraph) = await LoadScanSetAndResolveAsync(
-                symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
-                indexSnapshot.Queries, cts.Token, implementerSeeds,
-                statsBox: scanBox, includeGenerated: includeGenerated,
-                includeTests: includeTests,
-                planStatsBox: planning.ScanSet).ConfigureAwait(false);
+            (SemanticSolutionLease scanLease, ISymbol? symbol, ClusterCoverage coverage,
+                List<string> skipped, List<string> outOfGraph) scanResult;
+            using (SemanticPhaseEventSource.Log.Measure("scanLoad", operationId))
+            {
+                scanResult = await LoadScanSetAndResolveAsync(
+                    symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
+                    indexSnapshot.Queries, cts.Token, implementerSeeds,
+                    statsBox: scanBox, includeGenerated: includeGenerated,
+                    includeTests: includeTests,
+                    planStatsBox: planning.ScanSet).ConfigureAwait(false);
+            }
+            var (scanLease, symbol, coverage, skipped, outOfGraph) = scanResult;
             deferredRetentionPending = false;
             using var scanOperation = scanLease;
             Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
             clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find+count
+            clusterLoadProcessWideCpuMs =
+                SemanticProcessCpu.ElapsedMilliseconds(clusterLoadCpuStarted);
             TestOnlyPhaseHook?.Invoke("afterScanSetLoad");
             if (symbol is null)
             {
                 string reason = SemanticCoverageReasons.FailedProjects(coverage)
                     ?? "symbol_not_resolved_in_scope";
-                EmitOpTelemetry("references", "unresolved", reason,
-                    ownerBox.Stats, scanBox.Stats, planning: planning); // epuc.1 + epuc.4
+                EmitReferencesTelemetry(operationId, "unresolved", reason,
+                    ownerBox.Stats, scanBox.Stats, clusterLoadMs: clusterLoadMs,
+                    planning: planning,
+                    clusterLoadProcessWideCpuMs: clusterLoadProcessWideCpuMs); // epuc.1 + epuc.4
                 return (null, reason);
             }
 
@@ -548,20 +623,27 @@ public sealed partial class SemanticService : IDisposable
             // waves before SymbolFinder. The exact leased Solution is reused below, so Roslyn's
             // CompilationTracker turns this into parallel preparation rather than duplicate work.
             await Workspace.PrepareCompilationsAsync(scanLease, owningProject,
-                queryStages.CompilationPreparation, cts.Token).ConfigureAwait(false);
+                queryStages.CompilationPreparation, cts.Token, operationId).ConfigureAwait(false);
 
-            ReferenceDocumentScope documentScope = await PlanReferenceDocumentScopeAsync(
-                symbol, solution, queryStages.DocumentScope, cts.Token).ConfigureAwait(false);
+            ReferenceDocumentScope documentScope;
+            using (SemanticPhaseEventSource.Log.Measure("documentScope", operationId))
+            {
+                documentScope = await PlanReferenceDocumentScopeAsync(
+                    symbol, solution, queryStages.DocumentScope, cts.Token).ConfigureAwait(false);
+            }
 
             IEnumerable<ReferencedSymbol> found;
             long findStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
-                found = documentScope.Documents is null
-                    ? await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token)
-                        .ConfigureAwait(false)
-                    : await SymbolFinder.FindReferencesAsync(symbol, solution,
-                        documentScope.Documents, cts.Token).ConfigureAwait(false);
+                using (SemanticPhaseEventSource.Log.Measure("findReferences", operationId))
+                {
+                    found = documentScope.Documents is null
+                        ? await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token)
+                            .ConfigureAwait(false)
+                        : await SymbolFinder.FindReferencesAsync(symbol, solution,
+                            documentScope.Documents, cts.Token).ConfigureAwait(false);
+                }
             }
             finally
             {
@@ -741,35 +823,46 @@ public sealed partial class SemanticService : IDisposable
                 deadlineExhausted, candidateProjectsSkipped, outOfGraphCandidates,
                 projectModelUnproven);
             long telemetryQueryMs = swPhase.ElapsedMilliseconds - clusterLoadMs;
-            EmitOpTelemetry("references", incomplete ? "partial" : "exact",
+            EmitReferencesTelemetry(operationId, incomplete ? "partial" : "exact",
                 telemetryReason,
                 ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs, telemetryQueryMs,
-                queryStages.Shape(telemetryQueryMs), planning); // epuc.1 + epuc.4
+                queryStages.Shape(telemetryQueryMs), planning,
+                clusterLoadProcessWideCpuMs); // epuc.1 + epuc.4
             return (result, null);
         }
         catch (OperationCanceledException)
         {
             // t2b: cold-cluster warm-up vs real scan timeout — see DefinitionAsync for rationale.
             string reason = clusterLoadInProgress ? "cluster_cold_load" : "semantic_timeout";
+            double? telemetryClusterCpuMs = clusterLoadInProgress
+                ? SemanticProcessCpu.ElapsedMilliseconds(clusterLoadCpuStarted)
+                : clusterLoadProcessWideCpuMs;
             // Field 48s gap: a timed-out op is exactly the record that NEEDS the query wall.
-            EmitOpTelemetry("references", "degraded", reason, ownerBox.Stats, scanBox.Stats,
+            EmitReferencesTelemetry(operationId, "degraded", reason,
+                ownerBox.Stats, scanBox.Stats,
                 clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
                 clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs,
                 queryStages: clusterLoadInProgress ? null : queryStages.Shape(
                     swPhase.ElapsedMilliseconds - clusterLoadMs),
-                planning: planning); // epuc.1 + epuc.4
+                planning: planning,
+                clusterLoadProcessWideCpuMs: telemetryClusterCpuMs); // epuc.1 + epuc.4
             return (null, reason);
         }
         catch (Exception ex)
         {
             _log($"Semantic references failed: {ex}");
-            EmitOpTelemetry("references", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
+            double? telemetryClusterCpuMs = clusterLoadInProgress
+                ? SemanticProcessCpu.ElapsedMilliseconds(clusterLoadCpuStarted)
+                : clusterLoadProcessWideCpuMs;
+            EmitReferencesTelemetry(operationId, "error", ex.GetType().Name,
+                ownerBox.Stats, scanBox.Stats,
                 clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
                 clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs,
                 queryStages: clusterLoadInProgress ? null : queryStages.Shape(
                     swPhase.ElapsedMilliseconds - clusterLoadMs),
-                planning: planning); // epuc.1 + epuc.4
+                planning: planning,
+                clusterLoadProcessWideCpuMs: telemetryClusterCpuMs); // epuc.1 + epuc.4
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
         finally

@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Diagnostics.Tracing;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
@@ -6,6 +9,65 @@ namespace CodeNav.Tests;
 
 public sealed class Batch59ReferenceCompilationPreparationTests
 {
+    [Fact]
+    public async Task PreparationPublishesProcessCpuCapacityAndCorrelatedPhaseMarkers()
+    {
+        Assert.Null(CodeNav.Core.Semantic.SemanticProcessCpu.ElapsedMilliseconds(null));
+        string root = Directory.CreateTempSubdirectory("codenav-59-cpu").FullName;
+        using var roslyn = new AdhocWorkspace();
+        using var semantic = new CodeNav.Core.Semantic.SemanticWorkspace(root,
+            Path.Combine(root, "unused.db"), preparationConcurrency: 1);
+        using var listener = new TestSemanticPhaseListener();
+        try
+        {
+            ProjectId id = ProjectId.CreateNewId("P");
+            Solution solution = AddProject(roslyn.CurrentSolution, id, "P");
+            using var lease = Lease(solution, id);
+            semantic.TestOnlyGetCompilationAsync = (project, cancellationToken) =>
+            {
+                var cpuBurn = Stopwatch.StartNew();
+                while (cpuBurn.ElapsedMilliseconds < 100)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Thread.SpinWait(2_000);
+                }
+                return Task.FromResult<Compilation?>(CSharpCompilation.Create(project.Name));
+            };
+            var stats = new CodeNav.Core.Semantic.SemanticWorkspace
+                .CompilationPreparationStatsBox();
+            const string operationId = "cpu-probe";
+
+            await semantic.PrepareCompilationsAsync(lease, "P", stats,
+                CancellationToken.None, operationId);
+
+            var measured = Assert.IsType<CodeNav.Core.Semantic.SemanticWorkspace
+                .CompilationPreparationStats>(stats.Stats);
+            Assert.True(measured.ProcessWideCpuMs is > 0);
+            Assert.Equal(Environment.ProcessorCount, measured.ProcessorCount);
+            Assert.Equal(1, measured.LaneLimit);
+
+            TestSemanticPhaseEvent[] events = listener.Events
+                .Where(e => e.OperationId == operationId)
+                .ToArray();
+            Assert.Collection(events,
+                start =>
+                {
+                    Assert.Equal("PhaseStart", start.EventName);
+                    Assert.Equal("compilationPreparation", start.PhaseName);
+                },
+                stop =>
+                {
+                    Assert.Equal("PhaseStop", stop.EventName);
+                    Assert.Equal("compilationPreparation", stop.PhaseName);
+                });
+        }
+        finally
+        {
+            semantic.TestOnlyGetCompilationAsync = null;
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
     [Fact]
     public async Task PreparationUsesDependencyWavesAndOverlapsOnlyReadySiblings()
     {
@@ -324,6 +386,8 @@ public sealed class Batch59ReferenceCompilationPreparationTests
 
             Assert.Equal(1, cancelledStats.Stats?.UnfinishedProjects);
             Assert.Equal(1, cancelledStats.Stats?.EffectiveConcurrency);
+            Assert.True(cancelledStats.Stats!.ProcessWideCpuMs is >= 0);
+            Assert.Equal(Environment.ProcessorCount, cancelledStats.Stats.ProcessorCount);
             Assert.True(cancelledStats.Stats!.BusySumMs >=
                 cancelledStats.Stats.MaxProjectBusyMs);
             Assert.True(cancelledStats.Stats.MaxProjectBusyMs <=
@@ -447,5 +511,40 @@ public sealed class Batch59ReferenceCompilationPreparationTests
                Interlocked.CompareExchange(ref target, value, observed) != observed)
         {
         }
+    }
+}
+
+internal sealed record TestSemanticPhaseEvent(
+    string EventName,
+    string PhaseName,
+    string OperationId);
+
+internal sealed class TestSemanticPhaseListener : EventListener
+{
+    private ConcurrentQueue<TestSemanticPhaseEvent>? _events;
+
+    private ConcurrentQueue<TestSemanticPhaseEvent> EventQueue =>
+        LazyInitializer.EnsureInitialized(ref _events);
+
+    internal IReadOnlyList<TestSemanticPhaseEvent> Events => EventQueue.ToArray();
+
+    protected override void OnEventSourceCreated(EventSource eventSource)
+    {
+        if (eventSource.Name == "PhoenixCodeNav-Semantic")
+            EnableEvents(eventSource, EventLevel.Informational);
+    }
+
+    protected override void OnEventWritten(EventWrittenEventArgs eventData)
+    {
+        if (eventData.EventName is not ("PhaseStart" or "PhaseStop") ||
+            eventData.Payload is not { Count: >= 2 })
+        {
+            return;
+        }
+
+        EventQueue.Enqueue(new TestSemanticPhaseEvent(
+            eventData.EventName,
+            eventData.Payload[0] as string ?? "",
+            eventData.Payload[1] as string ?? ""));
     }
 }

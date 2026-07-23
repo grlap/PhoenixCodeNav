@@ -408,6 +408,19 @@ attribution and aggregate
 `projectLoadMs` remain available during migration. This makes a wide-graph preparation bottleneck
 distinguishable from Roslyn commit cost or contention with another semantic request.
 
+Since v0.12.23, references telemetry adds two process-wide CPU brackets without changing the
+scheduler: one exactly around compilation preparation and one around the complete cluster-load
+interval. Both include GC/runtime and concurrent MCP work, so wall time remains the duration
+authority and production comparisons use an idle, sweep-settled, single-operation capture.
+Cluster-load CPU includes planning through scan-set resolution and stops before compilation
+preparation begins, so the brackets are disjoint; an unavailable process counter is omitted
+rather than represented as a clean-looking zero.
+The `PhoenixCodeNav-Semantic` EventSource brackets owner load, scan load, compilation preparation,
+document scoping, and Roslyn finding; its phase markers and the matching `semanticOp` record carry
+the same privacy-safe correlation id for EventPipe attribution. Raw processor count and the
+preparation lane limit are published together so capacity assumptions stay visible. Marker
+scopes are decided at phase start: a trace attached mid-phase does not receive that phase's pair.
+
 The executable regression matrix covers deterministic order and cancellable indexed-text fallback,
 reload/`ProjectId` and cycle behavior, distinct concurrent caller wiring (including reciprocal
 absence) on one shared preparation, atomic planned-id cleanup after concurrent terminal failures,

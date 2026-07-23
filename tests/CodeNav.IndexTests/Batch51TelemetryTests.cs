@@ -37,6 +37,7 @@ public class Batch51TelemetryTests
             IndexBuilder.Build(root, dbPath);
             using var m = new IndexManager(root, dbPath);
             var semantic = new SemanticService(m);
+            using var phaseListener = new TestSemanticPhaseListener();
             try
             {
                 m.Start();
@@ -109,6 +110,11 @@ public class Batch51TelemetryTests
                              && l.Contains("\"tool\":\"references\""));
                 using var referencesRecord = System.Text.Json.JsonDocument.Parse(referencesLine);
                 var referencesRoot = referencesRecord.RootElement;
+                string correlationId = Assert.IsType<string>(
+                    referencesRoot.GetProperty("corr").GetString());
+                Assert.NotEmpty(correlationId);
+                Assert.True(referencesRoot.GetProperty("clusterLoadProcessWideCpuMs")
+                    .GetDouble() >= 0);
                 var scanSet = referencesRoot.GetProperty("planning").GetProperty("scanSet");
                 Assert.True(scanSet.GetProperty("totalMs").GetDouble() >= 0);
                 Assert.True(scanSet.GetProperty("scanProjects").GetInt32() >= 1);
@@ -117,6 +123,8 @@ public class Batch51TelemetryTests
                 Assert.Equal("symbol_finder", queryStages.GetProperty("path").GetString());
                 var compilationPreparation = queryStages.GetProperty("compilationPreparation");
                 Assert.True(compilationPreparation.GetProperty("totalMs").GetDouble() >= 0);
+                Assert.True(compilationPreparation.GetProperty("processWideCpuMs")
+                    .GetDouble() >= 0);
                 Assert.True(compilationPreparation.GetProperty("queueMs").GetDouble() >= 0);
                 double busySumMs = compilationPreparation.GetProperty("busySumMs").GetDouble();
                 double maxProjectBusyMs =
@@ -133,6 +141,7 @@ public class Batch51TelemetryTests
                 Assert.True(compilationPreparation.GetProperty("requestedProjects").GetInt32() >= 1);
                 Assert.True(compilationPreparation.GetProperty("graphProjects").GetInt32() >= 1);
                 Assert.True(compilationPreparation.GetProperty("laneLimit").GetInt32() >= 1);
+                Assert.True(compilationPreparation.GetProperty("processorCount").GetInt32() >= 1);
                 Assert.True(compilationPreparation.GetProperty("effectiveConcurrency").GetInt32() >= 0);
                 foreach (string countField in new[]
                          {
@@ -174,6 +183,21 @@ public class Batch51TelemetryTests
                 Assert.True(queryStages.GetProperty("uniqueSites").GetInt32() >= 1);
                 Assert.True(queryStages.GetProperty("samplesRead").GetInt32() >= 1);
 
+                TestSemanticPhaseEvent[] correlatedPhases = phaseListener.Events
+                    .Where(e => e.OperationId == correlationId)
+                    .ToArray();
+                foreach (string phase in new[]
+                         {
+                             "ownerLoad", "scanLoad", "compilationPreparation",
+                             "documentScope", "findReferences",
+                         })
+                {
+                    Assert.Equal(1, correlatedPhases.Count(e =>
+                        e.EventName == "PhaseStart" && e.PhaseName == phase));
+                    Assert.Equal(1, correlatedPhases.Count(e =>
+                        e.EventName == "PhaseStop" && e.PhaseName == phase));
+                }
+
                 // (2) privacy: no drive-rooted path may appear in any record —
                 // neither drive-letter (C:\\) nor UNC (\\\\server\\share) shaped.
                 foreach (string line in content.Split('\n', StringSplitOptions.RemoveEmptyEntries))
@@ -200,11 +224,13 @@ public class Batch51TelemetryTests
             CompilationPreparation =
             {
                 Stats = new CodeNav.Core.Semantic.SemanticWorkspace.CompilationPreparationStats(
-                    TotalMs: 20, QueueMs: 3, BusySumMs: 30, MaxProjectBusyMs: 8,
+                    TotalMs: 20, ProcessWideCpuMs: 7, QueueMs: 3, BusySumMs: 30,
+                    MaxProjectBusyMs: 8,
                     WaveMaxSumMs: 15, CriticalPathMs: 12,
                     RequestedProjects: 2, GraphProjects: 4,
                     CacheHits: 1, PreparedProjects: 3, FailedProjects: 0, SkippedProjects: 0,
-                    UnfinishedProjects: 0, Waves: 2, LaneLimit: 8, EffectiveConcurrency: 3),
+                    UnfinishedProjects: 0, Waves: 2, LaneLimit: 8, ProcessorCount: 12,
+                    EffectiveConcurrency: 3),
             },
             DocumentScope =
             {
@@ -238,6 +264,7 @@ public class Batch51TelemetryTests
         Assert.Equal(25, root.GetProperty("otherMs").GetDouble());
         var preparation = root.GetProperty("compilationPreparation");
         Assert.Equal(20, preparation.GetProperty("totalMs").GetDouble());
+        Assert.Equal(7, preparation.GetProperty("processWideCpuMs").GetDouble());
         Assert.Equal(3, preparation.GetProperty("queueMs").GetDouble());
         Assert.Equal(30, preparation.GetProperty("busySumMs").GetDouble());
         Assert.Equal(8, preparation.GetProperty("maxProjectBusyMs").GetDouble());
@@ -248,6 +275,7 @@ public class Batch51TelemetryTests
         Assert.Equal(1, preparation.GetProperty("cacheHits").GetInt32());
         Assert.Equal(2, preparation.GetProperty("waves").GetInt32());
         Assert.Equal(8, preparation.GetProperty("laneLimit").GetInt32());
+        Assert.Equal(12, preparation.GetProperty("processorCount").GetInt32());
         Assert.Equal(3, preparation.GetProperty("effectiveConcurrency").GetInt32());
         var documentScope = root.GetProperty("documentScope");
         Assert.Equal("documentScoped", documentScope.GetProperty("mode").GetString());
@@ -273,6 +301,14 @@ public class Batch51TelemetryTests
         Assert.False(root.TryGetProperty("workspacePath", out _));
         Assert.False(root.TryGetProperty("sourceText", out _));
         Assert.False(root.TryGetProperty("arguments", out _));
+
+        stats.CompilationPreparation.Stats =
+            stats.CompilationPreparation.Stats with { ProcessWideCpuMs = null };
+        using var unavailableDocument = System.Text.Json.JsonDocument.Parse(
+            System.Text.Json.JsonSerializer.Serialize(stats.Shape(queryMs: 200)));
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, unavailableDocument.RootElement
+            .GetProperty("compilationPreparation")
+            .GetProperty("processWideCpuMs").ValueKind);
     }
 
     [Fact]

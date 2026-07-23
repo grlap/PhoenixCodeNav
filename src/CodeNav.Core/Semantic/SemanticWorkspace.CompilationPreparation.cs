@@ -11,6 +11,7 @@ public sealed partial class SemanticWorkspace
     /// outcome before cancellation.</summary>
     internal sealed record CompilationPreparationStats(
         double TotalMs,
+        double? ProcessWideCpuMs,
         double QueueMs,
         double BusySumMs,
         double MaxProjectBusyMs,
@@ -25,6 +26,7 @@ public sealed partial class SemanticWorkspace
         int UnfinishedProjects,
         int Waves,
         int LaneLimit,
+        int ProcessorCount,
         int EffectiveConcurrency);
 
     internal readonly record struct CompilationWorkAttribution(
@@ -49,12 +51,16 @@ public sealed partial class SemanticWorkspace
     /// </summary>
     internal async Task PrepareCompilationsAsync(SemanticSolutionLease lease,
         string owningProject,
-        CompilationPreparationStatsBox statsBox, CancellationToken cancellationToken)
+        CompilationPreparationStatsBox statsBox, CancellationToken cancellationToken,
+        string? operationId = null)
     {
         ArgumentNullException.ThrowIfNull(lease);
         ArgumentNullException.ThrowIfNull(statsBox);
 
+        TimeSpan? processCpuStarted = SemanticProcessCpu.Snapshot();
         long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        using SemanticPhaseEventSource.PhaseScope phase =
+            SemanticPhaseEventSource.Log.Measure("compilationPreparation", operationId);
         Solution solution = lease.Solution;
         ProjectDependencyGraph graph = solution.GetProjectDependencyGraph();
         var requested = lease.RequestedProjectIds
@@ -236,6 +242,7 @@ public sealed partial class SemanticWorkspace
                 graph, selected, busyTicksByProject, waveByProject);
             statsBox.Stats = new CompilationPreparationStats(
                 TotalMs: System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                ProcessWideCpuMs: SemanticProcessCpu.ElapsedMilliseconds(processCpuStarted),
                 QueueMs: ToMs(Interlocked.Read(ref queueTicks)),
                 BusySumMs: ToMs(work.BusySumTicks),
                 MaxProjectBusyMs: ToMs(work.MaxProjectBusyTicks),
@@ -250,6 +257,7 @@ public sealed partial class SemanticWorkspace
                 UnfinishedProjects: Math.Max(0, selected.Count - Volatile.Read(ref completedCount)),
                 Waves: waves,
                 LaneLimit: _coldStartRuntime.Concurrency,
+                ProcessorCount: Environment.ProcessorCount,
                 EffectiveConcurrency: Volatile.Read(ref effectiveConcurrency));
         }
     }

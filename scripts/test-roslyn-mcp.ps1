@@ -643,6 +643,10 @@ try {
         $coldPreparation = $writerReferenceColdTelemetry.queryStages.compilationPreparation
         $coldScope = $writerReferenceColdTelemetry.queryStages.documentScope
         $warmScope = $writerReferenceWarmTelemetry.queryStages.documentScope
+        Assert-True ([double]$writerReferenceColdTelemetry.clusterLoadProcessWideCpuMs -ge 0) "Cold cluster-load process CPU was not published"
+        Assert-True ([double]$coldPreparation.processWideCpuMs -ge 0) "Compilation process CPU was not published"
+        Assert-True ([int]$coldPreparation.processorCount -ge 1) "Compilation processor count was not published"
+        Assert-True ([int]$coldPreparation.laneLimit -ge 1) "Compilation lane limit was not published"
         Assert-True ([double]$coldPreparation.busySumMs -ge [double]$coldPreparation.maxProjectBusyMs) "Compilation busy sum is below its project maximum"
         Assert-True ([double]$coldPreparation.maxProjectBusyMs -le ([double]$coldPreparation.criticalPathMs + 0.2)) "Compilation critical path is below its project maximum"
         Assert-True ([double]$coldPreparation.criticalPathMs -le ([double]$coldPreparation.waveMaxSumMs + 0.2)) "Compilation critical path exceeds the current wave floor"

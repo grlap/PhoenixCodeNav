@@ -194,6 +194,15 @@ public class Batch37Tests
             string coldReason = cold.GetProperty("partialReason").GetString()!;
             Assert.StartsWith("cluster_cold_load", coldReason);
             Assert.Contains("retry", coldReason, StringComparison.OrdinalIgnoreCase);
+            string coldTelemetryLine = m.Telemetry.Snapshot().Last(line =>
+                line.Contains("\"tool\":\"references\"") &&
+                line.Contains("\"reason\":\"cluster_cold_load\""));
+            using (var coldTelemetry =
+                   System.Text.Json.JsonDocument.Parse(coldTelemetryLine))
+            {
+                Assert.True(coldTelemetry.RootElement
+                    .GetProperty("clusterLoadProcessWideCpuMs").GetDouble() >= 0);
+            }
 
             // Deadline dies right AFTER load completes -> a real scan timeout keeps its old name.
             sem.TestOnlyPhaseHook = phase =>
@@ -204,6 +213,15 @@ public class Batch37Tests
                 () => tools.References(name: "IZetaLike", mode: "semantic", timeoutMs: 5000),
                 j => j.TryGetProperty("partialReason", out var pv) && (pv.GetString() ?? "").Contains("semantic_timeout"), "partialReason==semantic_timeout");
             Assert.Equal("semantic_timeout", timeout.GetProperty("partialReason").GetString());
+            string timeoutTelemetryLine = m.Telemetry.Snapshot().Last(line =>
+                line.Contains("\"tool\":\"references\"") &&
+                line.Contains("\"reason\":\"semantic_timeout\""));
+            using (var timeoutTelemetry =
+                   System.Text.Json.JsonDocument.Parse(timeoutTelemetryLine))
+            {
+                Assert.True(timeoutTelemetry.RootElement
+                    .GetProperty("clusterLoadProcessWideCpuMs").GetDouble() >= 0);
+            }
 
             // The advice the cold token gives is TRUE: an unhooked retry returns exact.
             sem.TestOnlyPhaseHook = null;
