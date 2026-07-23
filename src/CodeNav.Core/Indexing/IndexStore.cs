@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using SQLitePCL;
 
 namespace CodeNav.Core.Indexing;
 
@@ -311,9 +312,11 @@ public sealed class IndexStore : IDisposable
     //      never collisions (see InitializeSymbolIdCounter for why open-time/committed-state
     //      matters). Parent wiring is resolved BEFORE binding from the assigned ids, so
     //      RETURNING has nothing left to do.
-    //   2. rows go through TWO store-cached prepared commands — a 32-row chunk and a 1-row
-    //      remainder — because the average file carries ~20 symbols and a per-call variable-
-    //      size statement would pay a fresh prepare per FILE, eating the win.
+    //   2. rows go through store-cached raw SQLite statements for every exact size 1..32.
+    //      Exact-size remainders reduce the runtime-scale corpus from ~355k executions to ~50k.
+    //      Binding is ordinal through SQLitePCLRaw: Microsoft.Data.Sqlite resolves every named
+    //      parameter again on every execution, which made wide exact-size commands slower despite
+    //      the lower call count and allocated ~1.66 GB for the measured 919k-symbol workload.
     // lf4p A/B (roslyn, 354k symbols): 32 → 9.0-9.4s; 128 → 11.0s. 128 lost because this
     // constant is ALSO the eligibility threshold — files with 32..127 symbols fell back to
     // the single-row path entirely. 32 chunks the fat generated files AND keeps the band
@@ -321,8 +324,10 @@ public sealed class IndexStore : IDisposable
     private const int SymbolChunkRows = 32;
     private const int SymbolColumns = 17;
     private long _nextSymbolId = -1;
-    private SqliteCommand? _symbolChunkCmd;
-    private SqliteCommand? _symbolSingleCmd;
+    private readonly sqlite3_stmt?[] _symbolInsertStatements =
+        new sqlite3_stmt?[SymbolChunkRows + 1];
+    private readonly long[] _symbolInsertExecutions =
+        new long[SymbolChunkRows + 1];
     private SqliteCommand? _baseEdgeInsertCmd;
 
     /// <summary>Review (lf4p): runs at store OPEN, outside any transaction — the first version
@@ -345,57 +350,112 @@ public sealed class IndexStore : IDisposable
         return first;
     }
 
-    private static readonly string[] SymbolCols =
-        { "i", "f", "p", "k", "n", "ns", "c", "sig", "acc", "sl", "el", "part", "ar", "attr", "mods", "accs", "decl" };
+    internal long SymbolInsertExecutionCountForTest(int rowsPerStatement) =>
+        rowsPerStatement is >= 1 and <= SymbolChunkRows
+            ? _symbolInsertExecutions[rowsPerStatement]
+            : throw new ArgumentOutOfRangeException(nameof(rowsPerStatement));
 
-    private SqliteCommand BuildSymbolInsert(int rowsPerStatement)
+    private sqlite3_stmt BuildSymbolInsert(int rowsPerStatement)
     {
         var sb = new System.Text.StringBuilder(
             "INSERT INTO symbols(id, file_id, parent_id, kind, name, ns, container, signature, " +
             "accessibility, start_line, end_line, is_partial, arity, attr_markers, modifiers, accessors, declaration_key) VALUES ");
-        var cmd = _write.CreateCommand();
         for (int r = 0; r < rowsPerStatement; r++)
         {
             sb.Append(r > 0 ? ",(" : "(");
             for (int c = 0; c < SymbolColumns; c++)
             {
                 if (c > 0) sb.Append(',');
-                sb.Append('$').Append(SymbolCols[c]).Append(r);
-                cmd.Parameters.Add($"${SymbolCols[c]}{r}",
-                    c is 0 or 1 or 2 or 9 or 10 or 11 or 12 ? SqliteType.Integer : SqliteType.Text);
+                sb.Append('?');
             }
             sb.Append(')');
         }
-        cmd.CommandText = sb.ToString();
-        return cmd;
+        int rc = raw.sqlite3_prepare_v2(_write.Handle, sb.ToString(),
+            out sqlite3_stmt statement);
+        if (rc != raw.SQLITE_OK)
+            throw RawSqliteException("prepare symbol insert", rc);
+        return statement;
     }
 
-    private static void BindSymbolRow(SqliteCommand cmd, int slot, long id, long fileId,
+    private SqliteException RawSqliteException(
+        string operation, int primaryCode, int? parameter = null)
+    {
+        int extendedCode = raw.sqlite3_extended_errcode(_write.Handle);
+        string detail = raw.sqlite3_errmsg(_write.Handle).utf8_to_string();
+        string parameterSuffix = parameter.HasValue
+            ? $", parameter {parameter.Value}"
+            : "";
+        return new SqliteException(
+            $"{operation} failed (SQLite {primaryCode}/{extendedCode}{parameterSuffix}): {detail}",
+            primaryCode, extendedCode);
+    }
+
+    private void BindRawInt64(sqlite3_stmt statement, int parameter, long value)
+    {
+        int rc = raw.sqlite3_bind_int64(statement, parameter, value);
+        if (rc != raw.SQLITE_OK)
+            throw RawSqliteException("bind symbol integer", rc, parameter);
+    }
+
+    private void BindRawText(sqlite3_stmt statement, int parameter, string? value)
+    {
+        int rc = value is null
+            ? raw.sqlite3_bind_null(statement, parameter)
+            : raw.sqlite3_bind_text(statement, parameter, value);
+        if (rc != raw.SQLITE_OK)
+            throw RawSqliteException("bind symbol text", rc, parameter);
+    }
+
+    private void BindSymbolRow(sqlite3_stmt statement, int slot, long id, long fileId,
         SymbolRow row, long[] ordinalToId)
     {
-        int b = slot * SymbolColumns;
-        cmd.Parameters[b + 0].Value = id;
-        cmd.Parameters[b + 1].Value = fileId;
-        cmd.Parameters[b + 2].Value = row.ParentOrdinal >= 0 ? ordinalToId[row.ParentOrdinal] : DBNull.Value;
-        cmd.Parameters[b + 3].Value = row.Kind;
-        cmd.Parameters[b + 4].Value = row.Name;
-        cmd.Parameters[b + 5].Value = (object?)row.Namespace ?? DBNull.Value;
-        cmd.Parameters[b + 6].Value = (object?)row.Container ?? DBNull.Value;
-        cmd.Parameters[b + 7].Value = row.Signature;
-        cmd.Parameters[b + 8].Value = row.Accessibility;
-        cmd.Parameters[b + 9].Value = row.StartLine;
-        cmd.Parameters[b + 10].Value = row.EndLine;
-        cmd.Parameters[b + 11].Value = row.IsPartial ? 1 : 0;
-        cmd.Parameters[b + 12].Value = row.Arity;
-        cmd.Parameters[b + 13].Value = (object?)row.AttrMarkers ?? DBNull.Value;
-        cmd.Parameters[b + 14].Value = (object?)row.Modifiers ?? DBNull.Value;
-        cmd.Parameters[b + 15].Value = (object?)row.Accessors ?? DBNull.Value;
-        cmd.Parameters[b + 16].Value = row.DeclarationKey ?? "";
+        int parameter = slot * SymbolColumns + 1;
+        BindRawInt64(statement, parameter++, id);
+        BindRawInt64(statement, parameter++, fileId);
+        if (row.ParentOrdinal >= 0)
+        {
+            BindRawInt64(statement, parameter++, ordinalToId[row.ParentOrdinal]);
+        }
+        else
+        {
+            int rc = raw.sqlite3_bind_null(statement, parameter++);
+            if (rc != raw.SQLITE_OK)
+                throw RawSqliteException("bind symbol parent", rc, parameter - 1);
+        }
+        BindRawText(statement, parameter++, row.Kind);
+        BindRawText(statement, parameter++, row.Name);
+        BindRawText(statement, parameter++, row.Namespace);
+        BindRawText(statement, parameter++, row.Container);
+        BindRawText(statement, parameter++, row.Signature);
+        BindRawText(statement, parameter++, row.Accessibility);
+        BindRawInt64(statement, parameter++, row.StartLine);
+        BindRawInt64(statement, parameter++, row.EndLine);
+        BindRawInt64(statement, parameter++, row.IsPartial ? 1 : 0);
+        BindRawInt64(statement, parameter++, row.Arity);
+        BindRawText(statement, parameter++, row.AttrMarkers);
+        BindRawText(statement, parameter++, row.Modifiers);
+        BindRawText(statement, parameter++, row.Accessors);
+        BindRawText(statement, parameter, row.DeclarationKey ?? "");
+    }
+
+    private void ExecuteRawSymbolInsert(sqlite3_stmt statement)
+    {
+        int step = raw.sqlite3_step(statement);
+        // Every parameter is rebound before the next step, so reset is sufficient; clearing all
+        // 544 bindings would add another native call per parameter without changing semantics.
+        int reset = raw.sqlite3_reset(statement);
+        if (step != raw.SQLITE_DONE)
+            throw RawSqliteException("execute symbol insert", step);
+        if (reset != raw.SQLITE_OK)
+            throw RawSqliteException("reset symbol insert", reset);
     }
 
     public void InsertSymbols(SqliteTransaction tx, long fileId, List<SymbolRow> rows)
     {
         if (rows.Count == 0) return;
+        if (!ReferenceEquals(tx.Connection, _write))
+            throw new InvalidOperationException(
+                "Symbol inserts require this IndexStore's active write transaction.");
         long tSym0 = System.Diagnostics.Stopwatch.GetTimestamp(); // lf4p
         long firstId = ReserveSymbolIds(rows.Count);
 
@@ -405,31 +465,21 @@ public sealed class IndexStore : IDisposable
         for (int o = 0; o < ordinalToId.Length; o++) ordinalToId[o] = firstId + o;
 
         int done = 0;
-        if (rows.Count >= SymbolChunkRows)
+        while (done < rows.Count)
         {
-            _symbolChunkCmd ??= BuildSymbolInsert(SymbolChunkRows);
-            _symbolChunkCmd.Transaction = tx;
-            while (rows.Count - done >= SymbolChunkRows)
+            int statementRows = Math.Min(SymbolChunkRows, rows.Count - done);
+            sqlite3_stmt statement =
+                _symbolInsertStatements[statementRows] ??=
+                    BuildSymbolInsert(statementRows);
+            for (int r = 0; r < statementRows; r++)
             {
-                for (int r = 0; r < SymbolChunkRows; r++)
-                {
-                    var row = rows[done + r];
-                    BindSymbolRow(_symbolChunkCmd, r, ordinalToId[row.OrdinalInFile], fileId, row, ordinalToId);
-                }
-                _symbolChunkCmd.ExecuteNonQuery();
-                done += SymbolChunkRows;
+                var row = rows[done + r];
+                BindSymbolRow(statement, r, ordinalToId[row.OrdinalInFile],
+                    fileId, row, ordinalToId);
             }
-        }
-        if (done < rows.Count)
-        {
-            _symbolSingleCmd ??= BuildSymbolInsert(1);
-            _symbolSingleCmd.Transaction = tx;
-            for (; done < rows.Count; done++)
-            {
-                var row = rows[done];
-                BindSymbolRow(_symbolSingleCmd, 0, ordinalToId[row.OrdinalInFile], fileId, row, ordinalToId);
-                _symbolSingleCmd.ExecuteNonQuery();
-            }
+            ExecuteRawSymbolInsert(statement);
+            _symbolInsertExecutions[statementRows]++;
+            done += statementRows;
         }
         long tEdges = System.Diagnostics.Stopwatch.GetTimestamp();
         _tSymbolRows += tEdges - tSym0; // lf4p
@@ -814,8 +864,10 @@ public sealed class IndexStore : IDisposable
 
     public void Dispose()
     {
-        _symbolChunkCmd?.Dispose();  // lf4p: cached prepared inserts die with their connection
-        _symbolSingleCmd?.Dispose();
+        foreach (sqlite3_stmt? statement in _symbolInsertStatements)
+        {
+            if (statement is not null) raw.sqlite3_finalize(statement);
+        }
         _baseEdgeInsertCmd?.Dispose();
         _fileInsertCmd?.Dispose();
         _write.Dispose();

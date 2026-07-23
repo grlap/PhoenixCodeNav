@@ -130,7 +130,10 @@ evidence may use newer workspace bytes. Other platforms remain writer-only for n
 `node_modules`, `.vs`, generated files, and symlink/junction targets); parse every `.csproj` and
 `.fsproj` directly, independent of solution membership; index `.cs`, `.fs`, `.fsi`, and `.fsx`
 text, while parsing only `.cs` with Roslyn syntax during indexing. Symbol rows stream through a
-bounded channel to the single writer; F# outlines are parsed on demand and are not stored. Solution files are
+bounded channel to the single writer. Since v0.12.24, that writer caches raw SQLite statements for
+every exact symbol-batch size from 1 through 32 and binds by ordinal, avoiding provider-level
+parameter-name lookup and per-execution parameter allocation without changing row or ID semantics;
+the same insertion path is used by delta refresh. F# outlines are parsed on demand and are not stored. Solution files are
 optional editor inventory: they never select projects or provide build, dependency, ownership,
 or symbol-resolution authority. A cold build of a
 multi-thousand-project workspace completes in minutes at most; live progress counters

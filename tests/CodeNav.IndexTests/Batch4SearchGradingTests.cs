@@ -266,6 +266,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("references-buffered-document-scope-scan", ids);
         Assert.Contains("semantic-byte-governed-retention", ids);
         Assert.Contains("references-process-cpu-attribution", ids);
+        Assert.Contains("index-raw-ordinal-symbol-batching", ids);
         Assert.Contains("search-symbol-malformed-query", ids);
         Assert.Contains("index-follower-liveness-fail-closed", ids);
         string semanticBudget = Assert.Single(json.GetProperty("features").EnumerateArray(),
