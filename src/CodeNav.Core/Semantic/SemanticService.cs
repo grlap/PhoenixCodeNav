@@ -136,6 +136,8 @@ public sealed partial class SemanticService : IDisposable
         }
     }
 
+    internal SemanticWorkspace TestOnlyWorkspace => Workspace;
+
     // ---------------------------------------------------------------- epuc.1 telemetry
 
     private sealed record ScanPlanStats(
@@ -319,6 +321,12 @@ public sealed partial class SemanticService : IDisposable
             effectiveProjectConcurrency = load.EffectiveProjectConcurrency,
             admittedBytesHighWater = load.AdmittedBytesHighWater,
             retainedBytes = load.RetainedBytes,
+            retainedInputBytes = load.RetainedBytes,
+            residentProjects = load.ResidentProjects,
+            evictedProjects = load.EvictedProjects,
+            evictedInputBytes = load.EvictedInputBytes,
+            evictionReason = load.EvictionReason,
+            managedHeapBytes = load.ManagedHeapBytes,
             replanCount = load.ReplanCount,
             totalElapsedMs = Math.Round(load.TotalElapsedMs, 1),
             loadedBefore = load.LoadedBefore,
@@ -458,6 +466,7 @@ public sealed partial class SemanticService : IDisposable
         var scanBox = new SemanticWorkspace.LoadStatsBox();
         var planning = new SemanticPlanningStats();
         var queryStages = new ReferenceQueryStats();
+        bool deferredRetentionPending = false;
         try
         {
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
@@ -468,9 +477,10 @@ public sealed partial class SemanticService : IDisposable
             }
 
             // Phase 1: load the owner closure and resolve, to learn the symbol name.
+            deferredRetentionPending = true;
             var (ownerLease, symbolA, owningProject, ownerCoverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
-                statsBox: ownerBox).ConfigureAwait(false);
+                statsBox: ownerBox, deferRetentionEviction: true).ConfigureAwait(false);
             using var ownerOperation = ownerLease;
             clusterLoadInProgress = false; // candidate discovery is a query phase, not cold loading
             // Review q2 (progressive stamp): a deadline in the DISCOVERY window otherwise
@@ -519,6 +529,7 @@ public sealed partial class SemanticService : IDisposable
                 statsBox: scanBox, includeGenerated: includeGenerated,
                 includeTests: includeTests,
                 planStatsBox: planning.ScanSet).ConfigureAwait(false);
+            deferredRetentionPending = false;
             using var scanOperation = scanLease;
             Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
@@ -761,6 +772,11 @@ public sealed partial class SemanticService : IDisposable
                 planning: planning); // epuc.1 + epuc.4
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
+        finally
+        {
+            if (deferredRetentionPending)
+                await Workspace.CompleteDeferredRetentionAsync().ConfigureAwait(false);
+        }
     }
 
     // ---------------------------------------------------------------- implementations
@@ -776,6 +792,7 @@ public sealed partial class SemanticService : IDisposable
         var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
         var scanBox = new SemanticWorkspace.LoadStatsBox();
         var planning = new SemanticPlanningStats(); // epuc.3
+        bool deferredRetentionPending = false;
         try
         {
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
@@ -785,9 +802,10 @@ public sealed partial class SemanticService : IDisposable
                 return (null, "index_snapshot_unavailable");
             }
 
+            deferredRetentionPending = true;
             var (ownerLease, symbolA, owningProject, ownerCoverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries, arityHint,
-                statsBox: ownerBox)
+                statsBox: ownerBox, deferRetentionEviction: true)
                 .ConfigureAwait(false);
             using var ownerOperation = ownerLease;
             clusterLoadInProgress = false;
@@ -856,6 +874,7 @@ public sealed partial class SemanticService : IDisposable
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
                 statsBox: scanBox, planStatsBox: planning.ScanSet).ConfigureAwait(false);
+            deferredRetentionPending = false;
             using var scanOperation = scanLease;
             Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
@@ -990,6 +1009,11 @@ public sealed partial class SemanticService : IDisposable
                 planning: planning); // epuc.1 + epuc.3
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
+        finally
+        {
+            if (deferredRetentionPending)
+                await Workspace.CompleteDeferredRetentionAsync().ConfigureAwait(false);
+        }
     }
 
     // ---------------------------------------------------------------- resolution
@@ -1005,7 +1029,8 @@ public sealed partial class SemanticService : IDisposable
         ClusterCoverage? Coverage)> LoadOwnerAndResolveAsync(
         string path, int line, int? column, string? nameHint, CancellationToken ct,
         IndexQueries? snapshotQueries = null, int? arityHint = null,
-        SemanticWorkspace.LoadStatsBox? statsBox = null)
+        SemanticWorkspace.LoadStatsBox? statsBox = null,
+        bool deferRetentionEviction = false)
     {
         string relPath = WorkspacePaths.Normalize(path);
         string owningProject;
@@ -1032,7 +1057,8 @@ public sealed partial class SemanticService : IDisposable
         }
 
         SemanticSolutionLease lease = await Workspace.EnsureLoadedAsync(closure, ct,
-                ensureReferenceTo: operationReferenceTargets, statsBox: statsBox)
+                ensureReferenceTo: operationReferenceTargets, statsBox: statsBox,
+                deferRetentionEviction: deferRetentionEviction)
             .ConfigureAwait(false);
         try
         {

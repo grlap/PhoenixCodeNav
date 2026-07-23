@@ -1157,6 +1157,567 @@ public class SemanticColdStartLoaderTests
     }
 
     [Fact]
+    public async Task OwnerPhaseProjectCapForcesScanReloadAndInvalidatesSolutionScopeCache()
+    {
+        string root = CreateWorkspace("owner-retention",
+            ("A", null), ("B", null), ("C", null), ("D", null));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "A", "A.cs"),
+                "namespace A; public interface AType { }");
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+
+            static async Task<(int Prepared, bool SameSolution, bool ScopeCacheHit,
+                string Diagnostic)> RunAsync(
+                string root, string dbPath, int cap)
+            {
+                using var workspace = new SemanticWorkspace(root, dbPath,
+                    preparationConcurrency: 2)
+                {
+                    TestOnlyMaxLoadedProjects = cap,
+                };
+                using var manager = new IndexManager(root, dbPath);
+                using var semantic = new SemanticService(manager);
+                string[] all = ["A", "B", "C", "D"];
+
+                Solution broadSolution;
+                INamedTypeSymbol broadSymbol;
+                SemanticService.ReferenceDocumentScope? initialScope = null;
+                using (SemanticSolutionLease broad = await workspace.EnsureLoadedAsync(
+                           all, CancellationToken.None))
+                {
+                    broadSolution = broad.Solution;
+                    Compilation compilation = (await broadSolution.Projects.Single(
+                        project => project.Name == "A").GetCompilationAsync())!;
+                    broadSymbol = compilation.GetTypeByMetadataName("A.AType")!;
+                    initialScope = await semantic
+                        .PlanReferenceDocumentScopeAsync(
+                            broadSymbol, broadSolution, CancellationToken.None);
+                    Assert.False(initialScope.Stats.CacheHit);
+                }
+
+                using SemanticSolutionLease owner = await workspace.EnsureLoadedAsync(
+                    ["A"], CancellationToken.None);
+                var scanStats = new SemanticWorkspace.LoadStatsBox();
+                using SemanticSolutionLease scan = await workspace.EnsureLoadedAsync(
+                    all, CancellationToken.None, statsBox: scanStats);
+                Compilation scanCompilation = (await scan.Solution.Projects.Single(
+                    project => project.Name == "A").GetCompilationAsync())!;
+                INamedTypeSymbol scanSymbol = scanCompilation.GetTypeByMetadataName("A.AType")!;
+                SemanticService.ReferenceDocumentScope current = await semantic
+                    .PlanReferenceDocumentScopeAsync(
+                        scanSymbol, scan.Solution, CancellationToken.None);
+
+                Assert.NotNull(scanStats.Stats);
+                return (scanStats.Stats.PreparedProjects,
+                    ReferenceEquals(broadSolution, scan.Solution), current.Stats.CacheHit,
+                    $"initial={initialScope.Stats.Mode}/{initialScope.Stats.Reason}; " +
+                    $"current={current.Stats.Mode}/{current.Stats.Reason}; " +
+                    $"cacheEntries={semantic.TestOnlyReferenceDocumentScopeCacheCount(scan.Solution)}");
+            }
+
+            var constrained = await RunAsync(root, dbPath, cap: 1);
+            Assert.Equal(3, constrained.Prepared);
+            Assert.False(constrained.SameSolution);
+            Assert.False(constrained.ScopeCacheHit);
+
+            var retained = await RunAsync(root, dbPath, cap: 4);
+            Assert.Equal(0, retained.Prepared);
+            Assert.True(retained.SameSolution);
+            Assert.True(retained.ScopeCacheHit, retained.Diagnostic);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task BytePressureEvictsOnlyTheOldestSafeResidentAndPublishesStats()
+    {
+        string root = CreateWorkspace("byte-retention",
+            ("A", null), ("B", null), ("C", null), ("D", null));
+        try
+        {
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath,
+                preparationConcurrency: 2)
+            {
+                TestOnlyManagedHeapBytes = static () => 0,
+            };
+
+            foreach (string name in new[] { "A", "B", "C", "D" })
+            {
+                using SemanticSolutionLease loaded = await workspace.EnsureLoadedAsync(
+                    [name], CancellationToken.None, deferRetentionEviction: true);
+                Assert.Equal(1, loaded.Coverage.LoadedProjects);
+            }
+
+            long retainedBefore = workspace.RetainedSemanticInputBytes;
+            Assert.True(retainedBefore > 1);
+            workspace.TestOnlyRetentionInputPressureBytes = retainedBefore;
+            long retainedTarget = retainedBefore - 1;
+            workspace.TestOnlyRetentionInputTargetBytes = retainedTarget;
+
+            var statsBox = new SemanticWorkspace.LoadStatsBox();
+            using SemanticSolutionLease pressured = await workspace.EnsureLoadedAsync(
+                ["D"], CancellationToken.None, statsBox: statsBox);
+
+            SemanticWorkspace.LoadStats stats = Assert.IsType<SemanticWorkspace.LoadStats>(
+                statsBox.Stats);
+            Assert.Equal("pressure_inputs", stats.EvictionReason);
+            Assert.Equal(1, stats.EvictedProjects);
+            Assert.True(stats.EvictedInputBytes > 0);
+            Assert.Equal(3, stats.ResidentProjects);
+            Assert.Equal(0, stats.ManagedHeapBytes);
+            Assert.DoesNotContain(pressured.Solution.Projects,
+                project => project.Name == "A");
+            Assert.Equal(new[] { "B", "C", "D" }, pressured.Solution.Projects
+                .Select(project => project.Name)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray());
+            Assert.True(workspace.RetainedSemanticInputBytes <= retainedTarget);
+
+            var steadyStats = new SemanticWorkspace.LoadStatsBox();
+            using SemanticSolutionLease steady = await workspace.EnsureLoadedAsync(
+                ["D"], CancellationToken.None, statsBox: steadyStats);
+            Assert.Equal(0, steadyStats.Stats!.EvictedProjects);
+            Assert.Null(steadyStats.Stats.EvictionReason);
+            Assert.Same(pressured.Solution, steady.Solution);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task DeferredOwnerRetentionPreservesTheBroadSolutionUntilScanSetIsSecured()
+    {
+        string root = CreateWorkspace("deferred-retention",
+            ("A", null), ("B", null), ("C", null), ("D", null));
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "A", "A.cs"),
+                "namespace A; public interface AType { }");
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath,
+                preparationConcurrency: 2)
+            {
+                TestOnlyManagedHeapBytes = static () => 0,
+            };
+            using var manager = new IndexManager(root, dbPath);
+            using var semantic = new SemanticService(manager);
+            string[] all = ["A", "B", "C", "D"];
+
+            Solution broadSolution;
+            INamedTypeSymbol broadSymbol;
+            using (SemanticSolutionLease broad = await workspace.EnsureLoadedAsync(
+                       all, CancellationToken.None, deferRetentionEviction: true))
+            {
+                broadSolution = broad.Solution;
+                Compilation compilation = (await broadSolution.Projects.Single(
+                    project => project.Name == "A").GetCompilationAsync())!;
+                broadSymbol = compilation.GetTypeByMetadataName("A.AType")!;
+                SemanticService.ReferenceDocumentScope initial = await semantic
+                    .PlanReferenceDocumentScopeAsync(
+                        broadSymbol, broadSolution, CancellationToken.None);
+                Assert.False(initial.Stats.CacheHit);
+            }
+
+            workspace.TestOnlyRetentionInputPressureBytes = 1;
+            workspace.TestOnlyRetentionInputTargetBytes = 0;
+
+            var ownerStats = new SemanticWorkspace.LoadStatsBox();
+            using (SemanticSolutionLease owner = await workspace.EnsureLoadedAsync(
+                       ["A"], CancellationToken.None, statsBox: ownerStats,
+                       deferRetentionEviction: true))
+            {
+                Assert.Same(broadSolution, owner.Solution);
+                Assert.Equal(0, ownerStats.Stats!.EvictedProjects);
+                Assert.Null(ownerStats.Stats.EvictionReason);
+            }
+
+            var scanStats = new SemanticWorkspace.LoadStatsBox();
+            using (SemanticSolutionLease scan = await workspace.EnsureLoadedAsync(
+                       all, CancellationToken.None, statsBox: scanStats))
+            {
+                Assert.Same(broadSolution, scan.Solution);
+                Assert.Equal(0, scanStats.Stats!.PreparedProjects);
+                Assert.Equal(0, scanStats.Stats.EvictedProjects);
+                Assert.Equal("no_safe_candidates", scanStats.Stats.EvictionReason);
+                Compilation compilation = (await scan.Solution.Projects.Single(
+                    project => project.Name == "A").GetCompilationAsync())!;
+                INamedTypeSymbol symbol = compilation.GetTypeByMetadataName("A.AType")!;
+                SemanticService.ReferenceDocumentScope current = await semantic
+                    .PlanReferenceDocumentScopeAsync(
+                        symbol, scan.Solution, CancellationToken.None);
+                Assert.True(current.Stats.CacheHit);
+            }
+
+            var drainStats = new SemanticWorkspace.LoadStatsBox();
+            using SemanticSolutionLease drained = await workspace.EnsureLoadedAsync(
+                ["A"], CancellationToken.None, statsBox: drainStats);
+            Assert.Equal(3, drainStats.Stats!.EvictedProjects);
+            Assert.Equal("pressure_inputs", drainStats.Stats.EvictionReason);
+            Assert.Single(drained.Solution.Projects);
+            Assert.Equal("A", drained.Solution.Projects.Single().Name);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task GlobalPressureSignalEvictsOnlyTheInvokingWorkspacesOwnLru()
+    {
+        string firstRoot = CreateWorkspace("retention-workspace-a", ("A", null), ("B", null));
+        string secondRoot = CreateWorkspace("retention-workspace-b", ("A", null), ("B", null));
+        try
+        {
+            string firstDb = IndexBuilder.DefaultDbPath(firstRoot);
+            string secondDb = IndexBuilder.DefaultDbPath(secondRoot);
+            IndexBuilder.Build(firstRoot, firstDb);
+            IndexBuilder.Build(secondRoot, secondDb);
+            using var first = new SemanticWorkspace(firstRoot, firstDb)
+            {
+                TestOnlyRetentionInputPressureBytes = 1,
+                TestOnlyRetentionInputTargetBytes = 0,
+                TestOnlyManagedHeapBytes = static () => 0,
+            };
+            using var second = new SemanticWorkspace(secondRoot, secondDb)
+            {
+                TestOnlyRetentionInputPressureBytes = 1,
+                TestOnlyRetentionInputTargetBytes = 0,
+                TestOnlyManagedHeapBytes = static () => 0,
+            };
+
+            using (SemanticSolutionLease ignored = await first.EnsureLoadedAsync(
+                       ["A", "B"], CancellationToken.None,
+                       deferRetentionEviction: true)) { }
+            using (SemanticSolutionLease ignored = await second.EnsureLoadedAsync(
+                       ["A", "B"], CancellationToken.None,
+                       deferRetentionEviction: true)) { }
+            Solution secondBefore = second.TestOnlyCurrentSolution;
+
+            var firstStats = new SemanticWorkspace.LoadStatsBox();
+            using (SemanticSolutionLease lease = await first.EnsureLoadedAsync(
+                       ["B"], CancellationToken.None, statsBox: firstStats))
+            {
+                Assert.Equal(1, firstStats.Stats!.EvictedProjects);
+                Assert.Single(lease.Solution.Projects);
+                Assert.Equal("B", lease.Solution.Projects.Single().Name);
+            }
+
+            Assert.Same(secondBefore, second.TestOnlyCurrentSolution);
+            Assert.Equal(new[] { "A", "B" }, second.TestOnlyCurrentSolution.Projects
+                .Select(project => project.Name)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray());
+
+            var secondStats = new SemanticWorkspace.LoadStatsBox();
+            using SemanticSolutionLease secondLease = await second.EnsureLoadedAsync(
+                ["B"], CancellationToken.None, statsBox: secondStats);
+            Assert.Equal(1, secondStats.Stats!.EvictedProjects);
+            Assert.Single(secondLease.Solution.Projects);
+            Assert.Equal("B", secondLease.Solution.Projects.Single().Name);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(firstRoot);
+            TestWorkspaceCleanup.DeleteWorkspace(secondRoot);
+        }
+    }
+
+    [Fact]
+    public async Task RetentionPeelsEveryNewlySafeDependencyLayerInOnePass()
+    {
+        string root = CreateWorkspace("retention-chain",
+            ("C", null), ("B", "C"), ("A", "B"), ("Keep", null));
+        try
+        {
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath,
+                preparationConcurrency: 2)
+            {
+                TestOnlyRetentionInputPressureBytes = 1,
+                TestOnlyRetentionInputTargetBytes = 0,
+                TestOnlyManagedHeapBytes = static () => 0,
+            };
+
+            using (SemanticSolutionLease ignored = await workspace.EnsureLoadedAsync(
+                       ["A", "B", "C", "Keep"], CancellationToken.None,
+                       deferRetentionEviction: true)) { }
+
+            var statsBox = new SemanticWorkspace.LoadStatsBox();
+            using SemanticSolutionLease retained = await workspace.EnsureLoadedAsync(
+                ["Keep"], CancellationToken.None, statsBox: statsBox);
+
+            Assert.Equal("pressure_inputs", statsBox.Stats!.EvictionReason);
+            Assert.Equal(3, statsBox.Stats.EvictedProjects);
+            Assert.Single(retained.Solution.Projects);
+            Assert.Equal("Keep", retained.Solution.Projects.Single().Name);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task RetentionPublishesNoSafeCandidatesWhenEveryResidentIsProtected()
+    {
+        string root = CreateWorkspace("retention-protected", ("A", null), ("B", null));
+        try
+        {
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath,
+                preparationConcurrency: 2)
+            {
+                TestOnlyRetentionInputPressureBytes = 1,
+                TestOnlyRetentionInputTargetBytes = 0,
+                TestOnlyManagedHeapBytes = static () => 0,
+            };
+
+            using (SemanticSolutionLease ignored = await workspace.EnsureLoadedAsync(
+                       ["A", "B"], CancellationToken.None,
+                       deferRetentionEviction: true)) { }
+
+            var statsBox = new SemanticWorkspace.LoadStatsBox();
+            using SemanticSolutionLease protectedSet = await workspace.EnsureLoadedAsync(
+                ["A", "B"], CancellationToken.None, statsBox: statsBox);
+
+            Assert.Equal("no_safe_candidates", statsBox.Stats!.EvictionReason);
+            Assert.Equal(0, statsBox.Stats.EvictedProjects);
+            Assert.Equal(2, statsBox.Stats.ResidentProjects);
+            Assert.Equal(new[] { "A", "B" }, protectedSet.Solution.Projects
+                .Select(project => project.Name)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray());
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void RetentionTargetArithmeticPinsInputSoftAndHardDrainContracts()
+    {
+        Assert.Equal(800, SemanticWorkspace.TestOnlyRetentionTargetBytes(
+            retainedBytes: 1_000, inputTargetBytes: 800, "pressure_inputs"));
+        Assert.Equal(750, SemanticWorkspace.TestOnlyRetentionTargetBytes(
+            retainedBytes: 1_000, inputTargetBytes: 800, "pressure_heap_soft"));
+        Assert.Equal(500, SemanticWorkspace.TestOnlyRetentionTargetBytes(
+            retainedBytes: 1_000, inputTargetBytes: 800, "pressure_heap_hard"));
+        Assert.Equal(400, SemanticWorkspace.TestOnlyRetentionTargetBytes(
+            retainedBytes: 1_000, inputTargetBytes: 400, "pressure_heap_soft"));
+        Assert.Equal(400, SemanticWorkspace.TestOnlyRetentionTargetBytes(
+            retainedBytes: 1_000, inputTargetBytes: 400, "pressure_heap_hard"));
+    }
+
+    [Fact]
+    public async Task ManagedHeapSoftAndHardSignalsPublishDistinctReasonsAndDrain()
+    {
+        static async Task VerifyAsync(long managedHeapBytes, string expectedReason)
+        {
+            string root = CreateWorkspace($"retention-{expectedReason}",
+                ("A", null), ("B", null));
+            try
+            {
+                string dbPath = IndexBuilder.DefaultDbPath(root);
+                IndexBuilder.Build(root, dbPath);
+                using var workspace = new SemanticWorkspace(root, dbPath,
+                    preparationConcurrency: 2)
+                {
+                    TestOnlyRetentionInputPressureBytes = long.MaxValue,
+                    TestOnlyRetentionInputTargetBytes = 0,
+                    TestOnlyManagedHeapBytes = () => managedHeapBytes,
+                };
+
+                using (SemanticSolutionLease ignored = await workspace.EnsureLoadedAsync(
+                           ["A", "B"], CancellationToken.None,
+                           deferRetentionEviction: true)) { }
+
+                var statsBox = new SemanticWorkspace.LoadStatsBox();
+                using SemanticSolutionLease retained = await workspace.EnsureLoadedAsync(
+                    ["B"], CancellationToken.None, statsBox: statsBox);
+                Assert.Equal(expectedReason, statsBox.Stats!.EvictionReason);
+                Assert.Equal(1, statsBox.Stats.EvictedProjects);
+                Assert.Equal(managedHeapBytes, statsBox.Stats.ManagedHeapBytes);
+                Assert.Single(retained.Solution.Projects);
+                Assert.Equal("B", retained.Solution.Projects.Single().Name);
+            }
+            finally
+            {
+                TestWorkspaceCleanup.DeleteWorkspace(root);
+            }
+        }
+
+        await VerifyAsync(2600L * 1024 * 1024, "pressure_heap_soft");
+        await VerifyAsync(3L * 1024 * 1024 * 1024, "pressure_heap_hard");
+    }
+
+    [Fact]
+    public async Task AbortedTwoPhaseReferenceQueryCompletesDeferredRetention()
+    {
+        string root = CreateWorkspace("retention-abort",
+            ("A", null), ("B", null), ("C", null));
+        try
+        {
+            const string source = "namespace A; public interface AType { }";
+            File.WriteAllText(Path.Combine(root, "A", "A.cs"), source);
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            using var semantic = new SemanticService(manager);
+            SemanticWorkspace workspace = semantic.TestOnlyWorkspace;
+            workspace.TestOnlyManagedHeapBytes = static () => 0;
+
+            using (SemanticSolutionLease ignored = await workspace.EnsureLoadedAsync(
+                       ["A", "B", "C"], CancellationToken.None,
+                       deferRetentionEviction: true)) { }
+            workspace.TestOnlyRetentionInputPressureBytes = 1;
+            workspace.TestOnlyRetentionInputTargetBytes = 0;
+            semantic.TestOnlyPhaseHook = phase =>
+            {
+                if (phase == "beforeScanSetLoad")
+                    throw new OperationCanceledException("stop between owner and scan");
+            };
+
+            int column = source.IndexOf("AType", StringComparison.Ordinal) + 1;
+            var (result, reason) = await semantic.ReferencesAsync(
+                "A/A.cs", 1, column, "AType", maxProjects: 0,
+                samplesPerGroup: 5, timeoutMs: 60_000);
+
+            Assert.Null(result);
+            Assert.Equal("cluster_cold_load", reason);
+            Assert.Empty(workspace.TestOnlyCurrentSolution.Projects);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task ReferencesDefersOwnerPressureUntilTheCompleteScanSetIsProtected()
+    {
+        string root = CreateWorkspace("retention-references-wiring",
+            ("A", null), ("B", "A"), ("C", "A"));
+        try
+        {
+            const string source = "namespace A; public interface AType { }";
+            File.WriteAllText(Path.Combine(root, "A", "A.cs"), source);
+            File.WriteAllText(Path.Combine(root, "B", "B.cs"),
+                "namespace B; public sealed class BUse { private A.AType? value; }");
+            File.WriteAllText(Path.Combine(root, "C", "C.cs"),
+                "namespace C; public sealed class CUse { private A.AType? value; }");
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            using var semantic = new SemanticService(manager);
+            SemanticWorkspace workspace = semantic.TestOnlyWorkspace;
+            workspace.TestOnlyMaxLoadedProjects = 1;
+            workspace.TestOnlyManagedHeapBytes = static () => 0;
+
+            Solution broadSolution;
+            using (SemanticSolutionLease broad = await workspace.EnsureLoadedAsync(
+                       ["A", "B", "C"], CancellationToken.None,
+                       deferRetentionEviction: true))
+            {
+                broadSolution = broad.Solution;
+            }
+
+            int column = source.IndexOf("AType", StringComparison.Ordinal) + 1;
+            var (result, reason) = await semantic.ReferencesAsync(
+                "A/A.cs", 1, column, "AType", maxProjects: 0,
+                samplesPerGroup: 5, timeoutMs: 60_000);
+
+            Assert.Null(reason);
+            Assert.NotNull(result);
+            Assert.Equal(2, result.TotalLocations);
+            Assert.Same(broadSolution, workspace.TestOnlyCurrentSolution);
+            Assert.Equal(3, workspace.TestOnlyCurrentSolution.ProjectIds.Count);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task EvictingOneProjectPreservesItsSiblingsSharedMetadataLease()
+    {
+        string root = CreateWorkspace("retention-shared-metadata",
+            ("A", null), ("B", null));
+        try
+        {
+            string bin = Path.Combine(root, "bin");
+            Directory.CreateDirectory(bin);
+            string vendorDll = Path.Combine(bin, "Vendor.dll");
+            EmitAssembly(vendorDll, "Vendor",
+                "namespace Vendor; public sealed class ExternalType { }");
+            foreach (string name in new[] { "A", "B" })
+            {
+                File.WriteAllText(Path.Combine(root, name, $"{name}.csproj"),
+                    $"""
+                    <Project Sdk="Microsoft.NET.Sdk">
+                      <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                      <ItemGroup><Reference Include="Vendor"><HintPath>../bin/Vendor.dll</HintPath></Reference></ItemGroup>
+                    </Project>
+                    """);
+                File.WriteAllText(Path.Combine(root, name, $"{name}.cs"),
+                    $"namespace {name}; public sealed class Use : Vendor.ExternalType {{ }}");
+            }
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath,
+                preparationConcurrency: 2)
+            {
+                TestOnlyRetentionInputPressureBytes = 1,
+                TestOnlyRetentionInputTargetBytes = 0,
+                TestOnlyManagedHeapBytes = static () => 0,
+            };
+            using (SemanticSolutionLease ignored = await workspace.EnsureLoadedAsync(
+                       ["A", "B"], CancellationToken.None,
+                       deferRetentionEviction: true)) { }
+            long retainedBefore = workspace.RetainedSemanticInputBytes;
+
+            var statsBox = new SemanticWorkspace.LoadStatsBox();
+            using SemanticSolutionLease retained = await workspace.EnsureLoadedAsync(
+                ["B"], CancellationToken.None, statsBox: statsBox);
+
+            Assert.Equal(1, statsBox.Stats!.EvictedProjects);
+            Assert.True(statsBox.Stats.EvictedInputBytes > 0);
+            Assert.Equal(retainedBefore - workspace.RetainedSemanticInputBytes,
+                statsBox.Stats.EvictedInputBytes);
+            Assert.True(workspace.RetainedSemanticInputBytes > 0);
+            Project projectB = Assert.Single(retained.Solution.Projects);
+            Compilation compilation = (await projectB.GetCompilationAsync())!;
+            Assert.NotNull(compilation.GetTypeByMetadataName("Vendor.ExternalType"));
+            Assert.Contains(projectB.MetadataReferences.OfType<PortableExecutableReference>(),
+                reference => string.Equals(reference.FilePath, vendorDll,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
     public async Task AggregateInputAccountingDoesNotDropARequestedCandidateProject()
     {
         string root = CreateWorkspace("accounting-active-request", ("A", null), ("B", null));

@@ -92,6 +92,11 @@ public class Batch51TelemetryTests
                 Assert.Contains("\"effectiveProjectConcurrency\":", exactLine);
                 Assert.Contains("\"admittedBytesHighWater\":", exactLine);
                 Assert.Contains("\"retainedBytes\":", exactLine);
+                Assert.Contains("\"retainedInputBytes\":", exactLine);
+                Assert.Contains("\"residentProjects\":", exactLine);
+                Assert.Contains("\"evictedProjects\":", exactLine);
+                Assert.Contains("\"evictedInputBytes\":", exactLine);
+                Assert.Contains("\"managedHeapBytes\":", exactLine);
                 Assert.Contains("\"replanCount\":", exactLine);
                 Assert.Contains("\"totalElapsedMs\":", exactLine);
 

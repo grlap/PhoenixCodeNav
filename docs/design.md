@@ -224,9 +224,26 @@ This is the part designed specifically for net472 enterprise scale.
 - **Rebuild-coordinated long scans.** Candidate enumeration and semantic cluster loading hold a
   shared cross-process reader guard, so a destructive Windows rebuild drains them before replacing
   the SQLite database.
-- **Reload keeps identity.** A changed project reloads under its *existing* `ProjectId`, and
-  eviction only removes projects nothing loaded references — so dependents' references never
-  dangle. An LRU soft-caps the loaded set (~160 projects).
+- **Reload keeps identity and retention is byte-governed.** A changed project reloads under its
+  *existing* `ProjectId`, and eviction only removes projects nothing loaded references — so
+  dependents' references never dangle. Since v0.12.22, the legacy ~160-project proxy is gone:
+  process-wide accounted semantic inputs trigger a strict safe-project LRU at 2 GiB and drain
+  toward 1.5 GiB, while 2.6/3 GiB managed-heap signals request progressively stronger drains.
+  Triggering is process-wide, but each workspace evicts only its own residents; requested,
+  referenced, and concurrently active projects are never candidates. Multi-phase semantic
+  operations defer the owner load's pressure pass until the scan load has protected its complete
+  project set, preserving one Roslyn `Solution` and its document-scope cache across the operation;
+  a terminal `finally` completes the deferred pass if resolution, planning, cancellation, or scan
+  loading ends early. Each pass iteratively peels dependency layers that become safe after their
+  final dependent is selected, rather than waiting for later operations to rediscover them.
+  The thresholds are pressure signals with hysteresis, not candidate-project ceilings: if every
+  resident is protected, Phoenix stays over target rather than silently reducing exact coverage.
+  The runtime-corpus measurement behind these thresholds retained about 636 MiB of accounted input
+  at about 903 MiB managed heap (`k ~= 1.42`); the 2 GiB input trigger therefore projects to roughly
+  2.8 GiB heap, between the 2.6 GiB soft and 3 GiB hard signals. Soft pressure targets the smaller
+  of 1.5 GiB or 75% of current retained input; hard pressure uses the smaller of 1.5 GiB or 50%.
+  Any actual eviction creates one new Roslyn `Solution`, so the next operation performs one new
+  document-scope scan; no-pressure steady state preserves both solution identity and the cache.
 
 ### Semantic cold-start loader: parallel prepare, ordered commit
 
@@ -342,8 +359,9 @@ individually bounded, so malformed growth is rejected at the input boundary rath
 discarding a candidate because unrelated projects already consume an aggregate allowance.
 
 The same accounting covers owned input bytes retained by in-flight work, prepared results,
-metadata leases, resident semantic projects, and active solution generations; the existing
-project-count LRU and managed-heap backstop remain secondary protections for Roslyn's internal
+metadata leases, resident semantic projects, and active solution generations. Since v0.12.22,
+process-wide accounted-input and managed-heap pressure signals drive a strict safe-project LRU;
+there is no production resident-count boundary. The managed-heap signals cover Roslyn's internal
 allocations, which cannot be measured exactly by input size. Charges remain held while
 prepared results wait to commit or re-plan. Shared preparations and metadata leases are charged
 once, not once per waiter or project. On commit, source/reference reservations transfer to the
@@ -355,9 +373,11 @@ No worker waits for aggregate byte capacity while holding the workspace-mutation
 projects proceed through the process-wide bounded preparation and source-read lanes, whose caps are
 not multiplied by the number of requests or projects. Large files use one sequential process lane,
 so parallelism cannot multiply the per-file maximum into an unbounded transient working set. The
-resident-project count cap remains the warm-cache eviction boundary; byte accounting never evicts
-a candidate merely to make a later candidate fit. Cancellation stops work that has no remaining
-waiter and is observed by every worker and pinned-index fallback query.
+retention pass never evicts a requested, concurrently active, dependency-protected, or otherwise
+unsafe candidate merely to meet a target; when no safe candidate exists it publishes
+`no_safe_candidates` and remains above target. Cancellation stops work that has no remaining waiter
+and is observed by every worker and pinned-index fallback query. A two-phase operation's terminal
+path still completes any pressure pass deferred by its owner load.
 Indexed fallback resolution remains part of the preparation phase for timing and cancellation;
 it cannot continue invisibly past the caller's deadline. No prepared result becomes visible after
 cancellation, a fingerprint or workspace-generation mismatch, or a failed Roslyn apply.

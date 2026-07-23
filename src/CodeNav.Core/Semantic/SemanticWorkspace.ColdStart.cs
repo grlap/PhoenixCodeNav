@@ -384,15 +384,17 @@ public sealed partial class SemanticWorkspace
         public long ProjectReservationBytes =>
             Volatile.Read(ref _projectReservation)?.Bytes ?? 0;
 
-        public void Release()
+        public long Release()
         {
-            if (Interlocked.Decrement(ref _references) != 0) return;
-            Interlocked.Exchange(ref _projectReservation, null)?.Dispose();
+            if (Interlocked.Decrement(ref _references) != 0) return 0;
+            long released = Interlocked.Exchange(ref _projectReservation, null)?.Release() ?? 0;
             List<MetadataReferenceLease>? leases = Interlocked.Exchange(ref _metadataLeases, null);
             if (leases is not null)
             {
-                foreach (MetadataReferenceLease lease in leases) lease.Dispose();
+                foreach (MetadataReferenceLease lease in leases)
+                    released = SaturatingAdd(released, lease.Release());
             }
+            return released;
         }
     }
 
@@ -433,15 +435,18 @@ public sealed partial class SemanticWorkspace
             }
         }
 
-        public void Dispose()
+        public long Release()
         {
             lock (_owner.Sync)
             {
                 long bytes = _bytes;
                 _bytes = 0;
                 _owner.ReleaseLocked(bytes);
+                return bytes;
             }
         }
+
+        public void Dispose() => Release();
     }
 
     private sealed class InputAccounting
@@ -490,7 +495,8 @@ public sealed partial class SemanticWorkspace
         }
 
         public PortableExecutableReference Reference { get; }
-        public void Dispose() => Interlocked.Exchange(ref _entry, null)?.Release();
+        public long Release() => Interlocked.Exchange(ref _entry, null)?.Release() ?? 0;
+        public void Dispose() => Release();
     }
 
     private sealed class MetadataCacheEntry
@@ -542,12 +548,12 @@ public sealed partial class SemanticWorkspace
             }
         }
 
-        public void Release()
+        public long Release()
         {
             InputReservation? release = null;
             lock (_sync)
             {
-                if (--_leases > 0) return;
+                if (--_leases > 0) return 0;
                 _retired = true;
                 _owner.Metadata.TryRemove(
                     new KeyValuePair<MetadataCacheKey, MetadataCacheEntry>(_key, this));
@@ -555,7 +561,7 @@ public sealed partial class SemanticWorkspace
                 _reservation = null;
                 _reference = null;
             }
-            release?.Dispose();
+            return release?.Release() ?? 0;
         }
     }
 
@@ -607,7 +613,8 @@ public sealed partial class SemanticWorkspace
 
     private async Task<SemanticSolutionLease> EnsureLoadedParallelAsync(
         IReadOnlyCollection<string> projectNames, CancellationToken cancellationToken,
-        IReadOnlyCollection<string>? ensureReferenceTo, LoadStatsBox? statsBox)
+        IReadOnlyCollection<string>? ensureReferenceTo, LoadStatsBox? statsBox,
+        bool deferRetentionEviction)
     {
         var requested = new HashSet<string>(projectNames, StringComparer.OrdinalIgnoreCase);
         lock (_planningOwnershipSync)
@@ -639,6 +646,7 @@ public sealed partial class SemanticWorkspace
         int preparedCount = 0;
         int committedCount = 0;
         int replanCount = 0;
+        RetentionEviction? retentionEviction = null;
 
         async Task WaitForGateAsync()
         {
@@ -678,7 +686,12 @@ public sealed partial class SemanticWorkspace
                 ReplanCount: replanCount,
                 TotalElapsedMs: ToMs(elapsed),
                 PreparationQueueMs: ToMs(queueTicks),
-                CommittedProjects: committedCount);
+                CommittedProjects: committedCount,
+                ResidentProjects: retentionEviction?.ResidentProjects,
+                EvictedProjects: retentionEviction?.EvictedProjects ?? 0,
+                EvictedInputBytes: retentionEviction?.EvictedInputBytes ?? 0,
+                EvictionReason: retentionEviction?.Reason,
+                ManagedHeapBytes: retentionEviction?.ManagedHeapBytes);
         }
 
         try
@@ -1201,7 +1214,8 @@ public sealed partial class SemanticWorkspace
                                 if (_loaded.TryGetValue(name, out LoadedProject? project))
                                     project.LastUse = ++_useCounter;
                             }
-                            EvictBeyondCap(requested);
+                            retentionEviction = EvictForRetention(requested,
+                                deferRetentionEviction);
 
                             var skippedSet = new HashSet<string>(skipped,
                                 StringComparer.OrdinalIgnoreCase);

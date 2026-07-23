@@ -264,6 +264,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("references-compilation-critical-path-attribution", ids);
         Assert.Contains("stack-safe-syntax-indexing", ids);
         Assert.Contains("references-buffered-document-scope-scan", ids);
+        Assert.Contains("semantic-byte-governed-retention", ids);
         Assert.Contains("search-symbol-malformed-query", ids);
         Assert.Contains("index-follower-liveness-fail-closed", ids);
         string semanticBudget = Assert.Single(json.GetProperty("features").EnumerateArray(),
@@ -271,6 +272,12 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .GetProperty("summary").GetString()!;
         Assert.Contains("default all candidates", semanticBudget);
         Assert.Contains("positive maxProjects bounds", semanticBudget);
+        string completeness = Assert.Single(json.GetProperty("features").EnumerateArray(),
+            feature => feature.GetProperty("id").GetString() ==
+                       "semantic-candidate-completeness-over-accounting")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("byte/managed-heap pressure retention", completeness);
+        Assert.DoesNotContain("resident-count eviction", completeness);
 
         string arityResolution = Assert.Single(json.GetProperty("features").EnumerateArray(),
             feature => feature.GetProperty("id").GetString() == "generic-arity-resolution")

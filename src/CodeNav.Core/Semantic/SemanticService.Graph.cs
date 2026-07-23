@@ -33,6 +33,7 @@ public sealed partial class SemanticService
         long loadMs = 0;
         var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
         var scanBox = new SemanticWorkspace.LoadStatsBox();
+        bool deferredRetentionPending = false;
         try
         {
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
@@ -42,9 +43,10 @@ public sealed partial class SemanticService
                 return (null, null, null, false, "index_snapshot_unavailable");
             }
 
+            deferredRetentionPending = true;
             var (ownerLease, symbolA, owningProject, ownerCoverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
-                statsBox: ownerBox).ConfigureAwait(false);
+                statsBox: ownerBox, deferRetentionEviction: true).ConfigureAwait(false);
             using var ownerOperation = ownerLease;
             clusterLoadInProgress = false;
             loadMs = swOp.ElapsedMilliseconds; // review q2: progressive stamp (see references)
@@ -60,6 +62,7 @@ public sealed partial class SemanticService
             var (scanLease, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, statsBox: scanBox).ConfigureAwait(false);
+            deferredRetentionPending = false;
             using var scanOperation = scanLease;
             Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
@@ -125,6 +128,11 @@ public sealed partial class SemanticService
                 clusterLoadMs: clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
                 queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs); // epuc.1
             return (null, null, null, false, $"semantic_error:{ex.GetType().Name}");
+        }
+        finally
+        {
+            if (deferredRetentionPending)
+                await Workspace.CompleteDeferredRetentionAsync().ConfigureAwait(false);
         }
     }
 
@@ -232,6 +240,7 @@ public sealed partial class SemanticService
         var ownerBox = new SemanticWorkspace.LoadStatsBox(); // epuc.1
         var scanBox = new SemanticWorkspace.LoadStatsBox();
         var planning = new SemanticPlanningStats(); // epuc.3
+        bool deferredRetentionPending = false;
         try
         {
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
@@ -241,9 +250,10 @@ public sealed partial class SemanticService
                 return (null, null, null, "index_snapshot_unavailable");
             }
 
+            deferredRetentionPending = true;
             var (ownerLease, symbolA, owningProject, ownerCoverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries, arityHint,
-                statsBox: ownerBox)
+                statsBox: ownerBox, deferRetentionEviction: true)
                 .ConfigureAwait(false);
             using var ownerOperation = ownerLease;
             clusterLoadInProgress = false;
@@ -300,6 +310,7 @@ public sealed partial class SemanticService
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
                 statsBox: scanBox, planStatsBox: planning.ScanSet).ConfigureAwait(false);
+            deferredRetentionPending = false;
             using var scanOperation = scanLease;
             Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
@@ -409,6 +420,11 @@ public sealed partial class SemanticService
                 queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs,
                 planning: planning); // epuc.1 + epuc.3 review F3
             return (null, null, null, $"semantic_error:{ex.GetType().Name}");
+        }
+        finally
+        {
+            if (deferredRetentionPending)
+                await Workspace.CompleteDeferredRetentionAsync().ConfigureAwait(false);
         }
     }
 }

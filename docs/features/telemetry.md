@@ -30,12 +30,18 @@ process is alive).
               "planMs":51.0,"preparationMs":8800.0,"preparationQueueMs":12.0,
               "preparedProjects":4,"committedProjects":4,"effectiveProjectConcurrency":4,
               "admittedBytesHighWater":18350080,"retainedBytes":12582912,
+              "retainedInputBytes":12582912,
+              "residentProjects":4,"evictedProjects":0,"evictedInputBytes":0,
+              "managedHeapBytes":73400320,
               "replanCount":0,"totalElapsedMs":8968.5,
               "loadedBefore":0,"requested":4,"reloaded":0,"loaded":4,"failed":0},
  "scanLoad":{"gateWaitMs":0.1,"fingerprintMs":3.9,"topoMs":95.2,"projectLoadMs":6120.4,
              "planMs":101.0,"preparationMs":5980.0,"preparationQueueMs":46.0,
              "preparedProjects":17,"committedProjects":17,"effectiveProjectConcurrency":8,
              "admittedBytesHighWater":62914560,"retainedBytes":52428800,
+             "retainedInputBytes":52428800,
+             "residentProjects":21,"evictedProjects":0,"evictedInputBytes":0,
+             "managedHeapBytes":167772160,
              "replanCount":0,"totalElapsedMs":6220.1,
              "loadedBefore":4,"requested":21,"reloaded":0,"loaded":21,"failed":0}}
 ```
@@ -127,7 +133,11 @@ load ran).
 | `*.projectParseMs/sourceReadMs/metadataResolveMs` | summed worker phase durations; parallel durations may overlap and can exceed preparation wall |
 | `*.workspaceMutationMs` | ordered `ProjectInfo` construction, reference wiring, and the single Roslyn apply |
 | `*.preparedProjects/committedProjects/effectiveProjectConcurrency` | preparation volume, successfully published projects, and the effective process-wide project concurrency cap |
-| `*.admittedBytesHighWater/retainedBytes` | process-wide accounted-input high-water and current retained-byte ownership; observational only, never a candidate-project completeness gate |
+| `*.admittedBytesHighWater/retainedBytes/retainedInputBytes` | process-wide accounted-input high-water and current retained-input ownership; `retainedBytes` is the compatibility name and `retainedInputBytes` makes the unit explicit; observational only, never a candidate-project completeness gate. Lease disposal can make this gauge settle down/up between owner and scan blocks without any project eviction |
+| `*.residentProjects` | projects resident in this semantic workspace after the load's retention pass |
+| `*.evictedProjects/evictedInputBytes` | safe LRU projects removed by this load and the process-wide accounted bytes their released ownership actually reclaimed |
+| `*.evictionReason` | present when a pressure pass was requested: `pressure_inputs`, `pressure_heap_soft`, `pressure_heap_hard`, or `no_safe_candidates`; the last means every resident was requested, referenced, concurrently active, or dependency-protected |
+| `*.managedHeapBytes` | observational managed-heap sample used by the retention pressure decision; it is not a candidate completeness gate |
 | `*.replanCount/totalElapsedMs` | stale-plan retries and complete per-call wall time |
 | `*.loadedBefore/requested/reloaded/loaded/failed` | warm-set size before this load, and this load's compatibility work volume |
 
@@ -139,6 +149,12 @@ phases never entered report 0). Concurrent operations cannot contaminate each ot
 One special shape remains: a load cancelled before it acquires its first brief workspace gate
 reports `gateWaitMs` as the whole wall, all other phase times 0, and omits `loadedBefore`.
 Absent `loadedBefore` means unknown, not 0, and such records carry no `cold` flag.
+
+Any actual eviction creates a new Roslyn `Solution`; a later operation therefore performs one
+new document-scope scan even when its selected projects survived. Since v0.12.21 that scan is
+buffered and cheap. No-pressure steady state performs no eviction and retains the same `Solution`
+and scope cache. Deferred owner-phase pressure is completed from the operation's terminal path even
+when resolution, planning, or scan loading fails.
 
 Since v0.12.16, `references` forces the operation-selected scan set's compilations before
 `FindReferencesAsync`. The same immutable `Solution` instance is used for preparation and search,

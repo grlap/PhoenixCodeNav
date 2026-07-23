@@ -65,12 +65,16 @@ public static class SemanticCoverageReasons
 /// Owns: an AdhocWorkspace populated lazily with per-project compilations built from
 /// parsed csproj facts (no MSBuild evaluation): documents from live files, framework
 /// reference assemblies, hint-path/NuGet package dlls, in-cluster project references.
-/// LRU-evicts beyond a project cap; reloads projects whose files changed (index fingerprint).
+/// LRU-evicts under accounted-input or managed-heap pressure; reloads projects whose files
+/// changed (index fingerprint).
 /// Does not own: which projects to load (SemanticService decides) or result shaping.
 /// </summary>
 public sealed partial class SemanticWorkspace : IDisposable
 {
-    private const int MaxLoadedProjects = 160;
+    private const long RetainedInputPressureBytes = 2L * 1024 * 1024 * 1024;
+    private const long RetainedInputTargetBytes = 1536L * 1024 * 1024;
+    private const long ManagedHeapSoftPressureBytes = 2600L * 1024 * 1024;
+    private const long ManagedHeapHardPressureBytes = 3L * 1024 * 1024 * 1024;
 
     private readonly string _workspaceRoot;
     private readonly string _dbPath;
@@ -80,6 +84,15 @@ public sealed partial class SemanticWorkspace : IDisposable
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, LoadedProject> _loaded = new(StringComparer.OrdinalIgnoreCase);
     private long _useCounter;
+
+    /// <summary>TEST SEAM (epuc.13): reenables the legacy project-count proxy so focused tests can
+    /// reproduce owner-phase eviction without constructing hundreds of projects. Never set in
+    /// production; shipped retention is governed by accounted input bytes and managed-heap
+    /// pressure.</summary>
+    internal int? TestOnlyMaxLoadedProjects { get; set; }
+    internal long? TestOnlyRetentionInputPressureBytes { get; set; }
+    internal long? TestOnlyRetentionInputTargetBytes { get; set; }
+    internal Func<long>? TestOnlyManagedHeapBytes { get; set; }
 
     private sealed class LoadedProject
     {
@@ -131,7 +144,10 @@ public sealed partial class SemanticWorkspace : IDisposable
         double PlanMs = 0, double PreparationMs = 0, int PreparedProjects = 0,
         int EffectiveProjectConcurrency = 0, long AdmittedBytesHighWater = 0,
         long RetainedBytes = 0, int ReplanCount = 0, double TotalElapsedMs = 0,
-        double PreparationQueueMs = 0, int CommittedProjects = 0);
+        double PreparationQueueMs = 0, int CommittedProjects = 0,
+        int? ResidentProjects = null, int EvictedProjects = 0,
+        long EvictedInputBytes = 0, string? EvictionReason = null,
+        long? ManagedHeapBytes = null);
 
     /// <summary>epuc.1 (review F2): per-CALL stats vehicle. The first cut published stats via
     /// an ambient last-load property — a concurrent caller could emit ANOTHER op's load as its
@@ -153,8 +169,41 @@ public sealed partial class SemanticWorkspace : IDisposable
     public Task<SemanticSolutionLease> EnsureLoadedAsync(
         IReadOnlyCollection<string> projectNames, CancellationToken ct,
         IReadOnlyCollection<string>? ensureReferenceTo = null,
-        LoadStatsBox? statsBox = null)
-        => EnsureLoadedParallelAsync(projectNames, ct, ensureReferenceTo, statsBox);
+        LoadStatsBox? statsBox = null, bool deferRetentionEviction = false)
+        => EnsureLoadedParallelAsync(projectNames, ct, ensureReferenceTo, statsBox,
+            deferRetentionEviction);
+
+    /// <summary>Completes a pressure pass deliberately deferred by a multi-phase semantic
+    /// operation. Terminal paths call this from finally with no caller deadline: memory safety
+    /// must not disappear because resolution, planning, or the scan phase failed. The pass is
+    /// diagnostic/cleanup work and therefore never replaces the operation's result or failure.</summary>
+    internal async Task CompleteDeferredRetentionAsync()
+    {
+        bool entered = false;
+        try
+        {
+            await _gate.WaitAsync(_disposeCts.Token).ConfigureAwait(false);
+            entered = true;
+            _ = EvictForRetention(new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                deferRetentionEviction: false);
+        }
+        catch (OperationCanceledException) when (_disposeCts.IsCancellationRequested)
+        {
+            // Workspace disposal already releases every resident owner.
+        }
+        catch (ObjectDisposedException) when (_disposeCts.IsCancellationRequested)
+        {
+            // Same disposal race, after the gate itself has been torn down.
+        }
+        catch (Exception ex)
+        {
+            _log($"Deferred semantic retention completion failed: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            if (entered) _gate.Release();
+        }
+    }
 
     private static double ToMs(long ticks) => ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
@@ -219,58 +268,173 @@ public sealed partial class SemanticWorkspace : IDisposable
         return names.OrderBy(n => Depth(n, 0)).ThenBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    // Memory backstop (njw): the project-count cap is SOFT — referenced projects are never evicted —
-    // so heavy clusters can hold compilations well past it with no byte accounting. Past this managed-
-    // heap threshold the effective cap halves, so subsequent passes drain harder while preserving the
-    // no-dangling-reference invariant. A pressure signal, not a hard ceiling.
-    private const long ManagedHeapBackstopBytes = 3L * 1024 * 1024 * 1024;
+    private readonly record struct RetentionEviction(
+        int ResidentProjects,
+        int EvictedProjects,
+        long EvictedInputBytes,
+        string? Reason,
+        long ManagedHeapBytes);
 
-    private void EvictBeyondCap(HashSet<string> keep)
+    private static long RetentionTargetBytes(long retainedBytes,
+        long inputTargetBytes, string reason) => reason switch
+        {
+            "pressure_inputs" => inputTargetBytes,
+            "pressure_heap_soft" => Math.Min(inputTargetBytes,
+                retainedBytes / 4 * 3 + retainedBytes % 4 * 3 / 4),
+            "pressure_heap_hard" => Math.Min(inputTargetBytes, retainedBytes / 2),
+            _ => throw new ArgumentOutOfRangeException(nameof(reason)),
+        };
+
+    internal static long TestOnlyRetentionTargetBytes(long retainedBytes,
+        long inputTargetBytes, string reason) =>
+        RetentionTargetBytes(retainedBytes, inputTargetBytes, reason);
+
+    /// <summary>Evicts only this workspace's strict LRU tail after a complete load phase. The
+    /// global input/heap gauges are pressure signals because the physical process budget is global;
+    /// in-flight reservations count toward pressure but are not residents and therefore cannot be
+    /// evicted here. Requested and referenced projects remain protected exactly as under the legacy
+    /// cap. Hysteresis (2 GiB trigger -> 1.5 GiB target) avoids one-project-per-operation churn.</summary>
+    private RetentionEviction EvictForRetention(HashSet<string> keep,
+        bool deferRetentionEviction)
     {
-        int cap = MaxLoadedProjects;
-        if (_loaded.Count > 0 && GC.GetTotalMemory(false) > ManagedHeapBackstopBytes)
+        long retainedBefore = _coldStartRuntime.Accounting.RetainedBytes;
+        long managedHeapBytes = Math.Max(0,
+            TestOnlyManagedHeapBytes?.Invoke() ?? GC.GetTotalMemory(false));
+        if (deferRetentionEviction || _loaded.Count == 0)
+            return new(_loaded.Count, 0, 0, null, managedHeapBytes);
+
+        int? testCap = TestOnlyMaxLoadedProjects;
+        string? reason = null;
+        long targetBytes = retainedBefore;
+        int evictCount = 0;
+        if (testCap is not null)
         {
-            cap = Math.Max(8, MaxLoadedProjects / 2);
+            int cap = Math.Max(1, testCap.Value);
+            if (_loaded.Count <= cap)
+                return new(_loaded.Count, 0, 0, null, managedHeapBytes);
+            reason = "test_project_cap";
+            evictCount = _loaded.Count - cap;
         }
-        if (_loaded.Count <= cap) return;
-        if (cap != MaxLoadedProjects)
+        else
         {
-            // Logged only when the tightened cap actually drives an eviction pass — under sustained
-            // heap pressure with nothing over cap this would otherwise spam every semantic call.
-            _log($"Semantic cache memory backstop: managed heap over {ManagedHeapBackstopBytes / (1024 * 1024)} MB — tightening cap {MaxLoadedProjects} -> {cap}.");
+            long inputPressure = Math.Max(1,
+                TestOnlyRetentionInputPressureBytes ?? RetainedInputPressureBytes);
+            long inputTarget = Math.Clamp(
+                TestOnlyRetentionInputTargetBytes ?? RetainedInputTargetBytes,
+                0, inputPressure - 1);
+            bool hardHeapPressure = managedHeapBytes >= ManagedHeapHardPressureBytes;
+            bool softHeapPressure = managedHeapBytes >= ManagedHeapSoftPressureBytes;
+            bool retainedInputPressure = retainedBefore >= inputPressure;
+            if (!hardHeapPressure && !softHeapPressure && !retainedInputPressure)
+                return new(_loaded.Count, 0, 0, null, managedHeapBytes);
+
+            if (hardHeapPressure)
+            {
+                reason = "pressure_heap_hard";
+                targetBytes = RetentionTargetBytes(
+                    retainedBefore, inputTarget, reason);
+            }
+            else if (softHeapPressure)
+            {
+                reason = "pressure_heap_soft";
+                targetBytes = RetentionTargetBytes(
+                    retainedBefore, inputTarget, reason);
+            }
+            else
+            {
+                reason = "pressure_inputs";
+                targetBytes = RetentionTargetBytes(
+                    retainedBefore, inputTarget, reason);
+            }
         }
 
-        // Evict only projects that no currently-loaded project references, so eviction
-        // never leaves a dangling ProjectReference (Roslyn would silently drop it and
-        // corrupt the dependent's symbol visibility). This drains the graph from the top;
-        // if nothing is safely evictable we stay over the soft cap until it is.
-        var referenced = new HashSet<ProjectId>();
-        foreach (var p in _workspace.CurrentSolution.Projects)
+        // Evict only projects that no REMAINING loaded project references, so eviction never
+        // leaves a dangling ProjectReference (Roslyn would silently drop it and corrupt the
+        // dependent's symbol visibility). Incoming counts are decremented as safe roots are
+        // selected, exposing the next dependency layer during this SAME pressure pass.
+        var protectedNames = new HashSet<string>(keep, StringComparer.OrdinalIgnoreCase);
+        lock (_planningOwnershipSync)
         {
-            foreach (var pr in p.ProjectReferences) referenced.Add(pr.ProjectId);
+            foreach ((string name, int count) in _activeRequestedProjects)
+            {
+                if (count > 0) protectedNames.Add(name);
+            }
         }
 
-        var evictable = _loaded
-            .Where(kv => !keep.Contains(kv.Key) && !referenced.Contains(kv.Value.Id))
-            .OrderBy(kv => kv.Value.LastUse)
-            .Take(_loaded.Count - cap)
-            .ToList();
-        if (evictable.Count == 0) return;
+        var byId = _loaded.ToDictionary(pair => pair.Value.Id, pair => pair);
+        var outgoing = byId.Keys.ToDictionary(id => id, _ => new List<ProjectId>());
+        var incoming = byId.Keys.ToDictionary(id => id, _ => 0);
+        foreach (Project project in _workspace.CurrentSolution.Projects)
+        {
+            if (!outgoing.TryGetValue(project.Id, out List<ProjectId>? references)) continue;
+            foreach (ProjectReference reference in project.ProjectReferences)
+            {
+                if (!incoming.ContainsKey(reference.ProjectId)) continue;
+                references.Add(reference.ProjectId);
+                incoming[reference.ProjectId]++;
+            }
+        }
+
+        var ready = new SortedSet<KeyValuePair<string, LoadedProject>>(
+            Comparer<KeyValuePair<string, LoadedProject>>.Create((left, right) =>
+            {
+                int byUse = left.Value.LastUse.CompareTo(right.Value.LastUse);
+                if (byUse != 0) return byUse;
+                int byName = StringComparer.OrdinalIgnoreCase.Compare(left.Key, right.Key);
+                return byName != 0
+                    ? byName
+                    : StringComparer.Ordinal.Compare(left.Key, right.Key);
+            }));
+        foreach (KeyValuePair<string, LoadedProject> pair in _loaded)
+        {
+            if (!protectedNames.Contains(pair.Key) && incoming[pair.Value.Id] == 0)
+                ready.Add(pair);
+        }
+
+        var evictable = new List<KeyValuePair<string, LoadedProject>>();
+        long estimatedRetained = retainedBefore;
+        while (ready.Count > 0)
+        {
+            if (testCap is not null && evictable.Count >= evictCount) break;
+            if (testCap is null && estimatedRetained <= targetBytes) break;
+            KeyValuePair<string, LoadedProject> candidate = ready.Min;
+            ready.Remove(candidate);
+            evictable.Add(candidate);
+            estimatedRetained = Math.Max(0,
+                estimatedRetained - Math.Max(1,
+                    candidate.Value.Resources?.ProjectReservationBytes ?? 0));
+            foreach (ProjectId dependency in outgoing[candidate.Value.Id])
+            {
+                incoming[dependency]--;
+                if (incoming[dependency] == 0 &&
+                    byId.TryGetValue(dependency,
+                        out KeyValuePair<string, LoadedProject> newlySafe) &&
+                    !protectedNames.Contains(newlySafe.Key))
+                    ready.Add(newlySafe);
+            }
+        }
+        if (evictable.Count == 0)
+            return new(_loaded.Count, 0, 0, "no_safe_candidates", managedHeapBytes);
         Solution next = _workspace.CurrentSolution;
         foreach ((_, LoadedProject project) in evictable)
             next = next.RemoveProject(project.Id);
         if (!_workspace.TryApplyChanges(next))
         {
             _log("Semantic cache eviction was rejected by the workspace; resident ownership is unchanged.");
-            return;
+            return new(_loaded.Count, 0, 0, reason, managedHeapBytes);
         }
+        long evictedInputBytes = 0;
         foreach (var (name, lp) in evictable)
         {
             _loaded.Remove(name);
-            lp.Resources?.Release();
+            evictedInputBytes = SaturatingAdd(evictedInputBytes,
+                lp.Resources?.Release() ?? 0);
         }
         _workspaceGeneration++;
-        _log($"Semantic cache evicted {evictable.Count} projects (cap {cap}).");
+        _log($"Semantic cache evicted {evictable.Count} projects " +
+             $"({reason}, {evictedInputBytes} accounted bytes released).");
+        return new(_loaded.Count, evictable.Count, evictedInputBytes, reason,
+            managedHeapBytes);
     }
 
     private static string PackagesConfigPath(string projectPath)
