@@ -405,7 +405,9 @@ public static class IndexBuilder
                     lineCount += item.Parsed.LineCount;
                     csCount++;
 
-                    liveProgress?.AddFileIndexed();
+                    liveProgress?.AddFileIndexed(
+                        item.ByteCount,
+                        item.Parsed.Symbols.Count);
                     if (++inTx >= sourceWriteBatchSize) // lf4p A/B: 400 → commits cost 2.9s/roslyn; WAL commit amortizes with width
                     {
                         long tc0 = System.Diagnostics.Stopwatch.GetTimestamp(); // lf4p
@@ -532,7 +534,7 @@ public static class IndexBuilder
                         fileIds[item.File.RelPath] = id;
                         fsCount++;
                         lineCount += item.LineCount;
-                        liveProgress?.AddFileIndexed();
+                        liveProgress?.AddFileIndexed(item.ByteCount, symbolsWritten: 0);
                         prepared[i] = null; // release large strings as soon as the writer is done
                         if (++inTx >= sourceWriteBatchSize)
                         {

@@ -1,6 +1,6 @@
 # Phoenix Telemetry API v1
 
-Status: **Draft contract — design only; implementation is not authorized**
+Status: **Approved v1 contract — producer partially implemented; IPC integration remains open**
 
 Feature spec: [`internal-operations-portal.md`](./internal-operations-portal.md)
 
@@ -14,6 +14,18 @@ This document is the integration boundary between two independently developed pr
 The projects share this protocol, not implementation assemblies. The portal must never reference
 `IndexManager`, `IndexStore`, `IndexQueries`, `SemanticWorkspace`, or the MCP tool classes. The
 producer must not serve HTTP, ship UI assets, or implement portal retention and charts.
+
+The current portal MVP does not claim IPC conformance yet. It consumes bounded semantic,
+`buildProgress`, and `serverInfo` JSONL records through anchored no-follow regular-file handles and observes
+only the equally anchored `index.db` file's presence and size. It deliberately does not open
+SQLite or poll full-table counts. This makes operations and basic index presence live
+cross-platform while preserving the
+implementation-assembly boundary. The JSONL adapter applies the same v1 confidence/partiality
+semantics, validated filters, cursor paging, string limits, aggregate retention limits, and
+response budgets described below. The JSONL producer emits exact full-build phase transitions,
+approximately one tick per second in long phases, terminal state, and one startup identity record.
+IPC remains the approved channel for heartbeats, refresh/delta progress, process gauges, and the
+full multi-instance lifecycle contract below.
 
 ## Contract principles
 
@@ -713,14 +725,32 @@ are the only unauthenticated resources. CORS is not enabled.
   "nextCursor": null,
   "returned": 0,
   "total": null,
+  "totalIsLowerBound": false,
   "truncated": false,
+  "byteBudgetHit": false,
+  "responseByteLimit": 524288,
   "dataComplete": true
 }
 ```
 
 `total` is `null` unless known without an unbounded count. `dataComplete` becomes false when the
 portal observed producer drops, sequence gaps, incompatible frames, or retention eviction relevant
-to the requested range.
+to the requested range. The current JSONL adapter counts only its already-bounded retained array;
+when earlier records were evicted, `total` is that retained lower bound and
+`totalIsLowerBound=true`. `truncated` also becomes true when another cursor page exists or the
+response byte budget stops the current page; `byteBudgetHit` distinguishes the latter.
+List cursors are opaque and bound to the current portal session, endpoint, filter fingerprint, and
+retained-data generation. Reusing one with different filters, after eviction/source replacement,
+or in another portal process returns `cursor_expired`.
+
+The current JSONL adapter reports `omittedSourceFiles` exactly within its bounded directory scan.
+When the directory-entry scan itself truncates,
+`omittedSourceFilesIsLowerBound=true` and `sourceDiscoveryTruncations>0`. A present index without
+any telemetry authority never makes operation/event totals exact, and oversized telemetry strings
+are rejected and counted as invalid records rather than silently shortened.
+Removing or replacing an observed telemetry source purges its retained records but keeps a
+session-sticky retention-loss boundary, so later pages remain explicit lower bounds instead of
+silently becoming exact again.
 
 ### Common error envelope
 
@@ -938,7 +968,7 @@ Portal retention is defined in the feature spec and reported by `/api/v1/bootstr
 
 ### Contract fixtures
 
-Before either implementation begins, freeze canonical fixtures for:
+The canonical IPC fixtures cover:
 
 1. writer building with unknown total;
 2. writer building with measured throughput/ETA;
@@ -952,7 +982,8 @@ Before either implementation begins, freeze canonical fixtures for:
 10. incompatible protocol.
 
 Project B uses these fixtures in its mock broker/API and UI visual tests. Project A's contract tests
-must emit schema-equivalent records for the same scenarios.
+must emit schema-equivalent records for the same scenarios when the remaining IPC integration is
+resumed.
 
 ### Producer deliverables (Project A)
 
@@ -971,11 +1002,12 @@ must emit schema-equivalent records for the same scenarios.
 - loopback HTTP API, bearer bootstrap, Host/Origin policy, SSE;
 - mock server generated from contract fixtures;
 - complete responsive UI, animation, accessibility, and browser tests;
-- no direct Phoenix Core/MCP/SQLite dependencies.
+- no direct Phoenix Core/MCP implementation dependency; the current pre-IPC MVP may observe only
+  anchored index-file presence/size and does not open SQLite.
 
 ### Integration gate
 
-Integration is complete when:
+Full IPC integration is complete when:
 
 - fixture and live producer records normalize to the same portal models;
 - two live same-workspace processes appear as one physical index with writer/follower instances;
@@ -994,4 +1026,4 @@ This contract adds observability only. It does not approve:
 - remote telemetry or internet access;
 - a portal-to-MCP control plane;
 - increased deadlines or eager semantic prewarming;
-- implementation before the feature and API specifications are reviewed and approved.
+- implementation that bypasses the privacy, bounds, loopback, or read-only constraints above.

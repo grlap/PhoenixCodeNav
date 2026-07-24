@@ -12,7 +12,8 @@ namespace CodeNav.Core.Indexing;
 /// phase's clock.</summary>
 public sealed record IndexProgress(string Phase, int FilesIndexed, int? FilesTotal, long ElapsedMs,
     int FilesSkipped = 0, int ProjectsFailed = 0,
-    double? FilesPerSecond = null, long? EstimatedRemainingMs = null);
+    double? FilesPerSecond = null, long? EstimatedRemainingMs = null,
+    long SymbolsWritten = 0, long BytesRead = 0);
 
 /// <summary>
 /// Owns: the thread-safe live progress of ONE index build — phase, monotonic file counters,
@@ -35,6 +36,9 @@ public sealed class BuildProgress
     private volatile int _projectsFailed;
     private volatile int _filesTotal = -1; // -1 = not yet known (omitted from responses)
     private long _indexingPhaseStartMs = -1; // stamped when the indexing_files phase begins (0tn)
+    private long _symbolsWritten;
+    private long _bytesRead;
+    internal Action? PhaseChangedForTelemetry { get; set; }
 
     public void SetPhase(string phase)
     {
@@ -46,6 +50,7 @@ public sealed class BuildProgress
             Interlocked.Exchange(ref _indexingPhaseStartMs, _sw.ElapsedMilliseconds);
         }
         lock (_phaseLog) { _phaseLog.Add((phase, _sw.ElapsedMilliseconds)); } // x5ls.1.2
+        PhaseChangedForTelemetry?.Invoke();
     }
 
     // x5ls.1.2: phase-transition log for the telemetry API's index.build.completed
@@ -82,6 +87,12 @@ public sealed class BuildProgress
 
     public void SetFilesTotal(int total) => _filesTotal = total;
     public void AddFileIndexed() => Interlocked.Increment(ref _filesIndexed);
+    public void AddFileIndexed(long bytesRead, int symbolsWritten)
+    {
+        Interlocked.Add(ref _bytesRead, Math.Max(0, bytesRead));
+        Interlocked.Add(ref _symbolsWritten, Math.Max(0, symbolsWritten));
+        Interlocked.Increment(ref _filesIndexed);
+    }
 
     /// <summary>efa: a source file the build could NOT read (transient IO / access denied) — it is
     /// absent from the index until a delta refresh retries it, and pretending the build was
@@ -120,6 +131,7 @@ public sealed class BuildProgress
             }
         }
         return new IndexProgress(_phase, indexed, total < 0 ? null : total, elapsed,
-            Volatile.Read(ref _filesSkipped), _projectsFailed, rate, remaining);
+            Volatile.Read(ref _filesSkipped), _projectsFailed, rate, remaining,
+            Interlocked.Read(ref _symbolsWritten), Interlocked.Read(ref _bytesRead));
     }
 }

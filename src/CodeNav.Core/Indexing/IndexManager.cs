@@ -160,6 +160,7 @@ public sealed class IndexManager : IDisposable
     internal Action? FullRebuildWaitingForReviewSnapshotsForTest { get; set; }
     internal Action<int>? FullRebuildDestructiveBoundaryForTest { get; set; }
     internal Action? FullRebuildCompletedForTest { get; set; }
+    internal Action? FullRebuildAfterTelemetryStartedForTest { get; set; }
     internal Action? RefreshRequestDequeuedForTest { get; set; }
     internal Action? RefreshRequestPassedStartupBarrierForTest { get; set; }
     internal Func<string, string, int, GitInfo.WorkspaceFileReadResult>?
@@ -181,6 +182,7 @@ public sealed class IndexManager : IDisposable
     private int _activeReviewSnapshots;
     private readonly object _resourceReleaseLock = new();
     private bool _ownedResourcesReleased;
+    private int _serverInfoEmitted;
 
     public IndexManager(string workspaceRoot, string? dbPath = null, Action<string>? log = null,
         string? telemetryPipeName = null)
@@ -274,9 +276,23 @@ public sealed class IndexManager : IDisposable
         string reason, BuildProgress progress)
     {
         string buildId = Guid.NewGuid().ToString();
+        EmitBuildProgressJsonl(buildId, reason, "started", progress);
         TelemetryIpc.Emit("index.build.started",
             ids => new { buildId, indexId = ids.IndexId, reason, phase = "scanning" },
             lifecycle: true);
+        long lastJsonlMs = 0;
+        string lastJsonlPhase = "scanning";
+        object jsonlGate = new();
+        progress.PhaseChangedForTelemetry = () =>
+        {
+            lock (jsonlGate)
+            {
+                IndexProgress current = progress.Snapshot();
+                lastJsonlPhase = current.Phase;
+                lastJsonlMs = current.ElapsedMs;
+                EmitBuildProgressJsonl(buildId, reason, "running", progress);
+            }
+        };
         var timer = new System.Threading.Timer(timerState =>
         {
             try
@@ -286,6 +302,16 @@ public sealed class IndexManager : IDisposable
                 // Captured BEFORE Snapshot (review B-r3 note): keeps phaseElapsedMs ≤ elapsedMs.
                 var (phase, phaseElapsedMs) = progress.CurrentPhase();
                 var s = progress.Snapshot();
+                lock (jsonlGate)
+                {
+                    if (!string.Equals(phase, lastJsonlPhase, StringComparison.Ordinal)
+                        || s.ElapsedMs - lastJsonlMs >= 1000)
+                    {
+                        lastJsonlPhase = phase;
+                        lastJsonlMs = s.ElapsedMs;
+                        EmitBuildProgressJsonl(buildId, reason, "running", progress);
+                    }
+                }
                 _ = TryGetSafeDatabaseStatus(out _, out long dbBytes);
                 TelemetryIpc.Emit("index.build.progress", ids => new
                 {
@@ -308,6 +334,45 @@ public sealed class IndexManager : IDisposable
         return (buildId, timer);
     }
 
+    private void EmitBuildProgressJsonl(
+        string buildId,
+        string reason,
+        string state,
+        BuildProgress progress,
+        string? errorCode = null)
+    {
+        try
+        {
+            var (phase, phaseElapsedMs) = progress.CurrentPhase();
+            IndexProgress snapshot = progress.Snapshot();
+            Telemetry.Emit(new
+            {
+                e = "buildProgress",
+                ts = DateTimeOffset.UtcNow,
+                buildId,
+                state,
+                reason,
+                accessMode = _accessMode,
+                phase,
+                phaseElapsedMs,
+                elapsedMs = snapshot.ElapsedMs,
+                filesDone = snapshot.FilesIndexed,
+                filesTotal = snapshot.FilesTotal,
+                filesSkipped = snapshot.FilesSkipped,
+                projectsFailed = snapshot.ProjectsFailed,
+                symbolsWritten = snapshot.SymbolsWritten,
+                bytesRead = snapshot.BytesRead,
+                filesPerSecond = snapshot.FilesPerSecond,
+                estimatedRemainingMs = snapshot.EstimatedRemainingMs,
+                errorCode
+            });
+        }
+        catch
+        {
+            // Observability is fail-open: telemetry must never change build behavior.
+        }
+    }
+
     /// <summary>Review B1: stops the progress timer AND waits out any in-flight tick before
     /// the terminal frame is emitted — otherwise progress frames with the same buildId land
     /// at higher sequences than completed/failed and a portal's latest-frame state regresses
@@ -324,7 +389,11 @@ public sealed class IndexManager : IDisposable
         catch { /* drain is best-effort; a stuck tick must never hurt the build path */ }
     }
 
-    private void EmitBuildCompleted(string buildId, BuildProgress progress, long durationMs)
+    private void EmitBuildCompleted(
+        string buildId,
+        string reason,
+        BuildProgress progress,
+        long durationMs)
     {
         var s = progress.Snapshot();
         var phases = progress.PhaseDurations()
@@ -341,9 +410,13 @@ public sealed class IndexManager : IDisposable
             databaseBytes = dbBytes > 0 ? dbBytes : (long?)null,
             phaseDurations = phases,
         }, lifecycle: true);
+        EmitBuildProgressJsonl(buildId, reason, "completed", progress);
     }
 
-    private void EmitBuildFailed(string buildId, BuildProgress progress)
+    private void EmitBuildFailed(
+        string buildId,
+        string reason,
+        BuildProgress progress)
     {
         string failedPhase = progress.Snapshot().Phase;
         TelemetryIpc.Emit("index.build.failed", ids => new
@@ -354,6 +427,25 @@ public sealed class IndexManager : IDisposable
             errorCode = "index_build_failed", // stable code; raw exception text never crosses IPC
             retryable = true,                 // refresh_index force:'full' remains the remedy
         }, lifecycle: true);
+        EmitBuildProgressJsonl(
+            buildId,
+            reason,
+            "failed",
+            progress,
+            errorCode: "index_build_failed");
+    }
+
+    private void EmitBuildCancelled(
+        string buildId,
+        string reason,
+        BuildProgress progress)
+    {
+        EmitBuildProgressJsonl(
+            buildId,
+            reason,
+            "cancelled",
+            progress,
+            errorCode: "index_build_cancelled");
     }
 
     /// <summary>One v1 refresh outcome frame (completed/failed). Refresh batches are debounced
@@ -381,6 +473,30 @@ public sealed class IndexManager : IDisposable
     /// ring). Consumers: SemanticService per-operation records today; the x5ls portal's IPC
     /// snapshots later. Never blocks or throws into request paths.</summary>
     internal Diagnostics.TelemetryLog Telemetry { get; }
+
+    public void EmitServerInfo(Diagnostics.TelemetryServerInfo info)
+    {
+        if (Interlocked.Exchange(ref _serverInfoEmitted, 1) != 0)
+            return;
+        string[] featureIds = info.FeatureIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .Take(128)
+            .ToArray();
+        Telemetry.Emit(new
+        {
+            e = "serverInfo",
+            ts = DateTimeOffset.UtcNow,
+            version = info.Version,
+            buildStamp = info.BuildStamp,
+            schemaVersion = info.SchemaVersion,
+            featureIds,
+            featureCount = info.FeatureIds.Count,
+            platform = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+            accessMode = _accessMode,
+            processId = Environment.ProcessId
+        });
+    }
 
     public string WorkspaceRoot => _workspaceRoot;
     public string DbPath => _dbPath;
@@ -644,6 +760,7 @@ public sealed class IndexManager : IDisposable
                                 BeginBuildTelemetry(buildReason, startupBuildProgress);
                             try
                             {
+                                FullRebuildAfterTelemetryStartedForTest?.Invoke();
                                 var buildResult = IndexBuilder.BuildOwned(_workspaceRoot,
                                     _databaseIoPath, _log, startupBuildProgress);
                                 _log($"Index built: {buildResult.CsFiles} C# + {buildResult.FsFiles} F# files, " +
@@ -652,13 +769,19 @@ public sealed class IndexManager : IDisposable
                                 // Review B1: drain the ticker BEFORE the terminal frame — a
                                 // progress frame sequenced after completed regresses portals.
                                 DrainDisposeBuildTimer(progressTimer);
-                                EmitBuildCompleted(buildId, startupBuildProgress,
+                                EmitBuildCompleted(buildId, buildReason, startupBuildProgress,
                                     (long)buildResult.TotalTime.TotalMilliseconds);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                DrainDisposeBuildTimer(progressTimer);
+                                EmitBuildCancelled(buildId, buildReason, startupBuildProgress);
+                                throw;
                             }
                             catch
                             {
                                 DrainDisposeBuildTimer(progressTimer);
-                                EmitBuildFailed(buildId, startupBuildProgress);
+                                EmitBuildFailed(buildId, buildReason, startupBuildProgress);
                                 throw; // the startup catch owns state/error, unchanged
                             }
                             finally
@@ -1377,6 +1500,7 @@ public sealed class IndexManager : IDisposable
         string? buildId = null;
         System.Threading.Timer? progressTimer = null;
         bool buildCompleted = false;
+        bool buildCancelled = false;
         try
         {
             _store?.Dispose();
@@ -1413,12 +1537,17 @@ public sealed class IndexManager : IDisposable
             rebuildProgress = new BuildProgress();
             _buildProgress = rebuildProgress;
             (buildId, progressTimer) = BeginBuildTelemetry("explicit_full", rebuildProgress); // x5ls.1.2
+            FullRebuildAfterTelemetryStartedForTest?.Invoke();
             var result = IndexBuilder.BuildOwned(_workspaceRoot, _databaseIoPath, _log, rebuildProgress);
             _log($"Full rebuild done: {result.CsFiles} C# + {result.FsFiles} F# files, " +
                  $"{result.Symbols} symbols in {result.TotalTime.TotalSeconds:F0}s");
             // Review B1: drain the ticker BEFORE the terminal frame (no progress after completed).
             DrainDisposeBuildTimer(progressTimer);
-            EmitBuildCompleted(buildId, rebuildProgress, (long)result.TotalTime.TotalMilliseconds);
+            EmitBuildCompleted(
+                buildId,
+                "explicit_full",
+                rebuildProgress,
+                (long)result.TotalTime.TotalMilliseconds);
             buildCompleted = true;
 
             var store = new IndexStore(_databaseIoPath, createNew: false);
@@ -1462,6 +1591,13 @@ public sealed class IndexManager : IDisposable
                 }
             }
         }
+        catch (OperationCanceledException ex)
+        {
+            buildCancelled = true;
+            _error = "full rebuild cancelled";
+            _state = "failed";
+            _log($"Full rebuild cancelled: {ex.Message}");
+        }
         catch (Exception ex)
         {
             _error = $"{ex.GetType().Name} during full rebuild (see server log)";
@@ -1475,7 +1611,13 @@ public sealed class IndexManager : IDisposable
             // only a build that never emitted completed reports failed. A TEARDOWN failure
             // (buildId null) emits nothing: the build lifecycle never started (review B5);
             // state 'failed' surfaces via instance.snapshot.
-            if (buildId is not null && !buildCompleted) EmitBuildFailed(buildId, rebuildProgress!);
+            if (buildId is not null && !buildCompleted)
+            {
+                if (buildCancelled)
+                    EmitBuildCancelled(buildId, "explicit_full", rebuildProgress!);
+                else
+                    EmitBuildFailed(buildId, "explicit_full", rebuildProgress!);
+            }
             _buildProgress = null;
         }
     }

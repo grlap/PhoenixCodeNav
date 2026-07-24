@@ -9,10 +9,11 @@ internal static class PortalFixtures
         return new
         {
             apiVersion = 1,
+            dataSource = "fixture",
             portal = new
             {
                 sessionId = "portal-preview-session",
-                version = "0.1.0-preview",
+                version = PortalDataSource.PortalVersion,
                 startedAtUtc = FixtureNow.AddMinutes(-18),
                 nowUtc = FixtureNow
             },
@@ -64,6 +65,7 @@ internal static class PortalFixtures
                     currentBuild = new
                     {
                         buildId = "build-1842",
+                        live = true,
                         phase = "indexing_files",
                         phaseLabel = "Indexing source",
                         startedAtUtc = FixtureNow.AddSeconds(-14.2),
@@ -189,6 +191,7 @@ internal static class PortalFixtures
                 state = "running",
                 outcome = "running",
                 confidence = "pending",
+                partial = false,
                 coldState = "warming",
                 reason = "cluster_cold_load",
                 summary = "Loading the owner cluster",
@@ -205,8 +208,9 @@ internal static class PortalFixtures
                 startedAtUtc = FixtureNow.AddSeconds(-7),
                 durationMs = 184,
                 state = "complete",
-                outcome = "success",
+                outcome = "completed",
                 confidence = "exact",
+                partial = false,
                 coldState = "warm",
                 reason = (string?)null,
                 summary = "Compiler-exact · 14 references",
@@ -223,8 +227,9 @@ internal static class PortalFixtures
                 startedAtUtc = FixtureNow.AddSeconds(-18),
                 durationMs = 31,
                 state = "complete",
-                outcome = "success",
+                outcome = "completed",
                 confidence = "indexed",
+                partial = false,
                 coldState = "not_applicable",
                 reason = (string?)null,
                 summary = "Indexed · 8 matches",
@@ -242,7 +247,8 @@ internal static class PortalFixtures
                 durationMs = 4_000,
                 state = "complete",
                 outcome = "degraded",
-                confidence = "partial",
+                confidence = "unknown",
+                partial = true,
                 coldState = "cold",
                 reason = "semantic_timeout",
                 summary = "Deadline reached · lower bound retained",
@@ -259,8 +265,9 @@ internal static class PortalFixtures
                 startedAtUtc = FixtureNow.AddMinutes(-1.4),
                 durationMs = 242,
                 state = "complete",
-                outcome = "success",
+                outcome = "completed",
                 confidence = "exact",
+                partial = false,
                 coldState = "warm",
                 reason = (string?)null,
                 summary = "Compiler-exact · 6 callers",
@@ -275,7 +282,10 @@ internal static class PortalFixtures
             nextCursor = (string?)null,
             returned = items.Length,
             total = items.Length,
+            totalIsLowerBound = false,
             truncated = false,
+            byteBudgetHit = false,
+            responseByteLimit = 512 * 1024,
             dataComplete = true
         };
     }
@@ -288,6 +298,7 @@ internal static class PortalFixtures
             {
                 eventId = "event-012",
                 workspaceId = "ws-phoenix",
+                indexId = "idx-phoenix",
                 instanceId = "instance-writer",
                 timestampUtc = FixtureNow.AddSeconds(-42),
                 severity = "warning",
@@ -300,6 +311,7 @@ internal static class PortalFixtures
             {
                 eventId = "event-011",
                 workspaceId = "ws-phoenix",
+                indexId = "idx-phoenix",
                 instanceId = "instance-writer",
                 timestampUtc = FixtureNow.AddMinutes(-3.2),
                 severity = "info",
@@ -316,7 +328,10 @@ internal static class PortalFixtures
             nextCursor = (string?)null,
             returned = items.Length,
             total = items.Length,
+            totalIsLowerBound = false,
             truncated = false,
+            byteBudgetHit = false,
+            responseByteLimit = 512 * 1024,
             dataComplete = true
         };
     }

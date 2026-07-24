@@ -267,6 +267,21 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("semantic-byte-governed-retention", ids);
         Assert.Contains("references-process-cpu-attribution", ids);
         Assert.Contains("index-raw-ordinal-symbol-batching", ids);
+        Assert.Contains("operations-portal-jsonl-readonly", ids);
+        Assert.Contains("operations-portal-live-build-status", ids);
+        Assert.Equal(
+            1,
+            ids.Count(id => id == "operations-portal-jsonl-readonly"));
+        Assert.Equal(
+            1,
+            ids.Count(id => id == "operations-portal-live-build-status"));
+        string portalReadOnly = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "operations-portal-jsonl-readonly")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("without opening SQLite", portalReadOnly);
         Assert.Contains("search-symbol-malformed-query", ids);
         Assert.Contains("index-follower-liveness-fail-closed", ids);
         string semanticBudget = Assert.Single(json.GetProperty("features").EnumerateArray(),

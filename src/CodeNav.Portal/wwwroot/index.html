@@ -37,6 +37,7 @@
         <a class="primary-nav__item is-active" href="#overview">Overview</a>
         <a class="primary-nav__item" href="#activity">Activity</a>
         <a class="primary-nav__item" href="#instances">Instances</a>
+        <a class="primary-nav__item" href="#status">Status</a>
       </nav>
 
       <div class="topbar__actions">
@@ -140,6 +141,14 @@
             <div>
               <dt>Skipped</dt>
               <dd><strong id="build-skipped">—</strong><small>files</small></dd>
+            </div>
+            <div>
+              <dt>Symbols</dt>
+              <dd><strong id="build-symbols">—</strong><small>written</small></dd>
+            </div>
+            <div>
+              <dt>Input</dt>
+              <dd><strong id="build-bytes">—</strong><small>read</small></dd>
             </div>
           </dl>
         </article>
@@ -250,11 +259,33 @@
           <div class="instance-list" id="instance-list"></div>
         </aside>
       </section>
+
+      <section class="operations-layout" id="status" aria-label="Server status and capabilities">
+        <article class="activity-panel" data-reveal>
+          <header class="section-head">
+            <div>
+              <span class="panel-label">Server status</span>
+              <h2>Know exactly what is running.</h2>
+            </div>
+          </header>
+          <div class="instance-list" id="server-status-list"></div>
+        </article>
+        <aside class="instances-panel" data-reveal>
+          <header class="section-head section-head--compact">
+            <div>
+              <span class="panel-label">Capabilities</span>
+              <h2>Deployed feature IDs.</h2>
+            </div>
+            <span class="instances-panel__count" id="capability-count">—</span>
+          </header>
+          <div class="instance-list" id="capability-list"></div>
+        </aside>
+      </section>
     </main>
 
     <footer class="site-footer">
       <span>Phoenix Operations <b>preview</b></span>
-      <span>Local · read-only · fixture mode</span>
+      <span id="data-mode">Local · read-only · fixture mode</span>
       <span id="portal-version">v—</span>
     </footer>
   </div>

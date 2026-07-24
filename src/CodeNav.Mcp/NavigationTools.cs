@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using ModelContextProtocol.Server;
@@ -39,6 +40,19 @@ public sealed partial class NavigationTools
     internal static string ServerCapabilitiesForTest(IndexHealth health,
         bool frameworkRefsAvailable = true) =>
         ServerCapabilitiesJson(health, frameworkRefsAvailable);
+
+    internal static string[] CapabilityFeatureIds(IndexHealth health)
+    {
+        using JsonDocument document = JsonDocument.Parse(
+            ServerCapabilitiesJson(health, frameworkRefsAvailable: true));
+        return document.RootElement
+            .GetProperty("features")
+            .EnumerateArray()
+            .Select(feature => feature.GetProperty("id").GetString())
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id!)
+            .ToArray();
+    }
 
     private static string ServerCapabilitiesJson(IndexHealth h, bool frameworkRefsAvailable)
     {
@@ -121,6 +135,8 @@ public sealed partial class NavigationTools
                 new { id = "semantic-byte-governed-retention", summary = "v0.12.22 semantic project retention is governed by accounted input bytes and managed-heap pressure with hysteresis and strict safe-project LRU; multi-phase operations defer pressure eviction until the complete scan set is protected, and load telemetry exposes resident/eviction state" },
                 new { id = "references-process-cpu-attribution", summary = "v0.12.23 references semanticOp telemetry publishes process-wide CPU for cluster loading and compilation preparation alongside processor/lane capacity, while PhoenixCodeNav-Semantic EventPipe phase markers share the record correlation id for trace attribution" },
                 new { id = "index-raw-ordinal-symbol-batching", summary = "v0.12.24 full builds and delta refreshes persist C# symbols through cached exact-size 1..32 raw SQLite statements with ordinal binding, preserving stored output while removing managed parameter-name lookup and allocation" },
+                new { id = "operations-portal-jsonl-readonly", summary = "v0.12.26 the loopback Operations Portal tails bounded workspace JSONL and observes anchored index-file presence and size without opening SQLite; source gaps, retention, paging, and response budgets remain explicit" },
+                new { id = "operations-portal-live-build-status", summary = "v0.12.26 full builds emit bounded JSONL lifecycle progress plus one server identity/capability record per process so the local portal can show live phase, file, symbol, byte, version, schema, platform, and access-mode status" },
                 new { id = "search-symbol-malformed-query", summary = "v0.12.10 search_symbol rejects ToolSearch-style select: routing prefixes with malformed_query instead of returning a clean empty result; valid C# qualification and generic punctuation remain searchable" },
                 new { id = "index-follower-liveness-fail-closed", summary = "v0.12.11 follower liveness distinguishes mutex contention from coordination failure; only contention proves a live writer, while an unverified probe publishes an explicit unavailable state" },
                 new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry the same serialized request after bounded 100/250/1000 ms delays" },

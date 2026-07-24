@@ -26,6 +26,8 @@ const elements = {
   buildElapsed: document.querySelector("#build-elapsed"),
   buildEta: document.querySelector("#build-eta"),
   buildSkipped: document.querySelector("#build-skipped"),
+  buildSymbols: document.querySelector("#build-symbols"),
+  buildBytes: document.querySelector("#build-bytes"),
   queryCount: document.querySelector("#query-count"),
   queryP95: document.querySelector("#query-p95"),
   semanticScore: document.querySelector("#semantic-score"),
@@ -39,6 +41,10 @@ const elements = {
   instancesPanelCount: document.querySelector("#instances-panel-count"),
   instanceIndexId: document.querySelector("#instance-index-id"),
   instanceList: document.querySelector("#instance-list"),
+  serverStatusList: document.querySelector("#server-status-list"),
+  capabilityCount: document.querySelector("#capability-count"),
+  capabilityList: document.querySelector("#capability-list"),
+  dataMode: document.querySelector("#data-mode"),
   portalVersion: document.querySelector("#portal-version"),
   dialog: document.querySelector("#operation-dialog"),
   dialogTitle: document.querySelector("#dialog-title"),
@@ -71,6 +77,18 @@ async function initialize() {
   bindNavigation();
   observeReveals();
 
+  await refreshData();
+  renderWorkspacePicker();
+  elements.workspaceSelect.addEventListener("change", () => {
+    state.selectedWorkspaceId = elements.workspaceSelect.value;
+    renderSelectedWorkspace();
+  });
+  elements.body.dataset.connection = "ready";
+  window.setInterval(() => refreshData().catch(showRefreshFailure), 2000);
+  window.setTimeout(() => revealVisibleElements(), 60);
+}
+
+async function refreshData() {
   const [bootstrap, operations, events] = await Promise.all([
     fetchJson("/api/v1/bootstrap"),
     fetchJson("/api/v1/operations"),
@@ -80,16 +98,34 @@ async function initialize() {
   state.bootstrap = bootstrap;
   state.operations = operations.items ?? [];
   state.events = events.items ?? [];
-  state.selectedWorkspaceId = bootstrap.workspaces?.[0]?.workspaceId ?? null;
-
-  renderWorkspacePicker();
-  renderSelectedWorkspace();
-
-  elements.portalVersion.textContent = `v${bootstrap.portal.version}`;
-  elements.connectionLabel.textContent = "Live";
   elements.body.dataset.connection = "ready";
+  if (!bootstrap.workspaces?.some((item) => item.workspaceId === state.selectedWorkspaceId))
+    state.selectedWorkspaceId = bootstrap.workspaces?.[0]?.workspaceId ?? null;
 
-  window.setTimeout(() => revealVisibleElements(), 60);
+  if (elements.workspaceSelect.options.length)
+    renderWorkspacePicker();
+  renderSelectedWorkspace();
+  elements.portalVersion.textContent = `v${bootstrap.portal.version}`;
+  elements.connectionLabel.textContent = bootstrap.dataSource === "live" ? "Live" : "Fixture";
+  const lagMs = bootstrap.telemetry?.lagMs;
+  const completeness = bootstrap.dataComplete ? "complete" : "partial";
+  elements.dataMode.textContent = bootstrap.dataSource === "live"
+    ? `Local · read-only · live · ${formatLag(lagMs)} lag · ${completeness}`
+    : "Local · read-only · fixture mode";
+}
+
+function showRefreshFailure(error) {
+  console.error("Portal refresh failed", error);
+  elements.body.dataset.connection = "error";
+  elements.connectionLabel.textContent = "Stale";
+}
+
+function formatLag(milliseconds) {
+  if (typeof milliseconds !== "number" || !Number.isFinite(milliseconds))
+    return "unknown";
+  if (milliseconds < 1000)
+    return `${Math.round(milliseconds)}ms`;
+  return `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)}s`;
 }
 
 function readSessionToken() {
@@ -128,10 +164,6 @@ function renderWorkspacePicker() {
   }
 
   elements.workspaceSelect.value = state.selectedWorkspaceId;
-  elements.workspaceSelect.addEventListener("change", () => {
-    state.selectedWorkspaceId = elements.workspaceSelect.value;
-    renderSelectedWorkspace();
-  });
 }
 
 function renderSelectedWorkspace() {
@@ -144,35 +176,72 @@ function renderSelectedWorkspace() {
   const operations = state.operations.filter((item) => item.workspaceId === workspace.workspaceId);
   const dataComplete = Boolean(state.bootstrap.dataComplete);
   const build = index?.currentBuild ?? null;
-  const workspaceState = build ? "indexing" : workspace.state;
+  const buildIsLive = build?.live === true;
+  const indexState = index?.state ?? workspace.state ?? "unknown";
+  const workspaceState = build
+    ? buildIsLive ? "indexing" : "degraded"
+    : indexState;
 
   elements.body.dataset.workspaceState = workspaceState;
   elements.workspaceState.textContent = workspaceState.toUpperCase();
   elements.workspaceSummary.textContent = build
-    ? `${workspace.name} is moving through ${formatToken(build.phase)}. The shared index is live and ${instances.length} agents remain connected.`
-    : `${workspace.name} is current and ready. The index is watching for changes and semantic context is available on demand.`;
+    ? buildIsLive
+      ? `${workspace.name} is moving through ${formatToken(build.phase)}. The shared index build is live and ${instances.length} recent Phoenix instance${instances.length === 1 ? " is" : "s are"} visible.`
+      : `${workspace.name} last reported ${formatToken(build.phase)}, but its build process is no longer running. Progress is stalled until fresh telemetry arrives.`
+    : index?.state === "ready"
+      ? `${workspace.name} has a committed index ready for queries. ${instances.length} recent Phoenix instance${instances.length === 1 ? "" : "s"} are visible.`
+      : `${workspace.name} reports ${formatToken(index?.state ?? "unknown")}. Waiting for bounded build or server telemetry.`;
   elements.instanceCount.textContent = String(instances.length);
   elements.semanticState.textContent = summarizeSemanticState(instances);
   elements.dataState.textContent = dataComplete ? "complete" : "partial";
-  elements.orbitState.textContent = build ? "building" : "ready";
+  elements.orbitState.textContent = build
+    ? buildIsLive ? "building" : "stalled"
+    : indexState === "ready" ? "ready" : formatToken(indexState);
 
   renderBuild(index, build);
   renderSignals(index, instances, operations, dataComplete);
   renderActivity(operations);
   renderInstances(index, instances);
+  renderStatus(instances);
 }
 
 function renderBuild(index, build) {
-  const phases = build?.phases ?? [
-    { id: "scanning", label: "Scan", state: "complete", durationMs: null },
-    { id: "parsing_projects", label: "Projects", state: "complete", durationMs: null },
-    { id: "indexing_files", label: "Symbols", state: "complete", durationMs: null },
-    { id: "finalizing", label: "Publish", state: "complete", durationMs: null }
-  ];
-  const view = createBuildViewModel(build);
+  const phaseIds = ["scanning", "parsing_projects", "indexing_files", "finalizing"];
+  const activeIndex = build ? phaseIds.indexOf(build.phase) : phaseIds.length;
+  const indexIsReady = index?.state === "ready";
+  const buildIsLive = build?.live === true;
+  const phases = build?.phases ?? phaseIds.map((id, index) => ({
+    id,
+    label: id === "parsing_projects"
+      ? "Projects"
+      : id === "indexing_files" ? "Symbols" : id === "finalizing" ? "Publish" : "Scan",
+    state: !build
+      ? indexIsReady ? "complete" : "pending"
+      : index < activeIndex
+        ? "complete"
+      : index === activeIndex ? "active" : "pending",
+    durationMs: index === activeIndex ? build?.phaseElapsedMs ?? null : null
+  }));
+  const view = build || indexIsReady
+    ? createBuildViewModel(build)
+    : createBuildViewModel({
+        progress: null,
+        filesProcessed: null,
+        filesTotal: null,
+        throughputPerSecond: null,
+        elapsedMs: null,
+        etaSeconds: null,
+        filesSkipped: null
+      });
 
-  elements.buildTitle.textContent = build?.phaseLabel ?? "Index ready";
-  elements.buildPanel.querySelector(".build-panel__live span").textContent = build ? "LIVE" : "READY";
+  elements.buildTitle.textContent = build
+    ? buildIsLive
+      ? build.phaseLabel
+      : `Stalled · ${build.phaseLabel}`
+    : indexIsReady ? "Index ready" : "Index state unknown";
+  elements.buildPanel.querySelector(".build-panel__live span").textContent = build
+    ? buildIsLive ? "LIVE" : "STALLED"
+    : indexIsReady ? "READY" : "UNKNOWN";
   elements.phaseRail.replaceChildren(...phases.map(createPhase));
   elements.progressFiles.textContent = view.filesLabel;
   elements.progressPercent.textContent = view.progressLabel;
@@ -193,6 +262,10 @@ function renderBuild(index, build) {
   elements.buildElapsed.textContent = view.elapsedLabel;
   elements.buildEta.textContent = view.etaLabel;
   elements.buildSkipped.textContent = view.skippedLabel;
+  elements.buildSymbols.textContent = build?.symbolsWritten == null
+    ? "—"
+    : formatNumber(build.symbolsWritten);
+  elements.buildBytes.textContent = formatBytes(build?.bytesRead);
 
   if (!build) {
     elements.progressGlow.style.left = "calc(100% - 10px)";
@@ -219,20 +292,39 @@ function renderSignals(index, instances, operations, dataComplete) {
   const completed = operations.filter((item) => item.state === "complete");
   const semanticCompleted = completed.filter((item) => item.category === "semantic");
   const exact = semanticCompleted.filter((item) => item.confidence === "exact");
-  const durations = completed.map((item) => item.durationMs).sort((a, b) => a - b);
+  const durations = completed
+    .map((item) => item.durationMs)
+    .filter((value) => typeof value === "number" && Number.isFinite(value))
+    .sort((a, b) => a - b);
   const p95 = durations.length ? durations[Math.min(durations.length - 1, Math.floor(durations.length * 0.95))] : null;
   const warmCount = instances.filter((item) => item.semanticState === "warm").length;
-  const allConnected = instances.every((item) => item.connectionState === "connected");
+  const semanticState = summarizeSemanticState(instances);
+  const allConnected = instances.length > 0
+    && instances.every((item) => item.connectionState === "connected");
 
   animateNumber(elements.queryCount, operations.length);
   elements.queryP95.textContent = p95 == null ? "—" : formatDuration(p95);
   elements.semanticScore.textContent = semanticCompleted.length ? `${exact.length}/${semanticCompleted.length}` : "—";
-  elements.semanticLabel.textContent = warmCount === instances.length ? "Warm" : warmCount ? "Partially warm" : "Cold";
-  elements.semanticDetail.textContent = `${warmCount} of ${instances.length} instances have warm semantic context`;
-  elements.freshnessLabel.textContent = index?.freshness === "head" ? "HEAD" : "WORKTREE";
+  elements.semanticLabel.textContent = formatToken(semanticState);
+  elements.semanticDetail.textContent = semanticState === "warm"
+    ? `${warmCount} of ${instances.length} instances have warm semantic context`
+    : semanticState === "mixed"
+    ? `${warmCount} of ${instances.length} instances are warm; other states remain distinct`
+    : semanticState === "warming"
+    ? "A cold operation was observed; semantic context is warming"
+    : semanticState === "cold"
+    ? "Explicit current evidence reports a cold semantic context"
+    : "No current warm/cold evidence is available";
+  elements.freshnessLabel.textContent = index?.freshness === "head"
+    ? "HEAD"
+    : index?.freshness === "working_tree" ? "WORKTREE" : "UNKNOWN";
   elements.indexEpoch.textContent = index?.epoch == null ? "—" : `#${formatNumber(index.epoch)}`;
-  elements.healthLabel.textContent = allConnected && dataComplete ? "All systems nominal" : "Attention needed";
-  elements.healthDetail.textContent = allConnected
+  elements.healthLabel.textContent = allConnected && dataComplete
+    ? "All systems nominal"
+    : dataComplete ? "Committed data available" : "Telemetry is partial";
+  elements.healthDetail.textContent = instances.length === 0
+    ? "No recent Phoenix process telemetry is available"
+    : allConnected
     ? `${instances.filter((item) => item.role === "writer").length} writer · ${instances.filter((item) => item.role === "follower").length} followers`
     : "One or more instances are stale or disconnected";
 }
@@ -244,7 +336,8 @@ function renderActivity(operations) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `activity-item${operation.state === "running" ? " is-running" : ""}`;
-    button.dataset.confidence = operation.confidence;
+    const visualConfidence = operation.partial ? "partial" : operation.confidence;
+    button.dataset.confidence = visualConfidence;
     button.addEventListener("click", () => openOperation(operation));
 
     const icon = element("span", "activity-item__icon", abbreviateTool(operation.tool));
@@ -263,8 +356,8 @@ function renderActivity(operations) {
     const duration = element("span", "activity-item__duration", formatDuration(operation.durationMs));
     const confidence = element(
       "span",
-      `confidence-pill confidence-pill--${operation.confidence}`,
-      operation.confidence
+      `confidence-pill confidence-pill--${visualConfidence}`,
+      operation.partial ? `${operation.confidence} · partial` : operation.confidence
     );
 
     button.append(icon, tool, summary, duration, confidence);
@@ -286,7 +379,11 @@ function renderInstances(index, instances) {
     const item = element("article", "instance-item");
     item.dataset.role = instance.role;
 
-    const mark = element("span", "instance-item__mark", instance.role === "writer" ? "W" : "F");
+    const mark = element(
+      "span",
+      "instance-item__mark",
+      instance.role === "writer" ? "W" : instance.role === "follower" ? "F" : "?"
+    );
     const copy = element("span", "instance-item__copy");
     copy.append(
       element("strong", "", instance.displayName),
@@ -300,13 +397,62 @@ function renderInstances(index, instances) {
   }
 }
 
+function renderStatus(instances) {
+  elements.serverStatusList.replaceChildren();
+  elements.capabilityList.replaceChildren();
+  const featureIds = [...new Set(
+    instances.flatMap((instance) => instance.featureIds ?? [])
+  )].sort();
+  elements.capabilityCount.textContent = featureIds.length
+    ? String(Math.max(
+        featureIds.length,
+        ...instances.map((instance) => instance.featureCount ?? 0)
+      ))
+    : "—";
+
+  for (const instance of instances) {
+    const item = element("article", "instance-item");
+    const mark = element(
+      "span",
+      "instance-item__mark",
+      instance.role === "writer" ? "W" : instance.role === "follower" ? "F" : "?"
+    );
+    const copy = element("span", "instance-item__copy");
+    copy.append(
+      element("strong", "", `${instance.version ?? "unknown"} · ${instance.platform ?? "unknown"}`),
+      element(
+        "span",
+        "",
+        `${instance.role} · schema ${instance.schemaVersion ?? "unknown"} · ${instance.buildStamp ?? "build unknown"}`
+      )
+    );
+    item.append(mark, copy);
+    elements.serverStatusList.append(item);
+  }
+  if (!instances.length)
+    elements.serverStatusList.append(
+      element("p", "empty-state", "No serverInfo record has been observed.")
+    );
+
+  for (const featureId of featureIds)
+    elements.capabilityList.append(element("article", "instance-item", featureId));
+  if (!featureIds.length)
+    elements.capabilityList.append(
+      element("p", "empty-state", "Capability IDs are unavailable until serverInfo arrives.")
+    );
+}
+
 function openOperation(operation) {
   elements.dialogTitle.textContent = formatToken(operation.tool);
   elements.dialogContent.replaceChildren();
 
   const summary = element("section", "drawer-summary");
   summary.append(
-    element("span", "", `${operation.confidence} · ${formatDuration(operation.durationMs)}`),
+    element(
+      "span",
+      "",
+      `${operation.confidence}${operation.partial ? " · partial" : ""} · ${formatDuration(operation.durationMs)}`
+    ),
     element("p", "", operation.summary)
   );
 
@@ -314,7 +460,9 @@ function openOperation(operation) {
   const facts = [
     ["Outcome", formatToken(operation.outcome)],
     ["Cold state", formatToken(operation.coldState)],
-    ["Projects", `${operation.counts.loaded} / ${operation.counts.requested} loaded`],
+    ["Projects", operation.counts.loaded == null || operation.counts.requested == null
+      ? "Unknown"
+      : `${operation.counts.loaded} / ${operation.counts.requested} loaded`],
     ["Reason", operation.reason ? formatToken(operation.reason) : "None"]
   ];
   for (const [label, value] of facts) {
@@ -331,8 +479,10 @@ function openOperation(operation) {
     ["Graph topology", operation.timings.topologyMs],
     ["Project load", operation.timings.projectLoadMs]
   ];
-  const max = Math.max(1, ...timings.map(([, duration]) => duration));
-  for (const [label, duration] of timings) {
+  const measuredTimings = timings.filter(([, duration]) =>
+    typeof duration === "number" && Number.isFinite(duration));
+  const max = Math.max(1, ...measuredTimings.map(([, duration]) => duration));
+  for (const [label, duration] of measuredTimings) {
     const row = element("div", "waterfall__row");
     const track = element("span", "waterfall__track");
     const bar = document.createElement("i");
@@ -347,6 +497,10 @@ function openOperation(operation) {
       bar.style.width = `${Math.max(2, (duration / max) * 100)}%`;
     });
   }
+  if (!measuredTimings.length)
+    waterfall.append(
+      element("p", "empty-state", "Phase timing was not emitted for this operation.")
+    );
 
   elements.dialogContent.append(summary, grid, waterfall);
   elements.dialog.showModal();
@@ -442,9 +596,23 @@ function formatToken(value) {
 }
 
 function formatDuration(milliseconds) {
+  if (typeof milliseconds !== "number" || !Number.isFinite(milliseconds))
+    return "—";
   if (milliseconds >= 1000)
     return `${formatNumber(milliseconds / 1000, 2)}s`;
   return `${formatNumber(milliseconds)}ms`;
+}
+
+function formatBytes(bytes) {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes))
+    return "—";
+  if (bytes < 1024)
+    return `${formatNumber(bytes)} B`;
+  if (bytes < 1024 * 1024)
+    return `${formatNumber(bytes / 1024, 1)} KiB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${formatNumber(bytes / (1024 * 1024), 1)} MiB`;
+  return `${formatNumber(bytes / (1024 * 1024 * 1024), 1)} GiB`;
 }
 
 function element(tag, className, text) {

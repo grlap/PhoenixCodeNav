@@ -71,7 +71,13 @@ builder.Services
 var host = builder.Build();
 
 // Kick off index open/build in the background — never block the MCP handshake.
-host.Services.GetRequiredService<IndexManager>().Start(rebuild);
+IndexManager indexManager = host.Services.GetRequiredService<IndexManager>();
+indexManager.Start(rebuild);
+indexManager.EmitServerInfo(new CodeNav.Core.Diagnostics.TelemetryServerInfo(
+    BuildInfo.Version,
+    BuildInfo.Stamp,
+    BuildInfo.IndexSchema,
+    NavigationTools.CapabilityFeatureIds(indexManager.Health())));
 
 await host.RunAsync();
 return 0;

@@ -3,6 +3,12 @@ using System.Threading.Channels;
 
 namespace CodeNav.Core.Diagnostics;
 
+public sealed record TelemetryServerInfo(
+    string Version,
+    string BuildStamp,
+    string SchemaVersion,
+    IReadOnlyList<string> FeatureIds);
+
 /// <summary>
 /// Owns: the bounded, non-blocking, privacy-safe telemetry stream (epuc.1) — one JSONL record
 /// per semantic operation, appended by a background drainer to
@@ -17,7 +23,7 @@ namespace CodeNav.Core.Diagnostics;
 /// file is size-capped and announces its own truncation, and every I/O failure downgrades to
 /// a server-log line once.
 /// Does not own: what gets measured (SemanticService/SemanticWorkspace own their spans) or
-/// any HTTP surface (x5ls, tracked separately, not authorized).
+/// the loopback HTTP surface (x5ls; the independent portal may only consume this bounded file).
 /// </summary>
 public sealed class TelemetryLog : IDisposable
 {

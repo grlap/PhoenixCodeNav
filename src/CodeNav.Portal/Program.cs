@@ -15,7 +15,11 @@ public static class Program
             ContentRootPath = AppContext.BaseDirectory,
             WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot")
         });
+        builder.Logging.SetMinimumLevel(LogLevel.Warning);
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
+        builder.Services.AddSingleton<PortalDataSource>();
+        builder.Services.AddHostedService(services =>
+            services.GetRequiredService<PortalDataSource>());
 
         string accessToken = CreateAccessToken();
         WebApplication app = builder.Build();
@@ -85,13 +89,14 @@ public static class Program
         app.MapGet("/healthz", static () => Results.Ok(new
         {
             status = "ok",
-            portalVersion = "0.1.0-preview",
+            portalVersion = PortalDataSource.PortalVersion,
             apiVersion = 1
         }));
 
-        app.MapGet("/api/v1/bootstrap", static () => Results.Ok(PortalFixtures.Bootstrap()));
-        app.MapGet("/api/v1/operations", static () => Results.Ok(PortalFixtures.Operations()));
-        app.MapGet("/api/v1/events", static () => Results.Ok(PortalFixtures.Events()));
+        app.MapGet("/api/v1/bootstrap", static (PortalDataSource source) =>
+            Results.Ok(source.Bootstrap()));
+        app.MapGet("/api/v1/operations", Operations);
+        app.MapGet("/api/v1/events", Events);
         app.MapMethods(
             "/api/{**path}",
             ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -109,17 +114,80 @@ public static class Program
         app.Lifetime.ApplicationStarted.Register(() =>
         {
             IServer server = app.Services.GetRequiredService<IServer>();
+            PortalDataSource source =
+                app.Services.GetRequiredService<PortalDataSource>();
             string address = server.Features.Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
                 ?? "http://127.0.0.1";
             Console.WriteLine();
             Console.WriteLine("Phoenix Operations Portal");
             Console.WriteLine($"Open {address}/#token={accessToken}");
-            Console.WriteLine("Fixture mode - no Phoenix runtime dependency");
+            Console.WriteLine(
+                $"Read-only telemetry view configured for {source.WorkspaceCount} workspace(s)");
             Console.WriteLine();
         });
 
         await app.RunAsync();
     }
+
+    private static IResult Operations(HttpRequest request, PortalDataSource source)
+    {
+        if (!PortalOperationQuery.TryParse(
+                request.Query,
+                out PortalOperationQuery query,
+                out string? error))
+        {
+            return InvalidQuery(error);
+        }
+        try
+        {
+            return Results.Ok(source.Operations(query));
+        }
+        catch (PortalCursorExpiredException)
+        {
+            return CursorExpired();
+        }
+    }
+
+    private static IResult Events(HttpRequest request, PortalDataSource source)
+    {
+        if (!PortalEventQuery.TryParse(
+                request.Query,
+                out PortalEventQuery query,
+                out string? error))
+        {
+            return InvalidQuery(error);
+        }
+        try
+        {
+            return Results.Ok(source.Events(query));
+        }
+        catch (PortalCursorExpiredException)
+        {
+            return CursorExpired();
+        }
+    }
+
+    private static IResult InvalidQuery(string? message) =>
+        Results.BadRequest(new
+        {
+            error = new
+            {
+                code = "invalid_query",
+                message = message ?? "The query is invalid.",
+                retryable = false
+            }
+        });
+
+    private static IResult CursorExpired() =>
+        Results.BadRequest(new
+        {
+            error = new
+            {
+                code = "cursor_expired",
+                message = "The cursor is outside this portal session, filter, or retained window.",
+                retryable = true
+            }
+        });
 
     private static string CreateAccessToken()
     {

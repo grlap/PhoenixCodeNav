@@ -1,12 +1,47 @@
 # Feature Spec: Phoenix Operations Portal
 
-Status: **Draft / proposal — design only; implementation is not authorized**
+Status: **Active implementation — local shell and bounded JSONL live MVP**
 
 Bead: `PhoenixCodeNav-x5ls`
 
 Depends on: `PhoenixCodeNav-epuc.1` (bounded internal telemetry)
 
 Related: [`design.md`](./design.md), [`telemetry-api.md`](./telemetry-api.md)
+
+## Current implementation cut
+
+The loopback-only ASP.NET Core portal and its polished responsive shell are implemented in
+`src/CodeNav.Portal`. The first live MVP deliberately reuses Phoenix's already-shipped,
+cross-platform telemetry files instead of making local IPC a prerequisite:
+
+- recent `semanticOp`, `buildProgress`, `serverInfo`, `telemetry_dropped`, and
+  `telemetry_truncated` records are tailed from
+  `{workspace}/.codenav/telemetry/phoenix-*.jsonl` through anchored regular-file handles;
+- the existence and size of `{workspace}/.codenav/index.db` come from the same anchored authority;
+  SQLite metadata and full table counts remain unknown because the portal does not reopen a
+  workspace-controlled database pathname;
+- the website labels data lag, dropped/truncated/read-error/backlog/retention evidence, and partial
+  completeness;
+- Unix reads walk from an open workspace directory with `openat`/`O_NOFOLLOW`/`O_NONBLOCK`;
+  Windows reads reject every reparse component, require regular disk-file handles, and verify the
+  opened leaf's final path against a separately opened workspace-root handle;
+- JSONL reads are capped per line, file tail, workspace refresh, retained object count, retained
+  bytes, configured workspace list, directory-entry scan, API page, string, and serialized
+  response estimate; oversized contract strings are rejected as invalid records, and every reached
+  cap is disclosed;
+- operation/event endpoints validate their documented filters and use bounded cursors tied to the
+  portal session, endpoint, filter fingerprint, and retained-data generation;
+- the overview shows live full-build phase/file/symbol/byte progress, while Status shows the exact
+  deployed version, build stamp, schema, platform, access mode, and bounded feature IDs for each
+  recently observed local Phoenix process;
+- multiple local MCP instances and up to eight explicitly configured workspace roots are
+  discovered through the same per-process files and grouped by workspace;
+- a workspace with an observed index but no telemetry source remains live but explicitly partial;
+  the fixture remains only when a configured workspace has no live index or telemetry source.
+
+The versioned IPC design below remains the target for heartbeats, process gauges, richer lifecycle
+state, and refresh/delta progress. Full-build progress and startup capability identity no longer
+depend on that future channel.
 
 ## Decision summary
 
@@ -81,6 +116,9 @@ The website should make those answers immediate without adding risk or latency t
   semantic-resolution behavior.
 - Increasing query deadlines or prewarming the whole repository.
 - Making the portal required for MCP startup or correct operation.
+- Fleet aggregation, fleet retention, or a cross-developer privacy/tenancy design.
+- Central deployment, SSO, organization-wide authorization, or a shared hosted service.
+- Cross-machine discovery, transport, aggregation, or control; the MVP is per-user and local.
 
 ## Primary user journeys
 
@@ -434,9 +472,10 @@ The portal must not become the new reason Phoenix is slow.
 
 ## Frontend implementation direction
 
-The Portal project owns the local IPC broker, normalized retention/metrics model, read-only HTTP
-and SSE API, and all browser UI. The Phoenix producer project owns no web code. Portal development
-uses the frozen telemetry contract fixtures and therefore does not wait for live producer work.
+The Portal project owns normalized retention, read-only HTTP APIs, and all browser UI. The Phoenix
+producer project owns no web code. The current MVP consumes bounded JSONL and observes only
+anchored `index.db` identity/size; the future IPC broker remains isolated behind the same normalized
+portal models.
 
 Recommended stack for a polished but maintainable UI:
 
@@ -515,9 +554,6 @@ quality before the implementation Bead commits to one.
 
 ## Delivery sequence
 
-No implementation begins until this feature spec and the telemetry API contract are reviewed and
-approved.
-
 1. **Freeze the shared contract** — review `telemetry-api.md`, schemas, bounds, privacy rules, and
    canonical fixtures.
 2. Work in parallel:
@@ -525,7 +561,8 @@ approved.
      structured-event instrumentation plus the bounded local-IPC publisher.
    - **Portal project** — fixture-backed broker, grouping/retention, HTTP/SSE API, Instances,
      Overview, Index, Queries, Logs, Metrics, animation, and accessibility.
-3. **Integrate** — run the live producer against the portal and verify the same models as fixtures.
+3. **Integrate** — first tail the existing cross-platform JSONL and safely observe index presence;
+   add IPC only for data that those sources demonstrably cannot provide.
 4. **Harden** — multi-process lifecycle, privacy/security, load, browser performance, and visual
    regression coverage.
 

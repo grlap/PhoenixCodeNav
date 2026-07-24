@@ -1,10 +1,50 @@
 # Semantic Operation Telemetry (epuc.1, epuc.3, epuc.4, epuc.5, epuc.10)
 
-Beads: `PhoenixCodeNav-epuc.1`, `PhoenixCodeNav-epuc.3`, `PhoenixCodeNav-epuc.4`, `PhoenixCodeNav-epuc.5`, `PhoenixCodeNav-epuc.10` · Consumed by: [`../internal-operations-portal.md`](../internal-operations-portal.md) (x5ls, design-frozen)
+Beads: `PhoenixCodeNav-epuc.1`, `PhoenixCodeNav-epuc.3`, `PhoenixCodeNav-epuc.4`, `PhoenixCodeNav-epuc.5`, `PhoenixCodeNav-epuc.10` · Consumed live by: [`../internal-operations-portal.md`](../internal-operations-portal.md)
 
 Phoenix writes one JSONL record per semantic operation to a bounded, privacy-safe,
-per-process file. This is the data layer the operations portal renders later; it is useful
-today by reading the file directly.
+per-process file. This is the live semantic-operations data layer consumed by the local Operations
+Portal and remains useful directly.
+
+Since v0.12.26, that independent loopback portal reads telemetry through anchored no-follow
+regular-file handles and reports only an equally anchored `index.db` file's presence and size.
+It does not open SQLite by workspace pathname, load Core/MCP implementation assemblies, follow
+workspace reparse points, scan index tables, or mutate the workspace. Per-line, per-refresh,
+retained-object/byte, cursor-page, string, source-discovery, and response limits remain observable
+through the portal's completeness metadata.
+
+The same bounded file also carries two operational record types:
+
+- `serverInfo`, emitted exactly once per MCP process startup, identifies the Phoenix version,
+  build stamp, index schema, bounded feature-ID list, platform, process, and writer/follower mode;
+- `buildProgress`, emitted for full cold/recovery/explicit rebuilds at start, every real phase
+  transition, approximately once per second during long phases, and once at terminal
+  `completed`, `failed`, or `cancelled`. It reports only bounded counters: build identity,
+  reason, phase, phase/build elapsed time, files done/total, skipped/failed counts, symbols
+  written, bytes read, measured file rate, and measured ETA.
+
+Neither record includes paths, source text, symbols, queries, or prompts. Delta-refresh progress
+remains outside this JSONL MVP.
+
+## Record: `serverInfo`
+
+```json
+{"e":"serverInfo","ts":"2026-07-24T10:00:00.000Z","version":"0.12.26",
+ "buildStamp":"0.12.26+abc123","schemaVersion":"18",
+ "featureIds":["operations-portal-jsonl-readonly","operations-portal-live-build-status"],
+ "featureCount":104,"platform":"Microsoft Windows 11","accessMode":"writer","processId":14832}
+```
+
+## Record: `buildProgress`
+
+```json
+{"e":"buildProgress","ts":"2026-07-24T10:00:04.000Z","buildId":"...",
+ "state":"running","reason":"startup_missing","accessMode":"writer",
+ "phase":"indexing_files","phaseElapsedMs":2400,"elapsedMs":4300,
+ "filesDone":18432,"filesTotal":24108,"filesSkipped":4,"projectsFailed":0,
+ "symbolsWritten":592104,"bytesRead":734003200,"filesPerSecond":1296.0,
+ "estimatedRemainingMs":4400}
+```
 
 ## Where
 
@@ -245,6 +285,6 @@ references query-stage wire-shape test, and the planning canaries in
 - Emission never blocks or throws into a request path (bounded channel, drop-oldest,
   disclosed in-band; I/O failure disables the file quietly and logs once).
 - Bounded everywhere: 1024-record queue, 256-record in-memory ring
-  (`TelemetryLog.Snapshot()` — the portal's future IPC source), 16 MiB file
+  (`TelemetryLog.Snapshot()` — available to a future IPC expansion), 16 MiB file
   (pinned by `Batch51TelemetryTests.FileCapTruncatesHonestlyWhileRingKeepsRolling`).
 - One `TelemetryLog` per `IndexManager`; disposed with it (2 s flush cap).
