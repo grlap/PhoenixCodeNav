@@ -88,6 +88,21 @@ public class Batch65RawSymbolBatchingTests
                 Assert.Equal("N", row.GetString(0));
                 Assert.Equal("D61", row.GetString(1));
             }
+
+            using (SqliteCommand unicode = reader.CreateCommand())
+            {
+                unicode.CommandText = """
+                    SELECT ns, container, signature, declaration_key
+                    FROM symbols
+                    WHERE name = '方法_測試'
+                    """;
+                using SqliteDataReader row = unicode.ExecuteReader();
+                Assert.True(row.Read());
+                Assert.Equal("命名空間", row.GetString(0));
+                Assert.Equal("Root_65", row.GetString(1));
+                Assert.Equal("void 方法_測試(字串 參數 = \"🧭\")", row.GetString(2));
+                Assert.Equal("宣告𐐀", row.GetString(3));
+            }
         }
         finally
         {
@@ -155,6 +170,76 @@ public class Batch65RawSymbolBatchingTests
         }
     }
 
+    [Fact]
+    public void RawBatchesKeepManagedAllocationBelowPerRowParameterChurn()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-65-raw-allocation").FullName;
+        try
+        {
+            string dbPath = Path.Combine(root, ".codenav", "index.db");
+            using var store = new IndexStore(dbPath, createNew: true, privateStaging: true);
+            using (SqliteTransaction warmup = store.BeginTransaction())
+            {
+                long warmupFile = store.InsertFile(warmup, "P/Warmup.cs", 1, 1, 1, "cs", 1,
+                    false, false);
+                store.InsertSymbols(warmup, warmupFile, FlatRows(32));
+                warmup.Commit();
+            }
+
+            List<SymbolRow> rows = FlatRows(4096);
+            using SqliteTransaction measured = store.BeginTransaction();
+            long fileId = store.InsertFile(measured, "P/Measured.cs", 1, 1, 2, "cs", 1,
+                false, false);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            store.InsertSymbols(measured, fileId, rows);
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            measured.Commit();
+
+            Assert.True(allocated < 1_000_000,
+                $"Raw insertion allocated {allocated:N0} managed bytes for 4,096 symbols.");
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void PreparedRawStatementsRemainSafeAcrossRepeatedDispose()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-65-raw-dispose").FullName;
+        IndexStore? store = null;
+        try
+        {
+            string dbPath = Path.Combine(root, ".codenav", "index.db");
+            store = new IndexStore(dbPath, createNew: true, privateStaging: true);
+            using (SqliteTransaction tx = store.BeginTransaction())
+            {
+                long fileId = store.InsertFile(tx, "P/Dispose.cs", 1, 1, 1, "cs", 1,
+                    false, false);
+                store.InsertSymbols(tx, fileId, FlatRows(1));
+                tx.Commit();
+            }
+
+            store.Dispose();
+            store.Dispose();
+
+            using var reader = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString());
+            reader.Open();
+            Assert.Equal(1, Scalar(reader, "SELECT COUNT(*) FROM symbols"));
+        }
+        finally
+        {
+            store?.Dispose();
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
     private static void InsertFileWithSymbols(
         IndexStore store, SqliteTransaction tx, int size)
     {
@@ -173,14 +258,19 @@ public class Batch65RawSymbolBatchingTests
         for (int ordinal = 0; ordinal < size; ordinal++)
         {
             bool root = ordinal == 0;
+            bool unicode = size == 65 && ordinal == 62;
             rows.Add(new SymbolRow(
                 OrdinalInFile: ordinal,
                 ParentOrdinal: root ? -1 : 0,
                 Kind: root ? "class" : "method",
-                Name: root ? rootName : $"M_{ordinal}_{size}",
-                Namespace: root || ordinal % 2 == 0 ? null : "N",
+                Name: root ? rootName : unicode ? "方法_測試" : $"M_{ordinal}_{size}",
+                Namespace: unicode ? "命名空間" : root || ordinal % 2 == 0 ? null : "N",
                 Container: root ? null : rootName,
-                Signature: root ? rootName : $"void M_{ordinal}_{size}()",
+                Signature: root
+                    ? rootName
+                    : unicode
+                        ? "void 方法_測試(字串 參數 = \"🧭\")"
+                        : $"void M_{ordinal}_{size}()",
                 Accessibility: "public",
                 StartLine: ordinal + 1,
                 EndLine: ordinal + 1,
@@ -191,12 +281,26 @@ public class Batch65RawSymbolBatchingTests
                 Accessors: !root && ordinal % 5 == 0
                     ? "get=public;set=private"
                     : null,
-                DeclarationKey: !root && ordinal % 2 == 1 ? $"D{ordinal}" : null,
+                DeclarationKey: unicode
+                    ? "宣告𐐀"
+                    : !root && ordinal % 2 == 1 ? $"D{ordinal}" : null,
                 BaseTypes: ordinal == size - 1
                     ? new[] { new BaseTypeIdentity("Base", 1) }
                     : null));
         }
         store.InsertSymbols(tx, fileId, rows);
+    }
+
+    private static List<SymbolRow> FlatRows(int count)
+    {
+        var rows = new List<SymbolRow>(count);
+        for (int ordinal = 0; ordinal < count; ordinal++)
+        {
+            rows.Add(new SymbolRow(
+                ordinal, -1, "method", "M", "N", "C", "void M()", "public",
+                ordinal + 1, ordinal + 1, false, 0, null));
+        }
+        return rows;
     }
 
     private static long Scalar(SqliteConnection connection, string sql)

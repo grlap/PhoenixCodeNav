@@ -370,7 +370,12 @@ public sealed class IndexStore : IDisposable
             }
             sb.Append(')');
         }
-        int rc = raw.sqlite3_prepare_v2(_write.Handle, sb.ToString(),
+        // These statements live for the store lifetime; PERSISTENT tells SQLite not to consume
+        // scarce lookaside memory for their bytecode.
+        int rc = raw.sqlite3_prepare_v3(
+            _write.Handle,
+            sb.ToString(),
+            (uint)raw.SQLITE_PREPARE_PERSISTENT,
             out sqlite3_stmt statement);
         if (rc != raw.SQLITE_OK)
             throw RawSqliteException("prepare symbol insert", rc);
@@ -864,9 +869,13 @@ public sealed class IndexStore : IDisposable
 
     public void Dispose()
     {
-        foreach (sqlite3_stmt? statement in _symbolInsertStatements)
+        // Slot zero is intentionally unused: every executed statement contains 1..32 rows.
+        for (int i = 1; i < _symbolInsertStatements.Length; i++)
         {
-            if (statement is not null) raw.sqlite3_finalize(statement);
+            sqlite3_stmt? statement = _symbolInsertStatements[i];
+            if (statement is null) continue;
+            raw.sqlite3_finalize(statement);
+            _symbolInsertStatements[i] = null;
         }
         _baseEdgeInsertCmd?.Dispose();
         _fileInsertCmd?.Dispose();
