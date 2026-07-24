@@ -15,6 +15,14 @@ namespace CodeNav.Core.Indexing;
 /// </summary>
 public static class GitInfo
 {
+    internal readonly record struct HeadSnapshot(
+        string? Commit,
+        string? Branch,
+        string Status)
+    {
+        internal bool IsResolved => Status is "attached" or "detached";
+    }
+
     // Resolve git's absolute path once, searching PATH ONLY (never the process current
     // directory), then spawn that path — so a git.exe planted in a workspace we navigate can
     // never be run in place of the real git via the Windows executable search order (which
@@ -194,12 +202,50 @@ public static class GitInfo
         return true;
     }
 
-    /// <summary>Current branch name, or null when detached or on failure.</summary>
-    public static string? HeadBranch(string workspaceRoot)
+    /// <summary>
+    /// Current commit and attachment state from one Git invocation. A null branch is authoritative
+    /// only when <see cref="HeadSnapshot.Status"/> is <c>detached</c>; invocation failures remain
+    /// distinguishable as <c>unavailable</c> or <c>timed_out</c>.
+    /// </summary>
+    internal static HeadSnapshot HeadSnapshotEx(string workspaceRoot) =>
+        HeadSnapshotEx(workspaceRoot, GitExe.Value);
+
+    internal static HeadSnapshot HeadSnapshotEx(string workspaceRoot, string? gitExe,
+        IReadOnlyDictionary<string, string?>? environmentOverrides = null)
     {
-        string? outp = Run(workspaceRoot, "rev-parse --abbrev-ref HEAD")?.Trim();
-        return string.IsNullOrEmpty(outp) || outp == "HEAD" ? null : outp;
+        if (gitExe is null) return new(null, null, "unavailable");
+        var environment = CopyEnvironmentOverrides(environmentOverrides);
+        ClearGitRepositorySelection(environment);
+        ProcessResult result = RunWithExecutableResult(gitExe, workspaceRoot,
+            "rev-parse HEAD --abbrev-ref HEAD", environmentOverrides: environment,
+            maxOutputChars: 16 * 1024);
+        if (result.Status is "timed_out" or "drain_timed_out")
+            return new(null, null, "timed_out");
+        if (result.Status != "ok" || result.Truncated || result.Output is null)
+            return new(null, null, "unavailable");
+
+        string[] lines = result.Output.Replace("\r", "", StringComparison.Ordinal)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length != 2 || !IsHexCommit(lines[0]))
+            return new(null, null, "unavailable");
+        string branch = lines[1];
+        if (branch == "HEAD")
+            return new(lines[0], null, "detached");
+        if (branch.Length is 0 or > 4096 || branch.Any(char.IsControl))
+            return new(null, null, "unavailable");
+        return new(lines[0], branch, "attached");
     }
+
+    /// <summary>Current branch with an honest attachment status.</summary>
+    internal static (string? Value, string Status) HeadBranchEx(string workspaceRoot)
+    {
+        HeadSnapshot snapshot = HeadSnapshotEx(workspaceRoot);
+        return (snapshot.Branch, snapshot.Status);
+    }
+
+    /// <summary>Compatibility helper for internal callers and tests. Production freshness logic
+    /// must use <see cref="HeadSnapshotEx(string)"/> so detached and unavailable remain distinct.</summary>
+    internal static string? HeadBranch(string workspaceRoot) => HeadBranchEx(workspaceRoot).Value;
 
     /// <summary>
     /// Workspace-relative Git paths ('/' separators; literal Unix backslashes preserved) that

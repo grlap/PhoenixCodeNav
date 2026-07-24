@@ -270,6 +270,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("operations-portal-jsonl-readonly", ids);
         Assert.Contains("operations-portal-live-build-status", ids);
         Assert.Contains("refresh-recovery-self-heal", ids);
+        Assert.Contains("git-awareness", ids);
         Assert.Equal(
             1,
             ids.Count(id => id == "operations-portal-jsonl-readonly"));
@@ -294,6 +295,24 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             refreshRecovery);
         Assert.Contains("re-resolve pending Git baselines", refreshRecovery);
         Assert.Contains("remain honestly stale until success", refreshRecovery);
+        string gitAwareness = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == "git-awareness")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("same-commit attachment changes", gitAwareness);
+        Assert.Contains("serialized HEAD snapshot acquisition", gitAwareness);
+        Assert.Contains("ordered recovery publication", gitAwareness);
+        Assert.Contains("rebuild-generation retirement", gitAwareness);
+        Assert.Contains("rapid inverse transitions preserve final rows",
+            gitAwareness);
+        Assert.Contains("unavailable recovery snapshots force older queued Git tuples to revalidate",
+            gitAwareness);
+        Assert.Contains("at or after the latest unavailable sample allowed to publish ready",
+            gitAwareness);
+        Assert.Contains(
+            "full rebuilds reject ordered recovery publications sampled for the replaced database",
+            gitAwareness);
         string refreshInputRetry = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

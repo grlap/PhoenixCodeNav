@@ -571,9 +571,31 @@ notification, and no request can clear the incomplete-freshness latch unless its
 captures the previously unavailable source.
 
 When the failed request carries a Git target, every later recovery request inherits that pending
-baseline and re-resolves the current `HEAD` immediately before capture. An unresolvable `HEAD`
-leaves the writer stale and rearms paced recovery; a successful complete sweep publishes rows,
-`indexed_commit`, and `indexed_branch` in the same transaction before the durable latch is cleared.
+baseline and re-resolves the current commit plus attached/detached state in one status-aware
+`HEAD` snapshot immediately before capture. An unresolvable snapshot
+leaves the writer stale, rearms paced recovery, and forces every older queued Git tuple to
+revalidate before it can publish; a successful complete sweep publishes rows, `indexed_commit`,
+and `indexed_branch` in the same transaction before the durable latch is cleared. Recovery samples
+carry a monotonic generation, so a resolved request may clear that latch only when it is at or after
+the latest unavailable generation; an older resolved request that was already queued may commit its
+internally consistent rows and metadata, but it remains explicitly stale with paced recovery armed.
+Because the recovery request is already active when it samples that tuple, it appends the
+revalidated request at the channel tail under the observation gate instead of publishing in place.
+Any older Git observation already queued therefore commits first, and the recovery snapshot remains
+the final baseline until a genuinely newer observation is appended after it. A successful full
+rebuild retires every ordered recovery generation sampled for the replaced database before it
+installs the replacement; a retired request already queued behind the rebuild completes without
+touching rows, Git metadata, or the replacement's convergence marker.
+Ordinary Git signals compare both commit and branch identity, so detaching, attaching, or switching
+branch names at the same commit still queues an atomic metadata reconcile. Only a resolved detached
+snapshot deletes `indexed_branch`; a failed Git invocation cannot impersonate detachment.
+The Git watcher is attached before the startup sample, and snapshot acquisition, comparison, and
+request publication share one observation gate. Overlapping watcher/retry callbacks therefore
+cannot return snapshots in one order and publish them in another. The latest resolved HEAD
+observation is tracked independently of published metadata, so an inverse transition is still
+queued while an older snapshot waits in the refresh pump. Commit-changing requests resolve their
+changed-file scope at execution time against the baseline actually published ahead of them; rapid
+A-to-B-to-A movement therefore restores both A's rows and its attachment state.
 
 `Oversized` is persistent rather than transient and receives no rapid retry loop. The failure
 identifies the regular source that prevented the atomic batch and propagates bounded partial

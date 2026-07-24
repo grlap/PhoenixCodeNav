@@ -39,22 +39,26 @@ public static class DeltaRefresher
     public static RefreshResult Refresh(
         IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? changedRelPaths,
         Action<string>? log = null,
-        string? recordCommit = null, string? recordBranch = null) =>
+        string? recordCommit = null, string? recordBranch = null,
+        bool recordBranchKnown = false) =>
         RefreshCore(store, workspaceRoot, changedRelPaths,
-            GitInfo.ReadBoundedWorkspaceFileResult, log, recordCommit, recordBranch);
+            GitInfo.ReadBoundedWorkspaceFileResult, log, recordCommit, recordBranch,
+            recordBranchKnown);
 
     internal static RefreshResult RefreshWithReaderForTest(
         IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? changedRelPaths,
         Func<string, string, int, GitInfo.WorkspaceFileReadResult> readWorkspaceFile,
         Action<string>? log = null,
-        string? recordCommit = null, string? recordBranch = null) =>
+        string? recordCommit = null, string? recordBranch = null,
+        bool recordBranchKnown = false) =>
         RefreshCore(store, workspaceRoot, changedRelPaths, readWorkspaceFile, log,
-            recordCommit, recordBranch);
+            recordCommit, recordBranch, recordBranchKnown);
 
     private static RefreshResult RefreshCore(
         IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? changedRelPaths,
         Func<string, string, int, GitInfo.WorkspaceFileReadResult> readWorkspaceFile,
-        Action<string>? log, string? recordCommit, string? recordBranch)
+        Action<string>? log, string? recordCommit, string? recordBranch,
+        bool recordBranchKnown)
     {
         var sw = Stopwatch.StartNew();
         var stored = store.AllFilesByPath();
@@ -281,8 +285,13 @@ public static class DeltaRefresher
             if (recordCommit is not null)
             {
                 store.SetMeta(tx, "indexed_commit", recordCommit);
-                if (recordBranch is not null)
-                    store.SetMeta(tx, "indexed_branch", recordBranch);
+                if (recordBranchKnown || recordBranch is not null)
+                {
+                    if (recordBranch is not null)
+                        store.SetMeta(tx, "indexed_branch", recordBranch);
+                    else
+                        store.DeleteMeta(tx, "indexed_branch");
+                }
             }
             tx.Commit();
         }

@@ -253,6 +253,7 @@ public static class WorktreeIndexer
                     $"{ex.GetType().Name} while seeding (see server log)", sw);
             }
 
+            GitInfo.HeadSnapshot headSnapshot;
             string? head;
             bool sweep = true;
             int added;
@@ -264,7 +265,8 @@ public static class WorktreeIndexer
                     privateStaging: true);
                 string? indexedCommit = store.GetMeta("indexed_commit");
                 string readRoot = destination.WorkspaceReadPath;
-                (head, _) = GitInfo.HeadCommitEx(readRoot);
+                headSnapshot = GitInfo.HeadSnapshotEx(readRoot);
+                head = headSnapshot.Commit;
 
                 // Commit movement UNION working-tree dirt — both read-only; either failing (or the
                 // union blowing the cap) falls back to the honest full sweep.
@@ -301,9 +303,10 @@ public static class WorktreeIndexer
                 if (head is not null)
                 {
                     store.SetMeta("indexed_commit", head);
-                    var branch = GitInfo.HeadBranch(readRoot);
-                    if (branch is not null) store.SetMeta("indexed_branch", branch);
-                    else store.DeleteMeta("indexed_branch");
+                    if (headSnapshot.Branch is { } branch)
+                        store.SetMeta("indexed_branch", branch);
+                    else if (headSnapshot.Status == "detached")
+                        store.DeleteMeta("indexed_branch");
                 }
                 else
                 {

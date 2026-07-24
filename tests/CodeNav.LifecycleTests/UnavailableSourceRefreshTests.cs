@@ -321,10 +321,11 @@ public sealed class UnavailableSourceRefreshTests
             manager.RefreshRecoverySweepDelayForTest =
                 _ => TimeSpan.FromMilliseconds(25);
             int headResolutionAttempts = 0;
-            manager.RefreshRecoveryHeadCommitForTest = () =>
+            manager.GitHeadSnapshotForTest = () =>
                 Interlocked.Increment(ref headResolutionAttempts) == 1
-                    ? null
-                    : latestHeadCommit;
+                    ? new GitInfo.HeadSnapshot(null, null, "unavailable")
+                    : new GitInfo.HeadSnapshot(
+                        latestHeadCommit, "recovery-branch", "attached");
             manager.Start();
             Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
                 TimeSpan.FromSeconds(20)), manager.Health().Error);
@@ -368,6 +369,7 @@ public sealed class UnavailableSourceRefreshTests
             Assert.True(Volatile.Read(ref headResolutionAttempts) >= 2,
                 "recovery did not retry after HEAD was temporarily unavailable");
             Assert.Equal(latestHeadCommit, manager.Health().IndexedCommit);
+            Assert.Equal("recovery-branch", manager.Health().IndexedBranch);
             Assert.Null(manager.Health().RefreshIncompleteReason);
             using var queries = manager.OpenQueries();
             Assert.Empty(queries.SearchSymbols("Before", "exact", null, 2));
@@ -377,6 +379,8 @@ public sealed class UnavailableSourceRefreshTests
             {
                 Assert.Equal(latestHeadCommit,
                     persistedAfterRecovery.GetMeta("indexed_commit"));
+                Assert.Equal("recovery-branch",
+                    persistedAfterRecovery.GetMeta("indexed_branch"));
             }
             using var followerReader = new IndexQueries(database);
             IndexMetadataSnapshot recoveredMetadata = followerReader.ReadMetadata();
@@ -386,9 +390,468 @@ public sealed class UnavailableSourceRefreshTests
                 recoveredMetadata, databaseBytes: 1, root, database);
             Assert.Equal("ready", followerHealth.State);
             Assert.Equal(latestHeadCommit, followerHealth.IndexedCommit);
+            Assert.Equal("recovery-branch", followerHealth.IndexedBranch);
         }
         finally
         {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task RecoverySnapshotQueuesBehindEarlierGitObservation()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-capture-git-recovery-order").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var releaseRecovery = new ManualResetEventSlim(initialState: false);
+        try
+        {
+            const string relativePath = "Changed.cs";
+            const string oldCommit = "1111111111111111111111111111111111111111";
+            const string failedRequestCommit =
+                "2222222222222222222222222222222222222222";
+            const string earlierObservedCommit =
+                "3333333333333333333333333333333333333333";
+            const string recoveredHeadCommit =
+                "4444444444444444444444444444444444444444";
+            File.WriteAllText(Path.Combine(root, relativePath),
+                "namespace RecoveryOrder; public sealed class Before { }");
+            IndexBuilder.Build(root, database);
+            using (var store = new IndexStore(database, createNew: false))
+                store.SetMeta("indexed_commit", oldCommit);
+
+            using var manager = new IndexManager(root, database);
+            int recoverySchedules = 0;
+            manager.RefreshRecoverySweepDelayForTest = _ =>
+                Interlocked.Increment(ref recoverySchedules) == 1
+                    ? TimeSpan.FromMilliseconds(25)
+                    : TimeSpan.FromMinutes(5);
+            manager.Start();
+            Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
+                TimeSpan.FromSeconds(20)), manager.Health().Error);
+            Assert.True(manager.RequestRefreshForTest(Array.Empty<string>(),
+                out Task startupQueueDrained));
+            await startupQueueDrained.WaitAsync(TimeSpan.FromSeconds(20));
+
+            byte[] recoveredBytes = Encoding.UTF8.GetBytes(
+                "namespace RecoveryOrder; public sealed class RecoveredHead { }");
+            int inputAvailable = 0;
+            manager.WorkspaceFileReaderForTest = (workspaceRoot, gitPath, maxBytes) =>
+            {
+                if (!gitPath.Equals(relativePath, StringComparison.Ordinal))
+                    return GitInfo.ReadBoundedWorkspaceFileResult(
+                        workspaceRoot, gitPath, maxBytes);
+                return Volatile.Read(ref inputAvailable) == 0
+                    ? new GitInfo.WorkspaceFileReadResult(
+                        GitInfo.WorkspaceFileReadDisposition.Unavailable, null)
+                    : new GitInfo.WorkspaceFileReadResult(
+                        GitInfo.WorkspaceFileReadDisposition.Success, recoveredBytes);
+            };
+
+            int headSnapshots = 0;
+            manager.GitHeadSnapshotForTest = () =>
+                Interlocked.Increment(ref headSnapshots) == 1
+                    ? new GitInfo.HeadSnapshot(
+                        earlierObservedCommit, "earlier-branch", "attached")
+                    : new GitInfo.HeadSnapshot(
+                        recoveredHeadCommit, "recovered-branch", "attached");
+
+            using var recoveryDequeued =
+                new ManualResetEventSlim(initialState: false);
+            int blockOnce = 0;
+            manager.RefreshRequestDequeuedForTest = () =>
+            {
+                if (!string.Equals(manager.Health().RefreshIncompleteReason,
+                        IndexManager.RefreshInputUnavailableCause,
+                        StringComparison.Ordinal) ||
+                    Interlocked.Exchange(ref blockOnce, 1) != 0)
+                    return;
+                recoveryDequeued.Set();
+                if (!releaseRecovery.Wait(TimeSpan.FromSeconds(20)))
+                    throw new TimeoutException("recovery request was not released");
+            };
+
+            Assert.True(manager.RequestGitRefreshForTest(
+                [relativePath], failedRequestCommit, out Task failedRefresh));
+            await failedRefresh.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(IndexManager.RefreshInputUnavailableCause,
+                manager.Health().RefreshIncompleteReason);
+            Assert.Equal(oldCommit, manager.Health().IndexedCommit);
+            Assert.True(recoveryDequeued.Wait(TimeSpan.FromSeconds(10)),
+                "timer-initiated recovery did not reach the deterministic blocker");
+
+            Volatile.Write(ref inputAvailable, 1);
+            // Queue C while timer recovery R is active. R then samples newer D. D must be
+            // appended behind C instead of being applied immediately and overwritten afterward.
+            manager.NotifyGitHeadChangedForTest();
+            releaseRecovery.Set();
+
+            Assert.True(SpinWait.SpinUntil(
+                    () => string.Equals(manager.Health().IndexedCommit,
+                        recoveredHeadCommit, StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                "ordered timer recovery did not publish after the earlier Git observation");
+
+            Assert.Equal(2, Volatile.Read(ref headSnapshots));
+            Assert.Equal(1, Volatile.Read(ref recoverySchedules));
+            Assert.Equal(recoveredHeadCommit, manager.Health().IndexedCommit);
+            Assert.Equal("recovered-branch", manager.Health().IndexedBranch);
+            Assert.Null(manager.Health().RefreshIncompleteReason);
+            using (var queries = manager.OpenQueries())
+            {
+                Assert.Empty(queries.SearchSymbols("Before", "exact", null, 2));
+                Assert.Single(queries.SearchSymbols(
+                    "RecoveredHead", "exact", null, 2));
+            }
+
+            using var persisted = new IndexStore(database, createNew: false);
+            Assert.Equal(recoveredHeadCommit,
+                persisted.GetMeta("indexed_commit"));
+            Assert.Equal("recovered-branch",
+                persisted.GetMeta("indexed_branch"));
+            using var followerReader = new IndexQueries(database);
+            IndexMetadataSnapshot metadata = followerReader.ReadMetadata();
+            Assert.Equal(recoveredHeadCommit, metadata.IndexedCommit);
+            Assert.Equal("recovered-branch", metadata.IndexedBranch);
+            IndexHealth followerHealth = IndexManager.FollowerHealthForTest(
+                metadata, databaseBytes: 1, root, database);
+            Assert.Equal(recoveredHeadCommit, followerHealth.IndexedCommit);
+            Assert.Equal("recovered-branch", followerHealth.IndexedBranch);
+        }
+        finally
+        {
+            releaseRecovery.Set();
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task UnavailableRecoveryHeadForcesOlderGitObservationToRevalidate()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-capture-git-recovery-unavailable-order").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var releaseRecovery = new ManualResetEventSlim(initialState: false);
+        using var releaseNextRecovery = new ManualResetEventSlim(initialState: false);
+        try
+        {
+            const string relativePath = "Changed.cs";
+            const string oldCommit = "1111111111111111111111111111111111111111";
+            const string failedRequestCommit =
+                "2222222222222222222222222222222222222222";
+            const string earlierObservedCommit =
+                "3333333333333333333333333333333333333333";
+            const string laterObservedCommit =
+                "4444444444444444444444444444444444444444";
+            const string intermediateHeadCommit =
+                "5555555555555555555555555555555555555555";
+            const string recoveredHeadCommit =
+                "6666666666666666666666666666666666666666";
+            File.WriteAllText(Path.Combine(root, relativePath),
+                "namespace RecoveryUnavailableOrder; public sealed class Before { }");
+            IndexBuilder.Build(root, database);
+            using (var store = new IndexStore(database, createNew: false))
+                store.SetMeta("indexed_commit", oldCommit);
+
+            using var manager = new IndexManager(root, database);
+            int recoverySchedules = 0;
+            manager.RefreshRecoverySweepDelayForTest = _ =>
+                Interlocked.Increment(ref recoverySchedules) == 1
+                    ? TimeSpan.FromMilliseconds(25)
+                    : TimeSpan.FromMilliseconds(250);
+            manager.Start();
+            Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
+                TimeSpan.FromSeconds(20)), manager.Health().Error);
+            Assert.True(manager.RequestRefreshForTest(Array.Empty<string>(),
+                out Task startupQueueDrained));
+            await startupQueueDrained.WaitAsync(TimeSpan.FromSeconds(20));
+
+            byte[] recoveredBytes = Encoding.UTF8.GetBytes(
+                "namespace RecoveryUnavailableOrder; " +
+                "public sealed class RecoveredHead { }");
+            int inputAvailable = 0;
+            manager.WorkspaceFileReaderForTest = (workspaceRoot, gitPath, maxBytes) =>
+            {
+                if (!gitPath.Equals(relativePath, StringComparison.Ordinal))
+                    return GitInfo.ReadBoundedWorkspaceFileResult(
+                        workspaceRoot, gitPath, maxBytes);
+                return Volatile.Read(ref inputAvailable) == 0
+                    ? new GitInfo.WorkspaceFileReadResult(
+                        GitInfo.WorkspaceFileReadDisposition.Unavailable, null)
+                    : new GitInfo.WorkspaceFileReadResult(
+                        GitInfo.WorkspaceFileReadDisposition.Success, recoveredBytes);
+            };
+
+            using var recoveryDequeued =
+                new ManualResetEventSlim(initialState: false);
+            using var nextRecoveryDequeued =
+                new ManualResetEventSlim(initialState: false);
+            int blockPhase = 0;
+            manager.RefreshRequestDequeuedForTest = () =>
+            {
+                if (!string.Equals(manager.Health().RefreshIncompleteReason,
+                        IndexManager.RefreshInputUnavailableCause,
+                        StringComparison.Ordinal))
+                    return;
+                if (Interlocked.CompareExchange(ref blockPhase, 1, 0) == 0)
+                {
+                    recoveryDequeued.Set();
+                    if (!releaseRecovery.Wait(TimeSpan.FromSeconds(20)))
+                        throw new TimeoutException("recovery request was not released");
+                    return;
+                }
+                if (string.Equals(manager.Health().IndexedCommit,
+                        intermediateHeadCommit, StringComparison.Ordinal) &&
+                    Interlocked.CompareExchange(ref blockPhase, 2, 1) == 1)
+                {
+                    nextRecoveryDequeued.Set();
+                    if (!releaseNextRecovery.Wait(TimeSpan.FromSeconds(20)))
+                        throw new TimeoutException(
+                            "next recovery request was not released");
+                }
+            };
+
+            Assert.True(manager.RequestGitRefreshForTest(
+                [relativePath], failedRequestCommit, out Task failedRefresh));
+            await failedRefresh.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(IndexManager.RefreshInputUnavailableCause,
+                manager.Health().RefreshIncompleteReason);
+            Assert.True(recoveryDequeued.Wait(TimeSpan.FromSeconds(10)),
+                "timer-initiated recovery did not reach the deterministic blocker");
+
+            int headSnapshots = 0;
+            manager.GitHeadSnapshotForTest = () =>
+            {
+                int attempt = Interlocked.Increment(ref headSnapshots);
+                return attempt switch
+                {
+                    1 => new GitInfo.HeadSnapshot(
+                        earlierObservedCommit, "earlier-branch", "attached"),
+                    2 => new GitInfo.HeadSnapshot(
+                        laterObservedCommit, "later-branch", "attached"),
+                    3 => new GitInfo.HeadSnapshot(null, null, "unavailable"),
+                    4 => new GitInfo.HeadSnapshot(
+                        intermediateHeadCommit, "intermediate-branch", "attached"),
+                    5 => new GitInfo.HeadSnapshot(null, null, "unavailable"),
+                    _ => new GitInfo.HeadSnapshot(
+                        recoveredHeadCommit, "recovered-branch", "attached"),
+                };
+            };
+
+            Volatile.Write(ref inputAvailable, 1);
+            // Queue C and E while timer recovery R is active. R then fails to resolve HEAD.
+            // C re-resolves D, but E observes a newer unavailable generation before D executes.
+            // D may commit rows and metadata, but cannot clear the latch; the next timer publishes F.
+            manager.NotifyGitHeadChangedForTest();
+            manager.NotifyGitHeadChangedForTest();
+            releaseRecovery.Set();
+
+            Assert.True(nextRecoveryDequeued.Wait(TimeSpan.FromSeconds(10)),
+                "the paced retry after the newer unavailable generation did not run");
+            Assert.Equal("stale", manager.State);
+            Assert.Equal(intermediateHeadCommit, manager.Health().IndexedCommit);
+            Assert.Equal("intermediate-branch", manager.Health().IndexedBranch);
+            Assert.Equal(IndexManager.RefreshInputUnavailableCause,
+                manager.Health().RefreshIncompleteReason);
+            using (var intermediateStore =
+                   new IndexStore(database, createNew: false))
+            {
+                Assert.Equal(intermediateHeadCommit,
+                    intermediateStore.GetMeta("indexed_commit"));
+                Assert.Equal("intermediate-branch",
+                    intermediateStore.GetMeta("indexed_branch"));
+                Assert.Equal(IndexManager.RefreshInputUnavailableCause,
+                    intermediateStore.GetMeta(IndexManager.RefreshIncompleteReasonMeta));
+            }
+            releaseNextRecovery.Set();
+
+            Assert.True(SpinWait.SpinUntil(
+                    () => string.Equals(manager.Health().IndexedCommit,
+                              recoveredHeadCommit, StringComparison.Ordinal) &&
+                          string.Equals(manager.State, "ready",
+                              StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                "the older queued Git observation published without revalidating HEAD");
+
+            Assert.Equal(6, Volatile.Read(ref headSnapshots));
+            Assert.Equal(4, Volatile.Read(ref recoverySchedules));
+            Assert.Equal("ready", manager.State);
+            Assert.Equal(recoveredHeadCommit, manager.Health().IndexedCommit);
+            Assert.Equal("recovered-branch", manager.Health().IndexedBranch);
+            Assert.Null(manager.Health().RefreshIncompleteReason);
+            using (var queries = manager.OpenQueries())
+            {
+                Assert.Empty(queries.SearchSymbols("Before", "exact", null, 2));
+                Assert.Single(queries.SearchSymbols(
+                    "RecoveredHead", "exact", null, 2));
+            }
+
+            using var persisted = new IndexStore(database, createNew: false);
+            Assert.Equal(recoveredHeadCommit,
+                persisted.GetMeta("indexed_commit"));
+            Assert.Equal("recovered-branch",
+                persisted.GetMeta("indexed_branch"));
+            using var followerReader = new IndexQueries(database);
+            IndexMetadataSnapshot metadata = followerReader.ReadMetadata();
+            Assert.Equal(recoveredHeadCommit, metadata.IndexedCommit);
+            Assert.Equal("recovered-branch", metadata.IndexedBranch);
+            Assert.Null(metadata.RefreshIncompleteReason);
+            IndexHealth followerHealth = IndexManager.FollowerHealthForTest(
+                metadata, databaseBytes: 1, root, database);
+            Assert.Equal("ready", followerHealth.State);
+            Assert.Equal(recoveredHeadCommit, followerHealth.IndexedCommit);
+            Assert.Equal("recovered-branch", followerHealth.IndexedBranch);
+            Assert.Null(followerHealth.RefreshIncompleteReason);
+        }
+        finally
+        {
+            releaseRecovery.Set();
+            releaseNextRecovery.Set();
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task FullRebuildRetiresOrderedRecoveryFromPreviousDatabase()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-rebuild-retires-ordered-recovery").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var releaseRecovery = new ManualResetEventSlim(initialState: false);
+        using var recoveryDequeued = new ManualResetEventSlim(initialState: false);
+        using var postBuildSweepDequeued = new ManualResetEventSlim(initialState: false);
+        using var releasePostBuildSweep = new ManualResetEventSlim(initialState: false);
+        try
+        {
+            const string relativePath = "Changed.cs";
+            const string oldCommit = "1111111111111111111111111111111111111111";
+            const string failedRequestCommit =
+                "2222222222222222222222222222222222222222";
+            const string obsoleteRecoveryCommit =
+                "3333333333333333333333333333333333333333";
+            File.WriteAllText(Path.Combine(root, relativePath),
+                "namespace RebuildRecovery; public sealed class Current { }");
+            IndexBuilder.Build(root, database);
+            using (var store = new IndexStore(database, createNew: false))
+                store.SetMeta("indexed_commit", oldCommit);
+
+            using var manager = new IndexManager(root, database);
+            manager.RefreshRecoverySweepDelayForTest = _ => TimeSpan.FromMinutes(5);
+            manager.Start();
+            Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
+                TimeSpan.FromSeconds(20)), manager.Health().Error);
+            Assert.True(manager.RequestRefreshForTest(Array.Empty<string>(),
+                out Task startupQueueDrained));
+            await startupQueueDrained.WaitAsync(TimeSpan.FromSeconds(20));
+
+            int inputAvailable = 0;
+            manager.WorkspaceFileReaderForTest = (workspaceRoot, gitPath, maxBytes) =>
+            {
+                if (!gitPath.Equals(relativePath, StringComparison.Ordinal))
+                    return GitInfo.ReadBoundedWorkspaceFileResult(
+                        workspaceRoot, gitPath, maxBytes);
+                return Volatile.Read(ref inputAvailable) == 0
+                    ? new GitInfo.WorkspaceFileReadResult(
+                        GitInfo.WorkspaceFileReadDisposition.Unavailable, null)
+                    : GitInfo.ReadBoundedWorkspaceFileResult(
+                        workspaceRoot, gitPath, maxBytes);
+            };
+
+            Assert.True(manager.RequestGitRefreshForTest(
+                [relativePath], failedRequestCommit, out Task failedRefresh));
+            await failedRefresh.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(IndexManager.RefreshInputUnavailableCause,
+                manager.Health().RefreshIncompleteReason);
+
+            manager.GitHeadSnapshotForTest = () => new GitInfo.HeadSnapshot(
+                obsoleteRecoveryCommit, "obsolete-branch", "attached");
+            int blockRecoveryOnce = 0;
+            int blockPostBuildSweepOnce = 0;
+            int rebuildCompleted = 0;
+            int afterRebuildDequeues = 0;
+            Task orderedRecoveryCompleted = Task.CompletedTask;
+            manager.FullRebuildCompletedForTest = () =>
+                Volatile.Write(ref rebuildCompleted, 1);
+            manager.RefreshRequestDequeuedForTest = () =>
+            {
+                if (Volatile.Read(ref rebuildCompleted) != 0)
+                {
+                    Interlocked.Increment(ref afterRebuildDequeues);
+                    // With retirement, D completes before the ordinary dequeue hook. Without it,
+                    // D reaches this hook first; let it run so the metadata assertions below prove
+                    // that such publication would corrupt the replacement.
+                    if (orderedRecoveryCompleted.IsCompleted &&
+                        Interlocked.Exchange(ref blockPostBuildSweepOnce, 1) == 0)
+                    {
+                        postBuildSweepDequeued.Set();
+                        if (!releasePostBuildSweep.Wait(TimeSpan.FromSeconds(20)))
+                            throw new TimeoutException(
+                                "post-build sweep was not released");
+                    }
+                    return;
+                }
+                if (string.Equals(manager.Health().RefreshIncompleteReason,
+                        IndexManager.RefreshInputUnavailableCause,
+                        StringComparison.Ordinal) &&
+                    Interlocked.Exchange(ref blockRecoveryOnce, 1) == 0)
+                {
+                    recoveryDequeued.Set();
+                    if (!releaseRecovery.Wait(TimeSpan.FromSeconds(20)))
+                        throw new TimeoutException("recovery request was not released");
+                }
+            };
+
+            Volatile.Write(ref inputAvailable, 1);
+            Assert.True(manager.RequestRefreshForTest(Array.Empty<string>(),
+                out orderedRecoveryCompleted));
+            Assert.True(recoveryDequeued.Wait(TimeSpan.FromSeconds(10)),
+                "recovery request did not reach the deterministic blocker");
+
+            // R is active. Queue rebuild F, then let R sample obsolete D and append it:
+            // the pump order is F -> D -> the post-build convergence sweep.
+            Assert.True(manager.RequestFullRebuild());
+            releaseRecovery.Set();
+
+            await orderedRecoveryCompleted.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.True(postBuildSweepDequeued.Wait(TimeSpan.FromSeconds(10)),
+                "post-build sweep did not queue behind the retired recovery publication");
+
+            Assert.True(Volatile.Read(ref afterRebuildDequeues) >= 1);
+            Assert.Equal("stale", manager.State);
+            Assert.Equal(IndexManager.RefreshSweepPendingCause,
+                manager.Health().RefreshIncompleteReason);
+            Assert.NotEqual(obsoleteRecoveryCommit, manager.Health().IndexedCommit);
+            Assert.NotEqual("obsolete-branch", manager.Health().IndexedBranch);
+            using (var replacementReader = new IndexQueries(database))
+            {
+                IndexMetadataSnapshot replacementMetadata =
+                    replacementReader.ReadMetadata();
+                Assert.Equal(IndexManager.RefreshSweepPendingCause,
+                    replacementMetadata.RefreshIncompleteReason);
+                Assert.NotEqual(obsoleteRecoveryCommit,
+                    replacementMetadata.IndexedCommit);
+                Assert.NotEqual("obsolete-branch",
+                    replacementMetadata.IndexedBranch);
+                IndexHealth followerHealth = IndexManager.FollowerHealthForTest(
+                    replacementMetadata, databaseBytes: 1, root, database);
+                Assert.Equal("stale", followerHealth.State);
+                Assert.Equal(IndexManager.RefreshSweepPendingCause,
+                    followerHealth.RefreshIncompleteReason);
+            }
+
+            manager.RefreshRequestDequeuedForTest = null;
+            releasePostBuildSweep.Set();
+            Assert.True(manager.RequestRefreshForTest(Array.Empty<string>(),
+                out Task queueDrained));
+            await queueDrained.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal("ready", manager.State);
+            Assert.NotEqual(obsoleteRecoveryCommit, manager.Health().IndexedCommit);
+        }
+        finally
+        {
+            releaseRecovery.Set();
+            releasePostBuildSweep.Set();
             TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }

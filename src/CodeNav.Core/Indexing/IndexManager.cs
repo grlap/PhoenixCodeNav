@@ -98,7 +98,12 @@ public sealed class IndexManager : IDisposable
         bool FullRebuild = false, string? Reason = null,
         TaskCompletionSource? CompletionForTest = null,
         bool TimerInitiatedRecovery = false,
-        bool RevalidateRecordCommit = false);
+        bool RevalidateRecordCommit = false,
+        string? RecordBranch = null,
+        bool RecordBranchKnown = false,
+        bool ResolveGitPathsAtExecution = false,
+        bool PublishRevalidatedGitSnapshot = false,
+        long RecoveryGitSnapshotGeneration = 0);
 
     private readonly string _workspaceRoot;
     private readonly string _dbPath;
@@ -168,7 +173,7 @@ public sealed class IndexManager : IDisposable
     internal Func<string, string, int, GitInfo.WorkspaceFileReadResult>?
         WorkspaceFileReaderForTest
     { get; set; }
-    internal Func<string?>? RefreshRecoveryHeadCommitForTest { get; set; }
+    internal Func<GitInfo.HeadSnapshot>? GitHeadSnapshotForTest { get; set; }
     internal Action? ClearRefreshIncompleteBeforeCommitForTest { get; set; }
     internal Action<string>? RefreshIncompleteBeforeCommitForTest { get; set; }
     internal Action? RefreshInputFailureBeforeLatchForTest { get; set; }
@@ -829,7 +834,7 @@ public sealed class IndexManager : IDisposable
                     // its verified structural snapshot before the long C# parse; edits made between
                     // that commit and watcher attachment would otherwise be permanently missed.
                     _refreshQueue.Writer.TryWrite(new RefreshRequest(null, Reason: "full_sweep")); // detect-all
-                    InitGitTracking(); // record/reconcile the git commit, then watch HEAD
+                    InitGitTracking(); // watch HEAD, then atomically sample and reconcile it
                 }
                 catch (Exception ex)
                 {
@@ -1018,8 +1023,8 @@ public sealed class IndexManager : IDisposable
     }
 
     /// <summary>
-    /// Wires git-aware refresh: records the current commit (or reconciles a diff if HEAD moved
-    /// while the server was down), then watches for future HEAD changes. Best-effort — a repo
+    /// Wires git-aware refresh: watches HEAD before atomically sampling the current tuple, then
+    /// records it (or reconciles a diff if HEAD moved while the server was down). Best-effort — a repo
     /// without git, or without a git CLI, simply keeps FSW-only behavior.
     /// </summary>
     private void InitGitTracking()
@@ -1036,28 +1041,73 @@ public sealed class IndexManager : IDisposable
         _gitDir = GitInfo.ResolveGitDir(_workspaceRoot);
         if (_gitDir is null) return;
 
-        string? head = GitInfo.HeadCommit(_workspaceRoot);
-        if (head is not null)
+        // Attach before the initial sample so a same-OID detach/reattach cannot land between
+        // sampling and watcher publication. A callback that wins the observation gate simply
+        // performs the same reconcile first; the startup sample then observes a duplicate.
+        lock (_disposeLock)
         {
-            string? stored = _indexedCommit;
-            if (stored is null)
+            if (_disposed) return;
+            _gitWatcher = new GitWatcher(_gitDir, () => OnGitHeadMaybeChanged());
+        }
+
+        bool scheduleRetry = false;
+        string? logMessage = null;
+        lock (_gitHeadObservationGate)
+        {
+            if (_disposed) return;
+            GitInfo.HeadSnapshot snapshot = ReadGitHeadSnapshot();
+            if (!snapshot.IsResolved)
             {
-                // First git-aware run (or a pre-git index): the build/startup-sweep already
-                // reflects the current tree, so just record the commit as the diff baseline.
-                _refreshQueue.Writer.TryWrite(new RefreshRequest(Array.Empty<string>(), head, Reason: "git_head"));
+                scheduleRetry = true;
             }
-            else if (!string.Equals(stored, head, StringComparison.OrdinalIgnoreCase))
+            else if (_latestObservedGitHead is not { } previous ||
+                     !SameGitHead(previous, snapshot))
             {
-                _log($"Git HEAD moved while stopped: {Short(stored)} -> {Short(head)}; reconciling.");
-                EnqueueGitReconcile(stored, head);
+                _latestObservedGitHead = snapshot;
+                string head = snapshot.Commit!;
+                string? stored = _indexedCommit;
+                if (stored is null)
+                {
+                    // First git-aware run (or a pre-git index): the build/startup-sweep already
+                    // reflects the current tree, so just record the commit as the diff baseline.
+                    _refreshQueue.Writer.TryWrite(new RefreshRequest(
+                        Array.Empty<string>(), head, Reason: "git_head",
+                        RecordBranch: snapshot.Branch, RecordBranchKnown: true));
+                }
+                else if (!string.Equals(stored, head, StringComparison.OrdinalIgnoreCase))
+                {
+                    logMessage =
+                        $"Git HEAD moved while stopped: {Short(stored)} -> {Short(head)}; reconciling.";
+                    EnqueueGitReconcile(snapshot);
+                }
+                else if (!string.Equals(_indexedBranch, snapshot.Branch,
+                             StringComparison.Ordinal))
+                {
+                    logMessage = "Git attachment changed while stopped at the same commit; " +
+                                 "refreshing branch metadata.";
+                    QueueGitMetadataRefresh(snapshot);
+                }
             }
         }
 
-        lock (_disposeLock)
-        {
-            if (_disposed) return; // Dispose already ran — don't publish a watcher it can't reach
-            _gitWatcher = new GitWatcher(_gitDir, () => OnGitHeadMaybeChanged());
-        }
+        if (scheduleRetry) ScheduleGitHeadRetry();
+        if (logMessage is not null) _log(logMessage);
+    }
+
+    private GitInfo.HeadSnapshot ReadGitHeadSnapshot() =>
+        GitHeadSnapshotForTest?.Invoke() ?? GitInfo.HeadSnapshotEx(_workspaceRoot);
+
+    private static bool SameGitHead(
+        GitInfo.HeadSnapshot left,
+        GitInfo.HeadSnapshot right) =>
+        string.Equals(left.Commit, right.Commit, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(left.Branch, right.Branch, StringComparison.Ordinal);
+
+    private void QueueGitMetadataRefresh(GitInfo.HeadSnapshot snapshot)
+    {
+        _refreshQueue.Writer.TryWrite(new RefreshRequest(
+            Array.Empty<string>(), snapshot.Commit, Reason: "git_head",
+            RecordBranch: snapshot.Branch, RecordBranchKnown: true));
     }
 
     // 17zd: bounded retry for a git signal whose HEAD is transiently unresolvable — the
@@ -1069,6 +1119,8 @@ public sealed class IndexManager : IDisposable
     private const int GitHeadRetryAttempts = 5;
     private int _gitHeadRetriesLeft = GitHeadRetryAttempts;
     private System.Threading.Timer? _gitHeadRetry;
+    private readonly object _gitHeadObservationGate = new();
+    private GitInfo.HeadSnapshot? _latestObservedGitHead;
     private static readonly TimeSpan[] RefreshRecoverySweepDelays =
     [
         TimeSpan.FromSeconds(5),
@@ -1080,6 +1132,15 @@ public sealed class IndexManager : IDisposable
     private int _refreshRecoverySweepBackoffLevel;
     private int _refreshRecoverySweepEscalationLogged;
     private volatile string? _refreshRecoveryPendingGitCommit;
+    // Recovery HEAD samples are ordered independently of queued refresh requests. A request may
+    // clear the stale latch only if its resolved generation is at least the latest unavailable
+    // generation; this prevents an older resolved tuple from publishing after a newer failed read.
+    private long _refreshRecoveryGitSnapshotGeneration;
+    private long _refreshRecoveryGitRevalidationRequiredGeneration;
+    // A full rebuild replaces the database incarnation targeted by every ordered recovery snapshot
+    // sampled before installation. Retire those generations so a request queued behind the rebuild
+    // cannot graft obsolete Git metadata onto the replacement or clear its convergence marker.
+    private long _refreshRecoveryGitSnapshotRetiredThroughGeneration;
     internal Func<int, TimeSpan>? RefreshRecoverySweepDelayForTest { get; set; }
 
     private void ScheduleGitHeadRetry()
@@ -1114,26 +1175,73 @@ public sealed class IndexManager : IDisposable
     private void OnGitHeadMaybeChanged(bool fromRetry = false)
     {
         if (_disposed) return;
-        if (!fromRetry) _gitHeadRetriesLeft = GitHeadRetryAttempts;
-        string? head = GitInfo.HeadCommit(_workspaceRoot);
-        if (head is null)
+        bool scheduleRetry = false;
+        string? logMessage = null;
+        lock (_gitHeadObservationGate)
+        {
+            if (_disposed) return;
+            if (!fromRetry) _gitHeadRetriesLeft = GitHeadRetryAttempts;
+            // Snapshot acquisition belongs to the same critical section as comparison and queue
+            // publication. Otherwise overlapping watcher/retry callbacks can capture old/new HEAD
+            // in order but acquire this gate in reverse, permanently publishing the older tuple.
+            GitInfo.HeadSnapshot snapshot = ReadGitHeadSnapshot();
+            if (_disposed) return;
+            if (!snapshot.IsResolved)
+            {
+                scheduleRetry = true;
+            }
+            else
+            {
+                string head = snapshot.Commit!;
+                GitInfo.HeadSnapshot? previousObserved = _latestObservedGitHead;
+                if (previousObserved is { } previous && SameGitHead(previous, snapshot))
+                    return; // duplicate signal for a request already published or queued
+                _latestObservedGitHead = snapshot;
+
+                string? current = _indexedCommit;
+                bool observedCommitChanged = previousObserved is { } observed &&
+                    !string.Equals(observed.Commit, head, StringComparison.OrdinalIgnoreCase);
+                if (current is null)
+                {
+                    // A first-commit signal may arrive while the startup baseline request is still
+                    // queued. Resolve its file scope against the baseline that is actually published
+                    // when this request reaches the pump.
+                    EnqueueGitReconcile(snapshot);
+                    logMessage =
+                        $"Git baseline signal: queueing first-commit reconcile {Short(head)}.";
+                }
+                else if (observedCommitChanged)
+                {
+                    // Even when this snapshot matches the still-published baseline, an older queued
+                    // commit may run first. Queue the inverse transition and resolve its diff at pump
+                    // execution time so A -> B -> A cannot leave B rows behind.
+                    EnqueueGitReconcile(snapshot);
+                    logMessage =
+                        $"Git HEAD observation changed to {Short(head)}; queueing ordered reconcile.";
+                }
+                else if (string.Equals(current, head, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (string.Equals(_indexedBranch, snapshot.Branch, StringComparison.Ordinal) &&
+                        previousObserved is null)
+                        return; // first observation confirms the already-published tuple
+                    QueueGitMetadataRefresh(snapshot);
+                    logMessage =
+                        "Git attachment changed at the current commit; refreshing branch metadata.";
+                }
+                else
+                {
+                    EnqueueGitReconcile(snapshot);
+                    logMessage =
+                        $"Git HEAD changed: {Short(current)} -> {Short(head)}; reconciling.";
+                }
+            }
+        }
+        if (scheduleRetry)
         {
             ScheduleGitHeadRetry(); // 17zd: transient — do not swallow the only first-commit signal
             return;
         }
-        string? current = _indexedCommit;
-        if (current is null)
-        {
-            // 17zd-b: this branch was SILENT — a first-commit signal that subsequently died in
-            // the pump (store-null skip, or the catch-all discarding RecordCommit) left no trace
-            // to diagnose. Log the handoff; the pump logs the completed record.
-            _log($"Git baseline signal: queueing first-commit record {Short(head)}.");
-            _refreshQueue.Writer.TryWrite(new RefreshRequest(Array.Empty<string>(), head, Reason: "git_head"));
-            return;
-        }
-        if (string.Equals(current, head, StringComparison.OrdinalIgnoreCase)) return; // spurious ref churn
-        _log($"Git HEAD changed: {Short(current)} -> {Short(head)}; reconciling.");
-        EnqueueGitReconcile(current, head);
+        if (logMessage is not null) _log(logMessage);
     }
 
     private void ScheduleRefreshRecoverySweep(string unavailablePath)
@@ -1196,6 +1304,7 @@ public sealed class IndexManager : IDisposable
     {
         _refreshRecoverySweepBackoffLevel = 0;
         Volatile.Write(ref _refreshRecoverySweepEscalationLogged, 0);
+        Volatile.Write(ref _refreshRecoveryGitRevalidationRequiredGeneration, 0);
         _refreshRecoveryPendingGitCommit = null;
         lock (_disposeLock)
         {
@@ -1212,19 +1321,15 @@ public sealed class IndexManager : IDisposable
         }
     }
 
-    /// <summary>Diff-scope the reconcile from <paramref name="from"/> to <paramref name="to"/>;
-    /// fall back to a full sweep when the diff is unavailable or too large.</summary>
-    private void EnqueueGitReconcile(string from, string to)
+    /// <summary>Queue the captured HEAD tuple. Its file scope is resolved by the serialized pump
+    /// against the commit actually published ahead of it, so rapid A -&gt; B -&gt; A transitions
+    /// cannot apply an A -&gt; A path list after B rows have entered the index.</summary>
+    private void EnqueueGitReconcile(GitInfo.HeadSnapshot snapshot)
     {
-        var changed = GitInfo.ChangedFiles(_workspaceRoot, from, to);
-        if (changed is null || changed.Count > GitDiffCap)
-        {
-            _refreshQueue.Writer.TryWrite(new RefreshRequest(null, to, Reason: "git_head")); // full sweep, then record `to`
-        }
-        else
-        {
-            _refreshQueue.Writer.TryWrite(new RefreshRequest(changed, to, Reason: "git_head"));
-        }
+        _refreshQueue.Writer.TryWrite(new RefreshRequest(
+            Array.Empty<string>(), snapshot.Commit, Reason: "git_head",
+            RecordBranch: snapshot.Branch, RecordBranchKnown: true,
+            ResolveGitPathsAtExecution: true));
     }
 
     private static string Short(string commit) => commit.Length >= 8 ? commit[..8] : commit;
@@ -1262,10 +1367,45 @@ public sealed class IndexManager : IDisposable
         {
             RefreshRequest req = queuedRequest;
             if (req.TimerInitiatedRecovery &&
+                !req.PublishRevalidatedGitSnapshot &&
                 !string.Equals(_refreshIncompleteReason, RefreshInputUnavailableCause,
                     StringComparison.Ordinal))
             {
                 continue;
+            }
+            if (req.PublishRevalidatedGitSnapshot &&
+                req.RecoveryGitSnapshotGeneration <= Volatile.Read(
+                    ref _refreshRecoveryGitSnapshotRetiredThroughGeneration))
+            {
+                req.CompletionForTest?.TrySetResult();
+                continue;
+            }
+            if (req.ResolveGitPathsAtExecution && req.RecordCommit is { } gitTarget)
+            {
+                string? publishedCommit = _indexedCommit;
+                IReadOnlyCollection<string>? resolvedPaths;
+                if (publishedCommit is null)
+                {
+                    resolvedPaths = null;
+                }
+                else if (string.Equals(publishedCommit, gitTarget,
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    resolvedPaths = Array.Empty<string>();
+                }
+                else
+                {
+                    List<string>? changed = GitInfo.ChangedFiles(
+                        _workspaceRoot, publishedCommit, gitTarget);
+                    resolvedPaths = changed is null || changed.Count > GitDiffCap
+                        ? null
+                        : changed;
+                }
+                req = req with
+                {
+                    Paths = resolvedPaths,
+                    ResolveGitPathsAtExecution = false,
+                };
             }
             if (_refreshIncompleteReason is not null && !req.FullRebuild &&
                 req.Paths is not null)
@@ -1277,12 +1417,17 @@ public sealed class IndexManager : IDisposable
                 req = req with { Paths = null, Reason = "recovery_sweep" };
             }
             if (_refreshIncompleteReason is not null && !req.FullRebuild &&
-                req.RecordCommit is null &&
-                _refreshRecoveryPendingGitCommit is { } pendingGitCommit)
+                !req.PublishRevalidatedGitSnapshot &&
+                _refreshRecoveryPendingGitCommit is { } pendingGitCommit &&
+                (req.RecordCommit is null ||
+                 Volatile.Read(ref _refreshRecoveryGitRevalidationRequiredGeneration) != 0))
             {
+                // A failed recovery HEAD read invalidates every tuple captured before it. Revalidate
+                // those queued requests too: otherwise one can publish its older commit, clear the
+                // stale latch, and cancel the paced retry that was promised for the unknown HEAD.
                 req = req with
                 {
-                    RecordCommit = pendingGitCommit,
+                    RecordCommit = req.RecordCommit ?? pendingGitCommit,
                     RevalidateRecordCommit = true,
                 };
             }
@@ -1332,11 +1477,48 @@ public sealed class IndexManager : IDisposable
             }
             if (req.RevalidateRecordCommit)
             {
-                string? currentHead = RefreshRecoveryHeadCommitForTest is { } headForTest
-                    ? headForTest()
-                    : GitInfo.HeadCommit(_workspaceRoot);
-                if (currentHead is null)
+                GitInfo.HeadSnapshot current;
+                bool requeued;
+                long recoveryGitSnapshotGeneration;
+                lock (_gitHeadObservationGate)
                 {
+                    current = ReadGitHeadSnapshot();
+                    recoveryGitSnapshotGeneration =
+                        ++_refreshRecoveryGitSnapshotGeneration;
+                    if (current.IsResolved)
+                    {
+                        string currentHead = current.Commit!;
+                        // The request is already active, while older Git observations may be
+                        // waiting in the channel. Publish this newly sampled tuple only by
+                        // appending it under the same observation gate; applying it in-place would
+                        // let an older queued request overwrite it afterward.
+                        RefreshRequest orderedRecovery = req with
+                        {
+                            RecordCommit = currentHead,
+                            RevalidateRecordCommit = false,
+                            RecordBranch = current.Branch,
+                            RecordBranchKnown = true,
+                            PublishRevalidatedGitSnapshot = true,
+                            RecoveryGitSnapshotGeneration =
+                                recoveryGitSnapshotGeneration,
+                        };
+                        requeued = _refreshQueue.Writer.TryWrite(orderedRecovery);
+                        if (requeued)
+                        {
+                            _refreshRecoveryPendingGitCommit = currentHead;
+                            _latestObservedGitHead = current;
+                        }
+                    }
+                    else
+                    {
+                        requeued = false;
+                    }
+                }
+                if (!current.IsResolved)
+                {
+                    Volatile.Write(
+                        ref _refreshRecoveryGitRevalidationRequiredGeneration,
+                        recoveryGitSnapshotGeneration);
                     _error = RefreshInputUnavailableCause;
                     _state = "stale";
                     _log("Git HEAD is temporarily unavailable during stale-index recovery; " +
@@ -1347,12 +1529,11 @@ public sealed class IndexManager : IDisposable
                     req.CompletionForTest?.TrySetResult();
                     continue;
                 }
-                _refreshRecoveryPendingGitCommit = currentHead;
-                req = req with
+                if (!requeued)
                 {
-                    RecordCommit = currentHead,
-                    RevalidateRecordCommit = false,
-                };
+                    req.CompletionForTest?.TrySetResult();
+                }
+                continue;
             }
             if (_store is null)
             {
@@ -1391,15 +1572,14 @@ public sealed class IndexManager : IDisposable
                 try
                 {
                     _state = "refreshing";
-                    string? recordBranch = req.RecordCommit is null
-                        ? null
-                        : GitInfo.HeadBranch(_workspaceRoot);
                     var result = WorkspaceFileReaderForTest is { } reader
                         ? DeltaRefresher.RefreshWithReaderForTest(_store, _workspaceRoot,
                             req.Paths, reader, _log, recordCommit: req.RecordCommit,
-                            recordBranch: recordBranch)
+                            recordBranch: req.RecordBranch,
+                            recordBranchKnown: req.RecordBranchKnown)
                         : DeltaRefresher.Refresh(_store, _workspaceRoot, req.Paths, _log,
-                            recordCommit: req.RecordCommit, recordBranch: recordBranch);
+                            recordCommit: req.RecordCommit, recordBranch: req.RecordBranch,
+                            recordBranchKnown: req.RecordBranchKnown);
                     // z4c: count what was ACTUALLY applied (the refresh result), not what was
                     // requested — a sweep request has no path count, and hash-identical paths are
                     // rightly skipped without being "processed".
@@ -1416,10 +1596,16 @@ public sealed class IndexManager : IDisposable
                     if (req.RecordCommit is { } commit)
                     {
                         _indexedCommit = commit;
-                        _indexedBranch = recordBranch ?? _indexedBranch;
+                        if (req.RecordBranchKnown)
+                            _indexedBranch = req.RecordBranch;
                         _log($"Git baseline recorded: {Short(commit)}."); // 17zd-b: close the loop visibly
                     }
-                    if (TryClearRefreshIncomplete())
+                    long requiredGitGeneration = Volatile.Read(
+                        ref _refreshRecoveryGitRevalidationRequiredGeneration);
+                    bool gitRecoverySnapshotIsCurrent =
+                        requiredGitGeneration == 0 ||
+                        req.RecoveryGitSnapshotGeneration >= requiredGitGeneration;
+                    if (gitRecoverySnapshotIsCurrent && TryClearRefreshIncomplete())
                     {
                         ResetRefreshRecoverySweepBackoff();
                         _error = null;
@@ -1430,9 +1616,15 @@ public sealed class IndexManager : IDisposable
                     }
                     else
                     {
-                        // Row changes committed successfully, but clearing the persisted coverage
-                        // latch did not. Keep serving the prior complete snapshot conservatively as
-                        // stale; do not mislabel the successful data refresh as refresh_failed.
+                        // Row changes committed successfully, but either a newer unavailable Git
+                        // generation forbids clearing the latch or its durable delete failed. Keep
+                        // serving the result conservatively as stale; do not mislabel successful row
+                        // publication as refresh_failed.
+                        if (!gitRecoverySnapshotIsCurrent)
+                        {
+                            _log("Refresh committed, but a newer unresolved Git HEAD recovery " +
+                                 "observation keeps the index stale and paced recovery armed.");
+                        }
                         _error = _refreshIncompleteReason;
                         _state = "stale";
                         EmitRefreshSnapshot(refreshId, refreshReason, "completed", // x5ls.1.2
@@ -1705,6 +1897,13 @@ public sealed class IndexManager : IDisposable
             _indexedBranch = null;
             CacheMeta(store);
             _store = store;
+            // A rebuild replaces the database that the pending unavailable-source reconcile
+            // targeted. Do not graft that obsolete target, or an ordered publication already
+            // queued behind this rebuild, onto the post-build convergence sweep.
+            _refreshRecoveryPendingGitCommit = null;
+            Volatile.Write(ref _refreshRecoveryGitRevalidationRequiredGeneration, 0);
+            Volatile.Write(ref _refreshRecoveryGitSnapshotRetiredThroughGeneration,
+                Volatile.Read(ref _refreshRecoveryGitSnapshotGeneration));
             // BuildOwned persists refresh_sweep_pending before it writes the compatibility
             // barrier. Keep the replacement queryable only as stale until the queued detect-all
             // sweep succeeds and clears that marker.
@@ -1721,21 +1920,25 @@ public sealed class IndexManager : IDisposable
             _refreshQueue.Writer.TryWrite(new RefreshRequest(null, Reason: "full_sweep"));
             if (_gitWatcher is null)
             {
-                // Resolves _gitDir, queues the baseline commit record, attaches the GitWatcher —
+                // Resolves _gitDir, attaches GitWatcher, then queues the sampled baseline —
                 // the same first-run path Start uses (queued behind us on this very pump).
                 InitGitTracking();
             }
-            else if (_gitDir is not null && GitInfo.HeadCommit(_workspaceRoot) is { } head)
+            else if (_gitDir is not null)
             {
-                // From-READY rebuild: tracking is live; re-record the baseline immediately (the
-                // fresh build reflects HEAD and the old indexed_commit died with the db).
-                store.SetMeta("indexed_commit", head);
-                _indexedCommit = head;
-                if (GitInfo.HeadBranch(_workspaceRoot) is { } branch)
+                GitInfo.HeadSnapshot snapshot;
+                lock (_gitHeadObservationGate)
                 {
-                    store.SetMeta("indexed_branch", branch);
-                    _indexedBranch = branch;
+                    snapshot = ReadGitHeadSnapshot();
+                    if (snapshot.IsResolved)
+                    {
+                        // From-READY rebuild: tracking is live. Publish commit and attachment
+                        // through the serialized refresh transaction queued behind convergence.
+                        _latestObservedGitHead = snapshot;
+                        QueueGitMetadataRefresh(snapshot);
+                    }
                 }
+                if (!snapshot.IsResolved) ScheduleGitHeadRetry();
             }
         }
         catch (OperationCanceledException ex)
@@ -1807,6 +2010,8 @@ public sealed class IndexManager : IDisposable
         signal.TrySetResult();
         return false;
     }
+
+    internal void NotifyGitHeadChangedForTest() => OnGitHeadMaybeChanged();
 
     /// <summary>Queues a REBUILD-FROM-SCRATCH (tky): delete the db, run a full build, reopen.
     /// Serialized on the refresh pump like every other index mutation, so it can never race a
