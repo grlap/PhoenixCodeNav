@@ -269,6 +269,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("index-raw-ordinal-symbol-batching", ids);
         Assert.Contains("operations-portal-jsonl-readonly", ids);
         Assert.Contains("operations-portal-live-build-status", ids);
+        Assert.Contains("refresh-recovery-self-heal", ids);
         Assert.Equal(
             1,
             ids.Count(id => id == "operations-portal-jsonl-readonly"));
@@ -282,6 +283,25 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .GetProperty("summary")
             .GetString()!;
         Assert.Contains("without opening SQLite", portalReadOnly);
+        string refreshRecovery = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "refresh-recovery-self-heal")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("5/10/30/60-second capped backoff", refreshRecovery);
+        Assert.Contains("timer-initiated recovery sweeps make one capture attempt each",
+            refreshRecovery);
+        Assert.Contains("re-resolve pending Git baselines", refreshRecovery);
+        Assert.Contains("remain honestly stale until success", refreshRecovery);
+        string refreshInputRetry = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "refresh-input-retry")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("initial or event-driven serialized requests", refreshInputRetry);
+        Assert.Contains("timer-initiated stale-index recovery", refreshInputRetry);
         Assert.Contains("search-symbol-malformed-query", ids);
         Assert.Contains("index-follower-liveness-fail-closed", ids);
         string semanticBudget = Assert.Single(json.GetProperty("features").EnumerateArray(),

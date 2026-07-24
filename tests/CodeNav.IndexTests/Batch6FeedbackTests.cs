@@ -399,6 +399,7 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("refresh-input-retry", featureIds);
         Assert.Contains("refresh-sweep-publication-gating", featureIds);
         Assert.Contains("refresh-incomplete-freshness", featureIds);
+        Assert.Contains("refresh-recovery-self-heal", featureIds);
         Assert.Contains("oversized-source-coverage", featureIds);
     }
 

@@ -559,11 +559,21 @@ advance `indexed_commit`, report worktree `inSync`, or allow semantic coverage t
 exact/current source evidence.
 
 If the quick retries are exhausted, the writer keeps a stable `refresh_input_unavailable` cause,
-persists that latch for read-only followers, widens the next queued targeted request into a
-detect-all recovery sweep, and remains stale until that recovery or a full rebuild succeeds. It
-never relies on the operating system producing a second identical notification. A fresh watcher
-signal may start a new bounded retry budget, but cannot clear the incomplete-freshness latch unless
-the recovery sweep captures the previously unavailable source.
+persists that latch for read-only followers, and remains stale until a complete recovery or full
+rebuild succeeds. It schedules autonomous detect-all recovery sweeps after 5, 10, 30, and then
+capped 60 second delays, with one capture attempt per timer-initiated sweep so a permanently
+unreadable source cannot amplify into a tight full-workspace scan loop. A successful sweep clears
+the durable latch, cancels the pending timer, and resets the next unavailable episode to 5 seconds;
+if row publication succeeds but clearing the durable latch fails, paced recovery remains armed.
+The next queued targeted event is also widened to detect-all and retains the short bounded capture
+retry ladder. Recovery therefore never relies on the operating system producing a second identical
+notification, and no request can clear the incomplete-freshness latch unless its complete sweep
+captures the previously unavailable source.
+
+When the failed request carries a Git target, every later recovery request inherits that pending
+baseline and re-resolves the current `HEAD` immediately before capture. An unresolvable `HEAD`
+leaves the writer stale and rearms paced recovery; a successful complete sweep publishes rows,
+`indexed_commit`, and `indexed_branch` in the same transaction before the durable latch is cleared.
 
 `Oversized` is persistent rather than transient and receives no rapid retry loop. The failure
 identifies the regular source that prevented the atomic batch and propagates bounded partial

@@ -96,7 +96,9 @@ public sealed class IndexManager : IDisposable
     // sweeps as full_sweep. Producers label at the source; the pump falls back to shape.
     private sealed record RefreshRequest(IReadOnlyCollection<string>? Paths, string? RecordCommit = null,
         bool FullRebuild = false, string? Reason = null,
-        TaskCompletionSource? CompletionForTest = null);
+        TaskCompletionSource? CompletionForTest = null,
+        bool TimerInitiatedRecovery = false,
+        bool RevalidateRecordCommit = false);
 
     private readonly string _workspaceRoot;
     private readonly string _dbPath;
@@ -166,6 +168,7 @@ public sealed class IndexManager : IDisposable
     internal Func<string, string, int, GitInfo.WorkspaceFileReadResult>?
         WorkspaceFileReaderForTest
     { get; set; }
+    internal Func<string?>? RefreshRecoveryHeadCommitForTest { get; set; }
     internal Action? ClearRefreshIncompleteBeforeCommitForTest { get; set; }
     internal Action<string>? RefreshIncompleteBeforeCommitForTest { get; set; }
     internal Action? RefreshInputFailureBeforeLatchForTest { get; set; }
@@ -1066,6 +1069,18 @@ public sealed class IndexManager : IDisposable
     private const int GitHeadRetryAttempts = 5;
     private int _gitHeadRetriesLeft = GitHeadRetryAttempts;
     private System.Threading.Timer? _gitHeadRetry;
+    private static readonly TimeSpan[] RefreshRecoverySweepDelays =
+    [
+        TimeSpan.FromSeconds(5),
+        TimeSpan.FromSeconds(10),
+        TimeSpan.FromSeconds(30),
+        TimeSpan.FromSeconds(60),
+    ];
+    private System.Threading.Timer? _refreshRecoverySweepRetry;
+    private int _refreshRecoverySweepBackoffLevel;
+    private int _refreshRecoverySweepEscalationLogged;
+    private volatile string? _refreshRecoveryPendingGitCommit;
+    internal Func<int, TimeSpan>? RefreshRecoverySweepDelayForTest { get; set; }
 
     private void ScheduleGitHeadRetry()
     {
@@ -1121,6 +1136,82 @@ public sealed class IndexManager : IDisposable
         EnqueueGitReconcile(current, head);
     }
 
+    private void ScheduleRefreshRecoverySweep(string unavailablePath)
+    {
+        if (_disposed) return;
+        int level = Math.Min(_refreshRecoverySweepBackoffLevel,
+            RefreshRecoverySweepDelays.Length - 1);
+        TimeSpan delay = RefreshRecoverySweepDelayForTest?.Invoke(level)
+            ?? RefreshRecoverySweepDelays[level];
+        if (delay < TimeSpan.Zero)
+            delay = TimeSpan.Zero;
+        bool logEscalation = false;
+        lock (_disposeLock)
+        {
+            if (_disposed) return;
+            _refreshRecoverySweepBackoffLevel = Math.Min(level + 1,
+                RefreshRecoverySweepDelays.Length - 1);
+            if (level == RefreshRecoverySweepDelays.Length - 1 &&
+                Interlocked.Exchange(ref _refreshRecoverySweepEscalationLogged, 1) == 0)
+            {
+                logEscalation = true;
+            }
+            try
+            {
+                (_refreshRecoverySweepRetry ??= new System.Threading.Timer(
+                        _ => QueueRefreshRecoverySweep(),
+                        null, Timeout.Infinite, Timeout.Infinite))
+                    .Change(delay, Timeout.InfiniteTimeSpan);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Dispose can win after the stale-state check. The manager is stopping, so no
+                // recovery request should survive it.
+            }
+        }
+        if (logEscalation)
+        {
+            _log($"Source remains unavailable for {unavailablePath}; automated stale-index " +
+                 $"recovery is now paced at one complete sweep every " +
+                 $"{delay.TotalSeconds:F0}s until the input becomes readable.");
+        }
+    }
+
+    private void QueueRefreshRecoverySweep()
+    {
+        if (_disposed ||
+            !string.Equals(_refreshIncompleteReason, RefreshInputUnavailableCause,
+                StringComparison.Ordinal))
+            return;
+
+        _log("Retrying stale index recovery with a complete workspace sweep.");
+        string? pendingGitCommit = _refreshRecoveryPendingGitCommit;
+        _refreshQueue.Writer.TryWrite(new RefreshRequest(null,
+            RecordCommit: pendingGitCommit, Reason: "recovery_sweep",
+            TimerInitiatedRecovery: true,
+            RevalidateRecordCommit: pendingGitCommit is not null));
+    }
+
+    private void ResetRefreshRecoverySweepBackoff()
+    {
+        _refreshRecoverySweepBackoffLevel = 0;
+        Volatile.Write(ref _refreshRecoverySweepEscalationLogged, 0);
+        _refreshRecoveryPendingGitCommit = null;
+        lock (_disposeLock)
+        {
+            if (_disposed) return;
+            try
+            {
+                _refreshRecoverySweepRetry?.Change(
+                    Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Dispose owns shutdown; a successful refresh does not need to retain the timer.
+            }
+        }
+    }
+
     /// <summary>Diff-scope the reconcile from <paramref name="from"/> to <paramref name="to"/>;
     /// fall back to a full sweep when the diff is unavailable or too large.</summary>
     private void EnqueueGitReconcile(string from, string to)
@@ -1170,6 +1261,12 @@ public sealed class IndexManager : IDisposable
         await foreach (var queuedRequest in _refreshQueue.Reader.ReadAllAsync())
         {
             RefreshRequest req = queuedRequest;
+            if (req.TimerInitiatedRecovery &&
+                !string.Equals(_refreshIncompleteReason, RefreshInputUnavailableCause,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
             if (_refreshIncompleteReason is not null && !req.FullRebuild &&
                 req.Paths is not null)
             {
@@ -1178,6 +1275,16 @@ public sealed class IndexManager : IDisposable
                 // the single pump still preserves FIFO order and one recovery sweep covers all
                 // paths queued behind the failed request.
                 req = req with { Paths = null, Reason = "recovery_sweep" };
+            }
+            if (_refreshIncompleteReason is not null && !req.FullRebuild &&
+                req.RecordCommit is null &&
+                _refreshRecoveryPendingGitCommit is { } pendingGitCommit)
+            {
+                req = req with
+                {
+                    RecordCommit = pendingGitCommit,
+                    RevalidateRecordCommit = true,
+                };
             }
             RefreshRequestDequeuedForTest?.Invoke();
             await _startupComplete.Task.ConfigureAwait(false);
@@ -1222,6 +1329,30 @@ public sealed class IndexManager : IDisposable
                     finally { EndIndexMutation(); }
                 }
                 continue;
+            }
+            if (req.RevalidateRecordCommit)
+            {
+                string? currentHead = RefreshRecoveryHeadCommitForTest is { } headForTest
+                    ? headForTest()
+                    : GitInfo.HeadCommit(_workspaceRoot);
+                if (currentHead is null)
+                {
+                    _error = RefreshInputUnavailableCause;
+                    _state = "stale";
+                    _log("Git HEAD is temporarily unavailable during stale-index recovery; " +
+                         "the pending baseline remains uncommitted and recovery stays paced.");
+                    ScheduleRefreshRecoverySweep(
+                        _refreshIncompletePaths?.FirstOrDefault()
+                        ?? "unavailable workspace input");
+                    req.CompletionForTest?.TrySetResult();
+                    continue;
+                }
+                _refreshRecoveryPendingGitCommit = currentHead;
+                req = req with
+                {
+                    RecordCommit = currentHead,
+                    RevalidateRecordCommit = false,
+                };
             }
             if (_store is null)
             {
@@ -1290,6 +1421,7 @@ public sealed class IndexManager : IDisposable
                     }
                     if (TryClearRefreshIncomplete())
                     {
+                        ResetRefreshRecoverySweepBackoff();
                         _error = null;
                         _state = "ready";
                         EmitRefreshSnapshot(refreshId, refreshReason, "completed", // x5ls.1.2
@@ -1307,6 +1439,13 @@ public sealed class IndexManager : IDisposable
                             result.AddedFiles + result.ChangedFiles + result.DeletedFiles,
                             (long)result.Elapsed.TotalMilliseconds,
                             errorCode: _refreshIncompleteReason);
+                        if (string.Equals(_refreshIncompleteReason,
+                                RefreshInputUnavailableCause, StringComparison.Ordinal))
+                        {
+                            ScheduleRefreshRecoverySweep(
+                                _refreshIncompletePaths?.FirstOrDefault()
+                                ?? "unavailable workspace input");
+                        }
                     }
                 }
                 catch (RefreshInputUnavailableException ex)
@@ -1315,7 +1454,11 @@ public sealed class IndexManager : IDisposable
                     MarkRefreshIncomplete(RefreshInputUnavailableCause, [ex.Path],
                         pathCountIsLowerBound: true);
                     _error = RefreshInputUnavailableCause;
-                    if (captureRetry < DeltaRefresher.RefreshInputRetryDelays.Length)
+                    if (req.RecordCommit is { } failedGitCommit)
+                        _refreshRecoveryPendingGitCommit = failedGitCommit;
+                    bool timerInitiatedRecovery = req.TimerInitiatedRecovery;
+                    if (!timerInitiatedRecovery &&
+                        captureRetry < DeltaRefresher.RefreshInputRetryDelays.Length)
                     {
                         retryCapture = true;
                         _log($"Source capture unavailable for {ex.Path}; retrying complete " +
@@ -1325,11 +1468,15 @@ public sealed class IndexManager : IDisposable
                     else
                     {
                         _state = "stale";
-                        _log($"Source capture unavailable for {ex.Path}; bounded refresh " +
-                             "retries exhausted.");
+                        _log(timerInitiatedRecovery
+                            ? $"Source capture remains unavailable for {ex.Path}; scheduling " +
+                              "the next paced recovery sweep."
+                            : $"Source capture unavailable for {ex.Path}; bounded refresh " +
+                              "retries exhausted; scheduling a complete recovery sweep.");
                         EmitRefreshSnapshot(refreshId, refreshReason, "failed",
                             batchProcessed: 0, elapsedMs: refreshWall.ElapsedMilliseconds,
                             errorCode: RefreshInputUnavailableCause);
+                        ScheduleRefreshRecoverySweep(ex.Path);
                     }
                 }
                 catch (RefreshInputOversizedException ex)
@@ -1911,6 +2058,7 @@ public sealed class IndexManager : IDisposable
         TelemetryIpc.Dispose();              // x5ls.1: stop the IPC producer (2s cap)
         _gitWatcher?.Dispose();              // stop git HEAD signals
         _gitHeadRetry?.Dispose();            // 17zd: stop the null-HEAD retry (callback checks _disposed)
+        _refreshRecoverySweepRetry?.Dispose(); // stop stale-input recovery retries
         _watcher?.Dispose();                 // stop new events reaching the queue
         _refreshQueue.Writer.TryComplete();  // let the pump drain and exit its loop
 

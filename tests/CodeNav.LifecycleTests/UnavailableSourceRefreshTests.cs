@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using CodeNav.Core.Indexing;
@@ -299,6 +300,100 @@ public sealed class UnavailableSourceRefreshTests
     }
 
     [Fact]
+    public async Task AutonomousRecoveryPublishesLatestGitBaseline()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-capture-git-autonomous-recovery").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            const string relativePath = "Changed.cs";
+            const string oldCommit = "1111111111111111111111111111111111111111";
+            const string failedRequestCommit = "2222222222222222222222222222222222222222";
+            const string latestHeadCommit = "3333333333333333333333333333333333333333";
+            File.WriteAllText(Path.Combine(root, relativePath),
+                "namespace AutonomousBaseline; public sealed class Before { }");
+            IndexBuilder.Build(root, database);
+            using (var store = new IndexStore(database, createNew: false))
+                store.SetMeta("indexed_commit", oldCommit);
+
+            using var manager = new IndexManager(root, database);
+            manager.RefreshRecoverySweepDelayForTest =
+                _ => TimeSpan.FromMilliseconds(25);
+            int headResolutionAttempts = 0;
+            manager.RefreshRecoveryHeadCommitForTest = () =>
+                Interlocked.Increment(ref headResolutionAttempts) == 1
+                    ? null
+                    : latestHeadCommit;
+            manager.Start();
+            Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
+                TimeSpan.FromSeconds(20)), manager.Health().Error);
+            Assert.True(manager.RequestRefreshForTest(Array.Empty<string>(),
+                out Task startupQueueDrained));
+            await startupQueueDrained.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(oldCommit, manager.Health().IndexedCommit);
+
+            byte[] replacement = Encoding.UTF8.GetBytes(
+                "namespace AutonomousBaseline; public sealed class After { }");
+            int inputAvailable = 0;
+            manager.WorkspaceFileReaderForTest = (workspaceRoot, gitPath, maxBytes) =>
+            {
+                if (!gitPath.Equals(relativePath, StringComparison.Ordinal))
+                    return GitInfo.ReadBoundedWorkspaceFileResult(
+                        workspaceRoot, gitPath, maxBytes);
+                return Volatile.Read(ref inputAvailable) == 0
+                    ? new GitInfo.WorkspaceFileReadResult(
+                        GitInfo.WorkspaceFileReadDisposition.Unavailable, null)
+                    : new GitInfo.WorkspaceFileReadResult(
+                        GitInfo.WorkspaceFileReadDisposition.Success, replacement);
+            };
+
+            Assert.True(manager.RequestGitRefreshForTest(
+                [relativePath], failedRequestCommit, out Task failedRefreshCompleted));
+            await failedRefreshCompleted.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal("stale", manager.State);
+            Assert.Equal(oldCommit, manager.Health().IndexedCommit);
+            using (var persistedBeforeRecovery =
+                   new IndexStore(database, createNew: false))
+            {
+                Assert.Equal(oldCommit,
+                    persistedBeforeRecovery.GetMeta("indexed_commit"));
+            }
+
+            Volatile.Write(ref inputAvailable, 1);
+
+            Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
+                TimeSpan.FromSeconds(10)),
+                "autonomous recovery did not converge after Git input became readable");
+            Assert.True(Volatile.Read(ref headResolutionAttempts) >= 2,
+                "recovery did not retry after HEAD was temporarily unavailable");
+            Assert.Equal(latestHeadCommit, manager.Health().IndexedCommit);
+            Assert.Null(manager.Health().RefreshIncompleteReason);
+            using var queries = manager.OpenQueries();
+            Assert.Empty(queries.SearchSymbols("Before", "exact", null, 2));
+            Assert.Single(queries.SearchSymbols("After", "exact", null, 2));
+            using (var persistedAfterRecovery =
+                   new IndexStore(database, createNew: false))
+            {
+                Assert.Equal(latestHeadCommit,
+                    persistedAfterRecovery.GetMeta("indexed_commit"));
+            }
+            using var followerReader = new IndexQueries(database);
+            IndexMetadataSnapshot recoveredMetadata = followerReader.ReadMetadata();
+            Assert.Equal(latestHeadCommit, recoveredMetadata.IndexedCommit);
+            Assert.Null(recoveredMetadata.RefreshIncompleteReason);
+            IndexHealth followerHealth = IndexManager.FollowerHealthForTest(
+                recoveredMetadata, databaseBytes: 1, root, database);
+            Assert.Equal("ready", followerHealth.State);
+            Assert.Equal(latestHeadCommit, followerHealth.IndexedCommit);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
     public async Task RetriedRequestStaysAheadOfLaterQueuedRefresh()
     {
         string root = Directory.CreateTempSubdirectory(
@@ -387,6 +482,8 @@ public sealed class UnavailableSourceRefreshTests
             IndexBuilder.Build(root, database);
 
             using var manager = new IndexManager(root, database);
+            manager.RefreshRecoverySweepDelayForTest =
+                _ => TimeSpan.FromHours(1);
             manager.Start();
             Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
                 TimeSpan.FromSeconds(20)), manager.Health().Error);
@@ -403,8 +500,8 @@ public sealed class UnavailableSourceRefreshTests
             {
                 if (gitPath.Equals(secondUnavailablePath, StringComparison.Ordinal))
                 {
-                    Interlocked.Increment(ref secondPathAttempts);
-                    return Volatile.Read(ref recovered) == 0
+                    int attempt = Interlocked.Increment(ref secondPathAttempts);
+                    return Volatile.Read(ref recovered) == 0 || attempt <= 3
                         ? new GitInfo.WorkspaceFileReadResult(
                             GitInfo.WorkspaceFileReadDisposition.Unavailable, null)
                         : GitInfo.ReadBoundedWorkspaceFileResult(workspaceRoot, gitPath,
@@ -440,7 +537,8 @@ public sealed class UnavailableSourceRefreshTests
                 out Task recoveryCompleted));
             await recoveryCompleted.WaitAsync(TimeSpan.FromSeconds(20));
 
-            Assert.Equal(5, Volatile.Read(ref failedPathAttempts));
+            Assert.InRange(Volatile.Read(ref failedPathAttempts), 5, 8);
+            Assert.Equal(4, Volatile.Read(ref secondPathAttempts));
             Assert.Equal("ready", manager.State);
             Assert.Null(manager.Health().Error);
             Assert.Null(manager.Health().RefreshIncompleteReason);
@@ -450,6 +548,242 @@ public sealed class UnavailableSourceRefreshTests
             using var queries = manager.OpenQueries();
             Assert.Single(queries.SearchSymbols("AfterRecovery", "exact", null, 2));
             Assert.Empty(queries.SearchSymbols("BeforeRecovery", "exact", null, 2));
+            using var followerReader = new IndexQueries(database);
+            IndexMetadataSnapshot recoveredMetadata = followerReader.ReadMetadata();
+            Assert.Null(recoveredMetadata.RefreshIncompleteReason);
+            Assert.Null(recoveredMetadata.RefreshIncompletePaths);
+            Assert.Equal(0, recoveredMetadata.RefreshIncompletePathCount);
+            Assert.False(recoveredMetadata.RefreshIncompletePathCountIsLowerBound);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task ExhaustedProjectCaptureRecoversCoBatchedSourceWithoutAnotherEvent()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-project-capture-recovery").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            const string sourcePath = "App.cs";
+            const string projectPath = "App.csproj";
+            string projectFile = Path.Combine(root, projectPath);
+            File.WriteAllText(Path.Combine(root, sourcePath),
+                "namespace ProjectRecovery; public sealed class BeforeRecovery { }");
+            File.WriteAllText(projectFile,
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+                "<TargetFramework>net10.0</TargetFramework>" +
+                "<AssemblyName>BeforeProjectRecovery</AssemblyName>" +
+                "</PropertyGroup></Project>");
+            IndexBuilder.Build(root, database);
+
+            using var manager = new IndexManager(root, database);
+            manager.RefreshRecoverySweepDelayForTest =
+                _ => TimeSpan.FromMilliseconds(25);
+            manager.Start();
+            Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
+                TimeSpan.FromSeconds(20)), manager.Health().Error);
+            Assert.True(manager.RequestRefreshForTest(Array.Empty<string>(),
+                out Task startupQueueDrained));
+            await startupQueueDrained.WaitAsync(TimeSpan.FromSeconds(20));
+
+            byte[] sourceReplacement = Encoding.UTF8.GetBytes(
+                "namespace ProjectRecovery; public sealed class AfterRecovery { }");
+            byte[] projectReplacement = Encoding.UTF8.GetBytes(
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+                "<TargetFramework>net10.0</TargetFramework>" +
+                "<AssemblyName>AfterProjectRecovery</AssemblyName>" +
+                "</PropertyGroup></Project>");
+
+            int projectAvailable = 0;
+            manager.WorkspaceFileReaderForTest = (workspaceRoot, gitPath, maxBytes) =>
+            {
+                if (gitPath.Equals(sourcePath, StringComparison.Ordinal))
+                {
+                    return new GitInfo.WorkspaceFileReadResult(
+                        GitInfo.WorkspaceFileReadDisposition.Success, sourceReplacement);
+                }
+                if (gitPath.Equals(projectPath, StringComparison.Ordinal))
+                {
+                    return Volatile.Read(ref projectAvailable) == 0
+                        ? new GitInfo.WorkspaceFileReadResult(
+                            GitInfo.WorkspaceFileReadDisposition.Unavailable, null)
+                        : new GitInfo.WorkspaceFileReadResult(
+                            GitInfo.WorkspaceFileReadDisposition.Success, projectReplacement);
+                }
+                return GitInfo.ReadBoundedWorkspaceFileResult(workspaceRoot, gitPath, maxBytes);
+            };
+
+            Assert.True(manager.RequestRefreshForTest([sourcePath, projectPath],
+                out Task failedRefreshCompleted));
+            await failedRefreshCompleted.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(IndexManager.RefreshInputUnavailableCause,
+                manager.Health().RefreshIncompleteReason);
+            using (var staleQueries = manager.OpenQueries())
+            {
+                Assert.Single(staleQueries.SearchSymbols(
+                    "BeforeRecovery", "exact", null, 2));
+                Assert.Empty(staleQueries.SearchSymbols(
+                    "AfterRecovery", "exact", null, 2));
+                Assert.NotNull(staleQueries.ProjectByName("BeforeProjectRecovery"));
+                Assert.Null(staleQueries.ProjectByName("AfterProjectRecovery"));
+            }
+
+            Volatile.Write(ref projectAvailable, 1);
+
+            Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
+                TimeSpan.FromSeconds(10)),
+                "the stale writer did not retry after project input became readable");
+            using var recoveredQueries = manager.OpenQueries();
+            Assert.Empty(recoveredQueries.SearchSymbols(
+                "BeforeRecovery", "exact", null, 2));
+            Assert.Single(recoveredQueries.SearchSymbols(
+                "AfterRecovery", "exact", null, 2));
+            Assert.Null(recoveredQueries.ProjectByName("BeforeProjectRecovery"));
+            Assert.NotNull(recoveredQueries.ProjectByName("AfterProjectRecovery"));
+            Assert.Null(manager.Health().Error);
+            Assert.Null(manager.Health().RefreshIncompleteReason);
+            using var followerReader = new IndexQueries(database);
+            IndexMetadataSnapshot recoveredMetadata = followerReader.ReadMetadata();
+            Assert.Null(recoveredMetadata.RefreshIncompleteReason);
+            Assert.Null(recoveredMetadata.RefreshIncompletePaths);
+            Assert.Equal(0, recoveredMetadata.RefreshIncompletePathCount);
+            Assert.False(recoveredMetadata.RefreshIncompletePathCountIsLowerBound);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task RecoverySweepBackoffEscalatesAndSkipsInlineCaptureRetries()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-capture-recovery-backoff").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            const string unavailablePath = "Unavailable.cs";
+            File.WriteAllText(Path.Combine(root, unavailablePath),
+                "namespace RecoveryBackoff; public sealed class BeforeRecovery { }");
+            IndexBuilder.Build(root, database);
+
+            var logs = new ConcurrentQueue<string>();
+            var scheduledLevels = new ConcurrentQueue<int>();
+            using var manager = new IndexManager(root, database, logs.Enqueue);
+            manager.RefreshRecoverySweepDelayForTest = level =>
+            {
+                scheduledLevels.Enqueue(level);
+                return level < 3
+                    ? TimeSpan.FromMilliseconds(10)
+                    : TimeSpan.FromHours(1);
+            };
+            manager.Start();
+            Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
+                TimeSpan.FromSeconds(20)), manager.Health().Error);
+            Assert.True(manager.RequestRefreshForTest(Array.Empty<string>(),
+                out Task startupQueueDrained));
+            await startupQueueDrained.WaitAsync(TimeSpan.FromSeconds(20));
+
+            int unavailableAttempts = 0;
+            manager.WorkspaceFileReaderForTest = (workspaceRoot, gitPath, maxBytes) =>
+            {
+                if (gitPath.Equals(unavailablePath, StringComparison.Ordinal))
+                {
+                    Interlocked.Increment(ref unavailableAttempts);
+                    return new GitInfo.WorkspaceFileReadResult(
+                        GitInfo.WorkspaceFileReadDisposition.Unavailable, null);
+                }
+                return GitInfo.ReadBoundedWorkspaceFileResult(
+                    workspaceRoot, gitPath, maxBytes);
+            };
+
+            Assert.True(manager.RequestRefreshForTest([unavailablePath],
+                out Task failedRefreshCompleted));
+            await failedRefreshCompleted.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.True(SpinWait.SpinUntil(() => scheduledLevels.Count >= 4,
+                TimeSpan.FromSeconds(5)), "recovery backoff did not reach its ceiling");
+
+            Assert.Equal([0, 1, 2, 3], scheduledLevels.Take(4).ToArray());
+            Assert.Equal(7, Volatile.Read(ref unavailableAttempts));
+            Assert.Single(logs, message => message.Contains(
+                "recovery is now paced at one complete sweep every",
+                StringComparison.Ordinal));
+            Assert.Equal(IndexManager.RefreshInputUnavailableCause,
+                manager.Health().RefreshIncompleteReason);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task RecoverySweepRetriesAfterDurableLatchClearFailsOnce()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-capture-recovery-latch-clear").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            const string relativePath = "Changed.cs";
+            File.WriteAllText(Path.Combine(root, relativePath),
+                "namespace RecoveryLatchClear; public sealed class Before { }");
+            IndexBuilder.Build(root, database);
+
+            using var manager = new IndexManager(root, database);
+            manager.RefreshRecoverySweepDelayForTest =
+                _ => TimeSpan.FromMilliseconds(25);
+            manager.Start();
+            Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
+                TimeSpan.FromSeconds(20)), manager.Health().Error);
+            Assert.True(manager.RequestRefreshForTest(Array.Empty<string>(),
+                out Task startupQueueDrained));
+            await startupQueueDrained.WaitAsync(TimeSpan.FromSeconds(20));
+
+            byte[] replacement = Encoding.UTF8.GetBytes(
+                "namespace RecoveryLatchClear; public sealed class After { }");
+            int inputAvailable = 0;
+            manager.WorkspaceFileReaderForTest = (workspaceRoot, gitPath, maxBytes) =>
+            {
+                if (!gitPath.Equals(relativePath, StringComparison.Ordinal))
+                    return GitInfo.ReadBoundedWorkspaceFileResult(
+                        workspaceRoot, gitPath, maxBytes);
+                return Volatile.Read(ref inputAvailable) == 0
+                    ? new GitInfo.WorkspaceFileReadResult(
+                        GitInfo.WorkspaceFileReadDisposition.Unavailable, null)
+                    : new GitInfo.WorkspaceFileReadResult(
+                        GitInfo.WorkspaceFileReadDisposition.Success, replacement);
+            };
+            int clearAttempts = 0;
+            manager.ClearRefreshIncompleteBeforeCommitForTest = () =>
+            {
+                if (Interlocked.Increment(ref clearAttempts) == 1)
+                    throw new IOException("injected one-time metadata clear failure");
+            };
+
+            Assert.True(manager.RequestRefreshForTest([relativePath],
+                out Task failedRefreshCompleted));
+            await failedRefreshCompleted.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(IndexManager.RefreshInputUnavailableCause,
+                manager.Health().RefreshIncompleteReason);
+
+            Volatile.Write(ref inputAvailable, 1);
+
+            Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
+                TimeSpan.FromSeconds(10)),
+                "recovery did not retry after the durable latch clear failed once");
+            Assert.Equal(2, Volatile.Read(ref clearAttempts));
+            Assert.Null(manager.Health().Error);
+            Assert.Null(manager.Health().RefreshIncompleteReason);
+            using var queries = manager.OpenQueries();
+            Assert.Empty(queries.SearchSymbols("Before", "exact", null, 2));
+            Assert.Single(queries.SearchSymbols("After", "exact", null, 2));
             using var followerReader = new IndexQueries(database);
             IndexMetadataSnapshot recoveredMetadata = followerReader.ReadMetadata();
             Assert.Null(recoveredMetadata.RefreshIncompleteReason);
