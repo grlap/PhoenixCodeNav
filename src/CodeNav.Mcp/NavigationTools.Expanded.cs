@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using ModelContextProtocol.Server;
@@ -480,12 +481,15 @@ public sealed partial class NavigationTools
     [McpServerTool(Name = "batch_outline")]
     [Description("Outlines for several files at once (types only per file, budget-shared). Use before deciding which files to read.")]
     public string BatchOutline(
-        [Description("Comma-separated workspace-relative paths (max 12).")] string paths,
+        [Description("One to 12 workspace-relative paths as comma-separated text or a JSON-array string; more than 12 returns bad_request.")] string paths,
         [Description("1 = types only (default), 2 = + members.")] int depth = 1)
     {
         if (NotReady() is { } notReady) return notReady;
-        var list = SplitCsv(paths) ?? new List<string>();
-        var results = list.Take(12)
+        if (!TryParseBatchOutlinePaths(paths, out List<string> list, out string? detail))
+        {
+            return Json.Serialize(new { error = "bad_request", detail });
+        }
+        var results = list
             .Select(p => System.Text.Json.JsonSerializer.Deserialize<object>(Outline(p, depth), Json.Options)!)
             .ToList();
         return Json.WithListBudget(results, (items, truncated) => new
@@ -493,6 +497,80 @@ public sealed partial class NavigationTools
             outlines = items,
             truncated,
         });
+    }
+
+    private const int BatchOutlinePathLimit = 12;
+
+    private static bool TryParseBatchOutlinePaths(
+        string? value,
+        out List<string> paths,
+        out string? detail)
+    {
+        paths = new List<string>();
+        detail = null;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            detail = "Provide 'paths'.";
+            return false;
+        }
+
+        string trimmed = value.Trim();
+        if (trimmed[0] == '[')
+        {
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(trimmed);
+                if (document.RootElement.ValueKind != JsonValueKind.Array)
+                {
+                    detail = "paths must be comma-separated text or a JSON array of strings.";
+                    return false;
+                }
+
+                foreach (JsonElement item in document.RootElement.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.String ||
+                        string.IsNullOrWhiteSpace(item.GetString()))
+                    {
+                        detail = "Every JSON-array paths item must be a non-empty string.";
+                        return false;
+                    }
+                    paths.Add(item.GetString()!);
+                }
+            }
+            catch (JsonException)
+            {
+                detail = "paths starts like a JSON array but is not a valid JSON array of strings.";
+                return false;
+            }
+        }
+        else if (trimmed[0] is '"' or '{')
+        {
+            detail = "paths must be comma-separated text or a JSON array of strings.";
+            return false;
+        }
+        else
+        {
+            string[] items = value.Split(',');
+            if (items.Any(string.IsNullOrWhiteSpace))
+            {
+                detail = "Every comma-separated paths item must be non-empty.";
+                return false;
+            }
+            paths = items.Select(path => path.Trim()).ToList();
+        }
+
+        if (paths.Count == 0)
+        {
+            detail = "Provide 'paths'.";
+            return false;
+        }
+
+        if (paths.Count > BatchOutlinePathLimit)
+        {
+            detail = $"paths accepts at most {BatchOutlinePathLimit} entries.";
+            return false;
+        }
+        return true;
     }
 
     // ---------------------------------------------------------------- composites

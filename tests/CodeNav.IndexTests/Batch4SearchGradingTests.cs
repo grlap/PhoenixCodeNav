@@ -271,6 +271,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("operations-portal-live-build-status", ids);
         Assert.Contains("refresh-recovery-self-heal", ids);
         Assert.Contains("git-awareness", ids);
+        Assert.Contains("batch-outline-json-array-paths", ids);
         Assert.Equal(
             1,
             ids.Count(id => id == "operations-portal-jsonl-readonly"));

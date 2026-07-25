@@ -96,12 +96,104 @@ public class ExpandedToolTests
     }
 
     [Fact]
-    public void BatchOutlineReturnsMultipleFiles()
+    public void BatchOutlineReturnsMultipleCommaSeparatedFiles()
     {
         using var q = _manager.OpenQueries();
         var files = q.FindFiles("*.cs", 3).Select(f => f.Path).ToList();
         var json = Parse(_tools.BatchOutline(string.Join(",", files)));
         Assert.Equal(files.Count, json.GetProperty("outlines").GetArrayLength());
+    }
+
+    [Fact]
+    public void BatchOutlineAcceptsSerializedJsonArrayWithoutManglingPaths()
+    {
+        using var q = _manager.OpenQueries();
+        var files = q.FindFiles("*.cs", 3).Select(f => f.Path).ToList();
+
+        var json = Parse(_tools.BatchOutline(JsonSerializer.Serialize(files)));
+        var outlines = json.GetProperty("outlines").EnumerateArray().ToList();
+
+        Assert.Equal(files.Count, outlines.Count);
+        Assert.Equal(files,
+            outlines.Select(outline => outline.GetProperty("path").GetString()!).ToList());
+        Assert.All(outlines, outline => Assert.False(outline.TryGetProperty("error", out _)));
+    }
+
+    [Fact]
+    public void BatchOutlinePreservesExactJsonArrayPathText()
+    {
+        string[] paths =
+        {
+            " leading.cs",
+            "leading.cs",
+            "trailing.cs ",
+            "\tTabbed.cs",
+            "comma,name.cs",
+            "Unicode/文件.cs",
+        };
+
+        var json = Parse(_tools.BatchOutline(JsonSerializer.Serialize(paths)));
+        var outlines = json.GetProperty("outlines").EnumerateArray().ToList();
+
+        Assert.Equal(paths,
+            outlines.Select(outline => outline.GetProperty("path").GetString()!).ToArray());
+        Assert.All(outlines,
+            outline => Assert.Equal("file_not_indexed",
+                outline.GetProperty("error").GetString()));
+    }
+
+    [Theory]
+    [InlineData("[\"first.cs\",]")]
+    [InlineData("[\"first.cs\",42]")]
+    [InlineData("\"first.cs,second.cs\"")]
+    public void BatchOutlineRejectsJsonShapedInvalidInputBeforePathLookup(string paths)
+    {
+        var json = Parse(_tools.BatchOutline(paths));
+
+        Assert.Equal("bad_request", json.GetProperty("error").GetString());
+        Assert.False(json.TryGetProperty("path", out _));
+        Assert.False(json.TryGetProperty("outlines", out _));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(",,,")]
+    [InlineData("first.cs,")]
+    [InlineData("[]")]
+    [InlineData("[\"\"]")]
+    public void BatchOutlineRejectsBlankPathInputs(string paths)
+    {
+        var json = Parse(_tools.BatchOutline(paths));
+
+        Assert.Equal("bad_request", json.GetProperty("error").GetString());
+        Assert.False(json.TryGetProperty("outlines", out _));
+    }
+
+    [Fact]
+    public void BatchOutlineAcceptsExactlyTwelvePaths()
+    {
+        using var q = _manager.OpenQueries();
+        var files = q.FindFiles("*.cs", 12).Select(f => f.Path).ToList();
+        Assert.Equal(12, files.Count);
+
+        var json = Parse(_tools.BatchOutline(JsonSerializer.Serialize(files)));
+
+        Assert.Equal(12, json.GetProperty("outlines").GetArrayLength());
+    }
+
+    [Fact]
+    public void BatchOutlineRejectsMoreThanTwelvePaths()
+    {
+        string[] paths = Enumerable.Range(1, 13).Select(i => $"File{i}.cs").ToArray();
+
+        var jsonArray = Parse(_tools.BatchOutline(JsonSerializer.Serialize(paths)));
+        var commaSeparated = Parse(_tools.BatchOutline(string.Join(",", paths)));
+
+        Assert.Equal("bad_request", jsonArray.GetProperty("error").GetString());
+        Assert.Contains("at most 12", jsonArray.GetProperty("detail").GetString());
+        Assert.Equal("bad_request", commaSeparated.GetProperty("error").GetString());
+        Assert.Contains("at most 12", commaSeparated.GetProperty("detail").GetString());
     }
 
     [Fact]
