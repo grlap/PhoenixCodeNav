@@ -97,6 +97,11 @@ remaining semantic operations still disclose stable unsupported boundaries. Gene
 remains language-neutral. For the C# `search_symbol` surface, an explicit F#-only path scope is
 rejected and a mixed scope returns C# results with `unsupported_language_files_skipped`. This keeps
 cross-language graph holes visible without fabricating semantics for unsupported F# project shapes.
+Exact-name type declarations receive a soft ordering preference over same-named members, but both
+remain pageable results. A first-page empty result probes the same name/match semantics without
+generated/path/namespace/kind filters: `existsUnfiltered` distinguishes genuine absence from
+filter exclusion, `appliedFilters` echoes the active narrowing, and `unfilteredKinds` reports the
+declaration kinds hidden by that narrowing.
 
 Structural facts (`project_graph`, `projects_containing`, `dependency_path`,
 `repo_overview`) come from the physical project-file and optional solution parse. Composites (`context_pack`, `impact`,

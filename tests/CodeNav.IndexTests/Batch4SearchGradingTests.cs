@@ -237,8 +237,11 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         var tools = new NavigationTools(_manager, _semantic);
         var json = Parse(tools.ServerCapabilities());
         Assert.False(json.TryGetProperty("featuresCompacted", out _));
-        var ids = json.GetProperty("features").EnumerateArray()
-            .Select(f => f.GetProperty("id").GetString()).ToHashSet();
+        var idList = json.GetProperty("features").EnumerateArray()
+            .Select(f => f.GetProperty("id").GetString()!)
+            .ToList();
+        Assert.Equal(idList.Count, idList.Distinct(StringComparer.Ordinal).Count());
+        var ids = idList.ToHashSet(StringComparer.Ordinal);
         Assert.Contains("compiled-awareness", ids);
         Assert.Contains("implementer-completeness", ids);
         Assert.Contains("generic-arity-resolution", ids);
@@ -272,12 +275,16 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("refresh-recovery-self-heal", ids);
         Assert.Contains("git-awareness", ids);
         Assert.Contains("batch-outline-json-array-paths", ids);
+        Assert.Contains("search-symbol-filtered-existence", ids);
+        Assert.Contains("search-symbol-type-relevance", ids);
+        Assert.Equal(1, idList.Count(id => id == "search-symbol-filtered-existence"));
+        Assert.Equal(1, idList.Count(id => id == "search-symbol-type-relevance"));
         Assert.Equal(
             1,
-            ids.Count(id => id == "operations-portal-jsonl-readonly"));
+            idList.Count(id => id == "operations-portal-jsonl-readonly"));
         Assert.Equal(
             1,
-            ids.Count(id => id == "operations-portal-live-build-status"));
+            idList.Count(id => id == "operations-portal-live-build-status"));
         string portalReadOnly = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

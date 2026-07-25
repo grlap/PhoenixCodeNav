@@ -73,6 +73,10 @@ references, implementations, callers/callees, and hierarchy remain
 unsupported instead of falling back to an empty or falsely exact result. Indexed searches stay
 language-neutral by default. An explicit F#-only `search_symbol` path scope is rejected, while a
 mixed C#/F# scope returns its C# symbols with `partialReason="unsupported_language_files_skipped"`.
+For C# name lookup, exact-name type declarations receive a soft relevance preference over
+same-named members without hiding either. A first-page empty `search_symbol` response remains a
+clean result and reports `existsUnfiltered`; `appliedFilters` identifies the active narrowing, and
+`unfilteredKinds` identifies declarations that become visible when those filters are dropped.
 
 The dependency graph also sees what MSBuild's project view hides in large legacy codebases:
 binary `<Reference Include>` + HintPath couplings from **multi-staged builds** (phase one

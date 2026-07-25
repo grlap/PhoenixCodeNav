@@ -28,7 +28,8 @@ public sealed partial class NavigationTools
         _semantic = semantic;
     }
 
-    private static readonly string[] TypeKinds = { "class", "interface", "struct", "record", "record_struct", "enum", "delegate" };
+    private static readonly IReadOnlyList<string> TypeKinds =
+        IndexedSymbolKinds.TypeDeclarations;
 
     // ---------------------------------------------------------------- capabilities / overview
 
@@ -138,6 +139,8 @@ public sealed partial class NavigationTools
                 new { id = "operations-portal-jsonl-readonly", summary = "v0.12.26 the loopback Operations Portal tails bounded workspace JSONL and observes anchored index-file presence and size without opening SQLite; source gaps, retention, paging, and response budgets remain explicit" },
                 new { id = "operations-portal-live-build-status", summary = "v0.12.26 full builds emit bounded JSONL lifecycle progress plus one server identity/capability record per process so the local portal can show live phase, file, symbol, byte, version, schema, platform, and access-mode status" },
                 new { id = "search-symbol-malformed-query", summary = "v0.12.10 search_symbol rejects ToolSearch-style select: routing prefixes with malformed_query instead of returning a clean empty result; valid C# qualification and generic punctuation remain searchable" },
+                new { id = "search-symbol-filtered-existence", summary = "v0.12.30 first-page empty search_symbol results report existsUnfiltered plus active appliedFilters; declarations hidden by those filters also disclose their unfilteredKinds, while genuine absence remains a clean symbols:[] result with existsUnfiltered:false" },
+                new { id = "search-symbol-type-relevance", summary = "v0.12.30 exact-name type declarations receive a soft relevance preference over same-named members without filtering or omitting either result class" },
                 new { id = "batch-outline-json-array-paths", summary = "v0.12.29 batch_outline accepts its documented comma-separated paths or a serialized JSON string array, rejects malformed/non-string arrays before lookup, and refuses more than 12 paths instead of silently dropping them" },
                 new { id = "index-follower-liveness-fail-closed", summary = "v0.12.11 follower liveness distinguishes mutex contention from coordination failure; only contention proves a live writer, while an unverified probe publishes an explicit unavailable state" },
                 new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry initial or event-driven serialized requests after bounded 100/250/1000 ms delays; timer-initiated stale-index recovery uses its separately declared paced cadence" },
@@ -1001,10 +1004,10 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- symbols
 
     [McpServerTool(Name = "search_symbol")]
-    [Description("Find C# declared symbols by name across the workspace (types, methods, properties...). With no pathGlob the indexed search is language-neutral and returns all available symbol rows. An explicit F#-only pathGlob returns unsupported_language; a mixed C#/F# scope returns its C# symbols with partialReason='unsupported_language_files_skipped'. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored source). Hits carry an 'orphaned' flag (present only when true) for files in NO project's compile set — dead code the compiler never builds (Compile Include globs expanded, Compile Remove honored).")]
+    [Description("Find C# declared symbols by name across the workspace (types, methods, properties...). Exact-name type declarations receive a soft relevance preference over same-named members. A first-page empty result remains successful and reports existsUnfiltered plus appliedFilters; when filters hid declarations, unfilteredKinds says what exists. With no pathGlob the indexed search is language-neutral and returns all available symbol rows. An explicit F#-only pathGlob returns unsupported_language; a mixed C#/F# scope returns its C# symbols with partialReason='unsupported_language_files_skipped'. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored source). Hits carry an 'orphaned' flag (present only when true) for files in NO project's compile set — dead code the compiler never builds (Compile Include globs expanded, Compile Remove honored).")]
     public string SearchSymbol(
         [Description("Symbol name. Match behavior set by 'match'. Empty (or '*') with a 'namespace' or 'pathGlob' ENUMERATES that scope's symbols instead — kind-filterable, paged.")] string query = "",
-        [Description("Comma-separated kind filter: class,interface,struct,record,enum,delegate,method,constructor,property,field,event,enum_member. Empty = all.")] string? kinds = null,
+        [Description("Comma-separated kind filter: class,interface,struct,record,record_struct,enum,delegate,method,constructor,property,field,event,enum_member. Empty = all.")] string? kinds = null,
         [Description("'auto' (exact, then prefix, then substring), 'exact', 'prefix', or 'substring'.")] string match = "auto",
         [Description("Include symbols in generated files (default false).")] bool includeGenerated = false,
         [Description("Restrict to file paths matching this glob (e.g. 'SOAPAPI/**'); a bare name matches at any depth.")] string? pathGlob = null,
@@ -1114,6 +1117,37 @@ public sealed partial class NavigationTools
                 hits = hits.Select(h => orphaned.Contains(h.FilePath) ? h with { IsOrphaned = true } : h).ToList();
         }
 
+        bool? existsUnfiltered = null;
+        List<string>? unfilteredKinds = null;
+        object? appliedFilters = null;
+        if (hits.Count == 0 && offset == 0 &&
+            !string.IsNullOrWhiteSpace(query) && query.Trim() != "*")
+        {
+            List<string> matchingKinds = q.UnfilteredSymbolKinds(query, effectiveMatch);
+            existsUnfiltered = matchingKinds.Count > 0;
+            unfilteredKinds = matchingKinds.Count > 0 ? matchingKinds : null;
+
+            bool hasAppliedFilters =
+                kindList is { Count: > 0 } ||
+                !includeGenerated ||
+                pathGlob is { Length: > 0 } ||
+                excludePath is { Length: > 0 } ||
+                firstPartyOnly ||
+                @namespace is { Length: > 0 };
+            if (hasAppliedFilters)
+            {
+                appliedFilters = new
+                {
+                    kinds = kindList is { Count: > 0 } ? string.Join(',', kindList) : null,
+                    includeGenerated = includeGenerated ? (bool?)null : false,
+                    pathGlob,
+                    excludePath,
+                    firstPartyOnly = firstPartyOnly ? true : (bool?)null,
+                    @namespace,
+                };
+            }
+        }
+
         bool hadMore = hits.Count > limit;
         if (hadMore) hits.RemoveAt(hits.Count - 1);
 
@@ -1122,6 +1156,9 @@ public sealed partial class NavigationTools
         {
             matchMode = effectiveMatch,
             symbols = items.Select(SymbolJson),
+            existsUnfiltered,
+            unfilteredKinds,
+            appliedFilters,
             // Carry the resolved mode so a later page continues it (bug cli); resume at the returned
             // count so a byte-budget shrink doesn't skip the dropped tail (bug e2q).
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}:{effectiveMatch}" : null,

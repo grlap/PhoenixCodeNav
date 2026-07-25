@@ -13,6 +13,17 @@ public sealed record SymbolHit(
     string? Accessors = null,    // "get=public;set=private" only when an accessor differs (hu7)
     string? DeclarationKey = null);
 
+/// <summary>Canonical syntax-index kinds that represent type declarations.</summary>
+public static class IndexedSymbolKinds
+{
+    public static IReadOnlyList<string> TypeDeclarations { get; } = Array.AsReadOnly(
+        new[] { "class", "interface", "struct", "record", "record_struct", "enum", "delegate" });
+
+    internal static string TypeDeclarationsSql { get; } = string.Join(
+        ',',
+        TypeDeclarations.Select(static kind => $"'{kind}'"));
+}
+
 public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated,
     string Language = "cs");
 
@@ -569,11 +580,43 @@ public sealed partial class IndexQueries : IDisposable
             ORDER BY
               CASE WHEN s.name = $q COLLATE NOCASE THEN 0
                    WHEN s.name LIKE $pre ESCAPE '\' THEN 1 ELSE 2 END,
-              f.is_generated, length(s.name), s.name, f.path
+              CASE WHEN s.name = $q COLLATE NOCASE
+                         AND s.kind IN ({IndexedSymbolKinds.TypeDeclarationsSql})
+                   THEN 0
+                   WHEN s.name = $q COLLATE NOCASE THEN 1
+                   ELSE 2 END,
+              f.is_generated, length(s.name), s.name, f.path, s.id
             LIMIT $lim OFFSET $off
             """,
             ReadSymbol,
             args.ToArray());
+    }
+
+    /// <summary>Distinct declaration kinds matching only the requested name semantics. This is
+    /// deliberately unfiltered by generated/path/namespace/kind policy: <c>search_symbol</c>
+    /// uses it after a first-page miss to distinguish genuine absence from a declaration hidden
+    /// by the active filters. The result has at most one row per indexed kind.</summary>
+    public List<string> UnfilteredSymbolKinds(string query, string mode)
+    {
+        string esc = EscapeLike(query);
+        string pattern = mode switch
+        {
+            "exact" => esc,
+            "prefix" => esc + "%",
+            _ => "%" + esc + "%",
+        };
+        return Query(
+            $"""
+            SELECT DISTINCT s.kind
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE s.name LIKE $pat ESCAPE '\'
+            ORDER BY
+              CASE WHEN s.kind IN ({IndexedSymbolKinds.TypeDeclarationsSql})
+                   THEN 0 ELSE 1 END,
+              s.kind
+            """,
+            r => r.GetString(0),
+            ("$pat", pattern));
     }
 
     /// <summary>Distinct generic arities for exact-name declarations. This is syntax-index

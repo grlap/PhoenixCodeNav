@@ -303,6 +303,139 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
     }
 
     [Fact]
+    public void SearchSymbolEmptyResultDistinguishesFilteredDeclarationFromAbsence()
+    {
+        var tools = Tools();
+
+        JsonElement visible = Parse(tools.SearchSymbol("Guard", match: "exact"));
+        Assert.Contains(visible.GetProperty("symbols").EnumerateArray(),
+            symbol => symbol.GetProperty("kind").GetString() == "class");
+
+        JsonElement filtered = Parse(tools.SearchSymbol(
+            "Guard", kinds: "interface", match: "exact"));
+        Assert.Empty(filtered.GetProperty("symbols").EnumerateArray());
+        Assert.True(filtered.GetProperty("existsUnfiltered").GetBoolean());
+        Assert.Contains("class", filtered.GetProperty("unfilteredKinds").EnumerateArray()
+            .Select(kind => kind.GetString()));
+        JsonElement filters = filtered.GetProperty("appliedFilters");
+        Assert.Equal("interface", filters.GetProperty("kinds").GetString());
+        Assert.False(filters.GetProperty("includeGenerated").GetBoolean());
+
+        JsonElement absent = Parse(tools.SearchSymbol(
+            "DefinitelyMissingSearchSymbolEk9l", kinds: "interface", match: "exact"));
+        Assert.Empty(absent.GetProperty("symbols").EnumerateArray());
+        Assert.False(absent.GetProperty("existsUnfiltered").GetBoolean());
+        Assert.False(absent.TryGetProperty("unfilteredKinds", out _));
+        Assert.Equal("interface",
+            absent.GetProperty("appliedFilters").GetProperty("kinds").GetString());
+    }
+
+    [Fact]
+    public void SearchSymbolRanksExactTypeBeforeSameNamedMembersWithoutHidingMembers()
+    {
+        using var q0 = _manager.OpenQueries();
+        string dir = Path.GetDirectoryName(q0.FindFiles("*.cs", 1).Single().Path)!
+            .Replace('\\', '/');
+        string noiseRel = $"{dir}/AZebSearchRankNoise.cs";
+        string typeRel = $"{dir}/ZZebSearchRankType.cs";
+        string noiseFull = Path.Combine(_fx.Root,
+            noiseRel.Replace('/', Path.DirectorySeparatorChar));
+        string typeFull = Path.Combine(_fx.Root,
+            typeRel.Replace('/', Path.DirectorySeparatorChar));
+        var noise = new System.Text.StringBuilder(
+            "namespace Phoenix.SearchRank;\n");
+        for (int i = 1; i <= 21; i++)
+        {
+            noise.Append("public sealed class Noise").Append(i)
+                .Append(" { public object? ZebSearchRankContext { get; init; }")
+                .Append(" public object? ZebSearchRankRecordContext { get; init; } }\n");
+        }
+        string noiseContent = noise.ToString();
+        const string typeContent =
+            "namespace Phoenix.SearchRank;\n" +
+            "public sealed class ZebSearchRankContext { }\n" +
+            "public readonly record struct ZebSearchRankRecordContext;\n";
+        File.WriteAllText(noiseFull, noiseContent);
+        File.WriteAllText(typeFull, typeContent);
+        try
+        {
+            IndexManagerTestSupport.RefreshAndWait(
+                _manager,
+                new[] { noiseRel, typeRel },
+                q => q.ContentByPath(noiseRel) == noiseContent &&
+                     q.ContentByPath(typeRel) == typeContent,
+                "the search-ranking fixtures were not indexed");
+
+            var tools = Tools();
+            JsonElement page1 = Parse(tools.SearchSymbol(
+                "ZebSearchRankContext", match: "substring", limit: 20));
+            List<JsonElement> symbols = page1.GetProperty("symbols")
+                .EnumerateArray().ToList();
+            Assert.Equal(20, symbols.Count);
+            Assert.Equal("class", symbols[0].GetProperty("kind").GetString());
+            Assert.Equal(typeRel, symbols[0].GetProperty("path").GetString());
+            Assert.Contains(symbols.Skip(1),
+                symbol => symbol.GetProperty("kind").GetString() == "property");
+            Assert.Equal("o:20:substring", page1.GetProperty("nextCursor").GetString());
+
+            JsonElement page2 = Parse(tools.SearchSymbol(
+                "ZebSearchRankContext", match: "substring", limit: 20,
+                cursor: page1.GetProperty("nextCursor").GetString()));
+            List<JsonElement> page2Symbols = page2.GetProperty("symbols")
+                .EnumerateArray().ToList();
+            Assert.Equal(2, page2Symbols.Count);
+            Assert.DoesNotContain(page2Symbols,
+                symbol => symbol.GetProperty("kind").GetString() == "class");
+            List<string> pagedSymbolIds = symbols.Concat(page2Symbols)
+                .Select(symbol => symbol.GetProperty("symbolId").GetString()!)
+                .ToList();
+            Assert.Equal(22, pagedSymbolIds.Count);
+            Assert.Equal(
+                pagedSymbolIds.Count,
+                pagedSymbolIds.Distinct(StringComparer.Ordinal).Count());
+
+            JsonElement classOnly = Parse(tools.SearchSymbol(
+                "ZebSearchRankContext", kinds: "class", match: "substring"));
+            Assert.Single(classOnly.GetProperty("symbols").EnumerateArray());
+            Assert.Equal(typeRel,
+                classOnly.GetProperty("symbols")[0].GetProperty("path").GetString());
+
+            JsonElement recordPage1 = Parse(tools.SearchSymbol(
+                "ZebSearchRankRecordContext", match: "substring", limit: 20));
+            List<JsonElement> recordSymbols = recordPage1.GetProperty("symbols")
+                .EnumerateArray().ToList();
+            Assert.Equal(20, recordSymbols.Count);
+            Assert.Equal("record_struct",
+                recordSymbols[0].GetProperty("kind").GetString());
+            Assert.Equal(typeRel,
+                recordSymbols[0].GetProperty("path").GetString());
+            Assert.Contains(recordSymbols.Skip(1),
+                symbol => symbol.GetProperty("kind").GetString() == "property");
+
+            JsonElement recordFiltered = Parse(tools.SearchSymbol(
+                "ZebSearchRankRecordContext", kinds: "interface", match: "exact"));
+            Assert.Empty(recordFiltered.GetProperty("symbols").EnumerateArray());
+            Assert.True(recordFiltered.GetProperty("existsUnfiltered").GetBoolean());
+            Assert.Equal("record_struct",
+                recordFiltered.GetProperty("unfilteredKinds")[0].GetString());
+            Assert.Contains("property",
+                recordFiltered.GetProperty("unfilteredKinds").EnumerateArray()
+                    .Select(kind => kind.GetString()));
+        }
+        finally
+        {
+            File.Delete(noiseFull);
+            File.Delete(typeFull);
+            IndexManagerTestSupport.RefreshAndWait(
+                _manager,
+                new[] { noiseRel, typeRel },
+                q => q.ContentByPath(noiseRel) is null &&
+                     q.ContentByPath(typeRel) is null,
+                "the deleted search-ranking fixtures remained indexed");
+        }
+    }
+
+    [Fact]
     public void SearchSymbolNullQueryStillEnumeratesRequestedScope()
     {
         var tools = Tools();
