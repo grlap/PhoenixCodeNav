@@ -77,6 +77,12 @@ For C# name lookup, exact-name type declarations receive a soft relevance prefer
 same-named members without hiding either. A first-page empty `search_symbol` response remains a
 clean result and reports `existsUnfiltered`; `appliedFilters` identifies the active narrowing, and
 `unfilteredKinds` identifies declarations that become visible when those filters are dropped.
+Exact path lookup remains strict, but a miss is recoverable: `outline` and `source_context`
+not-found responses, plus a first-page exact-path `find_file` miss, may include up to three
+workspace-relative paths under `pathSuggestions.paths` from the pinned index. The object also
+reports the exact same-basename `total` and whether the returned sample was `truncated`.
+Candidates are ranked by the longest matching path-segment suffix, then preserved prefix; Phoenix
+never substitutes a suggestion or consults Git history for deleted files.
 
 The dependency graph also sees what MSBuild's project view hides in large legacy codebases:
 binary `<Reference Include>` + HintPath couplings from **multi-staged builds** (phase one

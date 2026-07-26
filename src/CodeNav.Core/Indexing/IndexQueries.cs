@@ -27,6 +27,8 @@ public static class IndexedSymbolKinds
 public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated,
     string Language = "cs");
 
+public sealed record PathSuggestionResult(IReadOnlyList<string> Paths, int Total);
+
 public sealed record DirectoryBuildAuthorityPaths(
     string? PropsPath,
     string? TargetsPath,
@@ -315,6 +317,118 @@ public sealed partial class IndexQueries : IDisposable
             r => new FileHit(r.GetInt64(0), r.GetString(1), r.GetInt64(2), r.GetInt32(3),
                 r.GetBoolean(4), r.GetString(5)),
             args.ToArray());
+    }
+
+    /// <summary>Suggests indexed workspace-relative paths for an exact path that did not resolve.
+    /// Candidates must share the requested basename; longest matching path-segment suffix wins, so
+    /// an omitted middle directory ranks above an unrelated same-name file. This is navigation
+    /// recovery only: callers still fail the original exact lookup and never substitute a result.</summary>
+    public PathSuggestionResult SuggestFilePaths(string requestedPath, int limit = 3,
+        IReadOnlyList<string>? excludePaths = null)
+    {
+        if (limit <= 0 || string.IsNullOrWhiteSpace(requestedPath) ||
+            requestedPath.IndexOfAny(['*', '?']) >= 0)
+        {
+            return new([], 0);
+        }
+
+        string normalized = WorkspacePaths.Normalize(requestedPath);
+        string basename = Path.GetFileName(normalized);
+        if (string.IsNullOrWhiteSpace(basename)) return new([], 0);
+
+        var args = new List<(string, object)>
+        {
+            ("$basename", basename),
+            ("$nestedBasename", $"%/{EscapeLike(basename)}"),
+        };
+        var where = new System.Text.StringBuilder(
+            "WHERE (f.path = $basename COLLATE NOCASE " +
+            "OR f.path LIKE $nestedBasename ESCAPE '\\')");
+        AppendPathFilter(where, args, null, excludePaths);
+
+        string[] requestedSegments = normalized.Split(
+            '/',
+            StringSplitOptions.RemoveEmptyEntries);
+
+        // The current schema has no basename column, so complete discovery still scans the path
+        // index (tracked by PhoenixCodeNav-tsgp). Keep only the globally best N rows while reading:
+        // common basenames must not allocate or sort a workspace-sized managed candidate list.
+        var best = new List<RankedPathSuggestion>(limit + 1);
+        int total = 0;
+        string sql = $"SELECT f.path FROM files f {where}";
+        using var command = CreateCommand();
+        command.CommandText = sql;
+        foreach (var (name, value) in args) command.Parameters.AddWithValue(name, value);
+        _beforeQueryForTest?.Invoke(sql);
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                total++;
+                best.Add(RankPathSuggestion(reader.GetString(0), requestedSegments));
+                best.Sort(ComparePathSuggestions);
+                if (best.Count > limit) best.RemoveAt(best.Count - 1);
+            }
+        }
+        _afterQueryForTest?.Invoke(sql);
+
+        return new(best.Select(static candidate => candidate.Path).ToArray(), total);
+    }
+
+    private readonly record struct RankedPathSuggestion(
+        string Path,
+        int CommonSuffix,
+        int CommonPrefix,
+        int SegmentDelta);
+
+    private static RankedPathSuggestion RankPathSuggestion(
+        string candidate,
+        IReadOnlyList<string> requestedSegments)
+    {
+        string[] candidateSegments = candidate.Split(
+            '/',
+            StringSplitOptions.RemoveEmptyEntries);
+        int commonSuffix = 0;
+        while (commonSuffix < candidateSegments.Length &&
+               commonSuffix < requestedSegments.Count &&
+               candidateSegments[^(commonSuffix + 1)].Equals(
+                   requestedSegments[^(commonSuffix + 1)],
+                   StringComparison.OrdinalIgnoreCase))
+        {
+            commonSuffix++;
+        }
+
+        int commonPrefix = 0;
+        while (commonPrefix < candidateSegments.Length &&
+               commonPrefix < requestedSegments.Count &&
+               candidateSegments[commonPrefix].Equals(
+                   requestedSegments[commonPrefix],
+                   StringComparison.OrdinalIgnoreCase))
+        {
+            commonPrefix++;
+        }
+
+        return new(
+            candidate,
+            commonSuffix,
+            commonPrefix,
+            Math.Abs(candidateSegments.Length - requestedSegments.Count));
+    }
+
+    private static int ComparePathSuggestions(
+        RankedPathSuggestion left,
+        RankedPathSuggestion right)
+    {
+        int comparison = right.CommonSuffix.CompareTo(left.CommonSuffix);
+        if (comparison != 0) return comparison;
+        comparison = right.CommonPrefix.CompareTo(left.CommonPrefix);
+        if (comparison != 0) return comparison;
+        comparison = left.SegmentDelta.CompareTo(right.SegmentDelta);
+        if (comparison != 0) return comparison;
+        comparison = left.Path.Length.CompareTo(right.Path.Length);
+        return comparison != 0
+            ? comparison
+            : StringComparer.Ordinal.Compare(left.Path, right.Path);
     }
 
     /// <summary>Source languages present in an explicit path scope, using the exact same glob and

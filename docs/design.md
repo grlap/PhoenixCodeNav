@@ -64,6 +64,14 @@ for code identifiers.
    context is exactly one physical `.fsproj` plus one target framework; ambiguous files require
    explicit selection, and the selection never changes or merges ownership/reference graph facts.
 
+Exact path identity is never fuzzy. When `outline` or `source_context` cannot resolve a path, or
+the first page of an exact-path `find_file` query is empty, the MCP layer asks `IndexQueries` for
+up to three recovery candidates. The query considers only pinned-index paths with the same
+basename, ranks them by longest matching path-segment suffix and then preserved prefix, and
+returns a byte-budgeted `pathSuggestions` object with `paths`, exact `total`, and observable
+`truncated` state. The original result remains a not-found error or empty list; suggestions are
+never substituted, never read from the mutable filesystem, and never widen into Git history.
+
 F# `.fs/.fsi/.fsx` content and `.fsproj` ownership/reference graphs are indexed. The FCS semantic
 adapter consumes one immutable source/project snapshot captured from a pinned index epoch, copies
 workspace `HintPath` assemblies through verified open handles into request-private snapshots, releases

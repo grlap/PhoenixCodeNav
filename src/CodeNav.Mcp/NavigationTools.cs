@@ -141,6 +141,7 @@ public sealed partial class NavigationTools
                 new { id = "search-symbol-malformed-query", summary = "v0.12.10 search_symbol rejects ToolSearch-style select: routing prefixes with malformed_query instead of returning a clean empty result; valid C# qualification and generic punctuation remain searchable" },
                 new { id = "search-symbol-filtered-existence", summary = "v0.12.30 first-page empty search_symbol results report existsUnfiltered plus active appliedFilters; declarations hidden by those filters also disclose their unfilteredKinds, while genuine absence remains a clean symbols:[] result with existsUnfiltered:false" },
                 new { id = "search-symbol-type-relevance", summary = "v0.12.30 exact-name type declarations receive a soft relevance preference over same-named members without filtering or omitting either result class" },
+                new { id = "indexed-path-suggestions", summary = "v0.12.31 outline/source_context not-found errors and first-page exact-path find_file misses may include a byte-budgeted pathSuggestions object with up to three pinned-index paths, exact total and truncation state; basename matches rank by preserved suffix then prefix and are never substituted" },
                 new { id = "batch-outline-json-array-paths", summary = "v0.12.29 batch_outline accepts its documented comma-separated paths or a serialized JSON string array, rejects malformed/non-string arrays before lookup, and refuses more than 12 paths instead of silently dropping them" },
                 new { id = "index-follower-liveness-fail-closed", summary = "v0.12.11 follower liveness distinguishes mutex contention from coordination failure; only contention proves a live writer, while an unverified probe publishes an explicit unavailable state" },
                 new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry initial or event-driven serialized requests after bounded 100/250/1000 ms delays; timer-initiated stale-index recovery uses its separately declared paced cadence" },
@@ -367,7 +368,7 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- files / text
 
     [McpServerTool(Name = "find_file")]
-    [Description("Find files by name or glob (e.g. 'InvoiceService.cs', '*Controller.cs', 'src/Billing/**/*.csproj'). Cheap path-only lookup; use search_symbol for code symbols.")]
+    [Description("Find files by name or glob (e.g. 'InvoiceService.cs', '*Controller.cs', 'src/Billing/**/*.csproj'). A first-page exact-path miss may include pathSuggestions with up to three ranked pinned-index paths plus total/truncated coverage. Cheap path-only lookup; use search_symbol for code symbols.")]
     public string FindFile(
         [Description("File name or glob pattern. '*' matches any characters including '/'.")] string nameOrGlob,
         [Description("Exclude paths matching this glob (e.g. '3rdparty/**' to drop vendored third-party files).")] string? excludePath = null,
@@ -381,24 +382,34 @@ public sealed partial class NavigationTools
         var files = q.FindFiles(nameOrGlob, limit + 1, excludes, offset);
         bool hadMore = files.Count > limit;
         if (hadMore) files.RemoveAt(files.Count - 1);
+        PathSuggestionResult suggestions = offset == 0 && files.Count == 0
+            ? q.SuggestFilePaths(nameOrGlob, excludePaths: excludes)
+            : new([], 0);
 
         var meta = Meta.From(_manager.Health(), "indexed", "text");
         // nextCursor resumes at offset + the count actually RETURNED: the byte-budget shrink drops the
         // page tail (keeping a prefix), so a fixed offset+limit would skip the dropped items (bug e2q).
-        return Json.WithListBudget(files, (items, truncated) => new
-        {
-            files = items.Select(f => new
+        return Json.WithAuxiliaryListBudget(
+            files,
+            suggestions.Paths.ToList(),
+            (items, truncated, suggestionPaths, suggestionsBudgetTruncated) => new
             {
-                f.Path,
-                language = f.Language,
-                sizeBytes = f.Size,
-                lines = f.LineCount,
-                f.IsGenerated,
-            }),
-            nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
-            truncated,
-            meta,
-        });
+                files = items.Select(f => new
+                {
+                    f.Path,
+                    language = f.Language,
+                    sizeBytes = f.Size,
+                    lines = f.LineCount,
+                    f.IsGenerated,
+                }),
+                nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
+                truncated,
+                pathSuggestions = PathSuggestionsJson(
+                    suggestions.Total,
+                    suggestionPaths,
+                    suggestionsBudgetTruncated),
+                meta,
+            });
     }
 
     [McpServerTool(Name = "search_text")]
@@ -705,7 +716,7 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- outline / source
 
     [McpServerTool(Name = "outline")]
-    [Description("Syntactic map of a file (namespaces, types, members with line spans) without reading the body. ALWAYS call this before reading a large file, then fetch only needed spans via source_context. For F# files, selectedParseContext and availableParseContexts identify only the .fsproj/target-framework parser options used for #if and syntax; they do not select assemblies, builds, reference resolution, or semantic workspaces.")]
+    [Description("Syntactic map of a file (namespaces, types, members with line spans) without reading the body. A file_not_indexed response may include pathSuggestions with up to three ranked pinned-index paths plus total/truncated coverage. ALWAYS call this before reading a large file, then fetch only needed spans via source_context. For F# files, selectedParseContext and availableParseContexts identify only the .fsproj/target-framework parser options used for #if and syntax; they do not select assemblies, builds, reference resolution, or semantic workspaces.")]
     public string Outline(
         [Description("Workspace-relative file path (forward slashes).")] string path,
         [Description("1 = namespaces + types, 2 = + members (default), 3 = reserved (currently same as 2).")] int depth = 2)
@@ -716,7 +727,19 @@ public sealed partial class NavigationTools
         FileHit? file = q.FileByPath(normPath);
         if (file is null)
         {
-            return Json.Serialize(new { error = "file_not_indexed", path, meta = Meta.From(_manager.Health(), "indexed", "syntax") });
+            PathSuggestionResult suggestions = q.SuggestFilePaths(normPath);
+            return Json.WithListBudget(
+                suggestions.Paths.ToList(),
+                (suggestionPaths, suggestionsBudgetTruncated) => new
+                {
+                    error = "file_not_indexed",
+                    path,
+                    pathSuggestions = PathSuggestionsJson(
+                        suggestions.Total,
+                        suggestionPaths,
+                        suggestionsBudgetTruncated),
+                    meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+                });
         }
         if (file.Language == "fs" &&
             (Path.GetExtension(normPath).Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
@@ -843,7 +866,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "source_context")]
-    [Description("Bounded live source read around one or more line spans (the bridge from navigation results to actual code). Use spans from outline/definition/search results instead of reading whole files.")]
+    [Description("Bounded live source read around one or more line spans (the bridge from navigation results to actual code). A file_not_found response may include pathSuggestions with up to three ranked pinned-index paths plus total/truncated coverage. Use spans from outline/definition/search results instead of reading whole files.")]
     public string SourceContext(
         [Description("Workspace-relative file path. Optional when symbolId is given.")] string? path = null,
         [Description("Spans as 'start-end' or 'line', comma-separated (e.g. '42-88,120'). Optional when symbolId is given (defaults to the symbol's own declaration span).")] string spans = "",
@@ -902,6 +925,7 @@ public sealed partial class NavigationTools
         // Skip paths reaching outside via a symlink/junction (target or any ancestor) so an
         // in-workspace link cannot be followed to external content; fall through to the index.
         IReadOnlyList<string>? lines = null;
+        PathSuggestionResult suggestions = new([], 0);
         if (File.Exists(full) && !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(_manager.WorkspaceRoot, full))
         {
             lines = ReadLinesUpTo(full, maxNeededLine);
@@ -915,11 +939,23 @@ public sealed partial class NavigationTools
             using var q = _manager.OpenQueries();
             string? content = q.ContentByPath(path);
             if (content is not null) lines = content.Split('\n');
+            else suggestions = q.SuggestFilePaths(path);
             freshness = "index";
         }
         if (lines is null)
         {
-            return Json.Serialize(new { error = "file_not_found", path, meta = Meta.From(_manager.Health(), "indexed", "text") });
+            return Json.WithListBudget(
+                suggestions.Paths.ToList(),
+                (suggestionPaths, suggestionsBudgetTruncated) => new
+                {
+                    error = "file_not_found",
+                    path,
+                    pathSuggestions = PathSuggestionsJson(
+                        suggestions.Total,
+                        suggestionPaths,
+                        suggestionsBudgetTruncated),
+                    meta = Meta.From(_manager.Health(), "indexed", "text"),
+                });
         }
 
         (List<object> Spans, bool Truncated) BuildSpans(long rawBudget)
@@ -2567,6 +2603,20 @@ public sealed partial class NavigationTools
         string.IsNullOrWhiteSpace(csv)
             ? null
             : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    internal static object? PathSuggestionsJson(
+        int total,
+        IReadOnlyList<string> paths,
+        bool budgetTruncated)
+    {
+        if (total <= 0) return null;
+        return new
+        {
+            paths,
+            total,
+            truncated = budgetTruncated || paths.Count < total,
+        };
+    }
 
     private static string NormalizePath(string path) => CodeNav.Core.WorkspacePaths.Normalize(path);
 }

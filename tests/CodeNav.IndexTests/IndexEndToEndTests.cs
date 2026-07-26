@@ -215,6 +215,56 @@ public class IndexEndToEndTests : IClassFixture<IndexFixture>
     }
 
     [Fact]
+    public void IndexedPathSuggestionsPreferPreservedPrefixAndReportCoverage()
+    {
+        const string basename = "PhoenixPathSuggestionProbe.cs";
+        string[] paths =
+        [
+            $"src/Platform/Common/Service/{basename}",
+            $"other/Area/Service/{basename}",
+            $"else/One/Service/{basename}",
+            $"else/Two/Service/{basename}",
+            $"src/[Generated]/Nested/{basename}",
+        ];
+        foreach (string relativePath in paths)
+        {
+            string fullPath = Path.Combine(
+                _fx.Root,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            File.WriteAllText(fullPath, "namespace PathSuggestionProbe { class Marker { } }");
+        }
+
+        using var store = new IndexStore(_fx.DbPath, createNew: false);
+        try
+        {
+            DeltaRefresher.Refresh(store, _fx.Root, paths);
+            using var q = _fx.Open();
+
+            PathSuggestionResult result =
+                q.SuggestFilePaths($"src/Platform/Service/{basename}");
+            Assert.Equal(paths.Length, result.Total);
+            Assert.Equal(3, result.Paths.Count);
+            Assert.Equal(paths[0], result.Paths[0]);
+
+            PathSuggestionResult bracket =
+                q.SuggestFilePaths($"src/[Generated]/{basename}");
+            Assert.Equal(paths.Length, bracket.Total);
+            Assert.Equal(paths[4], bracket.Paths[0]);
+        }
+        finally
+        {
+            foreach (string relativePath in paths)
+            {
+                File.Delete(Path.Combine(
+                    _fx.Root,
+                    relativePath.Replace('/', Path.DirectorySeparatorChar)));
+            }
+            DeltaRefresher.Refresh(store, _fx.Root, paths);
+        }
+    }
+
+    [Fact]
     public void BareGlobsReachWorkspaceRootFiles()
     {
         // A symbol-bearing file at depth 0. Kept OUT of the shared fixture on purpose:
@@ -372,6 +422,114 @@ public class McpToolLayerTests
         var first = page1.GetProperty("files").EnumerateArray().First().GetProperty("path").GetString();
         var second = page2.GetProperty("files").EnumerateArray().First().GetProperty("path").GetString();
         Assert.NotEqual(first, second);
+    }
+
+    [Fact]
+    public void MissingDirectorySegmentSuggestsTheIndexedPathAcrossPathTools()
+    {
+        var tools = Tools();
+        using var q = _fx.Open();
+        string indexedPath = Assert.Single(q.FindFiles("Guard.cs", 10)).Path;
+        string[] parts = indexedPath.Split('/');
+        Assert.True(parts.Length >= 5, $"expected a nested Guard.cs fixture, got '{indexedPath}'");
+        string guessedPath = string.Join('/', parts.Where((_, index) => index != 2));
+        Assert.Empty(q.FindFiles(guessedPath, 10));
+
+        static JsonElement Suggestions(JsonElement response) =>
+            response.GetProperty("pathSuggestions");
+
+        static string[] SuggestionPaths(JsonElement response) =>
+            Suggestions(response).GetProperty("paths").EnumerateArray()
+                .Select(item => item.GetString()!)
+                .ToArray();
+
+        JsonElement outline = Parse(tools.Outline(guessedPath));
+        Assert.Equal("file_not_indexed", outline.GetProperty("error").GetString());
+        Assert.Equal([indexedPath], SuggestionPaths(outline));
+        Assert.Equal(1, Suggestions(outline).GetProperty("total").GetInt32());
+        Assert.False(Suggestions(outline).GetProperty("truncated").GetBoolean());
+        Assert.False(outline.TryGetProperty("didYouMean", out _));
+
+        JsonElement source = Parse(tools.SourceContext(guessedPath, "1", contextLines: 0));
+        Assert.Equal("file_not_found", source.GetProperty("error").GetString());
+        Assert.Equal([indexedPath], SuggestionPaths(source));
+
+        JsonElement find = Parse(tools.FindFile(guessedPath));
+        Assert.Empty(find.GetProperty("files").EnumerateArray());
+        Assert.Equal([indexedPath], SuggestionPaths(find));
+
+        JsonElement exact = Parse(tools.Outline(indexedPath));
+        Assert.False(exact.TryGetProperty("pathSuggestions", out _));
+
+        JsonElement irrelevant = Parse(tools.Outline("missing/DefinitelyUnknownPathSuggestion.cs"));
+        Assert.Equal("file_not_indexed", irrelevant.GetProperty("error").GetString());
+        Assert.False(irrelevant.TryGetProperty("pathSuggestions", out _));
+
+        JsonElement globMiss = Parse(tools.FindFile("missing/**/*.DefinitelyUnknownPathSuggestion"));
+        Assert.Empty(globMiss.GetProperty("files").EnumerateArray());
+        Assert.False(globMiss.TryGetProperty("pathSuggestions", out _));
+
+        JsonElement excluded = Parse(tools.FindFile(guessedPath, excludePath: indexedPath));
+        Assert.Empty(excluded.GetProperty("files").EnumerateArray());
+        Assert.False(excluded.TryGetProperty("pathSuggestions", out _));
+    }
+
+    [Fact]
+    public void IndexedPathSuggestionsRankSuffixMatchesDeterministicallyAndCapAtThree()
+    {
+        using var q = _fx.Open();
+        string[] modelPaths = q.FindFiles("Models.cs", 100)
+            .Select(file => file.Path)
+            .Where(path => path.Split('/').Length >= 5)
+            .ToArray();
+        Assert.True(modelPaths.Length >= 4, "expected at least four duplicate Models.cs fixtures");
+
+        string target = modelPaths[0];
+        string[] parts = target.Split('/');
+        string guessedPath = string.Join('/', parts.Where((_, index) => index != 2));
+        Assert.Null(q.FileByPath(guessedPath));
+
+        PathSuggestionResult suggestions = q.SuggestFilePaths(guessedPath);
+        Assert.True(suggestions.Total >= 4);
+        Assert.Equal(3, suggestions.Paths.Count);
+        Assert.Equal(target, suggestions.Paths[0]);
+
+        JsonElement response = Parse(Tools().Outline(guessedPath));
+        JsonElement responseSuggestions = response.GetProperty("pathSuggestions");
+        Assert.Equal(suggestions.Total, responseSuggestions.GetProperty("total").GetInt32());
+        Assert.Equal(3, responseSuggestions.GetProperty("paths").GetArrayLength());
+        Assert.True(responseSuggestions.GetProperty("truncated").GetBoolean());
+        Assert.Equal(0, q.SuggestFilePaths("missing/**/*.cs").Total);
+        Assert.Equal(
+            0,
+            q.SuggestFilePaths("missing/DefinitelyUnknownPathSuggestion.cs").Total);
+    }
+
+    [Fact]
+    public void PathSuggestionPayloadUsesItsOwnShapeAndHonorsTheHardBudget()
+    {
+        var oversizedPaths = Enumerable.Range(0, 3)
+            .Select(index => $"{new string('x', 29_980)}/Target{index}.cs")
+            .ToList();
+        string json = Json.WithListBudget(
+            oversizedPaths,
+            (paths, budgetTruncated) => new
+            {
+                error = "file_not_indexed",
+                pathSuggestions = NavigationTools.PathSuggestionsJson(
+                    oversizedPaths.Count,
+                    paths,
+                    budgetTruncated),
+            });
+
+        Assert.True(
+            Json.Utf8Bytes(json) <= Json.HardBudgetBytes,
+            $"path-suggestion response used {Json.Utf8Bytes(json)} bytes");
+        JsonElement response = Parse(json);
+        JsonElement suggestions = response.GetProperty("pathSuggestions");
+        Assert.Equal(oversizedPaths.Count, suggestions.GetProperty("total").GetInt32());
+        Assert.True(suggestions.GetProperty("truncated").GetBoolean());
+        Assert.False(response.TryGetProperty("didYouMean", out _));
     }
 
     [Fact]
