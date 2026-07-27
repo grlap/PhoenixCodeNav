@@ -278,9 +278,11 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("search-symbol-filtered-existence", ids);
         Assert.Contains("search-symbol-type-relevance", ids);
         Assert.Contains("indexed-path-suggestions", ids);
+        Assert.Contains("source-context-range-alias", ids);
         Assert.Equal(1, idList.Count(id => id == "search-symbol-filtered-existence"));
         Assert.Equal(1, idList.Count(id => id == "search-symbol-type-relevance"));
         Assert.Equal(1, idList.Count(id => id == "indexed-path-suggestions"));
+        Assert.Equal(1, idList.Count(id => id == "source-context-range-alias"));
         Assert.Equal(
             1,
             idList.Count(id => id == "operations-portal-jsonl-readonly"));

@@ -677,6 +677,19 @@ try {
         Assert-Equal "text" ([string]$source.meta.navigationLayer) "source_context layer changed"
     }
 
+    $sourceRangeAlias = Invoke-McpTool $writer "source_context" @{
+        path = [string]$baseline.target.path
+        range = [string]$baseline.target.line
+        contextLines = 0
+        maxBytes = 4096
+    }
+    $evidence.results.sourceContextRangeAlias = $sourceRangeAlias
+    Test-IntegrationCase "source_context range compatibility alias" {
+        Assert-True ($null -eq $sourceRangeAlias.error) "source_context range alias returned $($sourceRangeAlias.error)"
+        Assert-Equal ([string]$baseline.target.path) ([string]$sourceRangeAlias.path) "source_context range alias returned the wrong file"
+        Assert-True (($sourceRangeAlias | ConvertTo-Json -Compress -Depth 10) -match "interface ICompilationFactoryService") "source_context range alias omitted the target line"
+    }
+
     $symbolAt = Invoke-McpTool $writer "symbol_at" @{ path = [string]$baseline.target.path; line = [int]$baseline.target.line }
     $evidence.results.symbolAt = $symbolAt
     Test-IntegrationCase "reverse symbol lookup and ownership" {

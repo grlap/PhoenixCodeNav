@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PhoenixCodeNav — Give your coding agent a map</title>
-  <meta name="description" content="Local MCP code navigation for AI coding agents working in large C# workspaces. Find definitions, references, dependencies, and tests with honest confidence labels.">
+  <meta name="description" content="Local MCP code navigation for AI coding agents working in large C# and mixed C#/F# workspaces. Find definitions, references, dependencies, and tests with honest confidence labels.">
   <meta name="theme-color" content="#07090f">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="noindex,nofollow">
@@ -47,6 +47,7 @@
       <div class="nav__links" role="group" aria-label="Page sections">
         <a href="#how">How it works</a>
         <a href="#questions">What to ask</a>
+        <a href="#anatomy">Under the hood</a>
         <a href="#proof">Proof</a>
         <a href="#setup">Setup</a>
       </div>
@@ -62,9 +63,10 @@
         <div class="mobile-menu__panel">
           <a href="#how"><span>01</span><b>How it works</b></a>
           <a href="#questions"><span>02</span><b>What to ask</b></a>
-          <a href="#proof"><span>03</span><b>Proof</b></a>
-          <a href="#setup"><span>04</span><b>Setup</b></a>
-          <a href="https://github.com/grlap/PhoenixCodeNav" target="_blank" rel="noopener"><span>05</span><b>GitHub ↗</b></a>
+          <a href="#anatomy"><span>03</span><b>Under the hood</b></a>
+          <a href="#proof"><span>04</span><b>Proof</b></a>
+          <a href="#setup"><span>05</span><b>Setup</b></a>
+          <a href="https://github.com/grlap/PhoenixCodeNav" target="_blank" rel="noopener"><span>06</span><b>GitHub ↗</b></a>
         </div>
       </details>
     </nav>
@@ -145,7 +147,7 @@
       <div class="shell trust-rail__inner">
         <div><i>◎</i><span><b>Local tool</b><small>No Phoenix cloud service</small></span></div>
         <div><i>◇</i><span><b>Tracked source unchanged</b><small>Local indexes live under .codenav</small></span></div>
-        <div><i>⌁</i><span><b>Legacy + modern C#</b><small>Legacy and SDK-style projects</small></span></div>
+        <div><i>⌁</i><span><b>Legacy + modern C#</b><small>Plus bounded F# support</small></span></div>
         <div><i>↗</i><span><b>Agent-agnostic</b><small>Any compatible MCP client</small></span></div>
       </div>
     </section>
@@ -294,10 +296,203 @@
       </div>
     </section>
 
+    <section class="setup section" id="anatomy">
+      <div class="setup__inner shell">
+        <div class="section-label section-label--dark" data-reveal><span>04</span><span>Under the hood</span></div>
+        <div class="setup__head">
+          <p class="eyebrow eyebrow--dark" data-reveal><span></span>One question, end to end</p>
+          <h2 data-reveal>How Phoenix really<br><em>resolves a symbol.</em></h2>
+          <p data-reveal>One real operation — <b><code>implementations(name: "ICache", arity: 1)</code></b> — from the agent’s seat to the returned evidence. Field names and nesting below match the v0.12.32 MCP contract; values are representative and optional fields are elided. The walkthrough stays on implementations from indexed closure discovery through compiler verification.</p>
+        </div>
+
+        <ol class="setup-steps">
+          <li class="setup-step" data-reveal>
+            <div class="setup-step__number"><span>01</span><i></i></div>
+            <div class="setup-step__copy">
+              <p class="setup-step__eyebrow">Without Phoenix</p>
+              <h3>What the agent normally reads: characters.</h3>
+              <p>An agent’s only native move is opening files. Twelve lines of source cost context window and answer nothing about who implements this interface, where, or what depends on it — those answers live in <em>other</em> files the agent has not found yet.</p>
+            </div>
+            <div class="code-window">
+              <header><span>src/Caching/ICache.cs · raw source</span><button class="copy-button" type="button" data-copy="anatomy-raw"><span>Copy</span><i aria-hidden="true">□</i></button></header>
+              <pre id="anatomy-raw"><code>namespace Acme.Caching;
+
+public interface ICache&lt;T&gt;
+{
+    T? Get(string key);
+    void Set(string key, T value, TimeSpan ttl);
+    bool TryEvict(string key);
+}
+// …and that is all the file will ever say.</code></pre>
+            </div>
+          </li>
+
+          <li class="setup-step" data-reveal>
+            <div class="setup-step__number"><span>02</span><i></i></div>
+            <div class="setup-step__copy">
+              <p class="setup-step__eyebrow">With Phoenix</p>
+              <h3>The question becomes one bounded operation.</h3>
+              <p><code>implementations</code> resolves the requested generic type, ranks concrete results before abstract scaffolding, and returns each declaration under <code>implementations[].symbol.declarations</code>. Those real <code>path</code>, <code>startLine</code>, and <code>endLine</code> fields feed directly into <code>source_context</code>.</p>
+            </div>
+            <div class="code-window">
+              <header><span>MCP · implementations request</span><button class="copy-button" type="button" data-copy="anatomy-enriched"><span>Copy</span><i aria-hidden="true">□</i></button></header>
+              <pre id="anatomy-enriched"><code>implementations(
+    name: "ICache",
+    arity: 1,
+    timeoutMs: 15000
+)</code></pre>
+              <footer><span>One bounded call</span><b>Instead of an open-ended file hunt</b></footer>
+            </div>
+          </li>
+
+          <li class="setup-step" data-reveal>
+            <div class="setup-step__number"><span>03</span><i></i></div>
+            <div class="setup-step__copy">
+              <p class="setup-step__eyebrow">From the database</p>
+              <h3>Precomputed at index time, in SQLite.</h3>
+              <p>The local index under <code>.codenav/</code> holds what can be known without compiling: declarations with spans and arity, normalized base-list <b>(name, arity)</b> edges, the project graph, compile ownership, and freshness. Phoenix pages every matching class, struct, record, and interface into a breadth-first transitive closure. Same-name collisions remain candidates on purpose; syntax narrows and the compiler verifies.</p>
+            </div>
+            <div class="code-window">
+              <header><span>SQLite · production filter, shortened projection</span><button class="copy-button" type="button" data-copy="anatomy-edges"><span>Copy</span><i aria-hidden="true">□</i></button></header>
+              <pre id="anatomy-edges"><code>SELECT s.id, s.kind, s.name, s.arity, f.path
+FROM type_base_edges e
+JOIN symbols s ON s.id = e.derived_symbol_id
+JOIN files   f ON f.id = s.file_id
+WHERE e.base_name = $n AND e.base_arity = $arity
+  AND e.derived_symbol_id &gt; $after
+  AND s.kind IN ('class','struct','record','record_struct','interface')
+ORDER BY e.derived_symbol_id
+LIMIT $lim;
+-- Each page feeds the next name/arity frontier.
+-- A capped closure is never returned as exact.</code></pre>
+            </div>
+          </li>
+
+          <li class="setup-step" data-reveal>
+            <div class="setup-step__number"><span>04</span><i></i></div>
+            <div class="setup-step__copy">
+              <p class="setup-step__eyebrow">From Roslyn, live</p>
+              <h3>Computed per query, from today’s bytes.</h3>
+              <p>Candidate projects load into an <code>AdhocWorkspace</code> hand-assembled from parsed project facts — no MSBuild — and the operation leases one immutable solution snapshot. When the indexed closure completes, Phoenix resolves and verifies every candidate’s real base/interface chain against the target symbol. If the closure safety cap is reached, it discards that incomplete shortcut and falls back to Roslyn’s exhaustive implementation search.</p>
+            </div>
+            <div class="code-window">
+              <header><span>C# · implementations verification path</span><button class="copy-button" type="button" data-copy="anatomy-workspace"><span>Copy</span><i aria-hidden="true">□</i></button></header>
+              <pre id="anatomy-workspace"><code>Solution pinned = scanLease.Solution;
+
+if (typeClosure is not null &amp;&amp; !closureCapped)
+    await VerifyClosureImplementersAsync(
+        targetType, pinned, typeClosure, onVerified, cancellationToken);
+else
+    await SymbolFinder.FindImplementationsAsync(
+        targetType, pinned, cancellationToken: cancellationToken);</code></pre>
+            </div>
+          </li>
+
+          <li class="setup-step setup-step--last" data-reveal>
+            <div class="setup-step__number"><span>05</span><i></i></div>
+            <div class="setup-step__copy">
+              <p class="setup-step__eyebrow">The split, labeled</p>
+              <h3>Every field says where it came from.</h3>
+              <p>The implementations envelope keeps its evidence layers separate: <code>coverage</code> is top-level compiler coverage, while <code>meta</code> carries freshness, confidence, navigation layer, schema, and build identity. The representative JSON below is parsed by the website verification gate so its public field nesting cannot silently drift back to the references contract.</p>
+            </div>
+            <div class="code-window">
+              <header><span>implementations · representative response</span><button class="copy-button" type="button" data-copy="anatomy-envelope"><span>Copy</span><i aria-hidden="true">□</i></button></header>
+              <pre id="anatomy-envelope"><code>{
+  "symbol": {
+    "display": "Acme.Caching.ICache&lt;T&gt;",
+    "documentationCommentId": "T:Acme.Caching.ICache`1",
+    "kind": "namedtype",
+    "ns": "Acme.Caching",
+    "assembly": "Acme.Contracts",
+    "declarations": [
+      {
+        "path": "src/Caching/ICache.cs",
+        "startLine": 3,
+        "endLine": 8,
+        "project": "Acme.Contracts"
+      }
+    ]
+  },
+  "implementations": [
+    {
+      "symbol": {
+        "display": "Acme.Caching.MemoryCache&lt;T&gt;",
+        "kind": "namedtype",
+        "ns": "Acme.Caching",
+        "assembly": "Acme.Runtime",
+        "declarations": [
+          {
+            "path": "src/Caching/MemoryCache.cs",
+            "startLine": 18,
+            "endLine": 64,
+            "project": "Acme.Runtime"
+          }
+        ]
+      },
+      "rank": "concrete"
+    },
+    {
+      "symbol": {
+        "display": "Acme.Caching.DistributedCache&lt;T&gt;",
+        "kind": "namedtype",
+        "ns": "Acme.Caching",
+        "assembly": "Acme.Cluster",
+        "declarations": [
+          {
+            "path": "src/Caching/DistributedCache.cs",
+            "startLine": 22,
+            "endLine": 97,
+            "project": "Acme.Cluster"
+          }
+        ]
+      },
+      "rank": "concrete",
+      "via": "Acme.Caching.CacheBase&lt;T&gt;"
+    }
+  ],
+  "concreteCount": 2,
+  "coverage": {
+    "loadedProjects": 2,
+    "requestedProjects": 2,
+    "solutionProjects": 2,
+    "frameworkRefsAvailable": true
+  },
+  "timing": {
+    "deadlineMs": 15000,
+    "elapsedMs": 42,
+    "clusterLoadMs": 31,
+    "queryMs": 11
+  },
+  "truncated": false,
+  "meta": {
+    "indexStatus": "ready",
+    "indexVersion": "7f4c2a9d18e64b3a92c01d5f6e8a7b40",
+    "indexedAtUtc": "2026-07-27T08:00:00Z",
+    "lastRefreshUtc": "2026-07-27T08:10:00Z",
+    "pendingChanges": 0,
+    "confidence": "exact",
+    "navigationLayer": "semantic",
+    "build": "0.12.32+8a1b2c3",
+    "indexSchema": "18",
+    "indexMode": "writer"
+  }
+}</code></pre>
+              <footer><span>The contract</span><b>Never present a guess as a fact</b></footer>
+            </div>
+          </li>
+        </ol>
+
+        <div class="setup__links" data-reveal>
+          <a href="https://github.com/grlap/PhoenixCodeNav/blob/main/docs/design.md" target="_blank" rel="noopener"><span>Read the full architecture</span><span aria-hidden="true">↗</span></a>
+          <a href="https://github.com/grlap/PhoenixCodeNav/blob/main/docs/intro.md" target="_blank" rel="noopener"><span>Why not just grep?</span><span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+    </section>
+
     <section class="proof section" id="proof">
       <div class="proof__grid" aria-hidden="true"></div>
       <div class="proof__inner shell">
-        <div class="section-label" data-reveal><span>04</span><span>Operational signals</span></div>
+        <div class="section-label" data-reveal><span>05</span><span>Operational signals</span></div>
         <div class="proof__head">
           <div>
             <p class="eyebrow" data-reveal><span></span>Fast feedback without frozen promises</p>
@@ -338,13 +533,19 @@
             <p>compact, line-addressable context stays focused</p>
             <div class="blocks" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
           </article>
+          <article class="proof-card proof-card--wide" data-reveal style="grid-column: 1 / -1;">
+            <span class="proof-card__label">Operations portal</span>
+            <strong>LOCAL</strong>
+            <p>loopback web view of instances, index health, and live build progress — in development</p>
+            <div class="pulse-line" aria-hidden="true"><i></i></div>
+          </article>
         </div>
       </div>
     </section>
 
     <section class="setup section" id="setup">
       <div class="setup__inner shell">
-        <div class="section-label section-label--dark" data-reveal><span>05</span><span>Beginner setup</span></div>
+        <div class="section-label section-label--dark" data-reveal><span>06</span><span>Beginner setup</span></div>
         <div class="setup__head">
           <p class="eyebrow eyebrow--dark" data-reveal><span></span>From source to first answer</p>
           <h2 data-reveal>Three steps.<br><em>One new superpower.</em></h2>
@@ -437,7 +638,7 @@ args = [
 
     <section class="boundary section" id="boundary">
       <div class="boundary__inner shell">
-        <div class="section-label" data-reveal><span>06</span><span>The trust boundary</span></div>
+        <div class="section-label" data-reveal><span>07</span><span>The trust boundary</span></div>
         <div class="boundary__content">
           <div class="boundary__copy">
             <p class="eyebrow" data-reveal><span></span>Local server, honest boundary</p>
@@ -461,7 +662,7 @@ args = [
 
     <section class="fit section" id="fit">
       <div class="fit__inner shell">
-        <div class="section-label section-label--dark" data-reveal><span>07</span><span>Use the right tool</span></div>
+        <div class="section-label section-label--dark" data-reveal><span>08</span><span>Use the right tool</span></div>
         <div class="fit__head">
           <p class="eyebrow eyebrow--dark" data-reveal><span></span>Complement, do not replace</p>
           <h2 data-reveal>One toolbox.<br><em>Three strengths.</em></h2>
@@ -474,7 +675,7 @@ args = [
 
         <div class="faq" data-reveal>
           <h3>Good questions before you start</h3>
-          <details><summary><span>Does Phoenix support every language?</span><i aria-hidden="true">+</i></summary><p>No. PhoenixCodeNav is deliberately focused on C# workspaces and selected project/configuration files.</p></details>
+          <details><summary><span>Does Phoenix support every language?</span><i aria-hidden="true">+</i></summary><p>No. PhoenixCodeNav is C#-first, with deliberately bounded F# support: F# source is indexed for text search, compile-owned <code>.fs</code>/<code>.fsi</code> files get syntax outlines, and a bounded same-project semantic layer answers position lookups. Everything beyond those bounds is labeled unsupported instead of returning a misleading empty answer.</p></details>
           <details><summary><span>Is every answer compiler-exact?</span><i aria-hidden="true">+</i></summary><p>No—and that honesty is a feature. Semantic answers are exact when the required Roslyn cluster and references load. Otherwise Phoenix labels indexed, heuristic, partial, or stale coverage so the agent can verify or widen deliberately.</p></details>
           <details><summary><span>Does it require MSBuild to load my solution?</span><i aria-hidden="true">+</i></summary><p>No. Phoenix builds lazy Roslyn workspaces directly from parsed project facts. Building Phoenix from source requires the .NET 10 SDK; exact legacy semantics may also need .NET Framework reference assemblies.</p></details>
           <details><summary><span>Will it edit my repository?</span><i aria-hidden="true">+</i></summary><p>It does not edit tracked source files, apply code changes, or change Git refs. It writes local indexes under <code>.codenav/</code>, including inside an existing worktree you explicitly ask it to index; those files should be ignored by Git.</p></details>
@@ -503,7 +704,7 @@ args = [
         <svg class="brand__mark" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="24"></circle><path d="M21 46V18h15.5a9.5 9.5 0 0 1 0 19H21"></path><path class="brand__flare" d="M47 11l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"></path></svg>
         <span><b>Phoenix</b>CodeNav</span>
       </a>
-      <p>Local code navigation for AI coding agents working in very large C# repositories.</p>
+      <p>Local code navigation for AI coding agents working in very large C# and mixed C#/F# repositories.</p>
       <div class="footer__links">
         <a href="https://github.com/grlap/PhoenixCodeNav" target="_blank" rel="noopener">GitHub ↗</a>
         <a href="https://github.com/grlap/PhoenixCodeNav/blob/main/docs/intro.md" target="_blank" rel="noopener">Why Phoenix? ↗</a>

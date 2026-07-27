@@ -142,6 +142,7 @@ public sealed partial class NavigationTools
                 new { id = "search-symbol-filtered-existence", summary = "v0.12.30 first-page empty search_symbol results report existsUnfiltered plus active appliedFilters; declarations hidden by those filters also disclose their unfilteredKinds, while genuine absence remains a clean symbols:[] result with existsUnfiltered:false" },
                 new { id = "search-symbol-type-relevance", summary = "v0.12.30 exact-name type declarations receive a soft relevance preference over same-named members without filtering or omitting either result class" },
                 new { id = "indexed-path-suggestions", summary = "v0.12.31 outline/source_context not-found errors and first-page exact-path find_file misses may include a byte-budgeted pathSuggestions object with up to three pinned-index paths, exact total and truncation state; basename matches rank by preserved suffix then prefix and are never substituted" },
+                new { id = "source-context-range-alias", summary = "v0.12.32 source_context accepts range as a compatibility alias when canonical spans is omitted; conflicting simultaneous values return bad_request instead of applying silent precedence" },
                 new { id = "batch-outline-json-array-paths", summary = "v0.12.29 batch_outline accepts its documented comma-separated paths or a serialized JSON string array, rejects malformed/non-string arrays before lookup, and refuses more than 12 paths instead of silently dropping them" },
                 new { id = "index-follower-liveness-fail-closed", summary = "v0.12.11 follower liveness distinguishes mutex contention from coordination failure; only contention proves a live writer, while an unverified probe publishes an explicit unavailable state" },
                 new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry initial or event-driven serialized requests after bounded 100/250/1000 ms delays; timer-initiated stale-index recovery uses its separately declared paced cadence" },
@@ -866,13 +867,14 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "source_context")]
-    [Description("Bounded live source read around one or more line spans (the bridge from navigation results to actual code). A file_not_found response may include pathSuggestions with up to three ranked pinned-index paths plus total/truncated coverage. Use spans from outline/definition/search results instead of reading whole files.")]
+    [Description("Bounded live source read around one or more line spans (the bridge from navigation results to actual code). A file_not_found response may include pathSuggestions with up to three ranked pinned-index paths plus total/truncated coverage. Use canonical spans from outline/definition/search results instead of reading whole files; range is accepted as a compatibility alias when spans is omitted.")]
     public string SourceContext(
         [Description("Workspace-relative file path. Optional when symbolId is given.")] string? path = null,
         [Description("Spans as 'start-end' or 'line', comma-separated (e.g. '42-88,120'). Optional when symbolId is given (defaults to the symbol's own declaration span).")] string spans = "",
         [Description("Extra context lines around each span (default 2).")] int contextLines = 2,
         [Description("Byte budget for returned source (default 8192, max 65536).")] int maxBytes = 8192,
-        [Description("Show one symbol's source by handle instead of path+spans: 'idx:NNN' from a prior result. Overrides path/spans with the symbol's declaration span. Note: 'idx:' handles are index-local and change on reindex.")] string? symbolId = null)
+        [Description("Show one symbol's source by handle instead of path+spans: 'idx:NNN' from a prior result. Overrides path/spans/range with the symbol's declaration span. Note: 'idx:' handles are index-local and change on reindex.")] string? symbolId = null,
+        [Description("Compatibility alias for spans. Use only when spans is omitted; conflicting simultaneous values return bad_request.")] string? range = null)
     {
         if (NotReady() is { } notReady) return notReady;
         if (symbolId is { Length: > 0 })
@@ -882,9 +884,25 @@ public sealed partial class NavigationTools
             path = hit!.FilePath;
             spans = $"{hit.StartLine}-{hit.EndLine}";
         }
+        else if (!string.IsNullOrEmpty(range))
+        {
+            if (!string.IsNullOrEmpty(spans) && !string.Equals(spans, range, StringComparison.Ordinal))
+            {
+                return Json.Serialize(new
+                {
+                    error = "bad_request",
+                    detail = "Provide only one of 'spans' or its compatibility alias 'range', or make them identical.",
+                });
+            }
+            if (string.IsNullOrEmpty(spans)) spans = range;
+        }
         if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(spans))
         {
-            return Json.Serialize(new { error = "bad_request", detail = "Provide 'symbolId', or 'path'+'spans'." });
+            return Json.Serialize(new
+            {
+                error = "bad_request",
+                detail = "Provide 'symbolId', or 'path' with 'spans' (compatibility alias: 'range').",
+            });
         }
         path = NormalizePath(path);
         maxBytes = Math.Clamp(maxBytes, 256, Json.HardBudgetBytes);

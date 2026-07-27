@@ -38,6 +38,16 @@ function isAbsoluteHttps(value) {
   }
 }
 
+function htmlCode(id) {
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`<pre\\s+id="${escaped}"><code>([\\s\\S]*?)<\\/code><\\/pre>`, "i").exec(html);
+  if (!match) return "";
+  return match[1]
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
 const args = process.argv.slice(2);
 const launchMode = args.includes("--launch");
 check(args.every((argument) => argument === "--launch"), "Only the optional --launch argument is supported.");
@@ -107,6 +117,53 @@ if (structuredData.length === 1) {
 check(/<html\b[^>]*\bclass="[^"]*\bno-js\b[^"]*"[^>]*\blang="en"/i.test(html), "The document must ship with the no-JavaScript fallback class and language.");
 check(!/<button\b(?![^>]*\btype="button")[^>]*>/i.test(html), "Every button must declare type=button.");
 check(!/<article\b[^>]*\btabindex=/i.test(html), "Noninteractive article cards must not be keyboard tab stops.");
+
+const implementationExampleText = htmlCode("anatomy-envelope");
+check(Boolean(implementationExampleText), "The implementations walkthrough must publish a response example.");
+if (implementationExampleText) {
+  try {
+    const example = JSON.parse(implementationExampleText);
+    check(typeof example.symbol === "object" && example.symbol !== null, "The implementations example must expose the resolved top-level symbol.");
+    check(Array.isArray(example.implementations) && example.implementations.length > 0, "The implementations example must contain implementation entries.");
+    check(example.implementations.every((item) =>
+      typeof item.symbol === "object" &&
+      typeof item.rank === "string" &&
+      Array.isArray(item.symbol.declarations) &&
+      item.symbol.declarations.every((declaration) =>
+        typeof declaration.path === "string" &&
+        Number.isInteger(declaration.startLine) &&
+        Number.isInteger(declaration.endLine) &&
+        typeof declaration.project === "string")),
+    "Every implementation example entry must use the emitted nested symbol/declarations/rank shape.");
+    check(typeof example.coverage === "object" && example.coverage !== null, "Compiler coverage must remain top-level in the implementations example.");
+    check(typeof example.meta === "object" && example.meta !== null, "The implementations example must contain meta.");
+    check(!Object.hasOwn(example.meta, "coverage"), "Coverage must not be nested under meta.");
+    check(!Object.hasOwn(example, "totalReferences") && !Object.hasOwn(example, "groups"), "The implementations example must not use references response fields.");
+    check(example.meta.confidence === "exact" && example.meta.navigationLayer === "semantic", "The implementations example must label compiler evidence as exact semantic navigation.");
+    check(/^[0-9a-f]{32}$/.test(example.meta.indexVersion), "The representative indexVersion must preserve the emitted opaque GUID format.");
+  } catch (error) {
+    check(false, `The implementations response example must be valid JSON after HTML entity decoding: ${error.message}`);
+  }
+}
+
+const anatomySection = /<section\b[^>]*\bid="anatomy"[\s\S]*?<\/section>/i.exec(html)?.[0] ?? "";
+check(!/scopes documents by scanning/i.test(anatomySection), "The implementations walkthrough must not claim references-only document scoping.");
+check(/e\.derived_symbol_id\s*&gt;\s*\$after/i.test(anatomySection), "The closure example must show production keyset paging.");
+check(/'interface'\)/i.test(anatomySection), "The closure example must retain derived-interface candidates.");
+
+const proofCards = matches(/<article\b[^>]*class="[^"]*\bproof-card\b[^"]*"[^>]*>[\s\S]*?<\/article>/gi)
+  .map((match) => match[0]);
+const ordinaryProofCards = proofCards.filter((card) => !/\bproof-card--hero\b/i.test(card));
+const portalCard = ordinaryProofCards.find((card) =>
+  /<span\b[^>]*class="proof-card__label"[^>]*>\s*Operations portal\s*<\/span>/i.test(card)) ?? "";
+const portalCardTag = /^<article\b[^>]*>/i.exec(portalCard)?.[0] ?? "";
+check(ordinaryProofCards.length === 5, "The proof dashboard must contain five ordinary proof cards.");
+check(Boolean(portalCard), "The proof dashboard must contain the Operations portal card.");
+check(ordinaryProofCards.at(-1) === portalCard, "Operations portal must remain the fifth ordinary proof card.");
+check(/\bproof-card--wide\b/i.test(portalCardTag), "The Operations portal card must declare its wide-card layout intent.");
+check(/style="[^"]*grid-column:\s*1\s*\/\s*-1\s*;?[^"]*"/i.test(portalCardTag), "The Operations portal card must span the full grid at desktop and tablet widths.");
+check(proofCards.filter((card) => /\bproof-card--wide\b/i.test(/^<article\b[^>]*>/i.exec(card)?.[0] ?? "")).length === 1,
+  "Only the Operations portal card may use the wide-card grid rule.");
 
 const robots = metaContent("name", "robots").toLowerCase().split(",").map((token) => token.trim()).filter(Boolean);
 if (launchMode) {

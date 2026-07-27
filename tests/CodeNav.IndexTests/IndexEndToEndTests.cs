@@ -533,6 +533,75 @@ public class McpToolLayerTests
     }
 
     [Fact]
+    public void SourceContextAcceptsRangeCompatibilityAliasAndRejectsConflicts()
+    {
+        var parameterNames = typeof(NavigationTools)
+            .GetMethod(nameof(NavigationTools.SourceContext))!
+            .GetParameters()
+            .Select(parameter => parameter.Name)
+            .ToArray();
+
+        Assert.Contains("range", parameterNames);
+
+        var tools = Tools();
+        var guardPath = Parse(tools.FindFile("Guard.cs", limit: 1))
+            .GetProperty("files").EnumerateArray().First().GetProperty("path").GetString()!;
+        JsonElement canonical = Parse(tools.SourceContext(
+            path: guardPath,
+            spans: "5-8",
+            contextLines: 0));
+        JsonElement alias = Parse(tools.SourceContext(
+            path: guardPath,
+            contextLines: 0,
+            range: "5-8"));
+
+        Assert.Equal(
+            canonical.GetProperty("spans").GetRawText(),
+            alias.GetProperty("spans").GetRawText());
+
+        JsonElement identical = Parse(tools.SourceContext(
+            path: guardPath,
+            spans: "5-8",
+            contextLines: 0,
+            range: "5-8"));
+        Assert.Equal(
+            canonical.GetProperty("spans").GetRawText(),
+            identical.GetProperty("spans").GetRawText());
+
+        JsonElement guardSymbol = Parse(tools.SearchSymbol(
+                "Guard",
+                kinds: "class",
+                match: "exact"))
+            .GetProperty("symbols")
+            .EnumerateArray()
+            .First(symbol => symbol.GetProperty("path").GetString() == guardPath);
+        JsonElement bySymbolId = Parse(tools.SourceContext(
+            contextLines: 0,
+            symbolId: guardSymbol.GetProperty("symbolId").GetString(),
+            range: "1-2"));
+        JsonElement symbolSpan = bySymbolId.GetProperty("spans").EnumerateArray().Single();
+        Assert.Equal(
+            guardSymbol.GetProperty("startLine").GetInt32(),
+            symbolSpan.GetProperty("startLine").GetInt32());
+        Assert.Equal(
+            guardSymbol.GetProperty("endLine").GetInt32(),
+            symbolSpan.GetProperty("endLine").GetInt32());
+
+        JsonElement conflict = Parse(tools.SourceContext(
+            path: guardPath,
+            spans: "5-8",
+            range: "6-9"));
+        Assert.Equal("bad_request", conflict.GetProperty("error").GetString());
+        Assert.Contains("'spans'", conflict.GetProperty("detail").GetString());
+        Assert.Contains("'range'", conflict.GetProperty("detail").GetString());
+
+        JsonElement missing = Parse(tools.SourceContext(path: guardPath));
+        Assert.Equal("bad_request", missing.GetProperty("error").GetString());
+        Assert.Contains("'spans'", missing.GetProperty("detail").GetString());
+        Assert.Contains("'range'", missing.GetProperty("detail").GetString());
+    }
+
+    [Fact]
     public void SourceContextReadsLiveSpans()
     {
         var tools = Tools();
