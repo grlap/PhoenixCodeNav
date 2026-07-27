@@ -44,5 +44,17 @@
     "path": "src/Workspaces/Core/Portable/Workspace/Solution/SolutionCompilationState.RegularCompilationTracker.cs",
     "line": 216,
     "container": "RegularCompilationTracker"
+  },
+  "understandingTarget": {
+    "path": "src/Workspaces/Core/Portable/Workspace/Solution/SolutionCompilationState.WithFrozenSourceGeneratedDocumentsCompilationTracker.cs",
+    "propertyLine": 39,
+    "propertySignature": "public RegularCompilationTracker UnderlyingTracker",
+    "calleeName": "GetCompilationAsync",
+    "calleeLine": 123,
+    "calleeColumn": 58,
+    "calleeDefinitionPath": "src/Workspaces/Core/Portable/Workspace/Solution/SolutionCompilationState.RegularCompilationTracker.cs",
+    "calleeSignature": "public async Task<Compilation> GetCompilationAsync",
+    "followOnLine": 136,
+    "followOnText": "newCompilation = newCompilation.ReplaceSyntaxTree"
   }
 }

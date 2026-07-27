@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const root = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(root, "..");
 const html = readFileSync(resolve(root, "index.html"), "utf8");
+const roslynBaseline = JSON.parse(readFileSync(resolve(repoRoot, "tests/integration/roslyn-mcp-baseline.json"), "utf8"));
 const failures = [];
 let checks = 0;
 
@@ -118,38 +119,72 @@ check(/<html\b[^>]*\bclass="[^"]*\bno-js\b[^"]*"[^>]*\blang="en"/i.test(html), "
 check(!/<button\b(?![^>]*\btype="button")[^>]*>/i.test(html), "Every button must declare type=button.");
 check(!/<article\b[^>]*\btabindex=/i.test(html), "Noninteractive article cards must not be keyboard tab stops.");
 
-const implementationExampleText = htmlCode("anatomy-envelope");
-check(Boolean(implementationExampleText), "The implementations walkthrough must publish a response example.");
-if (implementationExampleText) {
+const understanding = roslynBaseline.understandingTarget;
+const understandingSource = htmlCode("anatomy-raw");
+const understandingRequest = htmlCode("anatomy-enriched");
+const understandingChain = htmlCode("anatomy-edges");
+const definitionExampleText = htmlCode("anatomy-envelope");
+const understandingConclusion = htmlCode("anatomy-workspace");
+const understandingPathSlash = understanding.path.lastIndexOf("/") + 1;
+const understandingPathPrefix = understanding.path.slice(0, understandingPathSlash);
+const understandingFileName = understanding.path.slice(understandingPathSlash);
+
+check(understandingSource.includes(understanding.propertySignature), "The code-understanding walkthrough must show the receiver's real declared type.");
+check(understandingSource.includes(understanding.followOnText), "The code-understanding walkthrough must show the real follow-on Compilation use.");
+check(understandingRequest.includes(`path: "${understandingPathPrefix}"`) &&
+  understandingRequest.includes(`"${understandingFileName}"`),
+"The definition request must target the pinned Roslyn understanding fixture.");
+check(understandingRequest.includes(`name: "${understanding.calleeName}"`) &&
+  understandingRequest.includes(`line: ${understanding.calleeLine}`) &&
+  understandingRequest.includes(`column: ${understanding.calleeColumn}`),
+"The definition request must preserve the integration-tested symbol position.");
+check(/mode:\s*"semantic"/.test(understandingRequest) && /includeBody:\s*true/.test(understandingRequest),
+  "The code-understanding request must require semantic resolution with live declaration source.");
+check(understandingChain.includes("Task<Compilation>") &&
+  understandingChain.includes("newCompilation : Compilation"),
+"The reasoning chain must connect the bound task return to the awaited variable type.");
+check(Boolean(definitionExampleText), "The code-understanding walkthrough must publish a definition response example.");
+if (definitionExampleText) {
   try {
-    const example = JSON.parse(implementationExampleText);
-    check(typeof example.symbol === "object" && example.symbol !== null, "The implementations example must expose the resolved top-level symbol.");
-    check(Array.isArray(example.implementations) && example.implementations.length > 0, "The implementations example must contain implementation entries.");
-    check(example.implementations.every((item) =>
-      typeof item.symbol === "object" &&
-      typeof item.rank === "string" &&
-      Array.isArray(item.symbol.declarations) &&
-      item.symbol.declarations.every((declaration) =>
-        typeof declaration.path === "string" &&
+    const example = JSON.parse(definitionExampleText);
+    check(example.name === understanding.calleeName, "The definition example must name the integration-tested callee.");
+    check(typeof example.symbol === "object" && example.symbol !== null &&
+      example.symbol.kind === "method" &&
+      example.symbol.containingType === "RegularCompilationTracker",
+    "The definition example must expose the compiler-bound method identity.");
+    check(Array.isArray(example.declarations) &&
+      example.declarations.some((declaration) =>
+        declaration.path === understanding.calleeDefinitionPath &&
         Number.isInteger(declaration.startLine) &&
-        Number.isInteger(declaration.endLine) &&
-        typeof declaration.project === "string")),
-    "Every implementation example entry must use the emitted nested symbol/declarations/rank shape.");
-    check(typeof example.coverage === "object" && example.coverage !== null, "Compiler coverage must remain top-level in the implementations example.");
-    check(typeof example.meta === "object" && example.meta !== null, "The implementations example must contain meta.");
-    check(!Object.hasOwn(example.meta, "coverage"), "Coverage must not be nested under meta.");
-    check(!Object.hasOwn(example, "totalReferences") && !Object.hasOwn(example, "groups"), "The implementations example must not use references response fields.");
-    check(example.meta.confidence === "exact" && example.meta.navigationLayer === "semantic", "The implementations example must label compiler evidence as exact semantic navigation.");
+        Number.isInteger(declaration.endLine)),
+    "The definition example must point at the pinned Roslyn declaration.");
+    check(example.body?.path === understanding.calleeDefinitionPath &&
+      example.body.source.includes(understanding.calleeSignature) &&
+      example.body.freshness === "live",
+    "The definition example must carry the real live Task<Compilation> declaration source.");
+    check(typeof example.meta === "object" && example.meta !== null, "The definition example must contain meta.");
+    check(!Object.hasOwn(example, "implementations") &&
+      !Object.hasOwn(example, "totalReferences") &&
+      !Object.hasOwn(example, "groups"),
+    "The definition example must not borrow fields from other MCP operations.");
+    check(example.meta.confidence === "exact" && example.meta.navigationLayer === "semantic", "The definition example must label compiler evidence as exact semantic navigation.");
     check(/^[0-9a-f]{32}$/.test(example.meta.indexVersion), "The representative indexVersion must preserve the emitted opaque GUID format.");
   } catch (error) {
-    check(false, `The implementations response example must be valid JSON after HTML entity decoding: ${error.message}`);
+    check(false, `The definition response example must be valid JSON after HTML entity decoding: ${error.message}`);
   }
 }
 
 const anatomySection = /<section\b[^>]*\bid="anatomy"[\s\S]*?<\/section>/i.exec(html)?.[0] ?? "";
-check(!/scopes documents by scanning/i.test(anatomySection), "The implementations walkthrough must not claim references-only document scoping.");
-check(/e\.derived_symbol_id\s*&gt;\s*\$after/i.test(anatomySection), "The closure example must show production keyset paging.");
-check(/'interface'\)/i.test(anatomySection), "The closure example must retain derived-interface candidates.");
+check(/compile ownership comes from the index[\s\S]*bounded live source read supplies the declared receiver type/i.test(anatomySection),
+  "The walkthrough must distinguish indexed compile ownership from live receiver-type evidence.");
+check(!/same bytes|same immutable solution snapshot|live body\s*·\s*pinned snapshot/i.test(anatomySection),
+  "The walkthrough must not collapse separately captured text and semantic evidence into one snapshot.");
+check(/does not claim[\s\S]*full expression inference/i.test(anatomySection),
+  "The walkthrough must distinguish its proof chain from unsupported full expression inference.");
+check(/semantic_unavailable/i.test(anatomySection),
+  "The walkthrough must disclose the honest semantic-unavailable boundary.");
+check(/indexed ownership[\s\S]*text\s*·\s*live receiver context[\s\S]*exact\s*·\s*semantic call binding[\s\S]*separately read\s*·\s*live declaration body/i.test(understandingConclusion),
+  "The agent conclusion must label every evidence hop separately.");
 
 const proofCards = matches(/<article\b[^>]*class="[^"]*\bproof-card\b[^"]*"[^>]*>[\s\S]*?<\/article>/gi)
   .map((match) => match[0]);
@@ -181,6 +216,25 @@ if (launchMode) {
 
 const stylesheet = stylesheets.length === 1 && stylesheets[0].exists ? readFileSync(stylesheets[0].path, "utf8") : "";
 const script = scripts.length === 1 && scripts[0].exists ? readFileSync(scripts[0].path, "utf8") : "";
+const readableFontSize = (value) => {
+  const normalized = value.trim();
+  const supported = /^\d+(?:\.\d+)?px$/i.test(normalized) ||
+    /^clamp\(\s*\d+(?:\.\d+)?px\s*,\s*\d+(?:\.\d+)?(?:px|vw)\s*,\s*\d+(?:\.\d+)?px\s*\)$/i.test(normalized);
+  const pixelSizes = matches(/\d+(?:\.\d+)?px/gi, normalized).map((match) => Number.parseFloat(match[0]));
+  return supported && pixelSizes.length > 0 && pixelSizes.every((size) => size >= 12);
+};
+const fontSizeDeclarations = matches(/font-size:\s*([^;}{]+)\s*;/gi, stylesheet)
+  .map((match) => match[1]);
+check(fontSizeDeclarations.length > 0 && fontSizeDeclarations.every(readableFontSize),
+  "Readable site text must use a supported font-size with no pixel bound below 12px.");
+check([
+  "11px",
+  "calc(8px + 1vw)",
+  "clamp(12px, calc(8px + 1vw), 14px)",
+  "clamp(12px, 1vw, 11px)",
+  "0.75rem",
+].every((value) => !readableFontSize(value)),
+  "The font-size guard must fail closed for sub-12px and unsupported computed values.");
 check(stylesheet.includes(".no-js .atlas__controls") && stylesheet.includes(".no-js .config-tabs__list"), "CSS must hide dead atlas and tab controls without JavaScript.");
 check(stylesheet.includes(".motion-paused *"), "CSS must pause continuous animation in the global motion-paused state.");
 check(/function updatePauseButton\(\)[\s\S]*?setGlobalMotionPaused\(userPaused/.test(script), "The atlas pause state must invoke the global motion controller.");

@@ -734,6 +734,43 @@ try {
         Assert-True (($definition | ConvertTo-Json -Compress -Depth 20) -match [regex]::Escape([string]$baseline.target.path)) "definition returned the wrong declaration"
     }
 
+    $understanding = $baseline.understandingTarget
+    $calleeDefinition = Invoke-SemanticWithRetry $writer "definition" @{
+        name = [string]$understanding.calleeName
+        path = [string]$understanding.path
+        line = [int]$understanding.calleeLine
+        column = [int]$understanding.calleeColumn
+        mode = "semantic"
+        includeBody = $true
+        timeoutMs = 30000
+    }
+    $understandingContext = Invoke-McpTool $writer "source_context" @{
+        path = [string]$understanding.path
+        spans = "$($understanding.propertyLine),$($understanding.calleeLine),$($understanding.followOnLine)"
+        contextLines = 0
+        maxBytes = 8192
+    }
+    $evidence.results.codeUnderstanding = [ordered]@{
+        callee = $calleeDefinition
+        context = $understandingContext
+    }
+    Test-IntegrationCase "compiler-resolved code understanding chain" {
+        Assert-True ($null -eq $calleeDefinition.error) "GetCompilationAsync definition returned $($calleeDefinition.error): $($calleeDefinition.partialReason)"
+        Assert-Equal "exact" ([string]$calleeDefinition.meta.confidence) "GetCompilationAsync definition lost compiler-exact confidence"
+        Assert-Equal "semantic" ([string]$calleeDefinition.meta.navigationLayer) "GetCompilationAsync definition lost semantic provenance"
+        Assert-Equal "RegularCompilationTracker" ([string]$calleeDefinition.symbol.containingType) "GetCompilationAsync definition lost its containing type"
+        Assert-Contains @($calleeDefinition.declarations | ForEach-Object { [string]$_.path }) ([string]$understanding.calleeDefinitionPath) "GetCompilationAsync bound to the wrong declaration"
+        Assert-True ([string]$calleeDefinition.body.source -match [regex]::Escape([string]$understanding.calleeSignature)) "GetCompilationAsync body omitted its Task<Compilation> return type"
+        Assert-Equal "live" ([string]$calleeDefinition.body.freshness) "GetCompilationAsync body lost live-source freshness"
+
+        Assert-True ($null -eq $understandingContext.error) "Code-understanding source context returned $($understandingContext.error)"
+        Assert-Equal "text" ([string]$understandingContext.meta.navigationLayer) "Code-understanding source context lost text-layer provenance"
+        Assert-Equal "live" ([string]$understandingContext.freshness) "Code-understanding source context lost live-source freshness"
+        $understandingJson = $understandingContext | ConvertTo-Json -Compress -Depth 20
+        Assert-True ($understandingJson -match [regex]::Escape([string]$understanding.propertySignature)) "Source context omitted the receiver's declared type"
+        Assert-True ($understandingJson -match [regex]::Escape([string]$understanding.followOnText)) "Source context omitted the follow-on Compilation use"
+    }
+
     $implementations = Invoke-SemanticWithRetry $writer "implementations" @{ symbolId = $targetHandle; maxProjects = 0; timeoutMs = 60000 }
     $evidence.results.implementations = $implementations
     $implementationNames = @($implementations.implementations | ForEach-Object { Get-TypeResultName $_ })

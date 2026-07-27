@@ -5,7 +5,7 @@ Static, dependency-free product website for PhoenixCodeNav. It is designed for p
 ## Files
 
 - `index.html` — semantic page content, SEO metadata, setup examples, and structured data
-- `styles.c5bd8d3532.css` — complete responsive visual system and CSS motion
+- `styles.bcbe2a78c5.css` — complete responsive visual system and CSS motion
 - `script.1f28c1e1e6.js` — hero atlas, scroll reveals, tabs, copy buttons, navigation, and accessibility enhancements
 - `verify.mjs` — dependency-free structural, asset-integrity, accessibility-reference, and launch-guard checks
 - `assets/` — original code-native brand assets

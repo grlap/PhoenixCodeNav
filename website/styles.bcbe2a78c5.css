@@ -283,7 +283,7 @@ canvas {
   padding: 0 16px;
   border: 1px solid rgba(248, 247, 243, 0.22);
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
   text-decoration: none;
   transition: color 250ms ease, background-color 250ms ease, border-color 250ms ease, transform 350ms var(--ease-out);
@@ -374,7 +374,7 @@ canvas {
 .mobile-menu__panel > a > span {
   color: var(--cyan);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 9px;
+  font-size: 12px;
   letter-spacing: 0.1em;
 }
 
@@ -393,7 +393,7 @@ canvas {
   margin: 0;
   color: rgba(248, 247, 243, 0.67);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 750;
   letter-spacing: 0.13em;
   line-height: 1.5;
@@ -422,7 +422,7 @@ canvas {
   border-top: 1px solid var(--line);
   color: rgba(248, 247, 243, 0.55);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 750;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -609,7 +609,7 @@ canvas {
 .hero__plain-language > span {
   color: var(--cyan);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.11em;
   line-height: 1.5;
@@ -633,7 +633,7 @@ canvas {
   gap: 14px;
   color: rgba(248, 247, 243, 0.58);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 750;
   letter-spacing: 0.12em;
   text-decoration: none;
@@ -785,7 +785,7 @@ canvas {
   margin-bottom: 8px;
   color: rgba(248, 247, 243, 0.48);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 7px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -794,7 +794,7 @@ canvas {
 .atlas__prompt p {
   margin: 0;
   color: rgba(248, 247, 243, 0.8);
-  font-size: clamp(10px, 0.9vw, 13px);
+  font-size: clamp(12px, 1vw, 14px);
   line-height: 1.45;
 }
 
@@ -839,7 +839,7 @@ canvas {
   border: 1px solid rgba(220, 230, 255, 0.1);
   border-radius: 7px;
   color: rgba(248, 247, 243, 0.32);
-  font-size: clamp(7px, 0.62vw, 9px);
+  font-size: 12px;
   transition: color 450ms ease, border-color 450ms ease, background-color 450ms ease, transform 450ms var(--ease-out);
 }
 
@@ -855,7 +855,7 @@ canvas {
 
 .atlas__answer li b {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 6px;
+  font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -879,7 +879,7 @@ canvas {
   background: rgba(7, 9, 15, 0.7);
   color: rgba(248, 247, 243, 0.48);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: clamp(6px, 0.52vw, 8px);
+  font-size: 12px;
   transition: color 450ms ease, border-color 450ms ease, box-shadow 450ms ease, transform 450ms var(--ease-out);
 }
 
@@ -939,7 +939,7 @@ canvas {
   background: rgba(255, 255, 255, 0.025);
   color: rgba(248, 247, 243, 0.5);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 750;
   letter-spacing: 0.06em;
   cursor: pointer;
@@ -1035,7 +1035,7 @@ canvas {
 
 .trust-rail__inner small {
   color: rgba(248, 247, 243, 0.5);
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
@@ -1120,14 +1120,14 @@ canvas {
 }
 
 .contrast-panel > header b {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .contrast-panel > header small {
   margin-left: auto;
   color: rgba(248, 247, 243, 0.4);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .contrast-panel > footer {
@@ -1135,7 +1135,7 @@ canvas {
   margin-top: auto;
   border-top: 1px solid var(--line);
   color: rgba(248, 247, 243, 0.46);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .contrast-panel > footer b {
@@ -1179,7 +1179,7 @@ canvas {
   background: rgba(255, 255, 255, 0.025);
   color: rgba(248, 247, 243, 0.38);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: clamp(7px, 0.64vw, 9px);
+  font-size: 12px;
   animation: weak-hit 4s ease-in-out infinite alternate;
 }
 
@@ -1220,7 +1220,7 @@ canvas {
 .contrast-arrow small {
   color: rgba(248, 247, 243, 0.36);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 7px;
+  font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   writing-mode: vertical-rl;
@@ -1234,7 +1234,7 @@ canvas {
   border-radius: 50%;
   background: linear-gradient(135deg, var(--ember), var(--magenta));
   color: #fff;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 900;
 }
 
@@ -1275,7 +1275,7 @@ canvas {
   justify-items: center;
   gap: 5px;
   color: rgba(248, 247, 243, 0.72);
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .route-node i {
@@ -1294,7 +1294,7 @@ canvas {
 .route-node b {
   color: var(--cyan);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 6px;
+  font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -1377,7 +1377,7 @@ canvas {
 .question-card__number {
   color: rgba(248, 247, 243, 0.4);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 800;
 }
 
@@ -1412,7 +1412,7 @@ canvas {
   border-radius: 999px;
   color: var(--card-color);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 8px;
+  font-size: 12px;
   letter-spacing: 0.08em;
 }
 
@@ -1600,7 +1600,7 @@ canvas {
   margin-bottom: 70px;
   color: rgba(16, 19, 27, 0.42);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 800;
 }
 
@@ -1612,7 +1612,7 @@ canvas {
   padding: 7px 10px;
   border-radius: 999px;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1646,7 +1646,7 @@ canvas {
   margin-top: 30px;
   color: rgba(16, 19, 27, 0.42);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 8px;
+  font-size: 12px;
   letter-spacing: 0.06em;
 }
 
@@ -1741,7 +1741,7 @@ canvas {
   left: 30px;
   color: rgba(248, 247, 243, 0.48);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -1763,7 +1763,7 @@ canvas {
 .proof-card strong > span:not([data-counter]) {
   margin-left: 5px;
   color: var(--cyan);
-  font-size: 0.28em;
+  font-size: clamp(14px, 1.4vw, 21px);
   letter-spacing: 0;
 }
 
@@ -1781,7 +1781,7 @@ canvas {
   margin-top: 35px;
   color: rgba(248, 247, 243, 0.38);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 8px;
+  font-size: 12px;
   letter-spacing: 0.06em;
 }
 
@@ -1945,7 +1945,7 @@ canvas {
   background: var(--paper);
   color: #5b39c0;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 800;
 }
 
@@ -1966,7 +1966,7 @@ canvas {
   margin: 3px 0 19px;
   color: #5b39c0;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.11em;
   text-transform: uppercase;
@@ -2012,7 +2012,7 @@ canvas {
   padding: 0 17px;
   color: rgba(220, 232, 245, 0.52);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 8px;
+  font-size: 12px;
 }
 
 .code-window > header { border-bottom: 1px solid rgba(220, 232, 245, 0.1); }
@@ -2031,7 +2031,7 @@ canvas {
   background: rgba(255, 255, 255, 0.03);
   color: rgba(220, 232, 245, 0.68);
   font-family: inherit;
-  font-size: 8px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -2051,7 +2051,7 @@ canvas {
 .code-window code {
   color: #dce8f5;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: clamp(11px, 1vw, 13px);
+  font-size: clamp(13px, 1.05vw, 14px);
   line-height: 1.65;
 }
 
@@ -2072,7 +2072,7 @@ canvas {
   border-radius: 999px;
   background: transparent;
   color: rgba(16, 19, 27, 0.52);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
   cursor: pointer;
 }
@@ -2116,7 +2116,7 @@ canvas {
   padding-top: 2px;
   color: rgba(16, 19, 27, 0.48);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2228,7 +2228,7 @@ canvas {
   border-left: 2px solid var(--ember);
   background: rgba(255, 107, 61, 0.055);
   color: rgba(248, 247, 243, 0.54);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.65;
 }
 
@@ -2298,8 +2298,8 @@ canvas {
 
 .boundary-map__core svg circle { fill: none; stroke: rgba(91, 214, 255, 0.2); stroke-width: 2; }
 .boundary-map__core svg path { fill: none; stroke: var(--white); stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
-.boundary-map__core span { margin-top: 8px; font-size: 10px; font-weight: 800; }
-.boundary-map__core small { margin-top: 3px; color: rgba(248, 247, 243, 0.38); font-size: 6px; }
+.boundary-map__core span { margin-top: 8px; font-size: 12px; font-weight: 800; }
+.boundary-map__core small { margin-top: 3px; color: rgba(248, 247, 243, 0.38); font-size: 12px; }
 
 .boundary-map__item {
   position: absolute;
@@ -2322,8 +2322,8 @@ canvas {
   font-size: 16px;
 }
 
-.boundary-map__item span { font-size: 9px; font-weight: 700; }
-.boundary-map__item b { color: rgba(248, 247, 243, 0.42); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 6px; letter-spacing: 0.08em; text-transform: uppercase; }
+.boundary-map__item span { font-size: 12px; font-weight: 700; }
+.boundary-map__item b { color: rgba(248, 247, 243, 0.42); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
 .boundary-map__item--source { top: 13%; left: 2%; }
 .boundary-map__item--git { top: 21%; right: 1%; }
 .boundary-map__item--index { bottom: 12%; left: 6%; }
@@ -2342,9 +2342,9 @@ canvas {
   background: rgba(255, 107, 61, 0.06);
 }
 
-.boundary-map__exit span { color: rgba(248, 247, 243, 0.42); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 6px; letter-spacing: 0.07em; text-transform: uppercase; }
+.boundary-map__exit span { color: rgba(248, 247, 243, 0.42); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; letter-spacing: 0.07em; text-transform: uppercase; }
 .boundary-map__exit i { grid-row: span 2; color: var(--ember); font-style: normal; }
-.boundary-map__exit b { font-size: 9px; }
+.boundary-map__exit b { font-size: 12px; }
 
 /* Fit + FAQ */
 .fit {
@@ -2567,7 +2567,7 @@ canvas {
 
 .footer__links a {
   min-height: 27px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 750;
   text-decoration: none;
 }
@@ -2584,7 +2584,7 @@ canvas {
   border-top: 1px solid var(--line);
   color: rgba(248, 247, 243, 0.5);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 8px;
+  font-size: 12px;
   letter-spacing: 0.04em;
 }
 
@@ -2720,7 +2720,7 @@ canvas {
   .setup-step__number i { top: 42px; bottom: -90px; }
   .setup-step > :last-child { margin-top: 20px; }
   .setup__links { grid-template-columns: 1fr; margin-left: 68px; }
-  .code-window code { font-size: 11px; }
+  .code-window code { font-size: 12px; }
 
   .boundary-map__item { min-width: 120px; padding: 8px 9px; }
   .boundary-map__item--source { left: 0; }
@@ -2761,7 +2761,7 @@ canvas {
   .contrast-panel > header { align-items: flex-start; flex-wrap: wrap; }
   .contrast-panel > header small { width: 100%; margin-left: 0; }
   .contrast-panel > footer { align-items: flex-start; flex-direction: column; }
-  .grep-hit { font-size: 6px; }
+  .grep-hit { font-size: 12px; }
   .route-map { min-height: 340px; }
   .route-node { min-width: 63px; }
 
@@ -2777,7 +2777,7 @@ canvas {
   .boundary-map { margin-top: 20px; aspect-ratio: 0.9; }
   .boundary-map__core { width: 34%; }
   .boundary-map__item { min-width: 112px; }
-  .boundary-map__item span { font-size: 8px; }
+  .boundary-map__item span { font-size: 12px; }
   .boundary-map__item--source { top: 5%; }
   .boundary-map__item--git { top: 16%; }
   .boundary-map__item--index { bottom: 9%; }

@@ -16,7 +16,7 @@
   <meta name="twitter:card" content="summary">
 
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.c5bd8d3532.css">
+  <link rel="stylesheet" href="styles.bcbe2a78c5.css">
 
   <script type="application/ld+json">
   {
@@ -300,184 +300,156 @@
       <div class="setup__inner shell">
         <div class="section-label section-label--dark" data-reveal><span>04</span><span>Under the hood</span></div>
         <div class="setup__head">
-          <p class="eyebrow eyebrow--dark" data-reveal><span></span>One question, end to end</p>
-          <h2 data-reveal>How Phoenix really<br><em>resolves a symbol.</em></h2>
-          <p data-reveal>One real operation — <b><code>implementations(name: "ICache", arity: 1)</code></b> — from the agent’s seat to the returned evidence. Field names and nesting below match the v0.12.33 MCP contract; values are representative and optional fields are elided. The walkthrough stays on implementations from indexed closure discovery through compiler verification.</p>
+          <p class="eyebrow eyebrow--dark" data-reveal><span></span>From syntax to meaning</p>
+          <h2 data-reveal>How an agent turns<br><em>var into a fact.</em></h2>
+          <p data-reveal>This is a real example from Phoenix’s pinned Roslyn test repository. The agent starts with <code>var newCompilation</code>, resolves the exact method call in a semantic snapshot, and separately reads bounded live source context. From those labeled pieces of evidence — plus the C# rule for <code>await</code> — it can explain the variable’s type without guessing from text.</p>
         </div>
 
         <ol class="setup-steps">
           <li class="setup-step" data-reveal>
             <div class="setup-step__number"><span>01</span><i></i></div>
             <div class="setup-step__copy">
-              <p class="setup-step__eyebrow">Without Phoenix</p>
-              <h3>What the agent normally reads: characters.</h3>
-              <p>An agent’s only native move is opening files. Twelve lines of source cost context window and answer nothing about who implements this interface, where, or what depends on it — those answers live in <em>other</em> files the agent has not found yet.</p>
+              <p class="setup-step__eyebrow">The question in the code</p>
+              <h3><code>var</code> hides the answer from plain text.</h3>
+              <p>The call site says what happens, but not which overload the compiler chose or what <code>newCompilation</code> means. A text search for <code>GetCompilationAsync</code> returns declarations and calls across the repository; the agent still needs the identity attached to this exact token.</p>
             </div>
             <div class="code-window">
-              <header><span>src/Caching/ICache.cs · raw source</span><button class="copy-button" type="button" data-copy="anatomy-raw"><span>Copy</span><i aria-hidden="true">□</i></button></header>
-              <pre id="anatomy-raw"><code>namespace Acme.Caching;
-
-public interface ICache&lt;T&gt;
-{
-    T? Get(string key);
-    void Set(string key, T value, TimeSpan ttl);
-    bool TryEvict(string key);
-}
-// …and that is all the file will ever say.</code></pre>
+              <header><span>Roslyn · real source, shortened</span><button class="copy-button" type="button" data-copy="anatomy-raw"><span>Copy</span><i aria-hidden="true">□</i></button></header>
+              <pre id="anatomy-raw"><code>39 | public RegularCompilationTracker UnderlyingTracker { get; }
+   |
+123| var newCompilation = await
+   |     UnderlyingTracker.GetCompilationAsync(
+   |         compilationState, cancellationToken)
+   |     .ConfigureAwait(false);
+   |
+136| newCompilation = newCompilation.ReplaceSyntaxTree(
+   |     existingSyntaxTree, replacementSyntaxTree);</code></pre>
             </div>
           </li>
 
           <li class="setup-step" data-reveal>
             <div class="setup-step__number"><span>02</span><i></i></div>
             <div class="setup-step__copy">
-              <p class="setup-step__eyebrow">With Phoenix</p>
-              <h3>The question becomes one bounded operation.</h3>
-              <p><code>implementations</code> resolves the requested generic type, ranks concrete results before abstract scaffolding, and returns each declaration under <code>implementations[].symbol.declarations</code>. Those real <code>path</code>, <code>startLine</code>, and <code>endLine</code> fields feed directly into <code>source_context</code>.</p>
+              <p class="setup-step__eyebrow">Address the token, not the spelling</p>
+              <h3>The agent asks about one call in one snapshot.</h3>
+              <p><code>definition</code> accepts the real workspace-relative path, 1-based line, and 1-based column. The optional name is an additional guard on a line that also declares a local variable. <code>mode: "semantic"</code> forbids a silent indexed guess, while <code>includeBody</code> returns the live declaration and its written return type.</p>
             </div>
             <div class="code-window">
-              <header><span>MCP · implementations request</span><button class="copy-button" type="button" data-copy="anatomy-enriched"><span>Copy</span><i aria-hidden="true">□</i></button></header>
-              <pre id="anatomy-enriched"><code>implementations(
-    name: "ICache",
-    arity: 1,
-    timeoutMs: 15000
+              <header><span>MCP · compiler-semantic definition request</span><button class="copy-button" type="button" data-copy="anatomy-enriched"><span>Copy</span><i aria-hidden="true">□</i></button></header>
+              <pre id="anatomy-enriched"><code>definition(
+    name: "GetCompilationAsync",
+    path: "src/Workspaces/Core/Portable/Workspace/Solution/" +
+          "SolutionCompilationState.WithFrozenSourceGeneratedDocumentsCompilationTracker.cs",
+    line: 123,
+    column: 58,
+    mode: "semantic",
+    includeBody: true,
+    timeoutMs: 30000
 )</code></pre>
-              <footer><span>One bounded call</span><b>Instead of an open-ended file hunt</b></footer>
+              <footer><span>Exact position</span><b>Compiler binding for one source token</b></footer>
             </div>
           </li>
 
           <li class="setup-step" data-reveal>
             <div class="setup-step__number"><span>03</span><i></i></div>
             <div class="setup-step__copy">
-              <p class="setup-step__eyebrow">From the database</p>
-              <h3>Precomputed at index time, in SQLite.</h3>
-              <p>The local index under <code>.codenav/</code> holds what can be known without compiling: declarations with spans and arity, normalized base-list <b>(name, arity)</b> edges, the project graph, compile ownership, and freshness. Phoenix pages every matching class, struct, record, and interface into a breadth-first transitive closure. Same-name collisions remain candidates on purpose; syntax narrows and the compiler verifies.</p>
+              <p class="setup-step__eyebrow">The evidence chain</p>
+              <h3>Small facts compose into code understanding.</h3>
+              <p>Compile ownership comes from the index; a bounded live source read supplies the declared receiver type. Roslyn then binds the call to one symbol: <code>RegularCompilationTracker.GetCompilationAsync</code>. Its declaration returns <code>Task&lt;Compilation&gt;</code>; C# <code>await</code> unwraps that task, so the agent can state that <code>newCompilation</code> is a <code>Compilation</code> and explain why.</p>
             </div>
             <div class="code-window">
-              <header><span>SQLite · production filter, shortened projection</span><button class="copy-button" type="button" data-copy="anatomy-edges"><span>Copy</span><i aria-hidden="true">□</i></button></header>
-              <pre id="anatomy-edges"><code>SELECT s.id, s.kind, s.name, s.arity, f.path
-FROM type_base_edges e
-JOIN symbols s ON s.id = e.derived_symbol_id
-JOIN files   f ON f.id = s.file_id
-WHERE e.base_name = $n AND e.base_arity = $arity
-  AND e.derived_symbol_id &gt; $after
-  AND s.kind IN ('class','struct','record','record_struct','interface')
-ORDER BY e.derived_symbol_id
-LIMIT $lim;
--- Each page feeds the next name/arity frontier.
--- A capped closure is never returned as exact.</code></pre>
+              <header><span>Agent reasoning · every arrow has evidence</span><button class="copy-button" type="button" data-copy="anatomy-edges"><span>Copy</span><i aria-hidden="true">□</i></button></header>
+              <pre id="anatomy-edges"><code>UnderlyingTracker
+└─ declared type → RegularCompilationTracker
+   └─ exact call → GetCompilationAsync(...)
+      └─ return type → Task&lt;Compilation&gt;
+         └─ await unwraps → Compilation
+            └─ therefore → newCompilation : Compilation
+
+Follow-on check:
+newCompilation.ReplaceSyntaxTree(...)
+└─ receiver remains → Compilation</code></pre>
             </div>
           </li>
 
           <li class="setup-step" data-reveal>
             <div class="setup-step__number"><span>04</span><i></i></div>
             <div class="setup-step__copy">
-              <p class="setup-step__eyebrow">From Roslyn, live</p>
-              <h3>Computed per query, from today’s bytes.</h3>
-              <p>Candidate projects load into an <code>AdhocWorkspace</code> hand-assembled from parsed project facts — no MSBuild — and the operation leases one immutable solution snapshot. When the indexed closure completes, Phoenix resolves and verifies every candidate’s real base/interface chain against the target symbol. If the closure safety cap is reached, it discards that incomplete shortcut and falls back to Roslyn’s exhaustive implementation search.</p>
+              <p class="setup-step__eyebrow">The compiler-backed result</p>
+              <h3>The response carries identity, source, and provenance.</h3>
+              <p>The real integration case separately asserts the compiler-bound containing type, declaration path, <code>Task&lt;Compilation&gt;</code> signature, exact confidence, semantic navigation layer, and the live freshness of each source read. The representative envelope below uses the production field names and is parsed by the website gate so this explanation cannot drift into a fictional API.</p>
             </div>
             <div class="code-window">
-              <header><span>C# · implementations verification path</span><button class="copy-button" type="button" data-copy="anatomy-workspace"><span>Copy</span><i aria-hidden="true">□</i></button></header>
-              <pre id="anatomy-workspace"><code>Solution pinned = scanLease.Solution;
-
-if (typeClosure is not null &amp;&amp; !closureCapped)
-    await VerifyClosureImplementersAsync(
-        targetType, pinned, typeClosure, onVerified, cancellationToken);
-else
-    await SymbolFinder.FindImplementationsAsync(
-        targetType, pinned, cancellationToken: cancellationToken);</code></pre>
+              <header><span>definition · representative response</span><button class="copy-button" type="button" data-copy="anatomy-envelope"><span>Copy</span><i aria-hidden="true">□</i></button></header>
+              <pre id="anatomy-envelope"><code>{
+  "name": "GetCompilationAsync",
+  "symbol": {
+    "display": "Microsoft.CodeAnalysis.SolutionCompilationState.RegularCompilationTracker.GetCompilationAsync(Microsoft.CodeAnalysis.SolutionCompilationState, CancellationToken)",
+    "kind": "method",
+    "containingType": "RegularCompilationTracker",
+    "ns": "Microsoft.CodeAnalysis",
+    "assembly": "Microsoft.CodeAnalysis.Workspaces"
+  },
+  "declarations": [
+    {
+      "path": "src/Workspaces/Core/Portable/Workspace/Solution/SolutionCompilationState.RegularCompilationTracker.cs",
+      "startLine": 216,
+      "endLine": 233
+    }
+  ],
+  "body": {
+    "path": "src/Workspaces/Core/Portable/Workspace/Solution/SolutionCompilationState.RegularCompilationTracker.cs",
+    "startLine": 216,
+    "endLine": 233,
+    "source": "  216| public async Task&lt;Compilation&gt; GetCompilationAsync(...)",
+    "truncated": false,
+    "freshness": "live"
+  },
+  "timing": {
+    "deadlineMs": 30000,
+    "elapsedMs": 54
+  },
+  "meta": {
+    "indexStatus": "ready",
+    "indexVersion": "7f4c2a9d18e64b3a92c01d5f6e8a7b40",
+    "pendingChanges": 0,
+    "confidence": "exact",
+    "navigationLayer": "semantic",
+    "build": "0.12.33+e9c3e5b",
+    "indexSchema": "19",
+    "indexMode": "writer"
+  }
+}</code></pre>
+              <footer><span>Compiler identity</span><b>Not name matching dressed up as certainty</b></footer>
             </div>
           </li>
 
           <li class="setup-step setup-step--last" data-reveal>
             <div class="setup-step__number"><span>05</span><i></i></div>
             <div class="setup-step__copy">
-              <p class="setup-step__eyebrow">The split, labeled</p>
-              <h3>Every field says where it came from.</h3>
-              <p>The implementations envelope keeps its evidence layers separate: <code>coverage</code> is top-level compiler coverage, while <code>meta</code> carries freshness, confidence, navigation layer, schema, and build identity. The representative JSON below is parsed by the website verification gate so its public field nesting cannot silently drift back to the references contract.</p>
+              <p class="setup-step__eyebrow">The honest boundary</p>
+              <h3>Understanding is a proof trail, not a magic label.</h3>
+              <p>Phoenix does not claim that <code>definition</code> directly performs full expression inference for arbitrary C#. The agent composes a compiler-bound member identity, a separately read live declaration body, receiver context from another bounded live read, and a language rule. If the project cannot be loaded or the token cannot be resolved, the tool returns explicit <code>semantic_unavailable</code> or partial evidence instead of inventing the type.</p>
             </div>
             <div class="code-window">
-              <header><span>implementations · representative response</span><button class="copy-button" type="button" data-copy="anatomy-envelope"><span>Copy</span><i aria-hidden="true">□</i></button></header>
-              <pre id="anatomy-envelope"><code>{
-  "symbol": {
-    "display": "Acme.Caching.ICache&lt;T&gt;",
-    "documentationCommentId": "T:Acme.Caching.ICache`1",
-    "kind": "namedtype",
-    "ns": "Acme.Caching",
-    "assembly": "Acme.Contracts",
-    "declarations": [
-      {
-        "path": "src/Caching/ICache.cs",
-        "startLine": 3,
-        "endLine": 8,
-        "project": "Acme.Contracts"
-      }
-    ]
-  },
-  "implementations": [
-    {
-      "symbol": {
-        "display": "Acme.Caching.MemoryCache&lt;T&gt;",
-        "kind": "namedtype",
-        "ns": "Acme.Caching",
-        "assembly": "Acme.Runtime",
-        "declarations": [
-          {
-            "path": "src/Caching/MemoryCache.cs",
-            "startLine": 18,
-            "endLine": 64,
-            "project": "Acme.Runtime"
-          }
-        ]
-      },
-      "rank": "concrete"
-    },
-    {
-      "symbol": {
-        "display": "Acme.Caching.DistributedCache&lt;T&gt;",
-        "kind": "namedtype",
-        "ns": "Acme.Caching",
-        "assembly": "Acme.Cluster",
-        "declarations": [
-          {
-            "path": "src/Caching/DistributedCache.cs",
-            "startLine": 22,
-            "endLine": 97,
-            "project": "Acme.Cluster"
-          }
-        ]
-      },
-      "rank": "concrete",
-      "via": "Acme.Caching.CacheBase&lt;T&gt;"
-    }
-  ],
-  "concreteCount": 2,
-  "coverage": {
-    "loadedProjects": 2,
-    "requestedProjects": 2,
-    "solutionProjects": 2,
-    "frameworkRefsAvailable": true
-  },
-  "timing": {
-    "deadlineMs": 15000,
-    "elapsedMs": 42,
-    "clusterLoadMs": 31,
-    "queryMs": 11
-  },
-  "truncated": false,
-  "meta": {
-    "indexStatus": "ready",
-    "indexVersion": "7f4c2a9d18e64b3a92c01d5f6e8a7b40",
-    "indexedAtUtc": "2026-07-27T08:00:00Z",
-    "lastRefreshUtc": "2026-07-27T08:10:00Z",
-    "pendingChanges": 0,
-    "confidence": "exact",
-    "navigationLayer": "semantic",
-    "build": "0.12.33+8a1b2c3",
-    "indexSchema": "19",
-    "indexMode": "writer"
-  }
-}</code></pre>
-              <footer><span>The contract</span><b>Never present a guess as a fact</b></footer>
+              <header><span>Agent conclusion · explainable and bounded</span><button class="copy-button" type="button" data-copy="anatomy-workspace"><span>Copy</span><i aria-hidden="true">□</i></button></header>
+              <pre id="anatomy-workspace"><code>What I can say:
+  newCompilation is Compilation.
+
+Why:
+  receiver declaration  → RegularCompilationTracker
+  compiler-bound method → Task&lt;Compilation&gt;
+  C# await rule         → Compilation
+
+What I cannot say:
+  “Phoenix inferred every arbitrary expression type.”
+
+Evidence:
+  indexed ownership
+  text · live receiver context
+  exact · semantic call binding
+  separately read · live declaration body</code></pre>
+              <footer><span>The useful answer</span><b>A conclusion with receipts</b></footer>
             </div>
           </li>
         </ol>
