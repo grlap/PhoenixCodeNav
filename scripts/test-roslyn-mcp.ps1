@@ -602,6 +602,26 @@ try {
         Assert-Equal "indexed" ([string]$fileResult.meta.confidence) "find_file confidence changed"
     }
 
+    $markdownFiles = Invoke-McpTool $writer "find_file" @{ nameOrGlob = "README.md"; limit = 20 }
+    $markdownSearch = Invoke-McpTool $writer "search_text" @{
+        query = "open-source implementation"
+        pathGlob = "README.md"
+        lang = "md"
+        limit = 10
+    }
+    $evidence.results.markdownTextIndexing = [ordered]@{
+        files = $markdownFiles
+        search = $markdownSearch
+    }
+    Test-IntegrationCase "markdown text indexing" {
+        $rootReadme = @($markdownFiles.files | Where-Object {
+            [string]$_.path -eq "README.md" -and [string]$_.language -eq "md"
+        })
+        Assert-Equal 1 $rootReadme.Count "Root README.md was not exposed as lang=md"
+        Assert-Contains @($markdownSearch.hits | ForEach-Object { [string]$_.path }) "README.md" "Markdown FTS omitted the Roslyn README marker"
+        Assert-Equal "indexed" ([string]$markdownSearch.meta.confidence) "Markdown search confidence changed"
+    }
+
     $search = Invoke-McpTool $writer "search_symbol" @{ query = [string]$baseline.target.name; limit = 10 }
     $evidence.results.searchSymbol = $search
     $targetSymbols = @($search.symbols | Where-Object { $_.path -eq [string]$baseline.target.path -and $_.arity -eq [int]$baseline.target.arity })

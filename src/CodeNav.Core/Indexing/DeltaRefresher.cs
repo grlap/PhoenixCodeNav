@@ -72,7 +72,8 @@ public static class DeltaRefresher
             scan = WorkspaceScanner.Scan(workspaceRoot);
             var seen = new HashSet<string>(WorkspacePaths.FileSystemPathComparer);
             candidates = new List<string>();
-            foreach (var f in scan.CsFiles.Concat(scan.FsFiles).Concat(scan.ProjectFiles)
+            foreach (var f in scan.CsFiles.Concat(scan.FsFiles)
+                         .Concat(scan.MarkdownFiles).Concat(scan.SqlFiles).Concat(scan.ProjectFiles)
                          .Concat(scan.SolutionFiles).Concat(scan.ConfigFiles))
             {
                 seen.Add(f.RelPath);
@@ -440,6 +441,8 @@ public static class DeltaRefresher
         {
             ".cs" => "cs",
             ".fs" or ".fsi" or ".fsx" => "fs",
+            ".md" => "md",
+            ".sql" => "sql",
             ".csproj" => "csproj",
             ".fsproj" => "fsproj",
             ".sln" or ".slnx" or ".slnf" => "sln",

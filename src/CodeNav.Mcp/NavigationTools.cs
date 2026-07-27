@@ -92,11 +92,13 @@ public sealed partial class NavigationTools
             // Build identity so a caller can verify WHICH build is deployed. The old hardcoded version
             // went stale at 0.1.0 across many feature batches; commit auto-tracks the actual build.
             build = new { version = BuildInfo.Version, commit = BuildInfo.Commit, indexSchema = BuildInfo.IndexSchema },
-            languages = new[] { "csharp", "fsharp" },
+            languages = new[] { "csharp", "fsharp", "markdown", "sql" },
             languageLayers = new
             {
                 csharp = new[] { "text", "syntax", "semantic" },
                 fsharp = new[] { "text", "syntax", "semantic", "projectGraph" },
+                markdown = new[] { "text" },
+                sql = new[] { "text" },
             },
             navigationLayers = new[] { "text", "syntax", "semantic" },
             // Explicit capability manifest: lets a caller CONFIRM a feature is present without having to
@@ -111,6 +113,7 @@ public sealed partial class NavigationTools
                 new { id = "generic-arity-resolution", summary = "v0.11.8 implementations/type_hierarchy select by arity or symbolId; mixed-arity names refuse; syntax fallback is arity-exact" },
                 new { id = "friend-assembly-semantics", summary = "v0.11.9 models literal local SDK InternalsVisibleTo grants; friend-only results disclose project_model_unproven when imports, package build assets, or Directory.Build authority can change the grant" },
                 new { id = "fsharp-text-indexing", summary = "v0.12.0 F# FTS" },
+                new { id = "markdown-sql-text-indexing", summary = "v0.12.33 schema v19 indexes .md and .sql as text-only files for find_file, search_text, and indexed source fallback; no syntax or compiler semantics" },
                 new { id = "fsharp-project-graph", summary = "v0.12.0 .fsproj ownership/edges; no Roslyn" },
                 new { id = "fsharp-outline", summary = "v0.12.1 owned .fs/.fsi FCS outline" },
                 new { id = "fsharp-outline-parse-context-selection", summary = "v0.12.4 base/.Net project+TFM parse-context selection affects only F# parser options and #if symbols" },
@@ -349,6 +352,8 @@ public sealed partial class NavigationTools
             solutions = stats.Solutions,
             csFiles = stats.CsFiles,
             fsFiles = stats.FsFiles,
+            mdFiles = stats.MarkdownFiles,
+            sqlFiles = stats.SqlFiles,
             totalLines = stats.TotalLines,
             symbols = stats.Symbols,
             generatedFiles = stats.GeneratedFiles,
@@ -414,7 +419,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Ranked full-text search over indexed C# and F# source plus project/solution/config files. WHOLE-WORD and token-based by default: 'Batch' does NOT match 'Batching'. For \\s / alternation / character classes set regex:true (.NET regex, line-based, scoped by pathGlob) — still not rust/ripgrep syntax; other file types need grep. Returns 'precise' hits (all query tokens on one line) by default; set partials='always' for weaker co-occurrence leads. Use context (or contextBefore/contextAfter) for surrounding lines, like grep -C/-B/-A. Best for literals, config keys, error messages, and comments; this text tool does not use F# compiler semantics.")]
+    [Description("Ranked full-text search over indexed C# and F# source, Markdown, SQL, and project/solution/config files. WHOLE-WORD and token-based by default: 'Batch' does NOT match 'Batching'. For \\s / alternation / character classes set regex:true (.NET regex, line-based, scoped by pathGlob) — still not rust/ripgrep syntax; other file types need grep. Returns 'precise' hits (all query tokens on one line) by default; set partials='always' for weaker co-occurrence leads. Token mode grades at most 300 filtered candidate files and exposes filesScanned/filesAtLeast/partial when that cap is reached. Use context (or contextBefore/contextAfter) for surrounding lines, like grep -C/-B/-A. Best for literals, config keys, error messages, comments, documentation, and database scripts; only C#/F# participate in syntax or compiler semantics.")]
     public string SearchText(
         [Description("Text to find. Multi-word queries are AND-ed by token; a line with all tokens is 'precise'.")] string query,
         [Description("Restrict to paths matching this glob (e.g. 'src/Billing/**').")] string? pathGlob = null,
@@ -422,7 +427,7 @@ public sealed partial class NavigationTools
         [Description("Drop hits under known vendor/generated dir names (3rdparty, vendor, external, generated...) at ANY depth. Matches the per-hit noise flag; convenience over excludePath.")] bool firstPartyOnly = false,
         [Description("Restrict to files compiled by this project name.")] string? project = null,
         [Description("'all' (default), 'production' (exclude tests), or 'tests'.")] string scope = "all",
-        [Description("Restrict by file language: cs | fs | csproj | fsproj | sln | config.")] string? lang = null,
+        [Description("Restrict by file language: cs | fs | md | sql | csproj | fsproj | sln | config.")] string? lang = null,
         [Description("Include generated files (default false).")] bool includeGenerated = false,
         [Description("Weaker 'some query tokens co-occur, not all on one line' leads: 'never' (default — precise only), 'auto' (fill space precise did not), or 'always'. filesMatchedAcrossLines still flags files where all tokens co-occur across lines.")] string partials = "never",
         [Description("Lines of context around each hit, like grep -C (0-20, default 0 = just the line). Applies both before and after.")] int context = 0,
@@ -608,6 +613,16 @@ public sealed partial class NavigationTools
         {
             preciseCount = result.TotalPrecise,
             partialCount = result.TotalPartial,
+            // Token grading is intentionally file-bounded after every caller filter has been
+            // applied. One look-ahead row makes a clipped candidate set observable; counts are
+            // lower bounds exactly when partialReason is present.
+            filesScanned = result.CandidateFilesScanned,
+            filesTotal = result.CandidateFilesTruncated
+                ? (int?)null
+                : result.CandidateFilesScanned,
+            filesAtLeast = result.CandidateFilesAtLeast,
+            budgetHit = result.CandidateFilesTruncated ? true : (bool?)null,
+            countsAreLowerBounds = result.CandidateFilesTruncated ? true : (bool?)null,
             hits = items.Select(t => new
             {
                 path = t.FilePath,
@@ -626,6 +641,10 @@ public sealed partial class NavigationTools
             didYouMean, // dead-end token-form suggestion (Mode4 -> "Mode 4"); a suggestion, never a substitution
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
             truncated,
+            partial = result.CandidateFilesTruncated ? true : (bool?)null,
+            partialReason = result.CandidateFilesTruncated
+                ? "candidate_file_cap"
+                : null,
             // Contextual, not verbatim (feedback: the fixed explainer was duplicated token waste; the
             // whole-word/precise semantics live in the tool description). Present only when it changes
             // the caller's next move: redirect, absent, partial-leads, or common-term steering.

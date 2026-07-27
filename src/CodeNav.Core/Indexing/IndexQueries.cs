@@ -76,12 +76,15 @@ public sealed record TextHit(
 
 /// <summary>
 /// Graded text-search result. Hits are ordered precise-first (contiguous phrase before
-/// scattered), then token-covering partials. Counts reflect the full candidate set before
-/// paging. FilesMatchedAcrossLines are files where every query token occurs but never on a
-/// single line (the file-level co-occurrence signal).
+/// scattered), then token-covering partials. Counts reflect every graded candidate before
+/// paging; <see cref="CandidateFilesTruncated"/> makes them observable lower bounds when the
+/// candidate-file budget clips the filtered FTS set. FilesMatchedAcrossLines are files where
+/// every query token occurs but never on a single line (the file-level co-occurrence signal).
 /// </summary>
 public sealed record TextSearchResult(
-    List<TextHit> Hits, int TotalPrecise, int TotalPartial, List<string> FilesMatchedAcrossLines);
+    List<TextHit> Hits, int TotalPrecise, int TotalPartial, List<string> FilesMatchedAcrossLines,
+    int CandidateFilesScanned = 0, int CandidateFilesAtLeast = 0,
+    bool CandidateFilesTruncated = false);
 
 public sealed record ProjectRow(long Id, string Path, string Name, string Style, string Tfms,
     bool IsTest, string LoadStatus, string Language = "cs");
@@ -102,7 +105,8 @@ public sealed record DirectoryBuildSemanticAuthority(bool HasPotentialAuthority,
 public sealed record ReferenceGroup(string Project, bool IsTestProject, int Count, List<TextHit> Samples);
 
 public sealed record OverviewStats(
-    long CsFiles, long FsFiles, long TotalLines, long Symbols, long Projects,
+    long CsFiles, long FsFiles, long MarkdownFiles, long SqlFiles,
+    long TotalLines, long Symbols, long Projects,
     long CSharpProjects, long FSharpProjects, long LegacyProjects,
     long SdkProjects, long TestProjects, long Solutions, long GeneratedFiles, long OrphanedFiles,
     string TfmBreakdown, string? IndexVersion, string? IndexedAtUtc);
@@ -433,14 +437,15 @@ public sealed partial class IndexQueries : IDisposable
 
     /// <summary>Source languages present in an explicit path scope, using the exact same glob and
     /// exclude semantics as symbol search. Project/config rows are intentionally excluded: this
-    /// describes source coverage, not every structural file that happens to share a directory.</summary>
+    /// describes source/text coverage, not every structural file that happens to share a
+    /// directory.</summary>
     public List<string> SourceLanguagesForPathScope(string pathGlob,
         IReadOnlyList<string>? excludePaths = null, bool includeGenerated = false)
     {
         if (string.IsNullOrEmpty(pathGlob)) return [];
         var args = new List<(string, object)>();
         var where = new System.Text.StringBuilder(
-            "WHERE f.lang IN ('cs', 'fs')");
+            "WHERE f.lang IN ('cs', 'fs', 'md', 'sql')");
         if (!includeGenerated) where.Append(" AND f.is_generated = 0");
         AppendPathFilter(where, args, pathGlob, excludePaths);
         return Query(
@@ -478,9 +483,9 @@ public sealed partial class IndexQueries : IDisposable
         if (fts.Length == 0) return new TextSearchResult(new(), 0, 0, new());
         filter ??= new TextFilter();
 
-        var args = new List<(string, object)> { ("$q", fts), ("$lim", maxCandidateFiles) };
-        var where = new System.Text.StringBuilder("WHERE 1=1");
-        string join = "";
+        int candidateBudget = Math.Max(1, maxCandidateFiles);
+        var args = new List<(string, object)> { ("$q", fts) };
+        var where = new System.Text.StringBuilder("WHERE fts_content MATCH $q");
 
         if (!filter.IncludeGenerated) where.Append(" AND f.is_generated = 0");
         // Shared path predicate — same glob semantics as search_symbol/find_file (bare
@@ -493,38 +498,61 @@ public sealed partial class IndexQueries : IDisposable
         }
         if (filter.Project is { } proj)
         {
-            join = "JOIN compile_items ci ON ci.file_id = f.id JOIN projects p ON p.id = ci.project_id";
-            where.Append(" AND p.name = $proj COLLATE NOCASE");
+            where.Append(
+                " AND EXISTS (SELECT 1 FROM compile_items ci JOIN projects p ON p.id = ci.project_id" +
+                " WHERE ci.file_id = f.id AND p.name = $proj COLLATE NOCASE)");
             args.Add(("$proj", proj));
         }
         else if (filter.TestsOnly is { } testsOnly)
         {
-            join = "LEFT JOIN compile_items ci ON ci.file_id = f.id LEFT JOIN projects p ON p.id = ci.project_id";
-            where.Append(testsOnly
-                ? " AND (p.is_test = 1 OR f.has_test_attrs = 1)"
-                : " AND COALESCE(p.is_test, 0) = 0 AND f.has_test_attrs = 0");
+            if (testsOnly)
+            {
+                where.Append(
+                    " AND (f.has_test_attrs = 1 OR EXISTS (SELECT 1 FROM compile_items ci" +
+                    " JOIN projects p ON p.id = ci.project_id" +
+                    " WHERE ci.file_id = f.id AND p.is_test = 1))");
+            }
+            else
+            {
+                // Preserve the former LEFT JOIN semantics for a source shared by test and
+                // production projects: a production owner is sufficient to include it.
+                where.Append(
+                    " AND f.has_test_attrs = 0 AND (" +
+                    "NOT EXISTS (SELECT 1 FROM compile_items ci WHERE ci.file_id = f.id)" +
+                    " OR EXISTS (SELECT 1 FROM compile_items ci" +
+                    " JOIN projects p ON p.id = ci.project_id" +
+                    " WHERE ci.file_id = f.id AND p.is_test = 0))");
+            }
         }
 
-        // bm25() is an FTS5 auxiliary function valid only directly over the FTS query;
-        // MATERIALIZED prevents the planner from flattening it into the outer context.
-        args.Add(("$innerLim", Math.Clamp(maxCandidateFiles * 10, 2000, 20000)));
+        // Filter BEFORE the candidate cap. The former global top-N CTE let unrelated languages
+        // and paths crowd every in-scope row out, turning a bounded optimization into a false
+        // filtered zero. Fetch one extra row so the cap is observable without a second full FTS
+        // count query. bm25() remains directly over the MATCH query; MATERIALIZED prevents the
+        // planner from flattening it into the outer context.
+        args.Add(("$candidateLim", candidateBudget + 1));
         var candidates = Query(
             $"""
             WITH m AS MATERIALIZED (
-                SELECT rowid AS fid, bm25(fts_content) AS rank
-                FROM fts_content WHERE fts_content MATCH $q
-                ORDER BY rank LIMIT $innerLim
+                SELECT f.id AS fid, f.path, f.is_generated, bm25(fts_content) AS rank
+                FROM fts_content
+                JOIN files f ON f.id = fts_content.rowid
+                {where}
+                ORDER BY f.is_generated, rank
+                LIMIT $candidateLim
             )
-            SELECT f.id, f.path, f.is_generated FROM m
-            JOIN files f ON f.id = m.fid
-            {join}
-            {where}
-            GROUP BY f.id
-            ORDER BY f.is_generated, MIN(m.rank)
-            LIMIT $lim
+            SELECT fid, path, is_generated
+            FROM m
+            ORDER BY is_generated, rank
             """,
             r => (Id: r.GetInt64(0), Path: r.GetString(1), Gen: r.GetBoolean(2)),
             args.ToArray());
+        bool candidateFilesTruncated = candidates.Count > candidateBudget;
+        if (candidateFilesTruncated)
+            candidates.RemoveRange(candidateBudget, candidates.Count - candidateBudget);
+        int candidateFilesAtLeast = candidateFilesTruncated
+            ? candidateBudget + 1
+            : candidates.Count;
 
         // Distinct query tokens, preserving order (case-insensitive).
         var distinctTokens = new List<string>();
@@ -559,7 +587,8 @@ public sealed partial class IndexQueries : IDisposable
         };
         var ordered = includePartials ? precise.Concat(partial).ToList() : precise;
         var page = ordered.Skip(offset).Take(limit).ToList();
-        return new TextSearchResult(page, precise.Count, partial.Count, filesAcross);
+        return new TextSearchResult(page, precise.Count, partial.Count, filesAcross,
+            candidates.Count, candidateFilesAtLeast, candidateFilesTruncated);
     }
 
     /// <summary>
@@ -2742,6 +2771,8 @@ public sealed partial class IndexQueries : IDisposable
         return new OverviewStats(
             CsFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='cs'"),
             FsFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='fs'"),
+            MarkdownFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='md'"),
+            SqlFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='sql'"),
             TotalLines: Scalar("SELECT COALESCE(SUM(line_count),0) FROM files WHERE lang IN ('cs','fs')"),
             Symbols: Scalar("SELECT COUNT(*) FROM symbols"),
             Projects: Scalar("SELECT COUNT(*) FROM projects"),

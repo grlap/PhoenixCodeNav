@@ -42,10 +42,14 @@ different front end. `CodeNav.Mcp` is a thin protocol/shaping layer over it.
 Agents use the cheapest layer that answers the question, preferring compiler-backed facts
 for code identifiers.
 
-1. **Indexed text** — `find_file`, `search_text`, `config_lookup`. SQLite FTS5 over C# and F# file
-   contents with workspace-aware ranking and byte/line offsets. `search_text` grades each
-   line `precise` (contains all query tokens as whole tokens) vs `partial` (a token-covering
-   lead), so a partial-token match is never presented as a full hit.
+1. **Indexed text** — `find_file`, `search_text`, `source_context`, `config_lookup`. SQLite FTS5
+   over C#, F#, Markdown, SQL, project, solution, and configuration contents with workspace-aware
+   ranking and byte/line offsets. Markdown and SQL are text-only: they do not enter syntax or
+   compiler-semantic services. `search_text` applies every caller filter before ranking, grades
+   at most 300 matching files, and exposes `filesScanned`, `filesAtLeast`, `partial`, and
+   `partialReason:"candidate_file_cap"` when that bound clips coverage. Each graded line is
+   `precise` (contains all query tokens as whole tokens) or `partial` (a token-covering lead), so
+   a partial-token match is never presented as a full hit.
 2. **Syntax (C#)** — `outline`, `search_symbol`, `symbol_at`, `batch_outline`. Roslyn
    *syntax-only* parsing (no compilation) extracts namespaces/types/members with spans,
    signatures, accessibility, partial flags, and generated/test classification. This is the
@@ -141,8 +145,8 @@ evidence may use newer workspace bytes. Other platforms remain writer-only for n
 
 **Build** (`IndexBuilder`): scan the tree (excluding `.git`, `bin`, `obj`, `packages`,
 `node_modules`, `.vs`, generated files, and symlink/junction targets); parse every `.csproj` and
-`.fsproj` directly, independent of solution membership; index `.cs`, `.fs`, `.fsi`, and `.fsx`
-text, while parsing only `.cs` with Roslyn syntax during indexing. Symbol rows stream through a
+`.fsproj` directly, independent of solution membership; index `.cs`, `.fs`, `.fsi`, `.fsx`, `.md`,
+and `.sql` text, while parsing only `.cs` with Roslyn syntax during indexing. Symbol rows stream through a
 bounded channel to the single writer. Since v0.12.24, that writer caches raw SQLite statements for
 every exact symbol-batch size from 1 through 32 and binds by ordinal, avoiding provider-level
 parameter-name lookup and per-execution parameter allocation without changing row or ID semantics;
@@ -483,8 +487,8 @@ The index is kept live without rebuilding on every keystroke:
   pump. On Windows, compatible contenders attach as read-only followers with no writer
   connection, pump, watcher, build, or automatic promotion.
 - **`WorkspaceWatcher`** (a `FileSystemWatcher`) debounces working-tree changes (600 ms
-  quiet window) into batches. `DeltaRefresher` applies them: re-hash changed C# and F# source,
-  update FTS, re-parse C# symbols, mark deletes, and rebuild compile ownership plus the
+  quiet window) into batches. `DeltaRefresher` applies them: re-hash changed C#, F#, Markdown,
+  and SQL files, update FTS, re-parse C# symbols, mark deletes, and rebuild compile ownership plus the
   authoritative project graph when a `.csproj` or `.fsproj` changes. Solution changes can update
   non-authoritative editor inventory only.
   Directory-level changes (folder rename/move/delete) escalate to a full detect-all sweep, since

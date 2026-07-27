@@ -24,7 +24,15 @@ public class Batch27BuildProgressTests
         try
         {
             WorkspaceGenerator.Generate(root, targetProjects: 12, seed: 3);
-            int csFiles = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories).Length;
+            int indexedTextFiles = Directory.EnumerateFiles(
+                    root, "*", SearchOption.AllDirectories)
+                .Count(path => Path.GetExtension(path) is { } extension &&
+                    (extension.Equals(".cs", StringComparison.OrdinalIgnoreCase) ||
+                     extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+                     extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase) ||
+                     extension.Equals(".fsx", StringComparison.OrdinalIgnoreCase) ||
+                     extension.Equals(".md", StringComparison.OrdinalIgnoreCase) ||
+                     extension.Equals(".sql", StringComparison.OrdinalIgnoreCase)));
 
             var bp = new BuildProgress();
             var samples = new List<IndexProgress>();
@@ -44,8 +52,8 @@ public class Batch27BuildProgressTests
 
             var final = bp.Snapshot();
             Assert.Equal("finalizing", final.Phase);
-            Assert.Equal(csFiles, final.FilesTotal);
-            Assert.Equal(csFiles, final.FilesIndexed); // every scanned file counted exactly once
+            Assert.Equal(indexedTextFiles, final.FilesTotal);
+            Assert.Equal(indexedTextFiles, final.FilesIndexed); // every progress-counted text file exactly once
             Assert.True(final.ElapsedMs >= 0);
 
             // Monotonicity across every observed snapshot — the no-going-backwards contract.

@@ -28,7 +28,7 @@ each of which tells you *how much to trust it*:
 
 | Layer | Answers | Confidence |
 |---|---|---|
-| **Indexed text** (FTS5, C# + F#) | where literal text/config/keys appear, ranked | `indexed` |
+| **Indexed text** (FTS5, C# + F# + Markdown + SQL) | where literal text/config/keys appear, ranked | `indexed` |
 | **Syntax (C#)** (Roslyn parse) | file outlines, symbol declarations, spans | `indexed` |
 | **Syntax (F#)** (FCS parse) | compile-owned `.fs` / `.fsi` outlines | `indexed` |
 | **Semantic** (Roslyn for C#; bounded FCS Stage 2A for F#) | exact C# navigation; F# position symbols and same-project definitions | C# may be `exact`; F# is compiler-checked `indexed` with explicit partial causes |
@@ -37,6 +37,8 @@ Plus structural facts (project graph, ownership, dependency paths) and composite
 (`context_pack`, `impact`). Every response is budget-capped, line-addressable, and
 carries `confidence` + index-freshness metadata.
 
+Markdown and SQL files are indexed for path lookup, ranked text search, regex/context search, and
+bounded source reads, but remain text-only and never claim syntax or compiler semantics.
 F# source text, `.fsproj` compile ownership, and C#↔F# project edges are indexed. Compile-owned
 `.fs` / `.fsi` files support FCS outlines plus position-based `symbol_at` and same-project
 `definition` in a selected physical-project/TFM type-check context. The semantic path evaluates a

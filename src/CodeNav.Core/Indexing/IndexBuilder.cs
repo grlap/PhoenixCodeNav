@@ -89,8 +89,10 @@ public static class IndexBuilder
     /// v17: incomplete-source freshness metadata and fail-closed bounded capture prevent lossy
     /// builds or refreshes from publishing complete-looking source evidence.
     /// v18: normalized syntax-derived type_base_edges replace repeated leading-wildcard signature
-    /// scans and preserve base entries beyond the 400-character display-signature limit.</summary>
-    public const string SchemaVersion = "18";
+    /// scans and preserve base entries beyond the 400-character display-signature limit.
+    /// v19: Markdown and SQL files are persisted as text-only lang='md'/'sql' rows so cold builds
+    /// and incremental refresh expose repository documentation and database assets through FTS.</summary>
+    public const string SchemaVersion = "19";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null) =>
@@ -107,8 +109,9 @@ public static class IndexBuilder
     internal static BuildResult BuildWithSourceBatchSizeForTest(string workspaceRoot,
         int sourceWriteBatchSize, Action<string>? progress = null,
         FSharpPipelineTestHooks? fSharpPipelineTestHooks = null,
-        BuildCaptureTestHooks? buildCaptureTestHooks = null) =>
-        BuildCore(workspaceRoot, dbPath: null, progress, liveProgress: null,
+        BuildCaptureTestHooks? buildCaptureTestHooks = null,
+        BuildProgress? liveProgress = null) =>
+        BuildCore(workspaceRoot, dbPath: null, progress, liveProgress,
             TimeSpan.FromSeconds(30), waitingForReviewReaders: null,
             Math.Max(1, sourceWriteBatchSize), fSharpPipelineTestHooks,
             buildCaptureTestHooks);
@@ -183,9 +186,11 @@ public static class IndexBuilder
         var scan = WorkspaceScanner.Scan(workspaceRoot);
         var scanTime = sw.Elapsed;
         progress?.Invoke($"Scanned: {scan.CsFiles.Count} C# source, {scan.FsFiles.Count} F# source, " +
+                         $"{scan.MarkdownFiles.Count} Markdown, {scan.SqlFiles.Count} SQL, " +
                          $"{scan.ProjectFiles.Count} project files, {scan.SolutionFiles.Count} solutions");
         // The scan fixes filesTotal — the point where "% done" becomes derivable (bead two).
-        liveProgress?.SetFilesTotal(scan.CsFiles.Count + scan.FsFiles.Count);
+        liveProgress?.SetFilesTotal(scan.CsFiles.Count + scan.FsFiles.Count +
+                                    scan.MarkdownFiles.Count + scan.SqlFiles.Count);
         liveProgress?.SetPhase("parsing_projects");
 
         GitInfo.WorkspaceFileReadResult ReadBuildInputResult(string relPath, int maxBytes) =>
@@ -563,41 +568,75 @@ public static class IndexBuilder
         }
         progress?.Invoke(
             $"  indexed {fsCount}/{scan.FsFiles.Count} F# files in {fsWriteBatches} writer batches");
-        liveProgress?.SetPhase("finalizing");
-
-        // ---- remaining config files: find_file + config_lookup fodder ----
+        // ---- remaining text-only files: find_file/search_text/source_context fodder ----
         // Project/package rows and verified optional solutions were already persisted in the
         // coherent structural transaction above. Unsafe/budget-skipped solutions stay absent.
-        using (var tx = store.BeginTransaction())
+        int markdownSqlCount = 0;
+        int textOnlyWriteBatches = 0;
         {
-            foreach (var (bucket, lang) in new[]
-                     {
-                         (scan.ConfigFiles, "config"),
-                     })
+            var tx = store.BeginTransaction();
+            int inTx = 0;
+            try
             {
-                foreach (var f in bucket)
+                foreach (var (bucket, lang) in new[]
+                         {
+                             (scan.ConfigFiles, "config"),
+                             (scan.MarkdownFiles, "md"),
+                             (scan.SqlFiles, "sql"),
+                         })
                 {
-                    if (persistedStructuralPaths.Contains(f.RelPath)) continue;
-                    // A packages.config associated with a parsed project was either persisted in
-                    // the structural transaction or deliberately classified non-regular/absent.
-                    // Leave the latter absent so the post-build sweep can observe a later regular
-                    // replacement and rebuild the graph. Orphan packages.config files retain their
-                    // baseline config_lookup behavior here.
-                    if (associatedPackagesPaths.Contains(f.RelPath)) continue;
-                    byte[]? bytes = ReadBuildInput(f.RelPath,
-                        DeltaRefresher.MaxIndexedFileBytes);
-                    if (bytes is null) continue;
-                    string content = DecodeUtf8(bytes);
-                    long id = store.InsertFile(tx, f.RelPath, bytes.LongLength, f.MtimeTicks,
-                        XxHash64.HashToUInt64(bytes), lang,
-                        CountNewlines(content) + 1, isGenerated: false, hasTestAttrs: false);
-                    store.InsertContent(tx, id, content);
-                    fileIds[f.RelPath] = id;
-                    otherCount++;
+                    foreach (var f in bucket)
+                    {
+                        if (persistedStructuralPaths.Contains(f.RelPath)) continue;
+                        // A packages.config associated with a parsed project was either persisted in
+                        // the structural transaction or deliberately classified non-regular/absent.
+                        // Leave the latter absent so the post-build sweep can observe a later regular
+                        // replacement and rebuild the graph. Orphan packages.config files retain their
+                        // baseline config_lookup behavior here.
+                        if (associatedPackagesPaths.Contains(f.RelPath)) continue;
+                        byte[]? bytes = ReadBuildInput(f.RelPath,
+                            DeltaRefresher.MaxIndexedFileBytes);
+                        if (bytes is null) continue;
+                        string content = DecodeUtf8(bytes);
+                        long id = store.InsertFile(tx, f.RelPath, bytes.LongLength, f.MtimeTicks,
+                            XxHash64.HashToUInt64(bytes), lang,
+                            CountNewlines(content) + 1, isGenerated: false, hasTestAttrs: false);
+                        store.InsertContent(tx, id, content);
+                        fileIds[f.RelPath] = id;
+                        otherCount++;
+                        if (lang is "md" or "sql")
+                        {
+                            markdownSqlCount++;
+                            liveProgress?.AddFileIndexed(bytes.LongLength, symbolsWritten: 0);
+                        }
+                        if (++inTx >= sourceWriteBatchSize)
+                        {
+                            long tc0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                            tx.Commit();
+                            commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tc0;
+                            textOnlyWriteBatches++;
+                            tx.Dispose();
+                            tx = store.BeginTransaction();
+                            inTx = 0;
+                        }
+                    }
+                }
+                if (inTx > 0)
+                {
+                    long tc0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                    tx.Commit();
+                    commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tc0;
+                    textOnlyWriteBatches++;
                 }
             }
-            tx.Commit();
+            finally
+            {
+                tx.Dispose();
+            }
         }
+        progress?.Invoke(
+            $"  indexed {markdownSqlCount}/{scan.MarkdownFiles.Count + scan.SqlFiles.Count} Markdown/SQL files in {textOnlyWriteBatches} text writer batches");
+        liveProgress?.SetPhase("finalizing");
 
         // ---- compile items: explicit for legacy, longest-dir-prefix for SDK ----
         using (var tx = store.BeginTransaction())

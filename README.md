@@ -24,7 +24,7 @@ navigation questions in four layers, each labeled with how trustworthy it is:
 
 | Layer | Tools | Confidence |
 |---|---|---|
-| **Indexed text** (SQLite FTS5, C# + F#) | `find_file`, `search_text`, `config_lookup`, `references` (candidates) | `indexed` |
+| **Indexed text** (SQLite FTS5, C# + F# + Markdown + SQL) | `find_file`, `search_text`, `source_context`, `config_lookup`, `references` (candidates) | `indexed` |
 | **Syntax (C#)** (Roslyn parse, no compile) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
 | **Syntax (F#)** (FCS parse, no type check) | `outline` for project-owned `.fs` / `.fsi` | `indexed` |
 | **Semantic** (Roslyn for C#; bounded FCS type checks for F# Stage 2A) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at` and same-project `definition` | C# may be `exact`; bounded F# Stage 2A is `indexed` with explicit partial causes |
@@ -99,8 +99,8 @@ and NuGet-cache package dlls, in-cluster project references. It works identicall
 
 ## Keeping the index fresh
 
-Index updates are incremental: the writer process's file watcher applies debounced C# and F#
-source deltas (edit/add/delete, FTS-consistent); `.csproj` and `.fsproj` changes rebuild compile
+Index updates are incremental: the writer process's file watcher applies debounced C#, F#,
+Markdown, and SQL deltas (edit/add/delete, FTS-consistent); `.csproj` and `.fsproj` changes rebuild compile
 ownership and the authoritative project graph, while solution changes update only
 non-authoritative editor inventory. A startup sweep catches
 offline edits, and branch switches / pulls are detected by watching `.git` (`repo_overview.git`
@@ -256,6 +256,9 @@ watcher, and lifecycle test projects under `tests/`.
   globs, and MSBuild `Condition`s are not evaluated.
 - `search_text` regex mode (`regex:true`) is line-based .NET regex narrowed by FTS tokens —
   no multi-line patterns.
+- Token-mode `search_text` grades at most 300 files after applying language/path/project/scope
+  filters; clipped calls report `filesScanned`, `filesAtLeast`, and
+  `partialReason:"candidate_file_cap"` rather than presenting bounded counts as complete.
 - F# `outline` is syntax-only and limited to compile-owned `.fs` / `.fsi`; `.fsx` is text-only.
   F# semantic Stage 2A is position-only and limited to bounded, same-project source closure for
   `symbol_at` and `definition`. It evaluates simple properties/conditions/`Choose`, literal

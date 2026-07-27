@@ -201,6 +201,19 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("bounded FCS compiler checks", indexed);
         Assert.Contains("remain partial", indexed);
         Assert.Contains("Roslyn", model.GetProperty("exact").GetString());
+        var languages = json.GetProperty("languages").EnumerateArray()
+            .Select(language => language.GetString())
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("markdown", languages);
+        Assert.Contains("sql", languages);
+        Assert.Equal(
+            new[] { "text" },
+            json.GetProperty("languageLayers").GetProperty("markdown").EnumerateArray()
+                .Select(layer => layer.GetString()));
+        Assert.Equal(
+            new[] { "text" },
+            json.GetProperty("languageLayers").GetProperty("sql").EnumerateArray()
+                .Select(layer => layer.GetString()));
         JsonElement semantic = json.GetProperty("semantic");
         Assert.Equal("cs", semantic.GetProperty("exactToolsLanguage").GetString());
         Assert.Contains("definition", semantic.GetProperty("csharpExactTools")
@@ -279,10 +292,12 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("search-symbol-type-relevance", ids);
         Assert.Contains("indexed-path-suggestions", ids);
         Assert.Contains("source-context-range-alias", ids);
+        Assert.Contains("markdown-sql-text-indexing", ids);
         Assert.Equal(1, idList.Count(id => id == "search-symbol-filtered-existence"));
         Assert.Equal(1, idList.Count(id => id == "search-symbol-type-relevance"));
         Assert.Equal(1, idList.Count(id => id == "indexed-path-suggestions"));
         Assert.Equal(1, idList.Count(id => id == "source-context-range-alias"));
+        Assert.Equal(1, idList.Count(id => id == "markdown-sql-text-indexing"));
         Assert.Equal(
             1,
             idList.Count(id => id == "operations-portal-jsonl-readonly"));

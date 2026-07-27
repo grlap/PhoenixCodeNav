@@ -6,6 +6,8 @@ public sealed record ScanResult(
     string Root,
     List<ScannedFile> CsFiles,
     List<ScannedFile> FsFiles,
+    List<ScannedFile> MarkdownFiles,
+    List<ScannedFile> SqlFiles,
     List<ScannedFile> ProjectFiles,
     List<ScannedFile> SolutionFiles,
     List<ScannedFile> ConfigFiles);
@@ -19,7 +21,7 @@ public static class WorkspaceScanner
     public static readonly string[] DefaultExcludedDirs =
     {
         ".git", ".vs", ".idea", ".vscode", "bin", "obj", "packages",
-        "node_modules", "TestResults", ".codenav",
+        "node_modules", "TestResults", ".codenav", ".beads",
     };
 
     /// <summary>True when any path segment is an excluded directory name — the same rule the scan
@@ -51,6 +53,8 @@ public static class WorkspaceScanner
 
         var cs = new List<ScannedFile>();
         var fs = new List<ScannedFile>();
+        var markdown = new List<ScannedFile>();
+        var sql = new List<ScannedFile>();
         var projects = new List<ScannedFile>();
         var solutions = new List<ScannedFile>();
         var configs = new List<ScannedFile>();
@@ -101,6 +105,14 @@ public static class WorkspaceScanner
                 {
                     fs.Add(scanned);
                 }
+                else if (ext.Equals(".md", StringComparison.OrdinalIgnoreCase))
+                {
+                    markdown.Add(scanned);
+                }
+                else if (ext.Equals(".sql", StringComparison.OrdinalIgnoreCase))
+                {
+                    sql.Add(scanned);
+                }
                 else if (ext.Equals(".csproj", StringComparison.OrdinalIgnoreCase) ||
                          ext.Equals(".fsproj", StringComparison.OrdinalIgnoreCase))
                 {
@@ -122,6 +134,6 @@ public static class WorkspaceScanner
             }
         }
 
-        return new ScanResult(root, cs, fs, projects, solutions, configs);
+        return new ScanResult(root, cs, fs, markdown, sql, projects, solutions, configs);
     }
 }

@@ -18,7 +18,7 @@ public sealed class WorkspaceWatcher : IDisposable
     private static readonly string[] WatchedExtensions =
     {
         ".cs", ".fs", ".fsi", ".fsx", ".csproj", ".fsproj", ".sln", ".slnx", ".slnf",
-        ".config", ".props", ".targets", ".json",
+        ".config", ".props", ".targets", ".json", ".md", ".sql",
     };
 
     private readonly string _root;
