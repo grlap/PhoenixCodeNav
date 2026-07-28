@@ -150,7 +150,14 @@ and `.sql` text, while parsing only `.cs` with Roslyn syntax during indexing. Sy
 bounded channel to the single writer. Since v0.12.24, that writer caches raw SQLite statements for
 every exact symbol-batch size from 1 through 32 and binds by ordinal, avoiding provider-level
 parameter-name lookup and per-execution parameter allocation without changing row or ID semantics;
-the same insertion path is used by delta refresh. F# outlines are parsed on demand and are not stored. Solution files are
+the same insertion path is used by delta refresh. Since v0.12.35, file ids are also assigned by the
+single writer and persisted through cached raw ordinal statements; full C# builds batch exact
+groups of up to 32 files, while delta and structural writes use the same one-row statement. Cold
+builds create tables, primary keys, and uniqueness constraints first, bulk-load every row, then
+construct all nine query-facing secondary indexes in the unpublished finalization transaction
+before writing the compatible schema marker. The writer split reports schema, secondary-index
+groups, project/graph/compile-item SQL, file-statement count, commits, FTS, analysis, and checkpoint
+costs independently. F# outlines are parsed on demand and are not stored. Solution files are
 optional editor inventory: they never select projects or provide build, dependency, ownership,
 or symbol-resolution authority. A cold build of a
 multi-thousand-project workspace completes in minutes at most; live progress counters

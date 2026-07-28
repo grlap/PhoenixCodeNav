@@ -44,6 +44,8 @@ Focus: Deterministic convergence from the working tree to the index, truthful Gi
    - Publishes destination `rebuilding` before releasing writer handles; followers validate that
      state before and after opens so new reads cannot barge while existing handles drain.
    - Deletes the main database and then stale SQLite sidecars before creating the replacement.
+   - Cold bulk loading retains primary/unique constraints and completes every deferred secondary
+     index before the compatible `schema_version` marker can be published.
    - Clears stale cached metadata and prior error state.
    - Reattaches filesystem and Git tracking when recovering from startup failure.
 

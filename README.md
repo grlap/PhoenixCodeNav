@@ -107,7 +107,12 @@ offline edits, and branch switches / pulls are detected by watching `.git` (`rep
 reports indexed vs HEAD commit). Every response carries `indexStatus` / `indexVersion`
 freshness metadata; `refresh_index` is an in-band writer hatch (`force: 'incremental' | 'full'`)
 that recovers even a corrupted index without shell access, and cold builds expose live progress
-counters (no fabricated ETAs).
+counters (no fabricated ETAs). Cold rebuilds keep primary-key and uniqueness enforcement active
+while bulk-loading rows, then construct the nine query-facing secondary indexes once inside the
+still-unpublished finalization transaction. File rows use client-assigned ids and cached raw
+ordinal SQLite statements; C# persistence batches up to 32 file rows before writing their content
+and symbols. The final schema and query behavior are unchanged, while the build log separately
+reports file-statement, structural-SQL, schema, secondary-index, commit, FTS, and checkpoint costs.
 
 On Windows, Phoenix uses **one writer process and many read-only follower processes per index**.
 One crash-recoverable named mutex, keyed by the physical workspace/worktree directory identity,

@@ -4,6 +4,16 @@ using System.Diagnostics;
 
 namespace CodeNav.Core.Indexing;
 
+internal readonly record struct BulkFileRow(
+    string Path,
+    long Size,
+    long MtimeTicks,
+    ulong Hash,
+    string Lang,
+    int LineCount,
+    bool IsGenerated,
+    bool HasTestAttrs);
+
 /// <summary>
 /// Owns: the persisted SQLite index — schema, bulk writes (single writer), and the
 /// read API used by tools and benchmarks. WAL mode allows concurrent readers.
@@ -15,9 +25,18 @@ public sealed class IndexStore : IDisposable
     private readonly string _dbPath;
     private readonly SqliteConnection _write;
     private readonly bool _privateStaging;
+    private bool _secondaryIndexesPending;
 
     public IndexStore(string dbPath, bool createNew, bool privateStaging = false,
         TimeSpan? replacementWaitTimeout = null, Action? waitingForReaders = null)
+        : this(dbPath, createNew, privateStaging, replacementWaitTimeout,
+            waitingForReaders, deferSecondaryIndexes: false)
+    {
+    }
+
+    private IndexStore(string dbPath, bool createNew, bool privateStaging,
+        TimeSpan? replacementWaitTimeout, Action? waitingForReaders,
+        bool deferSecondaryIndexes)
     {
         _dbPath = dbPath;
         _privateStaging = privateStaging;
@@ -37,7 +56,15 @@ public sealed class IndexStore : IDisposable
         try
         {
             if (createNew) AfterOpenBeforeCreateSchemaForTest?.Invoke(_dbPath);
-            if (createNew) CreateSchema();
+            if (createNew)
+            {
+                long schemaStarted = Stopwatch.GetTimestamp();
+                CreateSchema();
+                _tSchema += Stopwatch.GetTimestamp() - schemaStarted;
+                _secondaryIndexesPending = deferSecondaryIndexes;
+                if (!deferSecondaryIndexes) CreateSecondaryIndexes(tx: null);
+            }
+            InitializeFileIdCounter();
             InitializeSymbolIdCounter();
         }
         catch
@@ -48,6 +75,16 @@ public sealed class IndexStore : IDisposable
             throw;
         }
     }
+
+    /// <summary>
+    /// Opens a fresh store whose query-facing secondary indexes are created only after the
+    /// caller has loaded every bulk row. Direct IndexStore construction remains eager so an
+    /// ad-hoc store can never escape with an incomplete schema.
+    /// </summary>
+    internal static IndexStore CreateForBulkBuild(string dbPath,
+        TimeSpan? replacementWaitTimeout = null, Action? waitingForReaders = null) =>
+        new(dbPath, createNew: true, privateStaging: false, replacementWaitTimeout,
+            waitingForReaders, deferSecondaryIndexes: true);
 
     private SqliteConnection OpenFreshDatabase(TimeSpan timeout, Action? waitingForReaders)
     {
@@ -102,6 +139,9 @@ public sealed class IndexStore : IDisposable
     // Read via WriterTimingsMs after the build completes.
     private long _tFileRows, _tContentRows, _tFtsRows, _tSymbolRows, _tBaseEdgeRows,
                  _tFtsOptimize, _tAnalyze, _tCheckpoint;
+    private long _tSchema, _tFileIndexes, _tProjectGraphIndexes, _tSymbolIndexes,
+                 _tBaseEdgeIndexes;
+    private long _tProjectRows, _tGraphRows, _tCompileItemRows, _tClassification;
 
     /// <summary>lf4p: where the single writer's time went, in milliseconds — the measurement
     /// that decides whether FTS tokenization (the second-writer split candidate) or plain
@@ -112,6 +152,16 @@ public sealed class IndexStore : IDisposable
             double FtsOptimize, double Analyze, double Checkpoint) WriterTimingsMs =>
         (ToMs(_tFileRows), ToMs(_tContentRows), ToMs(_tFtsRows), ToMs(_tSymbolRows),
          ToMs(_tBaseEdgeRows), ToMs(_tFtsOptimize), ToMs(_tAnalyze), ToMs(_tCheckpoint));
+
+    internal (double Schema, double FileIndexes, double ProjectGraphIndexes,
+              double SymbolIndexes, double BaseEdgeIndexes) BulkSchemaTimingsMs =>
+        (ToMs(_tSchema), ToMs(_tFileIndexes), ToMs(_tProjectGraphIndexes),
+         ToMs(_tSymbolIndexes), ToMs(_tBaseEdgeIndexes));
+
+    internal (double ProjectRows, double GraphRows, double CompileItemRows,
+              double Classification) StructuralTimingsMs =>
+        (ToMs(_tProjectRows), ToMs(_tGraphRows), ToMs(_tCompileItemRows),
+         ToMs(_tClassification));
 
     private static double ToMs(long ticks) =>
         ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
@@ -176,7 +226,6 @@ public sealed class IndexStore : IDisposable
               has_test_attrs INTEGER NOT NULL DEFAULT 0,
               stale INTEGER NOT NULL DEFAULT 0
             );
-            CREATE INDEX idx_files_path_nocase ON files(path COLLATE NOCASE);
 
             CREATE TABLE file_contents(
               file_id INTEGER PRIMARY KEY,
@@ -203,7 +252,6 @@ public sealed class IndexStore : IDisposable
               load_status TEXT NOT NULL,
               compile_globs INTEGER NOT NULL DEFAULT 0
             );
-            CREATE INDEX idx_projects_name ON projects(name COLLATE NOCASE);
 
             CREATE TABLE project_refs(
               from_id INTEGER NOT NULL,
@@ -211,21 +259,18 @@ public sealed class IndexStore : IDisposable
               kind TEXT NOT NULL DEFAULT 'project',  -- v10 (bxw): 'project' (<ProjectReference>) | 'assembly' (recovered <Reference>+HintPath edge)
               PRIMARY KEY(from_id, to_id)
             ) WITHOUT ROWID;
-            CREATE INDEX idx_project_refs_to ON project_refs(to_id);
 
             CREATE TABLE package_refs(
               project_id INTEGER NOT NULL,
               package TEXT NOT NULL,
               version TEXT NOT NULL
             );
-            CREATE INDEX idx_package_refs_project ON package_refs(project_id);
 
             CREATE TABLE compile_items(
               project_id INTEGER NOT NULL,
               file_id INTEGER NOT NULL,
               PRIMARY KEY(project_id, file_id)
             ) WITHOUT ROWID;
-            CREATE INDEX idx_compile_items_file ON compile_items(file_id);
 
             CREATE TABLE solutions(
               id INTEGER PRIMARY KEY,
@@ -257,9 +302,6 @@ public sealed class IndexStore : IDisposable
               accessors TEXT,  -- v9 (hu7): "get=public;set=private", only when an accessor differs
               declaration_key TEXT NOT NULL -- v11: overload/interface identity separate from display signature
             );
-            CREATE INDEX idx_symbols_file ON symbols(file_id, start_line);
-            CREATE INDEX idx_symbols_name ON symbols(name COLLATE NOCASE);
-            CREATE INDEX idx_symbols_kind ON symbols(kind, name COLLATE NOCASE);
 
             CREATE TABLE type_base_edges(
               base_name TEXT COLLATE NOCASE NOT NULL,
@@ -268,55 +310,182 @@ public sealed class IndexStore : IDisposable
               file_id INTEGER NOT NULL,
               PRIMARY KEY(base_name, base_arity, derived_symbol_id)
             ) WITHOUT ROWID;
-            CREATE INDEX idx_type_base_edges_file ON type_base_edges(file_id);
             """);
+    }
+
+    /// <summary>
+    /// Creates the query-facing B-trees after a cold build has loaded all rows. SQLite can then
+    /// scan and sort each populated table once instead of incrementally maintaining every index
+    /// for every inserted row. Primary keys and UNIQUE constraints remain present throughout the
+    /// load and continue to enforce persisted identity.
+    /// </summary>
+    internal void CompleteBulkLoad(SqliteTransaction tx)
+    {
+        if (!_secondaryIndexesPending) return;
+        if (!ReferenceEquals(tx.Connection, _write))
+            throw new InvalidOperationException(
+                "Bulk-load completion requires this IndexStore's active write transaction.");
+        CreateSecondaryIndexes(tx);
+        _secondaryIndexesPending = false;
+    }
+
+    private void CreateSecondaryIndexes(SqliteTransaction? tx)
+    {
+        _tFileIndexes += TimedSchemaExec(tx,
+            "CREATE INDEX idx_files_path_nocase ON files(path COLLATE NOCASE);");
+        _tProjectGraphIndexes += TimedSchemaExec(tx, """
+            CREATE INDEX idx_projects_name ON projects(name COLLATE NOCASE);
+            CREATE INDEX idx_project_refs_to ON project_refs(to_id);
+            CREATE INDEX idx_package_refs_project ON package_refs(project_id);
+            CREATE INDEX idx_compile_items_file ON compile_items(file_id);
+            """);
+        _tSymbolIndexes += TimedSchemaExec(tx, """
+            CREATE INDEX idx_symbols_file ON symbols(file_id, start_line);
+            CREATE INDEX idx_symbols_name ON symbols(name COLLATE NOCASE);
+            CREATE INDEX idx_symbols_kind ON symbols(kind, name COLLATE NOCASE);
+            """);
+        _tBaseEdgeIndexes += TimedSchemaExec(tx,
+            "CREATE INDEX idx_type_base_edges_file ON type_base_edges(file_id);");
+    }
+
+    private long TimedSchemaExec(SqliteTransaction? tx, string sql)
+    {
+        long started = Stopwatch.GetTimestamp();
+        using var cmd = _write.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+        return Stopwatch.GetTimestamp() - started;
     }
 
     // ================================================================ write API
 
     public SqliteTransaction BeginTransaction() => _write.BeginTransaction();
 
-    private SqliteCommand? _fileInsertCmd; // lf4p: cached like the symbol inserts
+    // ---------------------------------------------------------------- lf4p file batching
+    // File ids are consumed immediately by content/symbol rows, but they need not come from
+    // RETURNING: the single writer can reserve monotonically increasing ids exactly like symbols.
+    // Raw exact-size statements remove both the ExecuteScalar round-trip and managed parameter
+    // lookup/allocation. Rollbacks leave harmless gaps; they can never move the counter backward.
+    internal const int FileChunkRows = 32;
+    private const int FileColumns = 9;
+    private long _nextFileId = -1;
+    private readonly sqlite3_stmt?[] _fileInsertStatements =
+        new sqlite3_stmt?[FileChunkRows + 1];
+    private readonly long[] _fileInsertExecutions =
+        new long[FileChunkRows + 1];
+
+    private void InitializeFileIdCounter()
+    {
+        using var q = _write.CreateCommand();
+        q.CommandText = "SELECT COALESCE(MAX(id), 0) + 1 FROM files;";
+        _nextFileId = (long)q.ExecuteScalar()!;
+    }
+
+    private long ReserveFileIds(int count)
+    {
+        long first = _nextFileId;
+        _nextFileId += count;
+        return first;
+    }
+
+    internal long FileInsertExecutionCountForTest(int rowsPerStatement) =>
+        rowsPerStatement is >= 1 and <= FileChunkRows
+            ? _fileInsertExecutions[rowsPerStatement]
+            : throw new ArgumentOutOfRangeException(nameof(rowsPerStatement));
+
+    internal long FileInsertStatementCount =>
+        _fileInsertExecutions.Sum();
+
+    private sqlite3_stmt BuildFileInsert(int rowsPerStatement)
+    {
+        var sql = new System.Text.StringBuilder(
+            "INSERT INTO files(id,path,size,mtime_ticks,hash,lang,line_count,is_generated,has_test_attrs) VALUES ");
+        for (int row = 0; row < rowsPerStatement; row++)
+        {
+            sql.Append(row > 0 ? ",(" : "(");
+            for (int column = 0; column < FileColumns; column++)
+            {
+                if (column > 0) sql.Append(',');
+                sql.Append('?');
+            }
+            sql.Append(')');
+        }
+        int rc = raw.sqlite3_prepare_v3(
+            _write.Handle,
+            sql.ToString(),
+            (uint)raw.SQLITE_PREPARE_PERSISTENT,
+            out sqlite3_stmt statement);
+        if (rc != raw.SQLITE_OK)
+            throw RawSqliteException("prepare file insert", rc);
+        return statement;
+    }
+
+    private void BindFileRow(sqlite3_stmt statement, int slot, long id, BulkFileRow row)
+    {
+        int parameter = slot * FileColumns + 1;
+        BindRawInt64(statement, parameter++, id);
+        BindRawText(statement, parameter++, row.Path);
+        BindRawInt64(statement, parameter++, row.Size);
+        BindRawInt64(statement, parameter++, row.MtimeTicks);
+        BindRawInt64(statement, parameter++, unchecked((long)row.Hash));
+        BindRawText(statement, parameter++, row.Lang);
+        BindRawInt64(statement, parameter++, row.LineCount);
+        BindRawInt64(statement, parameter++, row.IsGenerated ? 1 : 0);
+        BindRawInt64(statement, parameter, row.HasTestAttrs ? 1 : 0);
+    }
 
     public long InsertFile(SqliteTransaction tx, string path, long size, long mtimeTicks, ulong hash,
         string lang, int lineCount, bool isGenerated, bool hasTestAttrs)
     {
-        // lf4p: one store-cached prepared command instead of CreateCommand + 8 AddWithValue +
-        // re-prepare per file (17k executions per roslyn-scale build). RETURNING stays: unlike
-        // symbols, the caller consumes the id immediately and file rows are one-per-call.
-        // Timer covers the WHOLE method now — the execute-only scope it had first under-
-        // reported this bucket relative to the others.
-        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-        if (_fileInsertCmd is null)
-        {
-            _fileInsertCmd = _write.CreateCommand();
-            _fileInsertCmd.CommandText = """
-                INSERT INTO files(path, size, mtime_ticks, hash, lang, line_count, is_generated, has_test_attrs)
-                VALUES($p, $s, $m, $h, $l, $lc, $g, $t)
-                RETURNING id;
-                """;
-            _fileInsertCmd.Parameters.Add("$p", SqliteType.Text);
-            _fileInsertCmd.Parameters.Add("$s", SqliteType.Integer);
-            _fileInsertCmd.Parameters.Add("$m", SqliteType.Integer);
-            _fileInsertCmd.Parameters.Add("$h", SqliteType.Integer);
-            _fileInsertCmd.Parameters.Add("$l", SqliteType.Text);
-            _fileInsertCmd.Parameters.Add("$lc", SqliteType.Integer);
-            _fileInsertCmd.Parameters.Add("$g", SqliteType.Integer);
-            _fileInsertCmd.Parameters.Add("$t", SqliteType.Integer);
-        }
-        _fileInsertCmd.Transaction = tx;
-        _fileInsertCmd.Parameters[0].Value = path;
-        _fileInsertCmd.Parameters[1].Value = size;
-        _fileInsertCmd.Parameters[2].Value = mtimeTicks;
-        _fileInsertCmd.Parameters[3].Value = unchecked((long)hash);
-        _fileInsertCmd.Parameters[4].Value = lang;
-        _fileInsertCmd.Parameters[5].Value = lineCount;
-        _fileInsertCmd.Parameters[6].Value = isGenerated ? 1 : 0;
-        _fileInsertCmd.Parameters[7].Value = hasTestAttrs ? 1 : 0;
-        long id = (long)_fileInsertCmd.ExecuteScalar()!;
-        _tFileRows += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
+        if (!ReferenceEquals(tx.Connection, _write))
+            throw new InvalidOperationException(
+                "File inserts require this IndexStore's active write transaction.");
+        long started = Stopwatch.GetTimestamp();
+        long id = ReserveFileIds(1);
+        sqlite3_stmt statement =
+            _fileInsertStatements[1] ??= BuildFileInsert(rowsPerStatement: 1);
+        BindFileRow(statement, slot: 0, id,
+            new BulkFileRow(path, size, mtimeTicks, hash, lang, lineCount,
+                isGenerated, hasTestAttrs));
+        ExecuteRawInsert(statement, "file");
+        _fileInsertExecutions[1]++;
+        _tFileRows += Stopwatch.GetTimestamp() - started;
         return id;
     }
+
+    /// <summary>
+    /// Inserts one ordered cold-build batch and returns its first client-assigned id. Every
+    /// subsequent id is <c>first + rowIndex</c>.
+    /// </summary>
+    internal long InsertFiles(SqliteTransaction tx, IReadOnlyList<BulkFileRow> rows)
+    {
+        if (rows.Count == 0)
+            throw new ArgumentException("A file batch cannot be empty.", nameof(rows));
+        if (!ReferenceEquals(tx.Connection, _write))
+            throw new InvalidOperationException(
+                "File inserts require this IndexStore's active write transaction.");
+        long started = Stopwatch.GetTimestamp();
+        long firstId = ReserveFileIds(rows.Count);
+        int done = 0;
+        while (done < rows.Count)
+        {
+            int statementRows = Math.Min(FileChunkRows, rows.Count - done);
+            sqlite3_stmt statement =
+                _fileInsertStatements[statementRows] ??=
+                    BuildFileInsert(statementRows);
+            for (int row = 0; row < statementRows; row++)
+                BindFileRow(statement, row, firstId + done + row, rows[done + row]);
+            ExecuteRawInsert(statement, "file");
+            _fileInsertExecutions[statementRows]++;
+            done += statementRows;
+        }
+        _tFileRows += Stopwatch.GetTimestamp() - started;
+        return firstId;
+    }
+
+    private SqliteCommand? _contentInsertCmd;
+    private SqliteCommand? _ftsInsertCmd;
 
     public void InsertContent(SqliteTransaction tx, long fileId, string content)
     {
@@ -325,24 +494,32 @@ public sealed class IndexStore : IDisposable
         // second-writer-split question. The extra command round-trip is µs-scale against the
         // ms-scale tokenization it isolates.
         long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-        using (var raw = _write.CreateCommand())
+        if (_contentInsertCmd is null)
         {
-            raw.Transaction = tx;
-            raw.CommandText = "INSERT INTO file_contents(file_id, content) VALUES($id, $c);";
-            raw.Parameters.AddWithValue("$id", fileId);
-            raw.Parameters.AddWithValue("$c", content);
-            raw.ExecuteNonQuery();
+            _contentInsertCmd = _write.CreateCommand();
+            _contentInsertCmd.CommandText =
+                "INSERT INTO file_contents(file_id, content) VALUES($id, $c);";
+            _contentInsertCmd.Parameters.Add("$id", SqliteType.Integer);
+            _contentInsertCmd.Parameters.Add("$c", SqliteType.Text);
         }
+        _contentInsertCmd.Transaction = tx;
+        _contentInsertCmd.Parameters[0].Value = fileId;
+        _contentInsertCmd.Parameters[1].Value = content;
+        _contentInsertCmd.ExecuteNonQuery();
         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
         _tContentRows += t1 - t0;
-        using (var fts = _write.CreateCommand())
+        if (_ftsInsertCmd is null)
         {
-            fts.Transaction = tx;
-            fts.CommandText = "INSERT INTO fts_content(rowid, content) VALUES($id, $c);";
-            fts.Parameters.AddWithValue("$id", fileId);
-            fts.Parameters.AddWithValue("$c", content);
-            fts.ExecuteNonQuery();
+            _ftsInsertCmd = _write.CreateCommand();
+            _ftsInsertCmd.CommandText =
+                "INSERT INTO fts_content(rowid, content) VALUES($id, $c);";
+            _ftsInsertCmd.Parameters.Add("$id", SqliteType.Integer);
+            _ftsInsertCmd.Parameters.Add("$c", SqliteType.Text);
         }
+        _ftsInsertCmd.Transaction = tx;
+        _ftsInsertCmd.Parameters[0].Value = fileId;
+        _ftsInsertCmd.Parameters[1].Value = content;
+        _ftsInsertCmd.ExecuteNonQuery();
         _tFtsRows += System.Diagnostics.Stopwatch.GetTimestamp() - t1;
     }
 
@@ -442,7 +619,7 @@ public sealed class IndexStore : IDisposable
     {
         int rc = raw.sqlite3_bind_int64(statement, parameter, value);
         if (rc != raw.SQLITE_OK)
-            throw RawSqliteException("bind symbol integer", rc, parameter);
+            throw RawSqliteException("bind index integer", rc, parameter);
     }
 
     private void BindRawText(sqlite3_stmt statement, int parameter, string? value)
@@ -451,7 +628,7 @@ public sealed class IndexStore : IDisposable
             ? raw.sqlite3_bind_null(statement, parameter)
             : raw.sqlite3_bind_text(statement, parameter, value);
         if (rc != raw.SQLITE_OK)
-            throw RawSqliteException("bind symbol text", rc, parameter);
+            throw RawSqliteException("bind index text", rc, parameter);
     }
 
     private void BindSymbolRow(sqlite3_stmt statement, int slot, long id, long fileId,
@@ -486,16 +663,16 @@ public sealed class IndexStore : IDisposable
         BindRawText(statement, parameter, row.DeclarationKey ?? "");
     }
 
-    private void ExecuteRawSymbolInsert(sqlite3_stmt statement)
+    private void ExecuteRawInsert(sqlite3_stmt statement, string rowKind)
     {
         int step = raw.sqlite3_step(statement);
         // Every parameter is rebound before the next step, so reset is sufficient; clearing all
         // 544 bindings would add another native call per parameter without changing semantics.
         int reset = raw.sqlite3_reset(statement);
         if (step != raw.SQLITE_DONE)
-            throw RawSqliteException("execute symbol insert", step);
+            throw RawSqliteException($"execute {rowKind} insert", step);
         if (reset != raw.SQLITE_OK)
-            throw RawSqliteException("reset symbol insert", reset);
+            throw RawSqliteException($"reset {rowKind} insert", reset);
     }
 
     public void InsertSymbols(SqliteTransaction tx, long fileId, List<SymbolRow> rows)
@@ -525,7 +702,7 @@ public sealed class IndexStore : IDisposable
                 BindSymbolRow(statement, r, ordinalToId[row.OrdinalInFile],
                     fileId, row, ordinalToId);
             }
-            ExecuteRawSymbolInsert(statement);
+            ExecuteRawInsert(statement, "symbol");
             _symbolInsertExecutions[statementRows]++;
             done += statementRows;
         }
@@ -565,6 +742,7 @@ public sealed class IndexStore : IDisposable
 
     public long InsertProject(SqliteTransaction tx, Discovery.ParsedProject p)
     {
+        long started = Stopwatch.GetTimestamp();
         using var cmd = _write.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
@@ -588,7 +766,9 @@ public sealed class IndexStore : IDisposable
         cmd.Parameters.AddWithValue("$cg",
             p.CompileIncludeGlobs is { Count: > 0 } || p.CompileRemoveGlobs is { Count: > 0 } ||
             !p.DefaultCompileItems ? 1 : 0);
-        return (long)cmd.ExecuteScalar()!;
+        long id = (long)cmd.ExecuteScalar()!;
+        _tProjectRows += Stopwatch.GetTimestamp() - started;
+        return id;
     }
 
     /// <summary>fgq: transactionally consistent snapshot of a (possibly LIVE) index into a
@@ -660,7 +840,8 @@ public sealed class IndexStore : IDisposable
     /// gives FIRST-WRITER precedence — both graph builders insert relpath ProjectReferences
     /// BEFORE AssemblyRefEdges runs, so a pair connected both ways records 'project'.</summary>
     public void InsertProjectRef(SqliteTransaction tx, long fromId, long toId, string kind = "project") =>
-        ExecTx(tx, "INSERT OR IGNORE INTO project_refs(from_id, to_id, kind) VALUES($a, $b, $k)",
+        TimedExecTx(tx, ref _tGraphRows,
+            "INSERT OR IGNORE INTO project_refs(from_id, to_id, kind) VALUES($a, $b, $k)",
             ("$a", fromId), ("$b", toId), ("$k", kind));
 
     /// <summary>R3 of the isTest rules (field: custom assembly resolution injects test-framework
@@ -676,6 +857,7 @@ public sealed class IndexStore : IDisposable
     /// attribution and ref insertion; returns rows flipped by BOTH passes for the build log.</summary>
     public int PromoteTestProjectsByCompiledAttributes(SqliteTransaction tx)
     {
+        long started = Stopwatch.GetTimestamp();
         using var cmd = _write.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
@@ -706,28 +888,36 @@ public sealed class IndexStore : IDisposable
               )
             """;
         promoted += uniform.ExecuteNonQuery();
+        _tClassification += Stopwatch.GetTimestamp() - started;
         return promoted;
     }
 
     public void InsertPackageRef(SqliteTransaction tx, long projectId, string package, string version) =>
-        ExecTx(tx, "INSERT INTO package_refs(project_id, package, version) VALUES($a, $b, $c)",
+        TimedExecTx(tx, ref _tGraphRows,
+            "INSERT INTO package_refs(project_id, package, version) VALUES($a, $b, $c)",
             ("$a", projectId), ("$b", package), ("$c", version));
 
     public void InsertCompileItem(SqliteTransaction tx, long projectId, long fileId) =>
-        ExecTx(tx, "INSERT OR IGNORE INTO compile_items(project_id, file_id) VALUES($a, $b)", ("$a", projectId), ("$b", fileId));
+        TimedExecTx(tx, ref _tCompileItemRows,
+            "INSERT OR IGNORE INTO compile_items(project_id, file_id) VALUES($a, $b)",
+            ("$a", projectId), ("$b", fileId));
 
     public long InsertSolution(SqliteTransaction tx, string path, string name)
     {
+        long started = Stopwatch.GetTimestamp();
         using var cmd = _write.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = "INSERT INTO solutions(path, name) VALUES($p, $n); SELECT last_insert_rowid();";
         cmd.Parameters.AddWithValue("$p", path);
         cmd.Parameters.AddWithValue("$n", name);
-        return (long)cmd.ExecuteScalar()!;
+        long id = (long)cmd.ExecuteScalar()!;
+        _tGraphRows += Stopwatch.GetTimestamp() - started;
+        return id;
     }
 
     public void InsertSolutionProject(SqliteTransaction tx, long solutionId, long projectId) =>
-        ExecTx(tx, "INSERT OR IGNORE INTO solution_projects(solution_id, project_id) VALUES($a, $b)",
+        TimedExecTx(tx, ref _tGraphRows,
+            "INSERT OR IGNORE INTO solution_projects(solution_id, project_id) VALUES($a, $b)",
             ("$a", solutionId), ("$b", projectId));
 
     // ================================================================ delta refresh API
@@ -910,8 +1100,24 @@ public sealed class IndexStore : IDisposable
         cmd.ExecuteNonQuery();
     }
 
+    private void TimedExecTx(SqliteTransaction tx, ref long ticks, string sql,
+        params (string, object)[] args)
+    {
+        long started = Stopwatch.GetTimestamp();
+        ExecTx(tx, sql, args);
+        ticks += Stopwatch.GetTimestamp() - started;
+    }
+
     public void Dispose()
     {
+        // Slot zero is intentionally unused: every executed statement contains 1..32 rows.
+        for (int i = 1; i < _fileInsertStatements.Length; i++)
+        {
+            sqlite3_stmt? statement = _fileInsertStatements[i];
+            if (statement is null) continue;
+            raw.sqlite3_finalize(statement);
+            _fileInsertStatements[i] = null;
+        }
         // Slot zero is intentionally unused: every executed statement contains 1..32 rows.
         for (int i = 1; i < _symbolInsertStatements.Length; i++)
         {
@@ -921,7 +1127,8 @@ public sealed class IndexStore : IDisposable
             _symbolInsertStatements[i] = null;
         }
         _baseEdgeInsertCmd?.Dispose();
-        _fileInsertCmd?.Dispose();
+        _ftsInsertCmd?.Dispose();
+        _contentInsertCmd?.Dispose();
         _write.Dispose();
     }
 }

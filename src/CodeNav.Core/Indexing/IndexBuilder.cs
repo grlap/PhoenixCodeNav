@@ -328,9 +328,16 @@ public static class IndexBuilder
         liveProgress?.SetProjectsFailed(parsedProjects.Count(p => p.LoadStatus.StartsWith("failed", StringComparison.Ordinal)));
         var projectTime = sw.Elapsed;
 
-        using var store = new IndexStore(dbPath, createNew: true,
+        using var store = IndexStore.CreateForBulkBuild(dbPath,
             replacementWaitTimeout: replacementWaitTimeout,
             waitingForReaders: waitingForReaders);
+        long commitTicks = 0; // lf4p: every cold-build commit, reported with the store's split
+        void CommitTracked(Microsoft.Data.Sqlite.SqliteTransaction transaction)
+        {
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            transaction.Commit();
+            commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started;
+        }
         var fileIds = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
         var projectFilesByPath = scan.ProjectFiles.ToDictionary(file => file.RelPath,
             WorkspacePaths.FileSystemPathComparer);
@@ -435,7 +442,7 @@ public static class IndexBuilder
             {
                 progress?.Invoke($"Assembly-ref edges: {recovered} recovered ({nameCollisions} assembly-name collisions resolved to their first project row)");
             }
-            tx.Commit();
+            CommitTracked(tx);
         }
         parsedSolutions = verifiedSolutions;
 
@@ -444,8 +451,7 @@ public static class IndexBuilder
         liveProgress?.SetPhase("indexing_files");
         progress?.Invoke($"Parsing {scan.CsFiles.Count} C# files on {Environment.ProcessorCount} cores ...");
 
-        var channel = Channel.CreateBounded<(
-            ScannedFile File, ParsedCsFile Parsed, ulong Hash, int ByteCount)>(
+        var channel = Channel.CreateBounded<PreparedCSharpSource>(
             new BoundedChannelOptions(1024) { SingleReader = true });
         Exception? csharpCaptureFailure = null;
 
@@ -468,7 +474,9 @@ public static class IndexBuilder
                         ulong hash = XxHash64.HashToUInt64(bytes);
                         string content = DecodeUtf8(bytes);
                         var parsed = SyntaxIndexer.Parse(scanned.RelPath, content);
-                        channel.Writer.WriteAsync((scanned, parsed, hash, bytes.Length)).AsTask()
+                        channel.Writer.WriteAsync(
+                                new PreparedCSharpSource(scanned, parsed, hash, bytes.Length))
+                            .AsTask()
                             .GetAwaiter().GetResult();
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -494,19 +502,36 @@ public static class IndexBuilder
         });
 
         long symbolCount = 0, lineCount = 0;
-        long commitTicks = 0; // lf4p: the writer's commit share, reported with the store's split
         int csCount = 0;
         {
             var reader = channel.Reader;
             var tx = store.BeginTransaction();
             int inTx = 0;
-            while (reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
+            var parsedBatch = new List<PreparedCSharpSource>(IndexStore.FileChunkRows);
+            var fileRows = new List<BulkFileRow>(IndexStore.FileChunkRows);
+
+            void FlushCSharpBatch()
             {
-                while (reader.TryRead(out var item))
+                if (parsedBatch.Count == 0) return;
+                fileRows.Clear();
+                foreach (PreparedCSharpSource item in parsedBatch)
                 {
-                    long fileId = store.InsertFile(tx, item.File.RelPath, item.ByteCount,
+                    fileRows.Add(new BulkFileRow(
+                        item.File.RelPath,
+                        item.ByteCount,
                         item.File.MtimeTicks,
-                        item.Hash, "cs", item.Parsed.LineCount, item.Parsed.LooksGenerated, item.Parsed.HasTestAttributes);
+                        item.Hash,
+                        "cs",
+                        item.Parsed.LineCount,
+                        item.Parsed.LooksGenerated,
+                        item.Parsed.HasTestAttributes));
+                }
+
+                long firstFileId = store.InsertFiles(tx, fileRows);
+                for (int i = 0; i < parsedBatch.Count; i++)
+                {
+                    PreparedCSharpSource item = parsedBatch[i];
+                    long fileId = firstFileId + i;
                     store.InsertContent(tx, fileId, item.Parsed.Content);
                     store.InsertSymbols(tx, fileId, item.Parsed.Symbols);
                     fileIds[item.File.RelPath] = fileId;
@@ -517,30 +542,44 @@ public static class IndexBuilder
                     liveProgress?.AddFileIndexed(
                         item.ByteCount,
                         item.Parsed.Symbols.Count);
-                    if (++inTx >= sourceWriteBatchSize) // lf4p A/B: 400 → commits cost 2.9s/roslyn; WAL commit amortizes with width
+                }
+
+                inTx += parsedBatch.Count;
+                parsedBatch.Clear();
+                if (inTx >= sourceWriteBatchSize)
+                {
+                    CommitTracked(tx);
+                    tx.Dispose();
+                    tx = store.BeginTransaction();
+                    inTx = 0;
+                    if (csCount % 8000 == 0)
                     {
-                        long tc0 = System.Diagnostics.Stopwatch.GetTimestamp(); // lf4p
-                        tx.Commit();
-                        commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tc0;
-                        tx.Dispose();
-                        tx = store.BeginTransaction();
-                        inTx = 0;
-                        if (csCount % 8000 == 0)
-                        {
-                            // The human-facing estimate for anyone watching the log (bead two):
-                            // running count / fixed total / derived percent / elapsed. The API
-                            // surface carries the raw numbers only — no percent field there.
-                            progress?.Invoke(
-                                $"  indexed {csCount}/{scan.CsFiles.Count} files " +
-                                $"({(scan.CsFiles.Count > 0 ? csCount * 100 / scan.CsFiles.Count : 100)}%, " +
-                                $"{total.Elapsed.TotalSeconds:F0}s elapsed)");
-                        }
+                        // The human-facing estimate for anyone watching the log (bead two):
+                        // running count / fixed total / derived percent / elapsed. The API
+                        // surface carries the raw numbers only — no percent field there.
+                        progress?.Invoke(
+                            $"  indexed {csCount}/{scan.CsFiles.Count} files " +
+                            $"({(scan.CsFiles.Count > 0 ? csCount * 100 / scan.CsFiles.Count : 100)}%, " +
+                            $"{total.Elapsed.TotalSeconds:F0}s elapsed)");
                     }
                 }
             }
-            long tcF = System.Diagnostics.Stopwatch.GetTimestamp(); // lf4p
-            tx.Commit();
-            commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tcF;
+
+            while (reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
+            {
+                while (reader.TryRead(out var item))
+                {
+                    parsedBatch.Add(item);
+                    int rowsBeforeCommit = Math.Max(1, sourceWriteBatchSize - inTx);
+                    if (parsedBatch.Count >= Math.Min(
+                            IndexStore.FileChunkRows, rowsBeforeCommit))
+                        FlushCSharpBatch();
+                }
+                // Do not retain parsed source while waiting for the next producer wave. A saturated
+                // channel still reaches the 32-row fast path; a parse straggler pays no extra latency.
+                FlushCSharpBatch();
+            }
+            CommitTracked(tx);
             tx.Dispose();
         }
         producer.GetAwaiter().GetResult();
@@ -647,9 +686,7 @@ public static class IndexBuilder
                         prepared[i] = null; // release large strings as soon as the writer is done
                         if (++inTx >= sourceWriteBatchSize)
                         {
-                            long tc0 = System.Diagnostics.Stopwatch.GetTimestamp();
-                            tx.Commit();
-                            commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tc0;
+                            CommitTracked(tx);
                             fsWriteBatches++;
                             tx.Dispose();
                             tx = store.BeginTransaction();
@@ -659,9 +696,7 @@ public static class IndexBuilder
                 }
                 if (inTx > 0)
                 {
-                    long tc0 = System.Diagnostics.Stopwatch.GetTimestamp();
-                    tx.Commit();
-                    commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tc0;
+                    CommitTracked(tx);
                     fsWriteBatches++;
                 }
             }
@@ -715,9 +750,7 @@ public static class IndexBuilder
                         }
                         if (++inTx >= sourceWriteBatchSize)
                         {
-                            long tc0 = System.Diagnostics.Stopwatch.GetTimestamp();
-                            tx.Commit();
-                            commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tc0;
+                            CommitTracked(tx);
                             textOnlyWriteBatches++;
                             tx.Dispose();
                             tx = store.BeginTransaction();
@@ -727,9 +760,7 @@ public static class IndexBuilder
                 }
                 if (inTx > 0)
                 {
-                    long tc0 = System.Diagnostics.Stopwatch.GetTimestamp();
-                    tx.Commit();
-                    commitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - tc0;
+                    CommitTracked(tx);
                     textOnlyWriteBatches++;
                 }
             }
@@ -751,11 +782,15 @@ public static class IndexBuilder
                 if (fileIds.TryGetValue(f.RelPath, out long fid)) sourceFileIds[f.RelPath] = fid;
             }
             CompileItemResolver.Write(store, tx, parsedProjects, projectIds, sourceFileIds);
+            // All bulk rows now exist. Build the query-facing B-trees inside the still-unpublished
+            // finalization transaction so the classification queries below use production indexes
+            // and schema_version can never advertise a partial schema.
+            store.CompleteBulkLoad(tx);
             // isTest R3 (custom-resolve-proof): compiled test attributes + graph-leaf promotion —
             // must run after BOTH compile attribution and ref insertion (leaf check).
             int promoted = store.PromoteTestProjectsByCompiledAttributes(tx);
             if (promoted > 0) progress?.Invoke($"Test classification: {promoted} project rows promoted (compiled test attributes + same-name uniformity)");
-            tx.Commit();
+            CommitTracked(tx);
         }
 
         store.SetMeta("index_version", Guid.NewGuid().ToString("N"));
@@ -774,14 +809,25 @@ public static class IndexBuilder
         // decides whether FTS tokenization (second-writer-split candidate) or b-tree work
         // dominates. Log-only surface: no API change, Bench and server logs both capture it.
         var wt = store.WriterTimingsMs;
+        var bt = store.BulkSchemaTimingsMs;
+        var st = store.StructuralTimingsMs;
         double commitMs = commitTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        double secondaryIndexMs = bt.FileIndexes + bt.ProjectGraphIndexes +
+                                  bt.SymbolIndexes + bt.BaseEdgeIndexes;
         double writerTotal = wt.FileRows + wt.ContentRows + wt.FtsRows + wt.SymbolRows
                              + wt.BaseEdgeRows
-                             + wt.FtsOptimize + wt.Analyze + wt.Checkpoint + commitMs;
+                             + wt.FtsOptimize + wt.Analyze + wt.Checkpoint + commitMs
+                             + bt.Schema + secondaryIndexMs + st.ProjectRows + st.GraphRows
+                             + st.CompileItemRows + st.Classification;
         progress?.Invoke(
             $"Writer split (lf4p): fts {wt.FtsRows / 1000:F1}s, content {wt.ContentRows / 1000:F1}s, " +
             $"symbols {wt.SymbolRows / 1000:F1}s, base-edges {wt.BaseEdgeRows / 1000:F1}s, " +
-            $"files {wt.FileRows / 1000:F1}s, " +
+            $"files {wt.FileRows / 1000:F1}s ({store.FileInsertStatementCount:N0} statements), " +
+            $"projects {st.ProjectRows / 1000:F1}s, graph {st.GraphRows / 1000:F1}s, " +
+            $"compile-items {st.CompileItemRows / 1000:F1}s, classification {st.Classification / 1000:F1}s, " +
+            $"schema {bt.Schema / 1000:F1}s, secondary-indexes {secondaryIndexMs / 1000:F1}s " +
+            $"(files {bt.FileIndexes / 1000:F1}s, project-graph {bt.ProjectGraphIndexes / 1000:F1}s, " +
+            $"symbols {bt.SymbolIndexes / 1000:F1}s, base-edges {bt.BaseEdgeIndexes / 1000:F1}s), " +
             $"commits {commitMs / 1000:F1}s, fts-optimize {wt.FtsOptimize / 1000:F1}s, " +
             $"analyze {wt.Analyze / 1000:F1}s, checkpoint {wt.Checkpoint / 1000:F1}s " +
             $"— writer statements total {writerTotal / 1000:F1}s");
@@ -796,6 +842,12 @@ public static class IndexBuilder
     }
 
     private const long FSharpPreparedItemOverheadBytes = 256;
+
+    private sealed record PreparedCSharpSource(
+        ScannedFile File,
+        ParsedCsFile Parsed,
+        ulong Hash,
+        int ByteCount);
 
     private sealed record PreparedFSharpSource(
         ScannedFile File,
