@@ -1079,8 +1079,8 @@ fixed index-size claim before that measurement.
 ### Initial build
 
 1. Base Phoenix performs its normal scan/index and becomes ready.
-2. Under the existing rebuild-coordination reader guard, the writer snapshots eligible indexed
-   source and creates deterministic chunk descriptors, then releases the guard.
+2. Using one pinned base-index read snapshot, the writer captures eligible indexed source and
+   creates deterministic chunk descriptors, then releases that local snapshot.
 3. The concept builder reuses content-hash cache hits and batches missing document embeddings.
 4. It builds chunk FTS and vector data in private staging.
 5. It validates counts, model descriptor, checksums, and the captured base-index identity.
@@ -1118,12 +1118,13 @@ canonical-input hash. Before committing returned embeddings to an overlay, the w
 compatible base snapshot and verifies those identities. A changed result is discarded and requeued;
 an embedding computed for old bytes is never labelled current for new bytes.
 
-`refresh_index(force:"full")` and base schema migration use Phoenix's existing rebuild turnstile.
-Descriptor capture and publish validation hold the shared reader guard; slow model inference does
-not. A queued destructive rebuild can therefore drain readers without waiting for the whole model
-batch, while stale batch results fail the hash recheck afterward. Concept refresh is eventually
-consistent with the committed base index and reports its own status/counts without changing base
-`pendingChanges` semantics.
+`refresh_index(force:"full")` and base schema migration remain owned by Phoenix's single
+workspace writer. Descriptor capture and publish validation use bounded pinned base snapshots;
+slow model inference does not. A queued destructive rebuild therefore waits only for those local
+snapshots and any existing Windows database handles, not for the whole model batch, while stale
+batch results fail the hash recheck afterward. Concept refresh is eventually consistent with the
+committed base index and reports its own status/counts without changing base `pendingChanges`
+semantics.
 
 ### Model or chunker migration
 
@@ -1150,10 +1151,10 @@ Vectors from different model fingerprints are never mixed in one search.
 - Followers never infer the writer's in-process concept queue. They report committed generation
   identity and `pendingChangesKnown:false`, matching the existing follower honesty model.
 - A rebuild publishes a new generation rather than invalidating readers holding the old one.
-- Concept search requires a readable base snapshot for source validation and mapping. If the base
-  follower becomes unavailable because its writer exits, concept search also returns
-  `concept_base_unavailable`; it does not keep serving position-bearing results independently.
-  Recovery and restart-only promotion follow Phoenix's existing writer/follower policy.
+- Concept search requires a readable base snapshot for source validation and mapping. A base
+  follower may keep serving the last compatible committed state after its writer exits; concept
+  search can do the same only while that base snapshot remains readable. Database replacement or
+  validation failure returns `concept_base_unavailable`. Promotion remains restart-only.
 
 Multi-process configuration has one authority:
 
@@ -1436,10 +1437,10 @@ run a test.
 | Chunk/parser failure | Record bounded failed/source-gap counts; continue other chunks |
 | ANN/filter candidate starvation | Return fewer results with a `concept_filter_budget` note; do not claim complete scope |
 | Query deadline | Return current-source-validated partial evidence with channel completion flags, or a fatal stable timeout error |
-| Base refresh overlaps query | Query uses its pinned current base snapshot; a destructive rebuild follows the existing reader turnstile |
+| Base refresh overlaps query | Query uses its pinned current base snapshot; a destructive rebuild drains writer-local snapshots and bounded Windows file handles |
 | Model/chunker config changes | Build side-by-side generation; never mix vector spaces |
 | Active query-model artifact removed | Keep generation data but report model unavailable until a compatible artifact is restored/replaced |
-| Writer exits | Base followers and therefore concept search become unavailable under existing Phoenix policy |
+| Writer exits | Existing base followers may serve the last compatible committed state; promotion remains restart-only |
 | Disk budget/GC sharing violation | Preserve active/rollback generations; defer GC or fail the new build without harming base Phoenix |
 | F# parser/FCS unavailable | F# concept capability reports fallback/unavailable provenance explicitly |
 

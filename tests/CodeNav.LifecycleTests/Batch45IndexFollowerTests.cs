@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
@@ -22,60 +23,517 @@ public sealed class Batch45IndexFollowerCollection;
 public sealed class Batch45IndexFollowerTests
 {
     [Fact]
-    public void OnlyContentionProvesFollowerWriterPresent()
+    public void OnePhysicalWorkspaceMutexCoversEveryIndexPathAndOtherWorkspacesRemainIndependent()
     {
-        Assert.True(IndexManager.IsFollowerWriterPresent(IndexLeaseAcquireResult.Contended));
-        Assert.False(IndexManager.IsFollowerWriterPresent(IndexLeaseAcquireResult.Acquired));
-        Assert.False(IndexManager.IsFollowerWriterPresent(IndexLeaseAcquireResult.Failed));
-        Assert.Contains("liveness could not be verified",
-            IndexManager.FollowerWriterUnavailableErrorFor(IndexLeaseAcquireResult.Failed),
-            StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("writer is no longer running",
-            IndexManager.FollowerWriterUnavailableErrorFor(IndexLeaseAcquireResult.Acquired),
-            StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task PeerFollowerProbeDoesNotMasqueradeAsDurableWriter()
-    {
-        string root = Directory.CreateTempSubdirectory("codenav-45-peer-probe").FullName;
-        string database = IndexBuilder.DefaultDbPath(root);
-        Directory.CreateDirectory(Path.GetDirectoryName(database)!);
-        using var firstAcquired = new ManualResetEventSlim(false);
-        using var releaseFirst = new ManualResetEventSlim(false);
-        using var secondCompleted = new ManualResetEventSlim(false);
+        string firstRoot = Directory.CreateTempSubdirectory("codenav-45-workspace-lock-a").FullName;
+        string secondRoot = Directory.CreateTempSubdirectory("codenav-45-workspace-lock-b").FullName;
+        string defaultDatabase = IndexBuilder.DefaultDbPath(firstRoot);
+        string alternateDatabase = Path.Combine(firstRoot, ".alternate", "other.db");
+        string independentDatabase = IndexBuilder.DefaultDbPath(secondRoot);
+        Directory.CreateDirectory(Path.GetDirectoryName(defaultDatabase)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(alternateDatabase)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(independentDatabase)!);
         try
         {
-            Task<IndexLeaseAcquireResult> first = Task.Run(() =>
-                IndexOwnershipLease.ProbeOwnerDetailed(root, database, result =>
-                {
-                    if (result == IndexLeaseAcquireResult.Acquired) firstAcquired.Set();
-                    releaseFirst.Wait(TimeSpan.FromSeconds(5));
-                }));
-            Assert.True(firstAcquired.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(IndexOwnershipLease.TryAcquire(firstRoot, defaultDatabase,
+                out IndexOwnershipLease? owner));
+            using (owner!)
+            {
+                Assert.Equal(IndexLeaseAcquireResult.Contended,
+                    IndexOwnershipLease.TryAcquireDetailed(firstRoot, alternateDatabase,
+                        anchoredIdentity: null, out IndexOwnershipLease? sameWorkspace));
+                Assert.Null(sameWorkspace);
 
-            Task<IndexLeaseAcquireResult> second = Task.Run(() =>
-                IndexOwnershipLease.ProbeOwnerDetailed(root, database, _ =>
-                    secondCompleted.Set()));
-            bool completedWhilePeerHeldProbe = secondCompleted.Wait(TimeSpan.FromSeconds(1));
-            releaseFirst.Set();
+                Assert.True(IndexOwnershipLease.TryAcquire(secondRoot, independentDatabase,
+                    out IndexOwnershipLease? independent));
+                independent!.Dispose();
+            }
 
-            IndexLeaseAcquireResult[] results = await Task.WhenAll(first, second);
-            Assert.False(completedWhilePeerHeldProbe);
-            Assert.All(results, result =>
-                Assert.Equal(IndexLeaseAcquireResult.Acquired, result));
-            Assert.All(results, result =>
-                Assert.False(IndexManager.IsFollowerWriterPresent(result)));
+            Assert.True(IndexOwnershipLease.TryAcquire(firstRoot, alternateDatabase,
+                out IndexOwnershipLease? successor));
+            successor!.Dispose();
         }
         finally
         {
-            releaseFirst.Set();
+            Cleanup(firstRoot);
+            Cleanup(secondRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BidirectionalWorkspaceAcquisitionFailsFastWithoutAWaitCycle()
+    {
+        string firstRoot = Directory.CreateTempSubdirectory(
+            "codenav-45-no-cycle-a").FullName;
+        string secondRoot = Directory.CreateTempSubdirectory(
+            "codenav-45-no-cycle-b").FullName;
+        string firstDatabase = IndexBuilder.DefaultDbPath(firstRoot);
+        string secondDatabase = IndexBuilder.DefaultDbPath(secondRoot);
+        try
+        {
+            Assert.True(IndexOwnershipLease.TryAcquire(firstRoot, firstDatabase,
+                out IndexOwnershipLease? firstOwner));
+            using (firstOwner!)
+            {
+                Assert.True(IndexOwnershipLease.TryAcquire(secondRoot, secondDatabase,
+                    out IndexOwnershipLease? secondOwner));
+                using (secondOwner!)
+                {
+                    var elapsed = Stopwatch.StartNew();
+                    Task<IndexLeaseAcquireResult> firstToSecond = Task.Run(() =>
+                        IndexOwnershipLease.TryAcquireDetailed(secondRoot, secondDatabase,
+                            anchoredIdentity: null, out _));
+                    Task<IndexLeaseAcquireResult> secondToFirst = Task.Run(() =>
+                        IndexOwnershipLease.TryAcquireDetailed(firstRoot, firstDatabase,
+                            anchoredIdentity: null, out _));
+
+                    IndexLeaseAcquireResult[] results = await Task.WhenAll(
+                        firstToSecond, secondToFirst).WaitAsync(TimeSpan.FromSeconds(2));
+                    Assert.All(results, result =>
+                        Assert.Equal(IndexLeaseAcquireResult.Contended, result));
+                    Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(2),
+                        "cross-worktree acquisition blocked instead of failing fast");
+                }
+            }
+        }
+        finally
+        {
+            Cleanup(secondRoot);
+            Cleanup(firstRoot);
+        }
+    }
+
+    [Fact]
+    public void DifferentWorkspacesCannotBecomeWritersForTheSameDatabaseDestination()
+    {
+        string firstRoot = Directory.CreateTempSubdirectory(
+            "codenav-45-shared-destination-a").FullName;
+        string secondRoot = Directory.CreateTempSubdirectory(
+            "codenav-45-shared-destination-b").FullName;
+        string sharedDatabase = IndexBuilder.DefaultDbPath(firstRoot);
+        try
+        {
+            WriteWorkspace(firstRoot);
+            WriteWorkspace(secondRoot);
+            IndexBuilder.Build(firstRoot, sharedDatabase);
+
+            using var first = new IndexManager(firstRoot, sharedDatabase);
+            first.Start();
+            Assert.True(WaitUntil(() => first.IsQueryable, 20_000), first.Health().Error);
+            Assert.True(first.IsWriter);
+            Assert.True(File.Exists(sharedDatabase + IndexDestinationClaim.Suffix));
+
+            using var second = new IndexManager(secondRoot, sharedDatabase);
+            second.Start();
+            Assert.Equal("failed", second.State);
+            Assert.Equal("unavailable", second.AccessMode);
+            Assert.False(second.IsWriter);
+            Assert.False(second.IsFollower);
+            Assert.False(second.IsQueryable);
+            Assert.Contains("different workspace", second.Health().Error ?? "",
+                StringComparison.OrdinalIgnoreCase);
+            Assert.True(first.IsQueryable, first.Health().Error);
+            Assert.True(IndexOwnershipLease.SameWorkspaceIdentity(firstRoot,
+                ReadMeta(sharedDatabase, "workspace_root")!));
+        }
+        finally
+        {
+            Cleanup(secondRoot);
+            Cleanup(firstRoot);
+        }
+    }
+
+    [Fact]
+    public void SameWorkspaceWithDifferentDatabaseDoesNotAttachToTheWrongWriter()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-divergent-destination").FullName;
+        string writerDatabase = IndexBuilder.DefaultDbPath(root);
+        string differentDatabase = Path.Combine(root, ".alternate", "other.db");
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, writerDatabase);
+            using var writer = new IndexManager(root, writerDatabase);
+            writer.Start();
+            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000), writer.Health().Error);
+
+            using var contender = new IndexManager(root, differentDatabase);
+            contender.Start();
+            Assert.Equal("failed", contender.State);
+            Assert.Equal("unavailable", contender.AccessMode);
+            Assert.False(contender.IsWriter);
+            Assert.False(contender.IsFollower);
+            Assert.False(contender.IsQueryable);
+            Assert.Contains("destination", contender.Health().Error ?? "",
+                StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(differentDatabase));
+        }
+        finally
+        {
             Cleanup(root);
         }
     }
 
     [Fact]
-    public void TransientLivenessProbeContentionDoesNotTurnSuccessorIntoFollower()
+    public void UnclaimedCurrentSchemaForeignDefaultDestinationFailsClosed()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-unclaimed-current").FullName;
+        string foreignRoot = Directory.CreateTempSubdirectory(
+            "codenav-45-unclaimed-current-owner").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root);
+            WriteWorkspace(foreignRoot);
+            IndexBuilder.Build(foreignRoot, database);
+            Assert.False(File.Exists(database + IndexDestinationClaim.Suffix));
+
+            using var manager = new IndexManager(root, database);
+            manager.Start(forceRebuild: true);
+            Assert.Equal("failed", manager.State);
+            Assert.False(manager.IsQueryable);
+            Assert.Contains("different workspace",
+                manager.Health().Error ?? "",
+                StringComparison.OrdinalIgnoreCase);
+            Assert.True(IndexOwnershipLease.SameWorkspaceIdentity(foreignRoot,
+                ReadMeta(database, "workspace_root")!));
+        }
+        finally
+        {
+            Cleanup(foreignRoot);
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void MovedWorkspaceCanForceRebuildAndRebindItsStoredRoot()
+    {
+        string oldRoot = Directory.CreateTempSubdirectory(
+            "codenav-45-moved-old").FullName;
+        string newRoot = oldRoot + "-renamed";
+        try
+        {
+            WriteWorkspace(oldRoot);
+            string oldDatabase = IndexBuilder.DefaultDbPath(oldRoot);
+            IndexBuilder.Build(oldRoot, oldDatabase);
+            Directory.Move(oldRoot, newRoot);
+            string newDatabase = IndexBuilder.DefaultDbPath(newRoot);
+
+            using (var ordinary = new IndexManager(newRoot, newDatabase))
+            {
+                ordinary.Start();
+                Assert.Equal("failed", ordinary.State);
+                Assert.Contains("force:'full'", ordinary.Health().Error ?? "",
+                    StringComparison.OrdinalIgnoreCase);
+            }
+
+            using var manager = new IndexManager(newRoot, newDatabase);
+            manager.Start(forceRebuild: true);
+            Assert.True(WaitUntil(() => manager.IsQueryable ||
+                manager.State == "failed", 30_000));
+            Assert.True(manager.IsQueryable, manager.Health().Error);
+            Assert.True(manager.IsWriter);
+            Assert.True(IndexOwnershipLease.SameWorkspaceIdentity(newRoot,
+                ReadMeta(newDatabase, "workspace_root")!));
+        }
+        finally
+        {
+            Cleanup(newRoot);
+            Cleanup(oldRoot);
+        }
+    }
+
+    [Fact]
+    public void ExplicitRebindRefusesAnUnverifiableStoredWorkspaceIdentity()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-rebind-current").FullName;
+        string storedRoot = Directory.CreateTempSubdirectory(
+            "codenav-45-rebind-inaccessible").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            using (var store = new IndexStore(database, createNew: false))
+                store.SetMeta("workspace_root", storedRoot);
+
+            string currentIdentity = IndexOwnershipLease.GetWorkspaceIdentity(root);
+            IOException error = Assert.Throws<IOException>(() =>
+                IndexBuilder.EnsureExistingDatabaseWorkspace(
+                    root, database, allowMissingStoredRootRebind: true,
+                    identityProbe: path =>
+                        CodeNav.Core.WorkspacePaths.FullPathsEqual(path, storedRoot)
+                            ? (WorkspaceIdentityProbeResult.Failed, null)
+                            : (WorkspaceIdentityProbeResult.Found, currentIdentity)));
+
+            Assert.Contains("could not be verified", error.Message,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(storedRoot, ReadMeta(database, "workspace_root"));
+        }
+        finally
+        {
+            Cleanup(storedRoot);
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void StoredWorkspaceRootReplacedByAFileFailsClosedDuringExplicitRebind()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-rebind-current-file").FullName;
+        string storedRoot = Directory.CreateTempSubdirectory(
+            "codenav-45-rebind-file").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            using (var store = new IndexStore(database, createNew: false))
+                store.SetMeta("workspace_root", storedRoot);
+            Directory.Delete(storedRoot);
+            File.WriteAllText(storedRoot, "not a workspace directory");
+
+            IOException error = Assert.Throws<IOException>(() =>
+                IndexBuilder.EnsureExistingDatabaseWorkspace(
+                    root, database, allowMissingStoredRootRebind: true));
+
+            Assert.Contains("could not be verified", error.Message,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(storedRoot, ReadMeta(database, "workspace_root"));
+        }
+        finally
+        {
+            try { File.Delete(storedRoot); } catch { }
+            Cleanup(storedRoot);
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void LegacyForeignOwnershipRequiresExplicitRecoveryAtTheWorkspaceLocalDefaultDestination()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-legacy-sibling").FullName;
+        string foreignRoot = Directory.CreateTempSubdirectory(
+            "codenav-45-legacy-seed").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root);
+            WriteWorkspace(foreignRoot);
+            IndexBuilder.Build(foreignRoot, database);
+            using (var store = new IndexStore(database, createNew: false))
+                store.SetMeta("schema_version", "19");
+
+            using (var ordinary = new IndexManager(root, database))
+            {
+                ordinary.Start();
+                Assert.Equal("failed", ordinary.State);
+                Assert.False(ordinary.IsQueryable);
+                Assert.Contains("different workspace",
+                    ordinary.Health().Error ?? "",
+                    StringComparison.OrdinalIgnoreCase);
+            }
+
+            using var manager = new IndexManager(root, database);
+            manager.Start(forceRebuild: true);
+            Assert.True(WaitUntil(() => manager.IsQueryable ||
+                manager.State == "failed", 30_000));
+            Assert.True(manager.IsQueryable, manager.Health().Error);
+            Assert.Equal(IndexBuilder.SchemaVersion,
+                ReadMeta(database, "schema_version"));
+            Assert.True(IndexOwnershipLease.SameWorkspaceIdentity(root,
+                ReadMeta(database, "workspace_root")!));
+        }
+        finally
+        {
+            Cleanup(foreignRoot);
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void UnclaimedForeignCustomDestinationCannotBeReboundEvenWhenLegacyAndForced()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-foreign-custom-current").FullName;
+        string foreignRoot = Directory.CreateTempSubdirectory(
+            "codenav-45-foreign-custom-owner").FullName;
+        string database = Path.Combine(root, ".alternate", "foreign.db");
+        try
+        {
+            WriteWorkspace(root);
+            WriteWorkspace(foreignRoot);
+            IndexBuilder.Build(foreignRoot, database);
+            using (var store = new IndexStore(database, createNew: false))
+                store.SetMeta("schema_version", "19");
+
+            using var manager = new IndexManager(root, database);
+            manager.Start(forceRebuild: true);
+            Assert.Equal("failed", manager.State);
+            Assert.False(manager.IsQueryable);
+            Assert.Contains("different workspace",
+                manager.Health().Error ?? "",
+                StringComparison.OrdinalIgnoreCase);
+            Assert.True(IndexOwnershipLease.SameWorkspaceIdentity(foreignRoot,
+                ReadMeta(database, "workspace_root")!));
+        }
+        finally
+        {
+            Cleanup(foreignRoot);
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void MalformedDestinationClaimFailsClosed()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-malformed-claim").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            File.WriteAllText(database + IndexDestinationClaim.Suffix,
+                "not-a-valid-claim", Encoding.UTF8);
+
+            using var manager = new IndexManager(root, database);
+            manager.Start();
+            Assert.Equal("failed", manager.State);
+            Assert.Equal("unavailable", manager.AccessMode);
+            Assert.False(manager.IsWriter);
+            Assert.False(manager.IsFollower);
+            Assert.Contains("ownership", manager.Health().Error ?? "",
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { File.Delete(database + IndexDestinationClaim.Suffix); } catch { }
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void MissingFollowerClaimFailsClosedAndNextWriterRepairsIt()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-missing-claim").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        IndexOwnershipLease? owner = null;
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            Assert.True(IndexOwnershipLease.TryAcquire(root, database, out owner));
+
+            using (var follower = new IndexManager(root, database))
+            {
+                follower.Start();
+                Assert.Equal("failed", follower.State);
+                Assert.Equal("unavailable", follower.AccessMode);
+                Assert.False(follower.IsFollower);
+                Assert.False(follower.IsQueryable);
+                Assert.Contains("verify", follower.Health().Error ?? "",
+                    StringComparison.OrdinalIgnoreCase);
+            }
+
+            owner!.Dispose();
+            owner = null;
+            using var successor = new IndexManager(root, database);
+            successor.Start();
+            Assert.True(WaitUntil(() => successor.IsQueryable ||
+                successor.State == "failed", 20_000));
+            Assert.True(successor.IsQueryable, successor.Health().Error);
+            Assert.True(successor.IsWriter);
+            Assert.True(WaitUntil(() => IndexDestinationClaim.ReadState(root, database) ==
+                IndexDestinationClaimState.Ready, 10_000));
+        }
+        finally
+        {
+            owner?.Dispose();
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ForceFullReportsWriterRequiredWhenRecoveryReattachesAsFollower()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-recovery-follower").FullName;
+        string blockedDirectory = Path.Combine(root, "blocked-index");
+        string database = Path.Combine(blockedDirectory, "index.db");
+        try
+        {
+            WriteWorkspace(root);
+            File.WriteAllText(blockedDirectory, "temporary destination blocker");
+            using var recovering = new IndexManager(root, database);
+            recovering.Start();
+            Assert.Equal("failed", recovering.State);
+            Assert.Equal("unavailable", recovering.AccessMode);
+
+            File.Delete(blockedDirectory);
+            Directory.CreateDirectory(blockedDirectory);
+            IndexBuilder.Build(root, database);
+            using var writer = new IndexManager(root, database);
+            writer.Start();
+            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000),
+                writer.Health().Error);
+
+            using var semantic = new SemanticService(recovering);
+            var tools = new NavigationTools(recovering, semantic);
+            JsonElement response = Parse(tools.RefreshIndex(force: "full"));
+            AssertWriterRequired(response);
+            Assert.True(recovering.IsFollower);
+            Assert.True(recovering.IsQueryable, recovering.Health().Error);
+            Assert.True(writer.IsWriter);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void SuccessorRecoversAStaleSameWorkspaceRebuildingClaim()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-stale-claim").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            File.WriteAllText(database + IndexDestinationClaim.Suffix,
+                "B\n" + IndexOwnershipLease.GetWorkspaceIdentity(root) + "\n");
+
+            using var successor = new IndexManager(root, database);
+            successor.Start();
+            Assert.True(WaitUntil(() => successor.IsQueryable ||
+                successor.State == "failed", 20_000));
+            Assert.True(successor.IsQueryable, successor.Health().Error);
+            Assert.True(successor.IsWriter);
+            Assert.True(WaitUntil(() => IndexDestinationClaim.ReadState(root, database) ==
+                IndexDestinationClaimState.Ready, 10_000));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void TransientOwnershipProbeContentionDoesNotTurnSuccessorIntoFollower()
     {
         if (!OperatingSystem.IsWindows()) return;
 
@@ -152,6 +610,10 @@ public sealed class Batch45IndexFollowerTests
                 .GetProperty("pendingChangesKnown").GetBoolean());
             Assert.Contains(capabilities.GetProperty("features").EnumerateArray(), feature =>
                 feature.GetProperty("id").GetString() == "index-read-followers");
+            Assert.Contains(capabilities.GetProperty("features").EnumerateArray(), feature =>
+                feature.GetProperty("id").GetString() == "single-workspace-writer-mutex");
+            Assert.Contains(capabilities.GetProperty("features").EnumerateArray(), feature =>
+                feature.GetProperty("id").GetString() == "index-destination-claim");
 
             JsonElement search = Parse(tools.SearchSymbol("Alpha45", match: "exact"));
             Assert.Single(search.GetProperty("symbols").EnumerateArray());
@@ -191,49 +653,6 @@ public sealed class Batch45IndexFollowerTests
         }
         finally
         {
-            follower?.Dispose();
-            Cleanup(root);
-        }
-    }
-
-    [Fact]
-    public void FollowerCoordinationFailurePublishesUnavailableInsteadOfWriterPresent()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-
-        string root = Directory.CreateTempSubdirectory("codenav-45-probe-failure").FullName;
-        string database = IndexBuilder.DefaultDbPath(root);
-        IndexManager? follower = null;
-        try
-        {
-            WriteWorkspace(root);
-            IndexBuilder.Build(root, database);
-            using var writer = new IndexManager(root, database);
-            writer.Start();
-            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000), writer.Health().Error);
-
-            follower = new IndexManager(root, database);
-            follower.Start();
-            Assert.True(WaitUntil(() => follower.IsQueryable, 20_000), follower.Health().Error);
-            follower.FollowerWriterProbeForTest = () => IndexLeaseAcquireResult.Failed;
-
-            IOException failure = Assert.Throws<IOException>(() =>
-            {
-                using var queries = follower.OpenQueries();
-            });
-            Assert.Contains("liveness could not be verified", failure.Message,
-                StringComparison.OrdinalIgnoreCase);
-
-            IndexHealth health = follower.Health();
-            Assert.Equal("failed", health.State);
-            Assert.False(follower.IsQueryable);
-            Assert.Contains("liveness could not be verified", health.Error ?? "",
-                StringComparison.OrdinalIgnoreCase);
-            Assert.True(writer.IsQueryable, writer.Health().Error);
-        }
-        finally
-        {
-            if (follower is not null) follower.FollowerWriterProbeForTest = null;
             follower?.Dispose();
             Cleanup(root);
         }
@@ -326,6 +745,11 @@ public sealed class Batch45IndexFollowerTests
             Assert.True(IndexOwnershipLease.TryAcquire(root, database,
                 out IndexOwnershipLease? owner));
             using var ownership = owner!;
+            Assert.Equal(IndexDestinationClaimAcquireResult.Acquired,
+                IndexDestinationClaim.TryAcquire(root, database,
+                    out IndexDestinationClaim? destinationClaim));
+            using var destination = destinationClaim!;
+            destination.SetReady();
             using var follower = new IndexManager(root, database);
             follower.Start();
             Assert.True(WaitUntil(() => follower.IsQueryable, 20_000), follower.Health().Error);
@@ -398,13 +822,74 @@ public sealed class Batch45IndexFollowerTests
     }
 
     [Fact]
-    public void FollowerReviewSnapshotDrainsBeforeWriterReplacesDatabase()
+    public async Task ContendedFollowerHealthObservesARebuildingDestinationClaim()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-health-claim-race").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var captured = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            Assert.True(IndexOwnershipLease.TryAcquire(root, database,
+                out IndexOwnershipLease? owner));
+            using var ownership = owner!;
+            Assert.Equal(IndexDestinationClaimAcquireResult.Acquired,
+                IndexDestinationClaim.TryAcquire(root, database,
+                    out IndexDestinationClaim? destinationClaim));
+            using var destination = destinationClaim!;
+            destination.SetReady();
+
+            using var follower = new IndexManager(root, database);
+            follower.Start();
+            Assert.True(WaitUntil(() => follower.IsQueryable, 20_000),
+                follower.Health().Error);
+
+            int blocked = 0;
+            follower.FollowerMetadataAfterPublishForTest = _ =>
+            {
+                if (Interlocked.Exchange(ref blocked, 1) != 0) return;
+                captured.Set();
+                Assert.True(release.Wait(TimeSpan.FromSeconds(15)));
+            };
+            await Task.Delay(300);
+            Task<IndexHealth> first = Task.Run(() => follower.Health());
+            Assert.True(captured.Wait(TimeSpan.FromSeconds(10)),
+                "the first Health refresh did not reach its publication seam");
+
+            destination.SetRebuilding();
+            IndexHealth concurrent = follower.Health();
+            Assert.Equal("failed", concurrent.State);
+            Assert.False(follower.IsQueryable);
+
+            release.Set();
+            IndexHealth firstResult =
+                await first.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal("failed", firstResult.State);
+
+            follower.FollowerMetadataAfterPublishForTest = null;
+            destination.SetReady();
+            Assert.True(WaitUntil(() => follower.IsQueryable, 10_000),
+                follower.Health().Error);
+        }
+        finally
+        {
+            release.Set();
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void RebuildClaimStopsNewFollowerReadsWhileExistingSnapshotsDrain()
     {
         if (!OperatingSystem.IsWindows()) return;
 
         string root = Directory.CreateTempSubdirectory("codenav-45-review-drain").FullName;
         string database = IndexBuilder.DefaultDbPath(root);
-        using var waiting = new ManualResetEventSlim(false);
         using var boundary = new ManualResetEventSlim(false);
         using var completed = new ManualResetEventSlim(false);
         IndexReadSnapshot? snapshot = null;
@@ -425,38 +910,49 @@ public sealed class Batch45IndexFollowerTests
             secondSnapshot = follower.TryOpenReviewSnapshot();
             Assert.NotNull(secondSnapshot);
             string oldVersion = writer.Health().IndexVersion!;
-            writer.FullRebuildReviewWaitTimeoutForTest = TimeSpan.FromMilliseconds(100);
             int activeAtBoundary = -1;
-            writer.FullRebuildWaitingForReviewSnapshotsForTest = () => waiting.Set();
             writer.FullRebuildDestructiveBoundaryForTest = active =>
             {
                 activeAtBoundary = active;
                 boundary.Set();
             };
+            writer.FullRebuildAfterTelemetryStartedForTest = () =>
+                Assert.Equal(IndexDestinationClaimState.Rebuilding,
+                    IndexDestinationClaim.ReadState(root, database));
             writer.FullRebuildCompletedForTest = () => completed.Set();
 
             Assert.True(writer.RequestFullRebuild());
-            Assert.True(waiting.Wait(TimeSpan.FromSeconds(10)),
-                "writer never observed the follower's cross-manager review slot");
+            Assert.True(boundary.Wait(TimeSpan.FromSeconds(10)),
+                "writer never reached its local destructive boundary");
+            Assert.Equal(0, activeAtBoundary);
             Assert.True(WaitUntil(() => writer.Health().Error?.Contains(
-                    "waiting for active index readers", StringComparison.OrdinalIgnoreCase) == true, 5_000),
-                "writer did not report the active-reader wait");
-            Assert.False(boundary.IsSet,
-                "writer crossed the destructive boundary while a follower snapshot was active");
-            Assert.Equal("ready", writer.State);
-            Assert.True(writer.IsQueryable, writer.Health().Error);
+                    "waiting for existing index readers", StringComparison.OrdinalIgnoreCase) == true,
+                10_000), "writer did not report the OS-level reader drain");
+            Assert.False(completed.IsSet,
+                "writer completed replacement while follower snapshots retained the old database");
             Assert.Equal(oldVersion, writer.Health().IndexVersion);
+            for (int attempt = 0; attempt < 20; attempt++)
+            {
+                Assert.False(follower.IsQueryable,
+                    "a follower remained queryable after rebuild intent was published");
+                Assert.Equal("failed", follower.Health().State);
+                Assert.Throws<IOException>(() => follower.OpenQueries());
+                Assert.Null(follower.TryOpenReviewSnapshot());
+                Thread.Sleep(10);
+            }
+            Assert.Single(snapshot.Queries.SearchSymbols("Alpha45", "exact", null, 2));
+            Assert.Single(secondSnapshot.Queries.SearchSymbols("Alpha45", "exact", null, 2));
 
             snapshot.Dispose();
             snapshot = null;
             secondSnapshot.Dispose();
             secondSnapshot = null;
-            Assert.True(boundary.Wait(TimeSpan.FromSeconds(10)));
-            Assert.Equal(0, activeAtBoundary);
             Assert.True(completed.Wait(TimeSpan.FromSeconds(40)),
-                "writer did not complete after the follower released its review slot");
+                "writer did not complete after the follower released its SQLite snapshots");
             Assert.True(WaitUntil(() => writer.IsQueryable &&
                 writer.Health().IndexVersion != oldVersion, 20_000), writer.Health().Error);
+            Assert.Equal(IndexDestinationClaimState.Ready,
+                IndexDestinationClaim.ReadState(root, database));
 
             using var semantic = new SemanticService(follower);
             var tools = new NavigationTools(follower, semantic);
@@ -523,14 +1019,13 @@ public sealed class Batch45IndexFollowerTests
     }
 
     [Fact]
-    public void SuccessorStartupRebuildDefersWhileFollowerReviewSnapshotIsActive()
+    public void SuccessorStartupRebuildWaitsForFollowerDatabaseHandleWithoutReaderSidecar()
     {
         if (!OperatingSystem.IsWindows()) return;
 
         string root = Directory.CreateTempSubdirectory(
             "codenav-45-startup-review-drain").FullName;
         string database = IndexBuilder.DefaultDbPath(root);
-        using var waiting = new ManualResetEventSlim(false);
         using var boundary = new ManualResetEventSlim(false);
         using var completed = new ManualResetEventSlim(false);
         IndexManager? writer = null;
@@ -560,30 +1055,26 @@ public sealed class Batch45IndexFollowerTests
 
             successor = new IndexManager(root, database)
             {
-                FullRebuildReviewWaitTimeoutForTest = TimeSpan.FromMilliseconds(100),
-                FullRebuildWaitingForReviewSnapshotsForTest = () => waiting.Set(),
                 FullRebuildDestructiveBoundaryForTest = _ => boundary.Set(),
                 FullRebuildCompletedForTest = () => completed.Set(),
             };
             successor.Start(forceRebuild: true);
-            Assert.True(WaitUntil(() => waiting.IsSet || boundary.IsSet, 10_000),
-                "successor startup reached neither reader coordination nor its rebuild boundary");
-            Assert.True(waiting.IsSet,
-                "successor startup bypassed the surviving follower review slot");
+            Assert.True(boundary.Wait(TimeSpan.FromSeconds(10)),
+                "successor startup never reached its local rebuild boundary");
             Assert.True(WaitUntil(() => successor.State == "building" &&
-                successor.Health().Error?.Contains("waiting for active index readers",
+                successor.Health().Error?.Contains("waiting for existing index readers",
                     StringComparison.OrdinalIgnoreCase) == true, 5_000),
                 successor.Health().Error);
             Assert.True(successor.IsWriter);
-            Assert.False(boundary.IsSet,
-                "successor startup crossed the destructive boundary with an active reader");
-            Assert.Equal(oldVersion, ReadMeta(database, "index_version"));
+            Assert.False(completed.IsSet,
+                "successor replaced the database while a follower retained the old handle");
+            Assert.Single(snapshot.Queries.SearchSymbols("Alpha45", "exact", null, 2));
+            Assert.False(File.Exists(database + ".readers"));
 
             snapshot.Dispose();
             snapshot = null;
-            Assert.True(boundary.Wait(TimeSpan.FromSeconds(10)));
             Assert.True(completed.Wait(TimeSpan.FromSeconds(40)),
-                "successor did not rebuild after the surviving follower released its snapshot");
+                "successor did not rebuild after the surviving follower released its handle");
             Assert.True(WaitUntil(() => successor.IsQueryable &&
                 successor.Health().IndexVersion != oldVersion, 20_000),
                 successor.Health().Error);
@@ -604,14 +1095,13 @@ public sealed class Batch45IndexFollowerTests
     }
 
     [Fact]
-    public void DirectBuildDefersWhileFollowerReviewSnapshotIsActive()
+    public async Task DirectBuildWaitsForFollowerDatabaseHandleWithoutCoordinationSidecar()
     {
         if (!OperatingSystem.IsWindows()) return;
 
         string root = Directory.CreateTempSubdirectory(
             "codenav-45-direct-build-review-drain").FullName;
         string database = IndexBuilder.DefaultDbPath(root);
-        using var waiting = new ManualResetEventSlim(false);
         IndexManager? writer = null;
         IndexManager? follower = null;
         IndexReadSnapshot? snapshot = null;
@@ -635,19 +1125,16 @@ public sealed class Batch45IndexFollowerTests
             writer = null;
             Assert.True(WaitUntil(() => !IndexOwnershipLease.IsHeld(root, database), 10_000));
 
-            IOException deferred = Assert.Throws<IOException>(() =>
-                IndexBuilder.BuildWithReviewWaitForTest(root, database,
-                    TimeSpan.FromMilliseconds(100), () => waiting.Set()));
-            Assert.True(waiting.IsSet,
-                "direct build never observed the surviving follower review slot");
-            Assert.Contains("review snapshot", deferred.Message,
-                StringComparison.OrdinalIgnoreCase);
-            Assert.Equal(oldVersion, ReadMeta(database, "index_version"));
+            Task<BuildResult> rebuild = Task.Run(() => IndexBuilder.Build(root, database));
+            await Task.Delay(500);
+            Assert.False(rebuild.IsCompleted,
+                "direct build completed while the follower retained the old database handle");
+            Assert.Single(snapshot.Queries.SearchSymbols("Alpha45", "exact", null, 2));
+            Assert.False(File.Exists(database + ".readers"));
 
             snapshot.Dispose();
             snapshot = null;
-            BuildResult rebuilt = IndexBuilder.BuildWithReviewWaitForTest(root, database,
-                TimeSpan.FromSeconds(5));
+            BuildResult rebuilt = await rebuild.WaitAsync(TimeSpan.FromSeconds(40));
             Assert.True(rebuilt.CsFiles > 0);
             Assert.NotEqual(oldVersion, ReadMeta(database, "index_version"));
         }
@@ -691,7 +1178,7 @@ public sealed class Batch45IndexFollowerTests
             JsonElement held = await WaitForWriterCapabilitiesAsync(writer,
                 index => index.TryGetProperty("error", out JsonElement error) &&
                          error.ValueKind == JsonValueKind.String &&
-                         error.GetString()!.Contains("waiting for active index readers",
+                         error.GetString()!.Contains("waiting for existing index readers",
                               StringComparison.OrdinalIgnoreCase),
                 45_000);
             Assert.NotEqual("failed", held.GetProperty("state").GetString());
@@ -758,28 +1245,25 @@ public sealed class Batch45IndexFollowerTests
 
             Assert.True(IndexOwnershipLease.TryAcquire(root, database,
                 out IndexOwnershipLease? owner));
+            Assert.Equal(IndexDestinationClaimAcquireResult.Acquired,
+                IndexDestinationClaim.TryAcquire(root, database,
+                    out IndexDestinationClaim? destinationClaim));
             using (owner!)
+            using (destinationClaim!)
             using (var follower = new IndexManager(root, database))
             {
+                if (scenario is "stale" or "workspace")
+                    destinationClaim!.SetReady();
                 follower.Start();
                 Assert.True(WaitUntil(() => follower.State == "failed", 20_000),
                     $"{scenario}: expected follower refusal, got {follower.State}");
                 Assert.False(follower.IsWriter);
-                Assert.Equal(scenario is "missing" or "corrupt" ? "unavailable" : "follower",
-                    follower.AccessMode);
+                Assert.Equal("follower", follower.AccessMode);
                 Assert.False(follower.IsQueryable);
-                if (follower.IsFollower)
-                {
-                    Assert.Contains("writer", follower.Health().Error ?? "",
-                        StringComparison.OrdinalIgnoreCase);
-                    Assert.Contains("compatible index", follower.Health().Error ?? "",
-                        StringComparison.OrdinalIgnoreCase);
-                }
-                else
-                {
-                    Assert.Contains("coordination", follower.Health().Error ?? "",
-                        StringComparison.OrdinalIgnoreCase);
-                }
+                Assert.Contains("writer", follower.Health().Error ?? "",
+                    StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("compatible index", follower.Health().Error ?? "",
+                    StringComparison.OrdinalIgnoreCase);
                 Assert.False(follower.RequestRefresh());
                 Assert.False(follower.RequestFullRebuild());
                 using var semantic = new SemanticService(follower);
@@ -787,16 +1271,8 @@ public sealed class Batch45IndexFollowerTests
                 JsonElement refresh = Parse(tools.RefreshIndex(force: "full"));
                 JsonElement worktree = Parse(tools.IndexWorktree(
                     Path.Combine(root, "never-created-worktree")));
-                if (follower.IsFollower)
-                {
-                    AssertWriterRequired(refresh);
-                    AssertWriterRequired(worktree);
-                }
-                else
-                {
-                    Assert.Equal("index_unavailable", refresh.GetProperty("error").GetString());
-                    Assert.Equal("index_unavailable", worktree.GetProperty("error").GetString());
-                }
+                AssertWriterRequired(refresh);
+                AssertWriterRequired(worktree);
             }
 
             switch (scenario)
@@ -820,7 +1296,7 @@ public sealed class Batch45IndexFollowerTests
     }
 
     [Fact]
-    public void WindowsForeignWriterAllowsFollowerAndSuccessorRebuildWhileFollowerLives()
+    public void WindowsFollowerKeepsServingCommittedStateAcrossWriterExitAndSuccessorRebuild()
     {
         if (!OperatingSystem.IsWindows()) return;
 
@@ -871,10 +1347,9 @@ public sealed class Batch45IndexFollowerTests
             Assert.Equal(0, child.ExitCode);
             Assert.True(WaitUntil(() => !IndexOwnershipLease.IsHeld(root, database), 10_000),
                 "the writer lease remained held after graceful owner shutdown");
-            Assert.True(WaitUntil(() => !follower.IsQueryable, 5_000),
-                "the follower stayed ready after its writer exited");
-            Assert.Contains("writer is no longer running", follower.Health().Error ?? "",
-                StringComparison.OrdinalIgnoreCase);
+            Assert.True(follower.IsQueryable, follower.Health().Error);
+            Assert.True(HasSymbol(followerTools, "Beta45"),
+                "the follower lost the last committed index after its writer exited");
 
             successor = new IndexManager(root, database);
             successor.Start();

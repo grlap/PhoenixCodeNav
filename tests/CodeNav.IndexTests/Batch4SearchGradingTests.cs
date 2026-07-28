@@ -269,7 +269,10 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
         Assert.Contains("semantic-large-repo-budget", ids);
-        Assert.Contains("semantic-rebuild-coordination", ids);
+        Assert.Contains("index-read-followers", ids);
+        Assert.Contains("single-workspace-writer-mutex", ids);
+        Assert.Contains("index-destination-claim", ids);
+        Assert.DoesNotContain("semantic-rebuild-coordination", ids);
         Assert.Contains("semantic-candidate-completeness-over-accounting", ids);
         Assert.Contains("semantic-planning-attribution", ids);
         Assert.Contains("indexed-base-type-edges", ids);
@@ -349,7 +352,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("initial or event-driven serialized requests", refreshInputRetry);
         Assert.Contains("timer-initiated stale-index recovery", refreshInputRetry);
         Assert.Contains("search-symbol-malformed-query", ids);
-        Assert.Contains("index-follower-liveness-fail-closed", ids);
+        Assert.DoesNotContain("index-follower-liveness-fail-closed", ids);
         string semanticBudget = Assert.Single(json.GetProperty("features").EnumerateArray(),
             feature => feature.GetProperty("id").GetString() == "semantic-large-repo-budget")
             .GetProperty("summary").GetString()!;

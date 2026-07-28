@@ -147,7 +147,6 @@ public sealed partial class NavigationTools
                 new { id = "indexed-path-suggestions", summary = "v0.12.31 outline/source_context not-found errors and first-page exact-path find_file misses may include a byte-budgeted pathSuggestions object with up to three pinned-index paths, exact total and truncation state; basename matches rank by preserved suffix then prefix and are never substituted" },
                 new { id = "source-context-range-alias", summary = "v0.12.32 source_context accepts range as a compatibility alias when canonical spans is omitted; conflicting simultaneous values return bad_request instead of applying silent precedence" },
                 new { id = "batch-outline-json-array-paths", summary = "v0.12.29 batch_outline accepts its documented comma-separated paths or a serialized JSON string array, rejects malformed/non-string arrays before lookup, and refuses more than 12 paths instead of silently dropping them" },
-                new { id = "index-follower-liveness-fail-closed", summary = "v0.12.11 follower liveness distinguishes mutex contention from coordination failure; only contention proves a live writer, while an unverified probe publishes an explicit unavailable state" },
                 new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry initial or event-driven serialized requests after bounded 100/250/1000 ms delays; timer-initiated stale-index recovery uses its separately declared paced cadence" },
                 new { id = "refresh-sweep-publication-gating", summary = "v0.12.7 builds and refreshes persist a follower-visible refresh_sweep_pending marker before publication or row mutation and clear it only after the serialized convergence sweep commits" },
                 new { id = "refresh-incomplete-freshness", summary = "v0.12.7 exhausted source capture keeps index state stale, preserves the Git baseline, exposes a stable refreshIncompleteReason plus bounded paths, and widens the next request to a recovery sweep" },
@@ -211,9 +210,10 @@ public sealed partial class NavigationTools
                 new { id = "worktree-index-destination-isolation", summary = "Sibling SQLite work stays in private staging; an anchored no-follow destination atomically publishes the checkpointed database and refuses linked database, WAL, SHM, and rollback-journal paths without touching their targets" },
                 new { id = "worktree-index-lease", summary = "A cross-process ownership lease guards every writable Phoenix index lifetime; index_worktree returns worktree_index_locked while another Phoenix owns that target" },
                 new { id = "worktree-response-budget", summary = "worktrees may trim every item to zero, and index_worktree UTF-8-bounds reflected paths/details with truncation metadata before enforcing the complete hardBytes envelope" },
-                new { id = "index-read-followers", summary = "Windows writer/followers; rebuild drains readers; modes writer|follower|unavailable; index_writer_required" },
+                new { id = "index-read-followers", summary = "v0.12.34 one physical-workspace writer mutex; Windows followers reopen compatible committed WAL state without a reader registry; modes writer|follower|unavailable; index_writer_required" },
+                new { id = "single-workspace-writer-mutex", summary = "v0.12.34 one crash-recoverable identity-named mutex per workspace/worktree elects the sole watcher, refresh, rebuild, and mutation owner; cross-worktree acquisition is zero-wait" },
+                new { id = "index-destination-claim", summary = "v0.12.34 a crash-recoverable database claim binds --index-db to its physical workspace and publishes ready|rebuilding; follower double-checks prevent new SQLite opens from barging across replacement" },
                 new { id = "semantic-large-repo-budget", summary = "default all candidates; positive maxProjects bounds" },
-                new { id = "semantic-rebuild-coordination", summary = "semantic loads drain; rebuild resumes after readers" },
                 new { id = "related-tests-signal", summary = "related_tests / impact / context_pack test groups carry 'signal' — the strongest usage shape among sampled mention lines: callSite > typeUsage > nameMention. A heuristic lead-strength label, not a compiler fact; omitted on naming-convention / project-reference groups and on an ungraded mention group — absent means UNGRADED, never nameMention. Samples carry the real mention line + text when located" },
             },
             tools = new[]
@@ -2172,7 +2172,8 @@ public sealed partial class NavigationTools
         if (_manager.IsFollower) return IndexWriterRequired();
         if (force == "full")
         {
-            if (!_manager.RequestFullRebuild()) return IndexMutationUnavailable();
+            if (!_manager.RequestFullRebuild())
+                return _manager.IsFollower ? IndexWriterRequired() : IndexMutationUnavailable();
             return Json.Serialize(new
             {
                 queued = true,

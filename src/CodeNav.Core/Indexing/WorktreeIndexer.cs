@@ -44,9 +44,10 @@ internal enum WorktreeIndexPlatformPolicy
 /// semantic layer is spun up for a sibling — a one-shot open, reconcile, close.
 /// Targets are VALIDATED against `git worktree list` — an arbitrary filesystem path can never
 /// be smuggled into an index-write operation.
-/// Ownership honesty: a phoenix instance RUNNING in the target worktree owns a separate
-/// cross-process lease for that db. The lease is independent of native SQLite sharing behavior
-/// and returns worktree_index_locked instead of contending with a foreign pump.
+/// Ownership honesty: a phoenix instance RUNNING in the target worktree owns its workspace mutex
+/// and adjacent destination claim. This one-shot publisher acquires both, holds claim state B
+/// through staged installation, and returns worktree_index_locked instead of contending with a
+/// foreign pump or allowing new follower reads to barge into replacement.
 /// Does not own: the main instance's own index (IndexManager/refresh_index), worktree
 /// lifecycle (the caller's), or response shaping (NavigationTools).
 /// Split out of: nothing — new for fgq/c36.
@@ -192,8 +193,50 @@ public static class WorktreeIndexer
             }
             using (ownershipLease!)
             {
-                return EnsureOwned(mainDbPath, mode, log, sw, target, dbPath,
-                    destination!);
+                IndexDestinationClaimAcquireResult claimResult =
+                    IndexDestinationClaim.TryAcquire(target.WorkspacePath,
+                        destination.DatabaseAuthorityPath,
+                        out IndexDestinationClaim? destinationClaim);
+                if (claimResult != IndexDestinationClaimAcquireResult.Acquired)
+                {
+                    return Fail(claimResult == IndexDestinationClaimAcquireResult.Contended
+                            ? "worktree_index_locked"
+                            : "worktree_not_indexable",
+                        claimResult == IndexDestinationClaimAcquireResult.Contended
+                            ? "another workspace owns this worktree index destination"
+                            : "the worktree index destination could not be claimed safely",
+                        sw);
+                }
+                using (destinationClaim!)
+                {
+                    try
+                    {
+                        _ = IndexBuilder.EnsureExistingDatabaseWorkspace(
+                            target.WorkspacePath, destination.DatabaseAuthorityPath,
+                            legacyWorkspaceRoot: mainRoot,
+                            allowMissingStoredRootRebind: true);
+                        log($"Claimed worktree destination for explicit publication: {target.WorkspacePath}");
+                    }
+                    catch (IndexWorkspaceMismatchException)
+                    {
+                        return Fail("worktree_index_locked",
+                            "the existing worktree index belongs to a different live workspace",
+                            sw);
+                    }
+                    catch (Exception ex)
+                    {
+                        log($"Worktree destination ownership validation failed: {ex}");
+                        return Fail("worktree_not_indexable",
+                            $"{ex.GetType().Name} while validating the worktree index destination (see server log)",
+                            sw);
+                    }
+
+                    // The claim is born in B and deliberately remains there until after the
+                    // handle-relative install. Existing bounded readers drain naturally; every
+                    // new follower open observes B and refuses to barge.
+                    return EnsureOwned(mainDbPath, mode, log, sw, target, dbPath,
+                        destination!);
+                }
             }
         }
     }
@@ -203,11 +246,6 @@ public static class WorktreeIndexer
         System.Diagnostics.Stopwatch sw, WorkspaceWorktree target, string dbPath,
         AnchoredIndexDestination destination)
     {
-        if (destination.HasRecoverySidecars)
-        {
-            return Fail("worktree_not_indexable",
-                "the worktree index has recovery sidecars; recover it in its owning Phoenix session before replacement", sw);
-        }
         bool exists = destination.DatabaseExists;
 
         bool create = mode == "create" || (mode != "refresh" && !exists);
@@ -300,6 +338,9 @@ public static class WorktreeIndexer
                 added = result.AddedFiles;
                 changed = result.ChangedFiles;
                 deleted = result.DeletedFiles;
+                // SnapshotToReserved copied the main workspace's metadata. Rebind the staged
+                // database before publication so a manager in the sibling accepts its own index.
+                store.SetMeta("workspace_root", Path.GetFullPath(target.WorkspacePath));
                 if (head is not null)
                 {
                     store.SetMeta("indexed_commit", head);
@@ -343,7 +384,9 @@ public static class WorktreeIndexer
             // install can replace the file; a global clear could hit unrelated databases (rqek).
             IndexQueries.ClearPoolsFor(dbPath);
             BeforeAnchoredInstallForTest?.Invoke(dbPath);
-            if (!destination.InstallStage())
+            if (!destination.InstallStage(
+                    waitingForReaders: () =>
+                        log("Worktree publication is waiting for existing index readers to drain.")))
             {
                 return Fail(create ? "snapshot_failed" : "refresh_failed",
                     "the staged index could not be atomically installed", sw);

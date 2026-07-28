@@ -110,9 +110,11 @@ that recovers even a corrupted index without shell access, and cold builds expos
 counters (no fabricated ETAs).
 
 On Windows, Phoenix uses **one writer process and many read-only follower processes per index**.
-The process that acquires the writer lease owns builds, watchers, refreshes, and worktree-index
-mutations. Additional Claude, Codex, or other MCP processes attach to the same compatible SQLite
-WAL index as followers and can use every navigation and semantic query tool concurrently. Check
+One crash-recoverable named mutex, keyed by the physical workspace/worktree directory identity,
+elects the process that owns builds, watchers, refreshes, and worktree-index mutations. Path aliases
+to that worktree converge on the same mutex. Additional Claude, Codex, or other MCP processes attach
+to the same compatible SQLite WAL index as followers and can use every navigation and semantic
+query tool concurrently. Check
 `server_capabilities.index.mode` or response `meta.indexMode` for `writer`, `follower`, or
 `unavailable` (the process has not attached to a database role).
 Followers never build or repair an index; `refresh_index` and `index_worktree` return the stable
@@ -120,13 +122,20 @@ Followers never build or repair an index; `refresh_index` and `index_worktree` r
 evidence reads committed writer state, while tools explicitly labeled live and compiler-backed
 semantic operations may read newer workspace bytes. Followers cannot observe the writer process's
 pending watcher queue, so capabilities report `pendingChangesKnown: false` rather than presenting
-  a local zero as freshness evidence. Review snapshots and semantic loads retain scalable shared
-  Windows reader handles; a full rebuild takes a writer-intent turnstile and drains those readers
-  before replacing the database. The queued rebuild resumes automatically after release. If the
-writer exits, followers stop reporting query-ready until another writer appears; they never silently
-promote themselves, so restart a follower when it should take writer ownership. If writer liveness
-cannot be verified safely, the follower reports unavailable instead of serving writer-backed
-evidence; retry the operation or restart that follower.
+a local zero as freshness evidence. There is no cross-process reader registry, slot file, or
+turnstile. A small `<index-db>.phoenix-owner` claim binds that destination to the writer's physical
+workspace identity and publishes `ready` or `rebuilding`. Followers check it before and after every
+SQLite open. Publishing `rebuilding` therefore stops new opens from barging while existing bounded
+operations keep their consistent old handle; the sole writer waits up to three minutes for those
+handles before publishing the replacement. A different workspace cannot claim the same
+`--index-db`, and a same-workspace process configured with another database refuses follower mode
+instead of reading a path its writer does not maintain. If a database moves with its workspace,
+an ordinary open refuses to guess while the old root may be temporarily unavailable. An explicit
+`refresh_index(force: "full")` rebuild recognizes the missing old lexical root and rebinds
+metadata to the new location; a still-live different workspace remains a hard refusal.
+Followers reopen the compatible database on each request. If the writer exits, an existing follower
+can continue serving the last committed state but never promotes itself; restart it if that process
+should become the next writer.
 
 ## Install (work machine)
 
@@ -184,7 +193,8 @@ takes a few minutes; the server answers `index_building` hints meanwhile). On Wi
 attach once that writer has produced a compatible index; a missing, corrupt, or schema-stale index
 requires the writer rather than being repaired by a follower. The index lives in
 `<workspace>/.codenav/index.db` — add `.codenav/` to `.gitignore` — or point `--index-db`
-elsewhere.
+elsewhere. A custom destination is still owned by exactly one physical workspace; do not share one
+database path between workspace roots.
 
 ## Git worktrees (review flows)
 
@@ -202,6 +212,13 @@ index_worktree(path: "../review-1234")         # MCP, on the MAIN instance: seed
                                                # the worktree's anchored .codenav destination,
                                                # then reconciles. refresh re-seeds the same way.
 ```
+
+That one-shot publisher acquires the target worktree mutex and publishes the same destination
+claim in `rebuilding` state for the entire staged install. It rewrites `workspace_root` to the
+target before publication, so an existing follower cannot barge and the sibling Phoenix accepts
+the resulting database as its own. If the target worktree's Phoenix starts while seeding owns the
+mutex, it attaches as a follower and remains one after publication; restart that worktree server
+after seeding when it should take writer ownership.
 
 Platform policy: **Windows** reconciles with one targeted delta (git diff of
 `indexed_commit->HEAD` UNION git status dirt — no fresh-checkout sweep); **Linux** always

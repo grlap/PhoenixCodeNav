@@ -32,6 +32,22 @@ internal sealed record BuildCaptureTestHooks(
     Func<string, string, int, GitInfo.WorkspaceFileReadResult> Reader,
     Action<string>? FirstCaptureFailureRetained = null);
 
+internal sealed class IndexWorkspaceMismatchException : IOException
+{
+    internal IndexWorkspaceMismatchException()
+        : base("index database belongs to a different workspace")
+    {
+    }
+}
+
+internal sealed class IndexWorkspaceRebindRequiredException : IOException
+{
+    internal IndexWorkspaceRebindRequiredException()
+        : base("index database moved with its workspace and requires an explicit full rebuild")
+    {
+    }
+}
+
 /// <summary>
 /// Owns: full index construction — scan, project/solution parsing, parallel syntax
 /// parsing, and single-writer persistence. v1 is full-rebuild; delta refresh arrives
@@ -91,19 +107,14 @@ public static class IndexBuilder
     /// v18: normalized syntax-derived type_base_edges replace repeated leading-wildcard signature
     /// scans and preserve base entries beyond the 400-character display-signature limit.
     /// v19: Markdown and SQL files are persisted as text-only lang='md'/'sql' rows so cold builds
-    /// and incremental refresh expose repository documentation and database assets through FTS.</summary>
-    public const string SchemaVersion = "19";
+    /// and incremental refresh expose repository documentation and database assets through FTS.
+    /// v20: sibling-worktree publications persist the target workspace_root rather than the seed
+    /// workspace root, making stored ownership metadata authoritative for follower attachment.</summary>
+    public const string SchemaVersion = "20";
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null) =>
-        BuildCore(workspaceRoot, dbPath, progress, liveProgress,
-            TimeSpan.FromSeconds(30), waitingForReviewReaders: null, SourceWriteBatchSize,
-            fSharpPipelineTestHooks: null, buildCaptureTestHooks: null);
-
-    internal static BuildResult BuildWithReviewWaitForTest(string workspaceRoot,
-        string? dbPath, TimeSpan reviewWaitTimeout, Action? waitingForReviewReaders = null) =>
-        BuildCore(workspaceRoot, dbPath, progress: null, liveProgress: null,
-            reviewWaitTimeout, waitingForReviewReaders, SourceWriteBatchSize,
+        BuildCore(workspaceRoot, dbPath, progress, liveProgress, SourceWriteBatchSize,
             fSharpPipelineTestHooks: null, buildCaptureTestHooks: null);
 
     internal static BuildResult BuildWithSourceBatchSizeForTest(string workspaceRoot,
@@ -112,13 +123,11 @@ public static class IndexBuilder
         BuildCaptureTestHooks? buildCaptureTestHooks = null,
         BuildProgress? liveProgress = null) =>
         BuildCore(workspaceRoot, dbPath: null, progress, liveProgress,
-            TimeSpan.FromSeconds(30), waitingForReviewReaders: null,
             Math.Max(1, sourceWriteBatchSize), fSharpPipelineTestHooks,
             buildCaptureTestHooks);
 
     private static BuildResult BuildCore(string workspaceRoot, string? dbPath,
-        Action<string>? progress, BuildProgress? liveProgress, TimeSpan reviewWaitTimeout,
-        Action? waitingForReviewReaders, int sourceWriteBatchSize,
+        Action<string>? progress, BuildProgress? liveProgress, int sourceWriteBatchSize,
         FSharpPipelineTestHooks? fSharpPipelineTestHooks,
         BuildCaptureTestHooks? buildCaptureTestHooks)
     {
@@ -141,35 +150,126 @@ public static class IndexBuilder
                 if (!authority.TryGetLeaseIdentity(out IndexLeaseIdentity? afterLease) ||
                     afterLease != leaseIdentity)
                     throw new IOException("index destination changed during ownership acquisition");
-                IndexLeaseIdentity ownedIdentity = afterLease!;
-
-                if (!authority.TryAnchorReviewCoordinationFile(create: true))
-                    throw new IOException(
-                        "index reader coordination could not be initialized safely");
-
-                IndexReviewCoordinationLease? rebuildLease = null;
-                if (OperatingSystem.IsWindows())
+                IndexDestinationClaimAcquireResult claimResult =
+                    IndexDestinationClaim.TryAcquire(root, authority.DatabasePath,
+                        out IndexDestinationClaim? destinationClaim);
+                if (claimResult != IndexDestinationClaimAcquireResult.Acquired)
+                    throw new IOException(claimResult == IndexDestinationClaimAcquireResult.Contended
+                        ? "index destination is assigned to another workspace"
+                        : "index destination ownership could not be established safely");
+                using (destinationClaim!)
                 {
-                    IndexReviewCoordinationAcquireResult coordination =
-                        IndexReviewCoordinationLease.TryAcquireExclusive(authority,
-                            reviewWaitTimeout, waitingForReviewReaders, out rebuildLease);
-                    if (coordination != IndexReviewCoordinationAcquireResult.Acquired)
-                        throw new IOException(
-                            "index rebuild deferred while another process holds a review snapshot");
-                    if (!authority.TryGetLeaseIdentity(out IndexLeaseIdentity? afterReaders) ||
-                        afterReaders != ownedIdentity)
-                    {
-                        rebuildLease!.Dispose();
-                        throw new IOException(
-                            "index destination changed during review-reader coordination");
-                    }
-                }
-
-                using (rebuildLease)
+                    bool rebind = EnsureExistingDatabaseWorkspace(root,
+                        authority.DatabasePath, allowMissingStoredRootRebind: true,
+                        allowLegacySchemaRebind: true);
+                    if (rebind)
+                        progress?.Invoke("Rebinding moved index database to the current workspace root ...");
                     return BuildOwned(root, authority.DatabasePath, progress, liveProgress,
                         sourceWriteBatchSize, fSharpPipelineTestHooks,
-                        buildCaptureTestHooks);
+                        buildCaptureTestHooks,
+                        waitingForReaders: () =>
+                            progress?.Invoke("Waiting for existing index readers to drain ..."));
+                }
             }
+        }
+    }
+
+    /// <summary>
+    /// Validates a live stored workspace identity before a serialized writer mutates a database.
+    /// Returns true when the stored lexical root no longer exists and metadata must be rebound to
+    /// the caller's current root. A rename/move is recoverable because the workspace mutex and
+    /// destination claim already exclude every live competing writer.
+    /// </summary>
+    internal static bool EnsureExistingDatabaseWorkspace(
+        string workspaceRoot, string databasePath, string? legacyWorkspaceRoot = null,
+        bool allowMissingStoredRootRebind = false,
+        bool allowLegacySchemaRebind = false,
+        Func<string, (WorkspaceIdentityProbeResult Result, string? Identity)>?
+            identityProbe = null)
+    {
+        if (!File.Exists(databasePath)) return false;
+        try
+        {
+            using var existing = new IndexStore(databasePath, createNew: false);
+            string? storedRoot = existing.GetMeta("workspace_root");
+            if (string.IsNullOrWhiteSpace(storedRoot))
+                return false;
+            string? storedSchema = existing.GetMeta("schema_version");
+
+            (WorkspaceIdentityProbeResult currentResult, string? currentIdentity) =
+                Probe(workspaceRoot);
+            if (currentResult != WorkspaceIdentityProbeResult.Found ||
+                currentIdentity is null)
+                throw new IOException("current workspace identity could not be verified");
+
+            (WorkspaceIdentityProbeResult storedResult, string? storedIdentity) =
+                Probe(storedRoot);
+            if (storedResult == WorkspaceIdentityProbeResult.Found &&
+                string.Equals(storedIdentity, currentIdentity, StringComparison.Ordinal))
+                return false;
+
+            // Worktree indexes created before destination claims copied the seed workspace root.
+            // The worktree publisher may consume that one legacy value while it holds the target
+            // mutex and claim, then writes the target root into the staged replacement.
+            if (!string.IsNullOrWhiteSpace(legacyWorkspaceRoot))
+            {
+                (WorkspaceIdentityProbeResult legacyResult, string? legacyIdentity) =
+                    Probe(legacyWorkspaceRoot);
+                if (storedResult == WorkspaceIdentityProbeResult.Found &&
+                    legacyResult == WorkspaceIdentityProbeResult.Found &&
+                    string.Equals(storedIdentity, legacyIdentity,
+                        StringComparison.Ordinal))
+                    return true;
+            }
+
+            // Schema v20 corrects legacy sibling publications that copied the seed workspace's
+            // live root into the target's default .codenav/index.db. A stale schema alone is not
+            // proof of that provenance: ordinary startup must refuse a live foreign identity.
+            // Only an explicit destructive build/rebuild may consume the exact v19 artifact at
+            // the current workspace's derived default destination. Current-schema foreign
+            // ownership and every custom destination still fail closed.
+            if (storedResult == WorkspaceIdentityProbeResult.Found &&
+                allowLegacySchemaRebind &&
+                string.Equals(storedSchema, "19", StringComparison.Ordinal) &&
+                WorkspacePaths.FullPathsEqual(databasePath,
+                    DefaultDbPath(workspaceRoot)))
+                return true;
+
+            if (storedResult == WorkspaceIdentityProbeResult.Missing &&
+                allowMissingStoredRootRebind)
+                return true;
+            if (storedResult == WorkspaceIdentityProbeResult.Missing)
+                throw new IndexWorkspaceRebindRequiredException();
+            if (storedResult == WorkspaceIdentityProbeResult.Failed)
+                throw new IOException("stored workspace identity could not be verified");
+
+            throw new IndexWorkspaceMismatchException();
+
+            (WorkspaceIdentityProbeResult Result, string? Identity) Probe(string root)
+            {
+                if (identityProbe is not null) return identityProbe(root);
+                WorkspaceIdentityProbeResult result =
+                    IndexOwnershipLease.ProbeWorkspaceIdentity(root, out string? identity);
+                return (result, identity);
+            }
+        }
+        catch (Exception ex) when (ex is IndexWorkspaceMismatchException or
+                                   IndexWorkspaceRebindRequiredException)
+        {
+            throw;
+        }
+        catch (IOException)
+        {
+            // Preserve transient I/O errors as I/O errors. Callers distinguish these from a
+            // proven live foreign workspace instead of publishing a misleading ownership refusal.
+            throw;
+        }
+        catch
+        {
+            // A corrupt or pre-metadata database remains recoverable by its first serialized
+            // destination claimant. A competing workspace cannot race that recovery: the claim
+            // stays in Rebuilding state until the build completes or the owner exits.
+            return false;
         }
     }
 
@@ -177,7 +277,9 @@ public static class IndexBuilder
         Action<string>? progress = null, BuildProgress? liveProgress = null,
         int sourceWriteBatchSize = SourceWriteBatchSize,
         FSharpPipelineTestHooks? fSharpPipelineTestHooks = null,
-        BuildCaptureTestHooks? buildCaptureTestHooks = null)
+        BuildCaptureTestHooks? buildCaptureTestHooks = null,
+        TimeSpan? replacementWaitTimeout = null,
+        Action? waitingForReaders = null)
     {
         var total = Stopwatch.StartNew();
         progress?.Invoke($"Scanning {workspaceRoot} ...");
@@ -226,7 +328,9 @@ public static class IndexBuilder
         liveProgress?.SetProjectsFailed(parsedProjects.Count(p => p.LoadStatus.StartsWith("failed", StringComparison.Ordinal)));
         var projectTime = sw.Elapsed;
 
-        using var store = new IndexStore(dbPath, createNew: true);
+        using var store = new IndexStore(dbPath, createNew: true,
+            replacementWaitTimeout: replacementWaitTimeout,
+            waitingForReaders: waitingForReaders);
         var fileIds = new Dictionary<string, long>(WorkspacePaths.FileSystemPathComparer);
         var projectFilesByPath = scan.ProjectFiles.ToDictionary(file => file.RelPath,
             WorkspacePaths.FileSystemPathComparer);

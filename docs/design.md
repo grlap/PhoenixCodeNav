@@ -241,9 +241,10 @@ This is the part designed specifically for net472 enterprise scale.
   every project touched by named-type global-alias discovery. The synthetic path is never read,
   solution files remain non-authoritative, and changed bytes or parse options invalidate through
   Roslyn's existing checksums.
-- **Rebuild-coordinated long scans.** Candidate enumeration and semantic cluster loading hold a
-  shared cross-process reader guard, so a destructive Windows rebuild drains them before replacing
-  the SQLite database.
+- **Pinned long scans.** Candidate enumeration and semantic cluster loading pin one local SQLite
+  read epoch. A writer drains its own pinned snapshots before rebuilding. A database-destination
+  claim stops new Windows follower opens before replacement while already-open bounded operations
+  retain their consistent old SQLite handle; no sidecar reader registration is required.
 - **Reload keeps identity and retention is byte-governed.** A changed project reloads under its
   *existing* `ProjectId`, and eviction only removes projects nothing loaded references — so
   dependents' references never dangle. Since v0.12.22, the legacy ~160-project proxy is gone:
@@ -501,12 +502,18 @@ The index is kept live without rebuilding on every keystroke:
   `unavailable` means the process has not attached to either database role. Followers report
   `pendingChangesKnown: false`: their index-backed fields see committed WAL state, not the writer's
   in-process queue. Live source/Git and compiler-backed semantic fields retain their own provenance.
-  A follower also becomes unavailable when its writer exits and recovers when another writer owns
-  the lease; promotion to writer is deliberately restart-only.
-- Review snapshots and semantic loads retain shared handles to one anchored Windows coordination
-  file; there is no configured reader-slot ceiling. Full rebuild holds a writer-intent turnstile,
-  drains the shared handles, and only then replaces the database. Its queued request remains pending
-  and resumes automatically after readers release; new readers cannot barge ahead of it.
+  A follower can continue serving the last compatible committed state after its writer exits, but
+  promotion to writer is deliberately restart-only. When a successor publishes a replacement, the
+  follower reopens it on the next request.
+- There is no cross-process reader registry or writer-intent turnstile. The writer still drains its
+  own in-process pinned snapshots before rebuilding. The sole writer also holds
+  `<index-db>.phoenix-owner`, a fixed-size claim containing its physical workspace identity and a
+  `ready`/`rebuilding` state. Windows followers validate the claim before and after each SQLite
+  open. Once the writer publishes `rebuilding`, new opens fail honestly while existing bounded
+  handles retain their consistent old database; replacement creation retries until those handles
+  drain. The retry budget is three minutes, above Phoenix's longest semantic operation deadline
+  (120 seconds). The claim is not a reader registry: followers never write it or register slots.
+  POSIX contenders remain unavailable, so Windows is the only advertised follower platform today.
 
 ### Filesystem notification and refresh serialization
 
@@ -535,11 +542,25 @@ refresh and every later request retries marker persistence before reading or mut
 Response metadata advises callers to retry `refresh_index` if that pending state persists; the same
 marker also covers ordinary refresh convergence, not only the build/open handoff.
 
-The index writer lease is per database destination. Only the process holding that lease owns the
-watcher, queue, build, and refresh pump. On Windows, additional processes may attach to committed
-WAL state as read-only followers; followers never watch, enqueue, refresh, or rebuild. On macOS and
-Linux, a contender currently remains unavailable rather than attaching as a follower. Processes
-configured with different index database paths own independent leases and refresh pipelines.
+The index writer lease is one named mutex per physical workspace/worktree directory, independent of
+the replaceable database file or its configured spelling. Only the process holding that mutex owns
+the watcher, queue, build, and refresh pump. Its adjacent destination claim prevents different
+workspace identities from sharing one `--index-db`; a contending same-workspace process attaches
+only when the claim proves that its configured database is the writer's destination. On Windows,
+such processes may attach to committed WAL state as read-only followers; followers never watch,
+enqueue, refresh, or rebuild. A clean writer exit removes the claim, but an already-bound follower
+may keep serving the last compatible committed database and never promotes without restart. On
+macOS and Linux, a contender currently remains unavailable rather than attaching as a follower.
+When a database moves with its workspace and its stored lexical root no longer exists, an ordinary
+open refuses to infer ownership from temporary unreachability. An explicit full rebuild may rebind
+`workspace_root` to the current location under the mutex and claim; an existing different physical
+workspace still fails the ownership check.
+Each worktree is an independent lock domain. `index_worktree` may make a zero-wait acquisition
+attempt for a target worktree while the caller owns its own workspace; it never blocks on that
+second mutex, so there is no cross-worktree wait cycle. Once acquired, the one-shot publisher
+holds the target destination claim in rebuilding state through the anchored install and rewrites
+the staged database's `workspace_root` to the target before publication. A target Phoenix started
+mid-publication attaches as a restart-only follower; restart it after seeding to elect it writer.
 
 ### Unavailable source capture and retry contract
 

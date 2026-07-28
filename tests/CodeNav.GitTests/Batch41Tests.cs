@@ -390,6 +390,12 @@ public class Batch41Tests
             // Ownership honesty is Phoenix-to-Phoenix, not inferred from SQLite/native sharing.
             Parse(tools.IndexWorktree(wt)); // seed it first
             string wtDb = IndexBuilder.DefaultDbPath(wt);
+            using (var published = new IndexStore(wtDb, createNew: false))
+            {
+                Assert.True(IndexOwnershipLease.SameWorkspaceIdentity(wt,
+                    published.GetMeta("workspace_root")!),
+                    "the staged sibling publication retained the main workspace owner");
+            }
             using (var siblingManager = new IndexManager(wt, wtDb))
             {
                 siblingManager.Start();
@@ -397,10 +403,156 @@ public class Batch41Tests
                 var locked = Parse(tools.IndexWorktree(wt, "refresh"));
                 Assert.Equal("worktree_index_locked", locked.GetProperty("error").GetString());
             }
+
+            string foreignRoot = Directory.CreateTempSubdirectory(
+                "codenav-41-foreign-claim").FullName;
+            try
+            {
+                Assert.Equal(IndexDestinationClaimAcquireResult.Acquired,
+                    IndexDestinationClaim.TryAcquire(foreignRoot, wtDb,
+                        out IndexDestinationClaim? foreignClaim));
+                using (foreignClaim!)
+                {
+                    WorktreeIndexResult lockedByClaim = WorktreeIndexer.Ensure(
+                        root, db, wt, "refresh", _ => { });
+                    Assert.Equal("worktree_index_locked", lockedByClaim.Action);
+                }
+            }
+            finally
+            {
+                Cleanup(foreignRoot);
+            }
+
             // Phoenix lease released — the same call succeeds again.
             Assert.Equal("refreshed", Parse(tools.IndexWorktree(wt, "refresh")).GetProperty("action").GetString());
         }
         finally { Cleanup(root); CleanupWorktree(root, wt); }
+    }
+
+    [Fact]
+    public async Task WindowsWorktreePublicationStopsFollowerBargingAndPublishesSiblingOwnership()
+    {
+        if (!OperatingSystem.IsWindows() || !GitInfo.GitAvailable) return;
+
+        string root = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-41-claim-publish").FullName);
+        string wt = Path.GetFullPath(Path.Combine(root, "..",
+            Path.GetFileName(root) + "-wt"));
+        using var installReached = new ManualResetEventSlim(false);
+        using var releaseInstall = new ManualResetEventSlim(false);
+        Task<WorktreeIndexResult>? refresh = null;
+        IndexManager? midSeedFollower = null;
+        IndexManager? restartedWriter = null;
+        IndexQueries? activeQuery = null;
+        IndexReadSnapshot? activeSnapshot = null;
+        var publicationLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        try
+        {
+            WriteRepo(root);
+            Git(root, $"worktree add -b claim-publish-review \"{wt}\"");
+            string mainDb = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, mainDb);
+            Assert.Equal("created", WorktreeIndexer.Ensure(
+                root, mainDb, wt, "create", _ => { }).Action);
+
+            string wtDb = IndexBuilder.DefaultDbPath(wt);
+            using var writer = new IndexManager(wt, wtDb);
+            writer.Start();
+            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000),
+                writer.Health().Error);
+            using var follower = new IndexManager(wt, wtDb);
+            follower.Start();
+            Assert.True(WaitUntil(() => follower.IsQueryable, 20_000),
+                follower.Health().Error);
+
+            writer.Dispose();
+            Assert.True(WaitUntil(() => !IndexOwnershipLease.IsHeld(wt, wtDb), 10_000));
+            Assert.True(follower.IsQueryable, follower.Health().Error);
+            // Open both handles before Ensure inspects the destination. This leaves genuine
+            // follower WAL/SHM state visible in the initial snapshot and decisively proves that
+            // pre-existing sidecars reach the claimed bounded-drain install path.
+            activeQuery = follower.OpenQueries();
+            Assert.NotEmpty(activeQuery.SearchSymbols(
+                "Alpha41", "contains", null, 4));
+            activeSnapshot = follower.TryOpenReviewSnapshot();
+            Assert.NotNull(activeSnapshot);
+            Assert.True(WaitUntil(() =>
+                    File.Exists(wtDb + "-wal") || File.Exists(wtDb + "-shm"),
+                    10_000),
+                "the pre-Ensure follower did not materialize a SQLite sidecar");
+
+            WorktreeIndexer.BeforeAnchoredInstallForTest = installDb =>
+            {
+                if (!IsInstallFor(installDb, wt)) return;
+                installReached.Set();
+                Assert.True(releaseInstall.Wait(TimeSpan.FromSeconds(15)));
+            };
+            refresh = Task.Run(() => WorktreeIndexer.Ensure(
+                root, mainDb, wt, "refresh", publicationLog.Enqueue));
+
+            Assert.True(installReached.Wait(TimeSpan.FromSeconds(15)),
+                "worktree refresh never reached its claimed publication boundary");
+            Assert.Equal(IndexDestinationClaimState.Rebuilding,
+                IndexDestinationClaim.ReadState(wt, wtDb));
+            Assert.False(follower.IsQueryable);
+            Assert.Equal("failed", follower.Health().State);
+
+            midSeedFollower = new IndexManager(wt, wtDb);
+            midSeedFollower.Start();
+            Assert.True(midSeedFollower.IsFollower);
+            Assert.Equal("failed", midSeedFollower.State);
+            Assert.False(midSeedFollower.IsQueryable);
+
+            releaseInstall.Set();
+            Assert.True(WaitUntil(() => publicationLog.Any(message =>
+                    message.Contains("waiting for existing index readers",
+                        StringComparison.OrdinalIgnoreCase)), 10_000),
+                "worktree publication did not report its bounded follower-handle drain");
+            Assert.False(refresh.IsCompleted,
+                "worktree publication completed while follower SQLite handles remained open");
+            Assert.NotEmpty(activeQuery!.SearchSymbols("Alpha41", "contains", null, 4));
+            Assert.NotEmpty(activeSnapshot!.Queries.SearchSymbols(
+                "Alpha41", "contains", null, 4));
+            activeQuery.Dispose();
+            activeQuery = null;
+            activeSnapshot.Dispose();
+            activeSnapshot = null;
+            Assert.Equal("refreshed",
+                (await refresh.WaitAsync(TimeSpan.FromSeconds(30))).Action);
+            Assert.True(WaitUntil(() => follower.IsQueryable, 10_000),
+                follower.Health().Error);
+            Assert.True(WaitUntil(() => midSeedFollower.IsQueryable, 10_000),
+                midSeedFollower.Health().Error);
+            Assert.True(midSeedFollower.IsFollower,
+                "restart-only follower unexpectedly promoted after seeding released the mutex");
+
+            midSeedFollower.Dispose();
+            midSeedFollower = null;
+            restartedWriter = new IndexManager(wt, wtDb);
+            restartedWriter.Start();
+            Assert.True(WaitUntil(() => restartedWriter.IsQueryable, 20_000),
+                restartedWriter.Health().Error);
+            Assert.True(restartedWriter.IsWriter);
+
+            using var published = new IndexStore(wtDb, createNew: false);
+            Assert.True(IndexOwnershipLease.SameWorkspaceIdentity(wt,
+                published.GetMeta("workspace_root")!));
+        }
+        finally
+        {
+            releaseInstall.Set();
+            if (refresh is not null)
+            {
+                try { await refresh.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+            }
+            WorktreeIndexer.BeforeAnchoredInstallForTest = null;
+            activeSnapshot?.Dispose();
+            activeQuery?.Dispose();
+            restartedWriter?.Dispose();
+            midSeedFollower?.Dispose();
+            CleanupWorktree(root, wt);
+            Cleanup(root);
+        }
     }
 
     [Fact]

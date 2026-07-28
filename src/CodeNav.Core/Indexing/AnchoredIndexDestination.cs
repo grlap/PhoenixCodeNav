@@ -39,6 +39,20 @@ internal sealed class AnchoredIndexDestination : IDisposable
     private readonly List<SidecarGuard> _stageSidecarGuards = new();
     private readonly List<SidecarGuard> _publishSidecarGuards = new();
 
+    private enum InstallAttemptResult
+    {
+        Installed,
+        RetryableContention,
+        Failed,
+    }
+
+    private enum SidecarReservationResult
+    {
+        Reserved,
+        RetryableContention,
+        Failed,
+    }
+
     private AnchoredIndexDestination(List<SafeFileHandle> handles,
         SafeFileHandle workspaceHandle, SafeFileHandle directoryHandle,
         string workspacePath, string dbPath)
@@ -59,6 +73,14 @@ internal sealed class AnchoredIndexDestination : IDisposable
         : OperatingSystem.IsWindows()
             ? _dbPath
             : $"/proc/{Environment.ProcessId}/fd/{_databaseHandle.DangerousGetHandle()}";
+
+    /// <summary>The database name resolved through the retained destination-directory handle.
+    /// Adjacent coordination artifacts use this path so a Linux lexical-path swap cannot redirect
+    /// them after the destination was validated and pinned.</summary>
+    internal string DatabaseAuthorityPath => OperatingSystem.IsWindows()
+        ? _dbPath
+        : $"/proc/{Environment.ProcessId}/fd/{_directoryHandle.DangerousGetHandle()}/" +
+          Path.GetFileName(_dbPath);
 
     internal bool TryGetLeaseIdentity(out IndexLeaseIdentity? identity)
     {
@@ -171,8 +193,8 @@ internal sealed class AnchoredIndexDestination : IDisposable
             _stageWindowsIdentity = WinFileIdentity.From(stageInfo);
             _handles.Add(_stageHandle);
             BeforeStageSidecarReservationForTest?.Invoke(path);
-            if (!TryReserveSidecarGuards(_stageName, _stageSidecarGuards,
-                    sqliteCompatible: true))
+            if (TryReserveSidecarGuards(_stageName, _stageSidecarGuards,
+                    sqliteCompatible: true) != SidecarReservationResult.Reserved)
                 throw new IOException("could not reserve staged SQLite sidecars");
             return path;
         }
@@ -193,25 +215,59 @@ internal sealed class AnchoredIndexDestination : IDisposable
         _handles.Add(_stageHandle);
         BeforeStageSidecarReservationForTest?.Invoke(
             Path.Combine(Path.GetDirectoryName(_dbPath)!, _stageName));
-        if (!TryReserveSidecarGuards(_stageName, _stageSidecarGuards,
-                sqliteCompatible: true))
+        if (TryReserveSidecarGuards(_stageName, _stageSidecarGuards,
+                sqliteCompatible: true) != SidecarReservationResult.Reserved)
             throw new IOException("could not reserve staged SQLite sidecars");
         return $"/proc/{Environment.ProcessId}/fd/{stageFd}";
     }
 
-    internal bool InstallStage()
+    internal bool InstallStage(TimeSpan? replacementWaitTimeout = null,
+        Action? waitingForReaders = null)
     {
-        if (_stageName is null || HasRecoverySidecars) return false;
+        TimeSpan timeout = replacementWaitTimeout ?? TimeSpan.FromMinutes(3);
+        var wait = System.Diagnostics.Stopwatch.StartNew();
+        bool announced = false;
+        while (true)
+        {
+            InstallAttemptResult result = TryInstallStage();
+            if (result == InstallAttemptResult.Installed) return true;
+            if (result != InstallAttemptResult.RetryableContention ||
+                wait.Elapsed >= timeout) return false;
+            if (!announced)
+            {
+                announced = true;
+                waitingForReaders?.Invoke();
+            }
+            Thread.Sleep(100);
+        }
+    }
+
+    private InstallAttemptResult TryInstallStage()
+    {
+        if (_stageName is null) return InstallAttemptResult.Failed;
         try
         {
-            if (!TryReserveSidecarGuards(Path.GetFileName(_dbPath),
-                    _publishSidecarGuards, sqliteCompatible: false)) return false;
+            SidecarReservationResult sidecars =
+                TryReserveSidecarGuards(Path.GetFileName(_dbPath),
+                    _publishSidecarGuards, sqliteCompatible: false);
+            if (sidecars != SidecarReservationResult.Reserved)
+                return sidecars == SidecarReservationResult.RetryableContention
+                    ? InstallAttemptResult.RetryableContention
+                    : InstallAttemptResult.Failed;
             if (OperatingSystem.IsWindows()) _databaseHandle?.Dispose();
-            return OperatingSystem.IsWindows() ? InstallWindows() : InstallLinux();
+            if (!OperatingSystem.IsWindows())
+                return InstallLinux()
+                    ? InstallAttemptResult.Installed
+                    : InstallAttemptResult.Failed;
+            if (InstallWindows(out int error))
+                return InstallAttemptResult.Installed;
+            return IsWindowsReplacementContention(error)
+                ? InstallAttemptResult.RetryableContention
+                : InstallAttemptResult.Failed;
         }
         catch
         {
-            return false;
+            return InstallAttemptResult.Failed;
         }
         finally
         {
@@ -219,10 +275,11 @@ internal sealed class AnchoredIndexDestination : IDisposable
         }
     }
 
-    private bool TryReserveSidecarGuards(string leaf, List<SidecarGuard> guards,
+    private SidecarReservationResult TryReserveSidecarGuards(
+        string leaf, List<SidecarGuard> guards,
         bool sqliteCompatible)
     {
-        if (guards.Count != 0) return false;
+        if (guards.Count != 0) return SidecarReservationResult.Failed;
         foreach (string name in new[]
                  { leaf + "-wal", leaf + "-shm", leaf + "-journal" })
         {
@@ -234,13 +291,38 @@ internal sealed class AnchoredIndexDestination : IDisposable
                     (sqliteCompatible ? 0 : DeleteAccess),
                     FileShareRead | FileShareWrite, IntPtr.Zero, 1,
                     FileFlagOpenReparsePoint | 0x00000080, IntPtr.Zero);
-                if (handle.IsInvalid || !TryGetWindowsInfo(handle, out WinFileInfo info) ||
+                if (handle.IsInvalid && !sqliteCompatible &&
+                    Marshal.GetLastPInvokeError() is 80 or 183)
+                {
+                    handle.Dispose();
+                    SidecarReservationResult removed =
+                        TryRemoveExistingWindowsSidecar(path);
+                    if (removed != SidecarReservationResult.Reserved)
+                    {
+                        ReleaseSidecarGuards(guards);
+                        return removed;
+                    }
+                    handle = CreateFileW(path,
+                        GenericRead | GenericWrite | DeleteAccess,
+                        FileShareRead | FileShareWrite, IntPtr.Zero, 1,
+                        FileFlagOpenReparsePoint | 0x00000080, IntPtr.Zero);
+                }
+                if (handle.IsInvalid)
+                {
+                    int error = Marshal.GetLastPInvokeError();
+                    handle.Dispose();
+                    ReleaseSidecarGuards(guards);
+                    return IsWindowsReplacementContention(error)
+                        ? SidecarReservationResult.RetryableContention
+                        : SidecarReservationResult.Failed;
+                }
+                if (!TryGetWindowsInfo(handle, out WinFileInfo info) ||
                     (info.FileAttributes & (FileAttributeReparsePoint | 0x10)) != 0 ||
                     info.NumberOfLinks != 1)
                 {
                     handle.Dispose();
                     ReleaseSidecarGuards(guards);
-                    return false;
+                    return SidecarReservationResult.Failed;
                 }
                 guards.Add(new SidecarGuard(name, handle,
                     WinFileIdentity.From(info), null, !sqliteCompatible,
@@ -252,19 +334,56 @@ internal sealed class AnchoredIndexDestination : IDisposable
                 int fd = openat(dirFd, name,
                     0x0002 | 0x0040 | 0x0080 | 0x020000 | 0x080000,
                     Convert.ToUInt32("600", 8));
+                if (fd < 0 && !sqliteCompatible &&
+                    Marshal.GetLastPInvokeError() == 17)
+                {
+                    if (!TryStatxAt(dirFd, name, out StatxIdentity existing) ||
+                        !existing.IsRegular || existing.Links != 1 ||
+                        unlinkat(dirFd, name, 0) != 0)
+                    {
+                        ReleaseSidecarGuards(guards);
+                        return SidecarReservationResult.Failed;
+                    }
+                    fd = openat(dirFd, name,
+                        0x0002 | 0x0040 | 0x0080 | 0x020000 | 0x080000,
+                        Convert.ToUInt32("600", 8));
+                }
                 if (fd < 0 || !TryStatxFd(fd, out StatxIdentity identity) ||
                     !identity.IsRegular || identity.Links != 1)
                 {
                     if (fd >= 0) close(fd);
                     ReleaseSidecarGuards(guards);
-                    return false;
+                    return SidecarReservationResult.Failed;
                 }
                 guards.Add(new SidecarGuard(name,
                     new SafeFileHandle((IntPtr)fd, ownsHandle: true), null, identity,
                     DeleteAccessHeld: false, MayContainSqliteBytes: sqliteCompatible));
             }
         }
-        return true;
+        return SidecarReservationResult.Reserved;
+    }
+
+    private SidecarReservationResult TryRemoveExistingWindowsSidecar(string path)
+    {
+        using SafeFileHandle existing = OpenWindowsFile(path,
+            GenericRead | DeleteAccess, FileShareRead | FileShareWrite);
+        if (existing.IsInvalid)
+        {
+            int error = Marshal.GetLastPInvokeError();
+            if (error is 2 or 3) return SidecarReservationResult.Reserved;
+            return IsWindowsReplacementContention(error)
+                ? SidecarReservationResult.RetryableContention
+                : SidecarReservationResult.Failed;
+        }
+        if (!TryGetWindowsInfo(existing, out WinFileInfo info) ||
+            (info.FileAttributes & (FileAttributeReparsePoint | 0x10)) != 0 ||
+            info.NumberOfLinks != 1)
+            return SidecarReservationResult.Failed;
+        if (MarkWindowsDeleteOnClose(existing))
+            return SidecarReservationResult.Reserved;
+        return IsWindowsReplacementContention(Marshal.GetLastPInvokeError())
+            ? SidecarReservationResult.RetryableContention
+            : SidecarReservationResult.Failed;
     }
 
     private void ReleaseSidecarGuards(List<SidecarGuard> guards)
@@ -381,15 +500,21 @@ internal sealed class AnchoredIndexDestination : IDisposable
         return true;
     }
 
-    private bool InstallWindows()
+    private bool InstallWindows(out int error)
     {
+        error = 0;
         using SafeFileHandle? stage = OpenReleasedWindowsStageForDelete();
         if (stage is null) return false;
         if (!TryGetWindowsInfo(stage, out WinFileInfo info) ||
             (info.FileAttributes & FileAttributeReparsePoint) != 0 ||
             info.NumberOfLinks != 1 || (info.FileAttributes & 0x10) != 0) return false;
-        return RenameWindowsHandle(stage, _dbPath);
+        bool renamed = RenameWindowsHandle(stage, _dbPath);
+        if (!renamed) error = Marshal.GetLastPInvokeError();
+        return renamed;
     }
+
+    private static bool IsWindowsReplacementContention(int error) =>
+        error is 5 or 32 or 33;
 
     private SafeFileHandle? OpenReleasedWindowsStageForDelete()
     {

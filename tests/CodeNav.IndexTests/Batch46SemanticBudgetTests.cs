@@ -382,110 +382,8 @@ public class Batch46SemanticBudgetTests
     }
 
     [Fact]
-    public async Task WindowsReaderCoordinationHasNoFormerSlotCeilingAndStopsBarging()
+    public void LongSemanticScanDefersLocalFullRebuildUntilItsSnapshotReleases()
     {
-        if (!OperatingSystem.IsWindows()) return;
-
-        string root = Directory.CreateTempSubdirectory("codenav-scalable-reader-gate").FullName;
-        string dbPath = Path.Combine(root, "index.db");
-        var readers = new List<IndexReviewCoordinationLease>();
-        try
-        {
-            Assert.True(IndexDirectoryAuthority.TryOpen(dbPath, createDirectory: true,
-                out IndexDirectoryAuthority? authority));
-            using (IndexDirectoryAuthority opened = Assert.IsType<IndexDirectoryAuthority>(authority))
-            {
-                Assert.True(opened.TryAnchorReviewCoordinationFile(create: true));
-                for (int i = 0; i < 128; i++)
-                {
-                    Assert.Equal(IndexReviewCoordinationAcquireResult.Acquired,
-                        IndexReviewCoordinationLease.TryAcquireReader(opened,
-                            TimeSpan.FromSeconds(1), out IndexReviewCoordinationLease? reader));
-                    readers.Add(reader!);
-                }
-
-                using var writerWaiting = new ManualResetEventSlim(false);
-                Task<(IndexReviewCoordinationAcquireResult Result,
-                    IndexReviewCoordinationLease? Lease)> writer = Task.Run(() =>
-                {
-                    IndexReviewCoordinationAcquireResult result =
-                        IndexReviewCoordinationLease.TryAcquireExclusive(opened,
-                            TimeSpan.FromSeconds(10), writerWaiting.Set,
-                            out IndexReviewCoordinationLease? lease);
-                    return (result, lease);
-                });
-                Assert.True(writerWaiting.Wait(TimeSpan.FromSeconds(5)),
-                    "writer never acquired the turnstile and began draining readers");
-
-                for (int i = 0; i < 16; i++)
-                {
-                    Assert.Equal(IndexReviewCoordinationAcquireResult.Contended,
-                        IndexReviewCoordinationLease.TryAcquireReader(opened,
-                            TimeSpan.FromMilliseconds(20), out IndexReviewCoordinationLease? barging));
-                    Assert.Null(barging);
-                }
-
-                foreach (IndexReviewCoordinationLease reader in readers) reader.Dispose();
-                readers.Clear();
-                var acquired = await writer.WaitAsync(TimeSpan.FromSeconds(10));
-                Assert.Equal(IndexReviewCoordinationAcquireResult.Acquired, acquired.Result);
-                acquired.Lease!.Dispose();
-            }
-        }
-        finally
-        {
-            foreach (IndexReviewCoordinationLease reader in readers) reader.Dispose();
-            try { Directory.Delete(root, recursive: true); } catch { }
-        }
-    }
-
-    [Fact]
-    public void SemanticSnapshotAcquisitionObservesTheRequestDeadline()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-
-        string root = Directory.CreateTempSubdirectory("codenav-semantic-gate-deadline").FullName;
-        try
-        {
-            WriteWorkspace(root, implementerCount: 1);
-            string dbPath = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, dbPath);
-            using var manager = new IndexManager(root, dbPath);
-            manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000), manager.Health().Error);
-
-            Assert.True(IndexDirectoryAuthority.TryOpen(dbPath, createDirectory: false,
-                out IndexDirectoryAuthority? authority));
-            using (IndexDirectoryAuthority opened = Assert.IsType<IndexDirectoryAuthority>(authority))
-            {
-                Assert.True(opened.TryAnchorReviewCoordinationFile(create: false));
-                Assert.Equal(IndexReviewCoordinationAcquireResult.Acquired,
-                    IndexReviewCoordinationLease.TryAcquireExclusive(opened,
-                        TimeSpan.FromSeconds(2), waiting: null,
-                        out IndexReviewCoordinationLease? writer));
-                using (writer!)
-                using (var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(150)))
-                {
-                    var elapsed = System.Diagnostics.Stopwatch.StartNew();
-                    Assert.Throws<OperationCanceledException>(() =>
-                        manager.TryOpenReviewSnapshot(deadline.Token));
-                    Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(1),
-                        $"snapshot gate ignored the deadline for {elapsed.Elapsed}");
-                }
-            }
-        }
-        finally
-        {
-            TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { }
-        }
-    }
-
-    [Fact]
-    public void LongSemanticScanDefersWindowsFullRebuildUntilItsReadGuardReleases()
-    {
-        if (!OperatingSystem.IsWindows()) return;
-
         string root = Directory.CreateTempSubdirectory("codenav-semantic-rebuild-guard").FullName;
         using var waiting = new ManualResetEventSlim(false);
         using var destructiveBoundary = new ManualResetEventSlim(false);
@@ -499,8 +397,7 @@ public class Batch46SemanticBudgetTests
 
             using var manager = new IndexManager(root, dbPath)
             {
-                FullRebuildReviewWaitTimeoutForTest = TimeSpan.FromMilliseconds(100),
-                FullRebuildWaitingForReviewSnapshotsForTest = () => waiting.Set(),
+                FullRebuildWaitingForLocalSnapshotsForTest = () => waiting.Set(),
                 FullRebuildDestructiveBoundaryForTest = activeReaders =>
                 {
                     activeAtBoundary = activeReaders;

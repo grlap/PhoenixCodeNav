@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using SQLitePCL;
+using System.Diagnostics;
 
 namespace CodeNav.Core.Indexing;
 
@@ -15,27 +16,24 @@ public sealed class IndexStore : IDisposable
     private readonly SqliteConnection _write;
     private readonly bool _privateStaging;
 
-    public IndexStore(string dbPath, bool createNew, bool privateStaging = false)
+    public IndexStore(string dbPath, bool createNew, bool privateStaging = false,
+        TimeSpan? replacementWaitTimeout = null, Action? waitingForReaders = null)
     {
         _dbPath = dbPath;
         _privateStaging = privateStaging;
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-        if (createNew)
+        if (createNew && privateStaging)
         {
-            // Sidecars cleaned UNCONDITIONALLY (review F3): a crash between a main-db delete and
-            // its sidecar deletes leaves an orphaned -wal that a fresh build would otherwise
-            // replay stale content from. Main-file check stays only for the main delete.
-            // kae: scoped — only THIS database's pooled reader handles can block these deletes.
-            IndexQueries.ClearPoolsFor(dbPath);
-            foreach (var sidecar in new[]
-                     { dbPath + "-wal", dbPath + "-shm", dbPath + "-journal" })
-            {
-                if (File.Exists(sidecar)) File.Delete(sidecar);
-            }
-            if (File.Exists(dbPath)) File.Delete(dbPath);
+            DeleteExistingDatabaseFiles();
+            _write = Open(coldBuild: true);
         }
-
-        _write = Open(coldBuild: createNew);
+        else
+        {
+            _write = createNew
+                ? OpenFreshDatabase(replacementWaitTimeout ?? TimeSpan.FromMinutes(3),
+                    waitingForReaders)
+                : Open(coldBuild: false);
+        }
         try
         {
             if (createNew) AfterOpenBeforeCreateSchemaForTest?.Invoke(_dbPath);
@@ -48,6 +46,51 @@ public sealed class IndexStore : IDisposable
             // dispose. Close the writer here so an outer ownership lease can unwind safely.
             _write.Dispose();
             throw;
+        }
+    }
+
+    private SqliteConnection OpenFreshDatabase(TimeSpan timeout, Action? waitingForReaders)
+    {
+        long started = Stopwatch.GetTimestamp();
+        bool waitingPublished = false;
+        while (true)
+        {
+            try
+            {
+                // Main first is deliberate on Windows: an existing SQLite reader can deny deletion,
+                // so retry this complete sequence until every bounded old handle drains. The
+                // caller-owned destination claim is the no-barge boundary for new follower opens.
+                // Sidecars are still removed unconditionally before a new schema is created, so a
+                // crash cannot replay an orphaned WAL into the replacement.
+                DeleteExistingDatabaseFiles();
+                return Open(coldBuild: true);
+            }
+            catch (Exception ex) when (OperatingSystem.IsWindows() &&
+                                       IsTransientReplacementContention(ex) &&
+                                       Stopwatch.GetElapsedTime(started) < timeout)
+            {
+                if (!waitingPublished)
+                {
+                    waitingPublished = true;
+                    waitingForReaders?.Invoke();
+                }
+                Thread.Sleep(100);
+            }
+        }
+    }
+
+    private static bool IsTransientReplacementContention(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException ||
+        ex is SqliteException { SqliteErrorCode: 5 or 10 or 14 };
+
+    private void DeleteExistingDatabaseFiles()
+    {
+        IndexQueries.ClearPoolsFor(_dbPath);
+        if (File.Exists(_dbPath)) File.Delete(_dbPath);
+        foreach (string sidecar in new[]
+                 { _dbPath + "-wal", _dbPath + "-shm", _dbPath + "-journal" })
+        {
+            if (File.Exists(sidecar)) File.Delete(sidecar);
         }
     }
 

@@ -41,14 +41,18 @@ Focus: Deterministic convergence from the working tree to the index, truthful Gi
 
 7. **Full rebuild recovery**
    - Runs on the refresh pump and cannot interleave with deltas.
-   - Deletes SQLite sidecars before the main database.
+   - Publishes destination `rebuilding` before releasing writer handles; followers validate that
+     state before and after opens so new reads cannot barge while existing handles drain.
+   - Deletes the main database and then stale SQLite sidecars before creating the replacement.
    - Clears stale cached metadata and prior error state.
    - Reattaches filesystem and Git tracking when recovering from startup failure.
 
 8. **Worktree indexes**
    - Targets come from `git worktree list`; arbitrary paths and bare/headless entries are rejected.
    - Seed uses a consistent `VACUUM INTO` snapshot.
-   - A live target Phoenix is detected before writes.
+   - The target workspace mutex and destination claim cover the complete staged publication; a
+     live target Phoenix or foreign destination claimant is detected before writes.
+   - Staged metadata is rebound to the target workspace before install.
    - Schema mismatch, commit movement, and all target dirt are reconciled; any incomplete set falls back honestly.
 
 9. **Freshness envelope**

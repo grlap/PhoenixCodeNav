@@ -777,7 +777,7 @@ public class Batch42TestsPart3
             using var boundary = new ManualResetEventSlim(false);
             using var completed = new ManualResetEventSlim(false);
             int activeAtBoundary = -1;
-            manager.FullRebuildWaitingForReviewSnapshotsForTest = () => waiting.Set();
+            manager.FullRebuildWaitingForLocalSnapshotsForTest = () => waiting.Set();
             manager.FullRebuildDestructiveBoundaryForTest = active =>
             {
                 activeAtBoundary = active;
@@ -822,7 +822,7 @@ public class Batch42TestsPart3
             // right after the completed seam, so wait for the landing state instead of racing it.
             Assert.True(WaitUntil(() => manager.State == "ready", 20000),
                 $"manager did not settle at 'ready' after the rebuild (state '{manager.State}')");
-            manager.FullRebuildWaitingForReviewSnapshotsForTest = null;
+            manager.FullRebuildWaitingForLocalSnapshotsForTest = null;
             manager.FullRebuildDestructiveBoundaryForTest = null;
             manager.FullRebuildCompletedForTest = null;
         }
