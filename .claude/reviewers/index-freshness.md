@@ -64,9 +64,14 @@ Focus: Deterministic convergence from the working tree to the index, truthful Gi
      main database and stale SQLite sidecars before creating its replacement.
    - Restoring a prior publication refreshes cached metadata and schedules a detect-all convergence
      sweep before reporting it readable.
-   - Cold bulk loading retains primary/unique constraints and completes the deferred external-
-     content FTS rebuild plus every deferred secondary index before the compatible `schema_version`
-     marker can be published.
+   - Cold bulk loading retains primary/unique constraints and commits the deferred external-content
+     FTS rebuild plus every deferred secondary index before the compatible `schema_version` marker
+     can be published; a rolled-back finalization must leave that barrier armed.
+   - After acquiring the physical-workspace writer lease and destination claim, validates stored
+     workspace ownership before reaping exact identity-verified Phoenix stage/publish artifacts;
+     bounded discovery must identify count/time refusal separately from unsafe link-set refusal
+     through retained directory authority. Discovery is count/time bounded before handles open; a
+     live claimed stage, foreign publication, and unrelated filenames are retained.
    - Clears stale cached metadata and prior error state.
    - Reattaches filesystem and Git tracking when recovering from startup failure.
 

@@ -53,6 +53,7 @@ internal sealed class IndexOwnershipLease : IDisposable
     }
 
     internal string WorkspaceIdentity { get; }
+    internal bool IsActive => Volatile.Read(ref _disposed) == 0 && _ownerThread.IsAlive;
 
     internal static bool TryAcquire(string ownershipRoot, string dbPath,
         out IndexOwnershipLease? lease)

@@ -163,7 +163,9 @@ statements at the same exact width. Since v0.12.38, cold builds defer FTS5 popul
 finalization transaction; live delta writes still update content and FTS together. Cold builds
 create tables, primary keys, and uniqueness constraints first, bulk-load every row, then complete
 FTS and construct all nine query-facing secondary indexes before writing the compatible schema
-marker. The writer split reports schema, secondary-index groups, project/graph/compile-item SQL,
+marker. `IndexStore` rejects that marker while either deferred structure remains pending, making
+the compatibility boundary an enforced store invariant rather than straight-line builder ordering.
+The writer split reports schema, secondary-index groups, project/graph/compile-item SQL,
 file/content/FTS statement counts, commits, analysis, and checkpoint costs independently. Since
 v0.12.36, supported
 Windows/Linux workspace-local full rebuilds perform
@@ -188,7 +190,15 @@ timeout cleans the stage, refreshes cached metadata, schedules a convergence swe
 prior publication to `ready` only while workspace authority still matches. Compatible startup
 force-rebuilds expose that prior publication through the new writer while the private stage builds;
 responses preserve `building` even when that prior publication also carries a freshness-convergence
-warning. F# outlines are parsed on demand and are not stored.
+warning. After a crash, the next elected writer first holds the physical-workspace lease and
+destination claim and validates any existing publication's stored workspace ownership. Only then
+does it enumerate the retained destination authority and remove exact GUID-named Phoenix stage,
+publish-link, and SQLite sidecar artifacts whose complete link set is accounted for. Candidate
+discovery is capped at 256 matching names and five seconds before any handles are opened; a refusal
+names the exceeded bound and observed candidate count separately from an unsafe-link-set refusal. A
+live claimed stage denies successor ownership, foreign publications are retained, and unrelated
+names are retained.
+F# outlines are parsed on demand and are not stored.
 Solution files are
 optional editor inventory: they never select projects or provide build, dependency, ownership,
 or symbol-resolution authority. A cold build of a

@@ -120,6 +120,9 @@ present, Phoenix rebuilds the external-content FTS5 index once; live incremental
 to update content and FTS transactionally. The final schema and query behavior are unchanged, while
 the build log separately reports file, content, and FTS statement counts plus structural-SQL,
 schema, secondary-index, commit, and checkpoint costs.
+The compatible `schema_version` marker is rejected until deferred FTS and all secondary indexes
+have completed in a committed finalization transaction. Rolling that transaction back leaves the
+barrier armed, so a future build-path refactor cannot publish a partially queryable schema.
 On supported Windows/Linux workspace-local destinations, a full rebuild writes and finalizes a
 pinned private database while the last compatible index remains queryable. Phoenix publishes the
 destination as `rebuilding` only for the final bounded reader drain and anchored atomic install.
@@ -139,6 +142,14 @@ or timed-out staged build leaves the previous publication intact, schedules a co
 when its workspace authority is still valid, and removes its private artifacts. Successful results
 served from the previous publication during this window report `building` with an explanatory
 status note, while any simultaneous freshness-convergence warning remains visible separately.
+After a crash, the next elected writer holds both workspace ownership and the destination claim,
+validates that any existing publication belongs to that workspace, then removes exact GUID-named
+Phoenix stage, temporary publish-link, and SQLite sidecar artifacts through retained destination
+authority. Discovery fails closed before opening artifact handles if it exceeds 256 candidates or
+five seconds; the refusal identifies which bound was reached and reports the observed candidate
+count instead of collapsing it into an unsafe-link diagnostic. A live claimed stage cannot be
+scavenged, foreign publications are never mutated, and unrelated or merely similar filenames are
+preserved.
 
 On Windows, Phoenix uses **one writer process and many read-only follower processes per index**.
 One crash-recoverable named mutex, keyed by the physical workspace/worktree directory identity,

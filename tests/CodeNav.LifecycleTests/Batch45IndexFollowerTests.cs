@@ -192,6 +192,9 @@ public sealed class Batch45IndexFollowerTests
             WriteWorkspace(foreignRoot);
             IndexBuilder.Build(foreignRoot, database);
             Assert.False(File.Exists(database + IndexDestinationClaim.Suffix));
+            string foreignArtifact = Path.Combine(Path.GetDirectoryName(database)!,
+                ".phoenix-stage-44444444444444444444444444444444.db");
+            File.WriteAllText(foreignArtifact, "foreign-owner");
 
             using var manager = new IndexManager(root, database);
             manager.Start(forceRebuild: true);
@@ -202,6 +205,7 @@ public sealed class Batch45IndexFollowerTests
                 StringComparison.OrdinalIgnoreCase);
             Assert.True(IndexOwnershipLease.SameWorkspaceIdentity(foreignRoot,
                 ReadMeta(database, "workspace_root")!));
+            Assert.Equal("foreign-owner", File.ReadAllText(foreignArtifact));
         }
         finally
         {
@@ -234,7 +238,8 @@ public sealed class Batch45IndexFollowerTests
 
             using var manager = new IndexManager(newRoot, newDatabase);
             manager.Start(forceRebuild: true);
-            Assert.True(WaitUntil(() => manager.IsQueryable ||
+            Assert.True(WaitUntil(() =>
+                (manager.IsQueryable && manager.State != "building") ||
                 manager.State == "failed", 30_000));
             Assert.True(manager.IsQueryable, manager.Health().Error);
             Assert.True(manager.IsWriter);
@@ -1021,8 +1026,9 @@ public sealed class Batch45IndexFollowerTests
             }
             string oldVersion = writer.Health().IndexVersion!;
 
-            File.WriteAllText(Path.Combine(root, "Beta.cs"),
-                "namespace Batch45; public class PrivateStageBeta45 { }");
+            writer.FullRebuildPrivateStageReadyForTest = _ =>
+                File.WriteAllText(Path.Combine(root, "Beta.cs"),
+                    "namespace Batch45; public class PrivateStageBeta45 { }");
             writer.FullRebuildPrivateStageCompletedForTest = () =>
             {
                 stageCompleted.Set();
@@ -1903,7 +1909,11 @@ public sealed class Batch45IndexFollowerTests
             IndexBuilder.Build(root, database);
             using var manager = new IndexManager(root, database);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000), manager.Health().Error);
+            Assert.True(WaitUntil(() =>
+                    manager.IsQueryable &&
+                    IndexDestinationClaim.ReadState(root, manager.DatabaseIoPath) ==
+                    IndexDestinationClaimState.Ready,
+                20_000), manager.Health().Error);
             string oldVersion = manager.Health().IndexVersion!;
             manager.FullRebuildCompletedForTest = () => completed.Set();
 

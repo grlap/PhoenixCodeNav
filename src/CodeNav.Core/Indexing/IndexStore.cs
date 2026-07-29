@@ -21,10 +21,12 @@ internal readonly record struct BulkFileRow(
 /// </summary>
 public sealed class IndexStore : IDisposable
 {
+    private const string BulkFinalizationMarker = "__phoenix_bulk_finalization";
     internal static Action<string>? AfterOpenBeforeCreateSchemaForTest { get; set; }
     private readonly string _dbPath;
     private readonly SqliteConnection _write;
     private readonly bool _privateStaging;
+    private readonly string _bulkFinalizationToken = Guid.NewGuid().ToString("N");
     private bool _secondaryIndexesPending;
     private bool _ftsRebuildPending;
 
@@ -349,14 +351,34 @@ public sealed class IndexStore : IDisposable
                 "INSERT INTO fts_content(fts_content) VALUES('rebuild');";
             rebuild.ExecuteNonQuery();
             _tFtsRows += Stopwatch.GetTimestamp() - started;
-            _ftsRebuildPending = false;
-            _ftsRebuildExecutions++;
         }
         if (_secondaryIndexesPending)
         {
             CreateSecondaryIndexes(tx);
-            _secondaryIndexesPending = false;
         }
+        SetMeta(tx, BulkFinalizationMarker, _bulkFinalizationToken);
+    }
+
+    /// <summary>
+    /// Confirms that deferred FTS and secondary-index finalization committed durably before
+    /// compatibility metadata may be published. The transaction-local sentinel rolls back with
+    /// the structures, so an aborted finalization cannot clear the in-memory publication barrier.
+    /// </summary>
+    internal void ConfirmBulkLoadCommitted()
+    {
+        if (!_secondaryIndexesPending && !_ftsRebuildPending) return;
+        if (raw.sqlite3_get_autocommit(_write.Handle) == 0)
+            throw new InvalidOperationException(
+                "Bulk-load completion must commit before it can be confirmed.");
+        if (!string.Equals(GetMeta(BulkFinalizationMarker), _bulkFinalizationToken,
+                StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Deferred index finalization did not commit durably.");
+
+        DeleteMeta(BulkFinalizationMarker);
+        if (_ftsRebuildPending) _ftsRebuildExecutions++;
+        _ftsRebuildPending = false;
+        _secondaryIndexesPending = false;
     }
 
     private void CreateSecondaryIndexes(SqliteTransaction? tx)
@@ -926,8 +948,14 @@ public sealed class IndexStore : IDisposable
     /// the caller. Anchored worktree staging uses this to close the target-leaf race.</summary>
     internal static void SnapshotToReserved(string sourceDbPath, string targetDbPath)
     {
-        if (new FileInfo(targetDbPath).Length != 0)
-            throw new IOException("reserved snapshot target is not empty");
+        using (var targetHandle = File.OpenHandle(targetDbPath, FileMode.Open,
+                   FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        {
+            // Linux anchored paths are /proc/<pid>/fd/<n> links. FileInfo.Length observes
+            // procfs link metadata there; RandomAccess reads the reserved file itself.
+            if (RandomAccess.GetLength(targetHandle) != 0)
+                throw new IOException("reserved snapshot target is not empty");
+        }
         using var source = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = sourceDbPath,
@@ -1169,14 +1197,29 @@ public sealed class IndexStore : IDisposable
         return list;
     }
 
-    public void SetMeta(string key, string value) =>
-        Exec(_write, "INSERT INTO meta(key, value) VALUES($k, $v) ON CONFLICT(key) DO UPDATE SET value=$v",
+    public void SetMeta(string key, string value)
+    {
+        EnsureCompatibilityMarkerCanBePublished(key);
+        Exec(_write,
+            "INSERT INTO meta(key, value) VALUES($k, $v) ON CONFLICT(key) DO UPDATE SET value=$v",
             ("$k", key), ("$v", value));
+    }
 
-    internal void SetMeta(SqliteTransaction tx, string key, string value) =>
+    internal void SetMeta(SqliteTransaction tx, string key, string value)
+    {
+        EnsureCompatibilityMarkerCanBePublished(key);
         ExecTx(tx,
             "INSERT INTO meta(key, value) VALUES($k, $v) ON CONFLICT(key) DO UPDATE SET value=$v",
             ("$k", key), ("$v", value));
+    }
+
+    private void EnsureCompatibilityMarkerCanBePublished(string key)
+    {
+        if (string.Equals(key, "schema_version", StringComparison.Ordinal) &&
+            (_secondaryIndexesPending || _ftsRebuildPending))
+            throw new InvalidOperationException(
+                "schema_version cannot be published before deferred index finalization");
+    }
 
     public void DeleteMeta(string key) =>
         Exec(_write, "DELETE FROM meta WHERE key=$k", ("$k", key));

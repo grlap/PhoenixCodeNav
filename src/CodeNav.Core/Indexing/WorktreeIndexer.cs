@@ -214,7 +214,18 @@ public static class WorktreeIndexer
                         _ = IndexBuilder.EnsureExistingDatabaseWorkspace(
                             target.WorkspacePath, destination.DatabaseAuthorityPath,
                             legacyWorkspaceRoot: mainRoot,
-                            allowMissingStoredRootRebind: true);
+                            allowMissingStoredRootRebind: true,
+                            configuredDatabasePath: dbPath);
+                        if (!destination.TryReapAbandonedPublicationArtifacts(
+                                ownershipLease!, destinationClaim!,
+                                out int reaped,
+                                out PublicationArtifactReapFailure reapFailure,
+                                out int observedCandidates))
+                            throw new IOException(
+                                AnchoredIndexDestination.DescribePublicationArtifactReapFailure(
+                                    reapFailure, observedCandidates));
+                        if (reaped != 0)
+                            log($"Removed {reaped} abandoned worktree publication artifact(s).");
                         log($"Claimed worktree destination for explicit publication: {target.WorkspacePath}");
                     }
                     catch (IndexWorkspaceMismatchException)

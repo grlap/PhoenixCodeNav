@@ -944,6 +944,54 @@ public class Batch41Tests
     }
 
     [Fact]
+    public void SupportedHostWorktreeRefreshReapsOwnedCrashArtifacts()
+    {
+        if (!GitInfo.GitAvailable || OperatingSystem.IsMacOS()) return;
+
+        string root = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-41-worktree-reap").FullName);
+        string wt = Path.GetFullPath(Path.Combine(root, "..",
+            Path.GetFileName(root) + "-wt"));
+        try
+        {
+            WriteRepo(root);
+            Git(root, $"worktree add -b cleanup-review \"{wt}\"");
+            string mainDb = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, mainDb);
+            var seedLog = new List<string>();
+            WorktreeIndexResult seed = WorktreeIndexer.Ensure(
+                root, mainDb, wt, "create", seedLog.Add);
+            Assert.True(seed.Action == "created",
+                $"{seed.Action}: {seed.Detail}; {string.Join(" | ", seedLog)}");
+
+            string worktreeDb = IndexBuilder.DefaultDbPath(wt);
+            string indexDirectory = Path.GetDirectoryName(worktreeDb)!;
+            string stage = Path.Combine(indexDirectory,
+                ".phoenix-stage-55555555555555555555555555555555.db");
+            string publish = Path.Combine(indexDirectory,
+                ".phoenix-publish-66666666666666666666666666666666.db");
+            File.WriteAllText(stage, "crash");
+            File.WriteAllText(publish, "crash");
+            var log = new List<string>();
+
+            WorktreeIndexResult result = WorktreeIndexer.Ensure(
+                root, mainDb, wt, "refresh", log.Add);
+
+            Assert.Equal("refreshed", result.Action);
+            Assert.False(File.Exists(stage));
+            Assert.False(File.Exists(publish));
+            Assert.Contains(log, line => line.Contains(
+                "Removed 2 abandoned worktree publication artifact(s)",
+                StringComparison.Ordinal));
+        }
+        finally
+        {
+            CleanupWorktree(root, wt);
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
     public void NormalIndexAuthorityRejectsLinkedDefaultParentWithoutTouchingTarget()
     {
         string root = Directory.CreateTempSubdirectory("codenav-41-main-parent").FullName;

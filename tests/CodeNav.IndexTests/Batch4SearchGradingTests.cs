@@ -293,6 +293,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("index-bounded-synchronous-csharp-build-handoff", ids);
         Assert.Contains("index-deferred-fts-rebuild", ids);
         Assert.Contains("index-size-prioritized-csharp-build-scheduling", ids);
+        Assert.Contains("index-abandoned-private-stage-reaping", ids);
         Assert.Contains("operations-portal-jsonl-readonly", ids);
         Assert.Contains("operations-portal-live-build-status", ids);
         Assert.Contains("refresh-recovery-self-heal", ids);

@@ -53,6 +53,7 @@ public sealed class Batch67DeferredSecondaryIndexTests
                 Assert.Equal(ExpectedIndexes, IndexNames(finalize.Connection!, finalize));
                 finalize.Commit();
             }
+            store.ConfirmBulkLoadCommitted();
 
             Assert.Equal(ExpectedIndexes, IndexNames(store));
             Assert.Equal(1, Scalar(store, "SELECT COUNT(*) FROM symbols WHERE name='A'"));
@@ -80,6 +81,53 @@ public sealed class Batch67DeferredSecondaryIndexTests
             using var store = new IndexStore(dbPath, createNew: true, privateStaging: true);
 
             Assert.Equal(ExpectedIndexes, IndexNames(store));
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void SchemaVersionPublicationRequiresDeferredIndexesToBeFinalized()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-67-schema-publication-barrier").FullName;
+        try
+        {
+            string dbPath = Path.Combine(root, ".codenav", "index.db");
+            using var store = IndexStore.CreateForBulkBuild(dbPath);
+
+            InvalidOperationException direct = Assert.Throws<InvalidOperationException>(
+                () => store.SetMeta("schema_version", IndexBuilder.SchemaVersion));
+            Assert.Contains("deferred index finalization", direct.Message,
+                StringComparison.Ordinal);
+            Assert.Null(store.GetMeta("schema_version"));
+
+            using (SqliteTransaction rolledBack = store.BeginTransaction())
+            {
+                Assert.Throws<InvalidOperationException>(() =>
+                    store.SetMeta(rolledBack, "schema_version", IndexBuilder.SchemaVersion));
+                store.CompleteBulkLoad(rolledBack);
+                Assert.Equal(ExpectedIndexes,
+                    IndexNames(rolledBack.Connection!, rolledBack));
+            }
+
+            Assert.Empty(IndexNames(store));
+            Assert.Throws<InvalidOperationException>(
+                store.ConfirmBulkLoadCommitted);
+            Assert.Throws<InvalidOperationException>(
+                () => store.SetMeta("schema_version", IndexBuilder.SchemaVersion));
+
+            using (SqliteTransaction finalize = store.BeginTransaction())
+            {
+                store.CompleteBulkLoad(finalize);
+                finalize.Commit();
+            }
+            store.ConfirmBulkLoadCommitted();
+            store.SetMeta("schema_version", IndexBuilder.SchemaVersion);
+
+            Assert.Equal(IndexBuilder.SchemaVersion, store.GetMeta("schema_version"));
         }
         finally
         {

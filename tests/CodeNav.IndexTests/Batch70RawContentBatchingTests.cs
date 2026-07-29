@@ -231,6 +231,7 @@ public sealed class Batch70RawContentBatchingTests
                 store.CompleteBulkLoad(tx);
                 tx.Commit();
             }
+            store.ConfirmBulkLoadCommitted();
 
             Assert.Equal(1, store.FtsInsertStatementCount);
             using SqliteConnection reader = store.OpenReader();

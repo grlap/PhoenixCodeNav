@@ -1,4 +1,5 @@
 using CodeNav.Core.Indexing;
+using System.Runtime.InteropServices;
 
 namespace CodeNav.Tests;
 
@@ -33,6 +34,266 @@ public sealed class Batch69PrivateStagedBuildTests
             Assert.Single(queries.SearchSymbols(
                 "InstalledStageAlpha69", "exact", null, 2));
             AssertNoPublicationArtifacts(Path.GetDirectoryName(database)!);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void SupportedHostDirectBuilderReapsCrashArtifactsAndPreservesUnrelatedFiles()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-69-reap-crash-artifacts").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root, "CrashArtifactAlpha69");
+            IndexBuilder.Build(root, database);
+            string indexDirectory = Path.GetDirectoryName(database)!;
+            string[] abandoned = WriteAbandonedPublicationArtifacts(indexDirectory);
+            string unrelated = Path.Combine(indexDirectory,
+                ".phoenix-stage-not-a-guid.db");
+            File.WriteAllText(unrelated, "keep");
+
+            var progress = new List<string>();
+            IndexBuilder.Build(root, database, progress.Add);
+
+            Assert.All(abandoned, path => Assert.False(File.Exists(path), path));
+            Assert.True(File.Exists(unrelated));
+            Assert.Contains(progress, line => line.Contains(
+                $"Removed {abandoned.Length} abandoned index publication artifact(s)",
+                StringComparison.Ordinal));
+            using var queries = new IndexQueries(database,
+                pinReadSnapshot: false, pooling: false);
+            Assert.Single(queries.SearchSymbols(
+                "CrashArtifactAlpha69", "exact", null, 2));
+            File.Delete(unrelated);
+            AssertNoPublicationArtifacts(indexDirectory);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void SupportedHostManagerStartupReapsCrashArtifactsWithoutForcingARebuild()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-69-startup-reaps-crash-artifacts").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root, "StartupReapAlpha69");
+            IndexBuilder.Build(root, database);
+            string oldVersion;
+            using (var prior = new IndexStore(database, createNew: false))
+                oldVersion = prior.GetMeta("index_version")!;
+            string indexDirectory = Path.GetDirectoryName(database)!;
+            string[] abandoned = WriteAbandonedPublicationArtifacts(indexDirectory);
+
+            using var manager = new IndexManager(root, database);
+            manager.Start();
+
+            Assert.All(abandoned, path => Assert.False(File.Exists(path), path));
+            Assert.True(SpinWait.SpinUntil(
+                () => manager.IsQueryable, TimeSpan.FromSeconds(20)),
+                manager.Health().Error);
+            Assert.Equal(oldVersion, manager.Health().IndexVersion);
+            Assert.NotEqual("building", manager.Health().State);
+            using IndexQueries queries = manager.OpenQueries();
+            Assert.Single(queries.SearchSymbols(
+                "StartupReapAlpha69", "exact", null, 2));
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Theory]
+    [InlineData(".phoenix-stage-0123456789abcdef0123456789abcdef.db", true)]
+    [InlineData(".phoenix-stage-0123456789ABCDEF0123456789ABCDEF.db-wal", true)]
+    [InlineData(".phoenix-stage-0123456789abcdef0123456789abcdef.db-shm", true)]
+    [InlineData(".phoenix-stage-0123456789abcdef0123456789abcdef.db-journal", true)]
+    [InlineData(".phoenix-publish-fedcba9876543210fedcba9876543210.db", true)]
+    [InlineData(".phoenix-publish-fedcba9876543210fedcba9876543210.db-wal", true)]
+    [InlineData(".phoenix-stage-not-a-guid.db", false)]
+    [InlineData(".phoenix-stage-0123456789abcdef0123456789abcde.db", false)]
+    [InlineData(".phoenix-stage-0123456789abcdef0123456789abcdef0.db", false)]
+    [InlineData(".phoenix-stage-0123456789abcdef0123456789abcdeg.db", false)]
+    [InlineData(".phoenix-stage-0123456789abcdef0123456789abcdef", false)]
+    [InlineData("index.db", false)]
+    public void PublicationArtifactNameClassificationIsExactAndPortable(
+        string name, bool expected)
+    {
+        Assert.Equal(expected,
+            AnchoredIndexDestination.IsPrivatePublicationArtifactName(name));
+    }
+
+    [Fact]
+    public void PublicationArtifactSelectionIsCountAndTimeBoundBeforeHandleOpening()
+    {
+        string[] boundary = Enumerable.Range(
+                0, AnchoredIndexDestination.MaxAbandonedPublicationArtifacts)
+            .Select(i => $".phoenix-stage-{i:x32}.db")
+            .ToArray();
+
+        Assert.True(AnchoredIndexDestination.TrySelectPrivatePublicationArtifactNames(
+            boundary,
+            AnchoredIndexDestination.MaxAbandonedPublicationArtifacts,
+            TimeSpan.FromMinutes(1),
+            out List<string> selected,
+            out PublicationArtifactReapFailure failure,
+            out int observedCandidates));
+        Assert.Equal(boundary, selected);
+        Assert.Equal(PublicationArtifactReapFailure.None, failure);
+        Assert.Equal(boundary.Length, observedCandidates);
+
+        Assert.False(AnchoredIndexDestination.TrySelectPrivatePublicationArtifactNames(
+            boundary.Append(
+                ".phoenix-publish-ffffffffffffffffffffffffffffffff.db"),
+            AnchoredIndexDestination.MaxAbandonedPublicationArtifacts,
+            TimeSpan.FromMinutes(1),
+            out selected,
+            out failure,
+            out observedCandidates));
+        Assert.Equal(AnchoredIndexDestination.MaxAbandonedPublicationArtifacts,
+            selected.Count);
+        Assert.Equal(PublicationArtifactReapFailure.CandidateLimitExceeded, failure);
+        Assert.Equal(AnchoredIndexDestination.MaxAbandonedPublicationArtifacts + 1,
+            observedCandidates);
+        string countDetail =
+            AnchoredIndexDestination.DescribePublicationArtifactReapFailure(
+                failure, observedCandidates);
+        Assert.Contains("256-artifact cap", countDetail, StringComparison.Ordinal);
+        Assert.Contains("257 candidates", countDetail, StringComparison.Ordinal);
+
+        int elapsedChecks = 0;
+        Assert.False(AnchoredIndexDestination.TrySelectPrivatePublicationArtifactNames(
+            boundary.Take(2),
+            AnchoredIndexDestination.MaxAbandonedPublicationArtifacts,
+            TimeSpan.FromSeconds(1),
+            out selected,
+            out failure,
+            out observedCandidates,
+            elapsedForTest: () => elapsedChecks++ == 0
+                ? TimeSpan.Zero
+                : TimeSpan.FromSeconds(2)));
+        Assert.Single(selected);
+        Assert.Equal(PublicationArtifactReapFailure.ScanBudgetExceeded, failure);
+        Assert.Equal(1, observedCandidates);
+        string timeDetail =
+            AnchoredIndexDestination.DescribePublicationArtifactReapFailure(
+                failure, observedCandidates);
+        Assert.Contains("5-second budget", timeDetail, StringComparison.Ordinal);
+        Assert.Contains("1 candidate", timeDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SupportedHostReaperRequiresTheCompleteHardLinkSet()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-69-reap-hardlinks").FullName;
+        string external = Directory.CreateTempSubdirectory(
+            "codenav-69-reap-hardlinks-external").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root, "HardLinkAlpha69");
+            IndexBuilder.Build(root, database);
+            string indexDirectory = Path.GetDirectoryName(database)!;
+
+            string internalStage = Path.Combine(indexDirectory,
+                ".phoenix-stage-11111111111111111111111111111111.db");
+            string internalPublish = Path.Combine(indexDirectory,
+                ".phoenix-publish-22222222222222222222222222222222.db");
+            File.WriteAllText(internalStage, "internal");
+            CreateHardLinkForTest(internalPublish, internalStage);
+
+            IndexBuilder.Build(root, database);
+
+            Assert.False(File.Exists(internalStage));
+            Assert.False(File.Exists(internalPublish));
+
+            string externalFile = Path.Combine(external, "outside.db");
+            string incompleteSet = Path.Combine(indexDirectory,
+                ".phoenix-stage-33333333333333333333333333333333.db");
+            File.WriteAllText(externalFile, "external-owner");
+            CreateHardLinkForTest(incompleteSet, externalFile);
+
+            IOException refused = Assert.Throws<IOException>(
+                () => IndexBuilder.Build(root, database));
+
+            Assert.Contains("could not be cleaned safely", refused.Message,
+                StringComparison.Ordinal);
+            Assert.True(File.Exists(incompleteSet));
+            Assert.Equal("external-owner", File.ReadAllText(externalFile));
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+            TestWorkspaceCleanup.DeleteWorkspace(external);
+        }
+    }
+
+    [Fact]
+    public void SupportedHostContendedWriterCannotReapTheActiveClaimedStage()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-69-active-stage-refusal").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root, "ActiveStageAlpha69");
+            IndexBuilder.Build(root, database);
+            Assert.True(AnchoredIndexDestination.TryOpen(
+                root, root, database, createIndexDirectory: false,
+                out AnchoredIndexDestination? destination));
+            using (destination!)
+            {
+                Assert.True(destination!.TryGetLeaseIdentity(
+                    out IndexLeaseIdentity? leaseIdentity));
+                Assert.True(IndexOwnershipLease.TryAcquire(
+                    root, database, leaseIdentity,
+                    out IndexOwnershipLease? ownershipLease));
+                using (ownershipLease!)
+                {
+                    Assert.Equal(IndexDestinationClaimAcquireResult.Acquired,
+                        IndexDestinationClaim.TryAcquire(
+                            root, destination.DatabaseAuthorityPath,
+                            out IndexDestinationClaim? destinationClaim));
+                    using (destinationClaim!)
+                    {
+                        _ = destination.CreateStagePath();
+                        string indexDirectory = Path.GetDirectoryName(database)!;
+                        string activeStage = Assert.Single(
+                            Directory.EnumerateFiles(
+                                indexDirectory, ".phoenix-stage-*.db"),
+                            path => !path.EndsWith("-wal", StringComparison.Ordinal) &&
+                                    !path.EndsWith("-shm", StringComparison.Ordinal) &&
+                                    !path.EndsWith("-journal", StringComparison.Ordinal));
+
+                        using (var contender = new IndexManager(root, database))
+                            contender.Start(forceRebuild: true);
+
+                        Assert.True(File.Exists(activeStage));
+                        Assert.True(File.Exists(activeStage + "-wal"));
+                        Assert.True(File.Exists(activeStage + "-shm"));
+                        Assert.True(File.Exists(activeStage + "-journal"));
+                    }
+                }
+            }
         }
         finally
         {
@@ -338,7 +599,41 @@ public sealed class Batch69PrivateStagedBuildTests
         Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(indexDirectory),
             path => Path.GetFileName(path).StartsWith(
                         ".phoenix-stage-", StringComparison.Ordinal) ||
-                    Path.GetFileName(path).StartsWith(
-                        ".phoenix-publish-", StringComparison.Ordinal));
+                        Path.GetFileName(path).StartsWith(
+                            ".phoenix-publish-", StringComparison.Ordinal));
     }
+
+    private static string[] WriteAbandonedPublicationArtifacts(string indexDirectory)
+    {
+        string stage = Path.Combine(indexDirectory,
+            $".phoenix-stage-{Guid.NewGuid():N}.db");
+        string publish = Path.Combine(indexDirectory,
+            $".phoenix-publish-{Guid.NewGuid():N}.db");
+        string[] paths =
+        [
+            stage,
+            stage + "-wal",
+            stage + "-shm",
+            stage + "-journal",
+            publish,
+        ];
+        foreach (string path in paths) File.WriteAllText(path, "crash");
+        return paths;
+    }
+
+    private static void CreateHardLinkForTest(string linkPath, string existingPath)
+    {
+        if (OperatingSystem.IsWindows())
+            Assert.True(CreateHardLinkW(linkPath, existingPath, IntPtr.Zero));
+        else
+            Assert.Equal(0, link(existingPath, linkPath));
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateHardLinkW(string newFileName,
+        string existingFileName, IntPtr securityAttributes);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int link(string existingPath, string newPath);
 }

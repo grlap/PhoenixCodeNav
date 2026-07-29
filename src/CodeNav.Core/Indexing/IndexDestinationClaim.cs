@@ -126,6 +126,24 @@ internal sealed class IndexDestinationClaim : IDisposable
 
     internal void SetRebuilding() => SetState('B');
 
+    internal bool IsActiveFor(string workspaceIdentity, string databasePath)
+    {
+        StringComparison comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        string expectedPath = databasePath + Suffix;
+        bool pathMatches = string.Equals(_path, expectedPath, comparison) ||
+                           (!OperatingSystem.IsWindows() &&
+                            string.Equals(Path.GetFileName(_path),
+                                Path.GetFileName(expectedPath),
+                                StringComparison.Ordinal));
+        return Volatile.Read(ref _disposed) == 0 &&
+               _stream is not null &&
+               string.Equals(_workspaceIdentity, workspaceIdentity,
+                   StringComparison.Ordinal) &&
+               pathMatches;
+    }
+
     private void SetState(char state)
     {
         FileStream stream = _stream ??

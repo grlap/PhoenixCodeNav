@@ -1,8 +1,18 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
 namespace CodeNav.Core.Indexing;
+
+internal enum PublicationArtifactReapFailure
+{
+    None,
+    OwnershipChanged,
+    CandidateLimitExceeded,
+    ScanBudgetExceeded,
+    UnsafeArtifactSet,
+}
 
 /// <summary>
 /// Pins a worktree workspace and its .codenav directory without following links. Linux reads use
@@ -12,6 +22,9 @@ namespace CodeNav.Core.Indexing;
 /// </summary>
 internal sealed class AnchoredIndexDestination : IDisposable
 {
+    internal const int MaxAbandonedPublicationArtifacts = 256;
+    internal static readonly TimeSpan AbandonedPublicationScanBudget =
+        TimeSpan.FromSeconds(5);
     internal static Action<string>? BeforeStageSidecarReservationForTest { get; set; }
     private const uint FileShareRead = 1;
     private const uint FileShareWrite = 2;
@@ -212,6 +225,286 @@ internal sealed class AnchoredIndexDestination : IDisposable
     internal string WorkspaceReadPath => OperatingSystem.IsWindows()
         ? _workspacePath
         : $"/proc/{Environment.ProcessId}/fd/{_workspaceHandle.DangerousGetHandle()}";
+
+    /// <summary>
+    /// Removes exact Phoenix private-publication artifacts left by a crashed prior writer. Callers
+    /// must hold both the physical-workspace writer lease and this destination's live claim, and
+    /// must invoke this once before allocating their own stage. Enumeration on Linux resolves
+    /// through the retained directory descriptor; Windows' retained no-delete directory chain
+    /// prevents the lexical directory from being replaced during enumeration.
+    /// </summary>
+    internal bool TryReapAbandonedPublicationArtifacts(
+        IndexOwnershipLease ownershipLease,
+        IndexDestinationClaim destinationClaim,
+        out int removed,
+        out PublicationArtifactReapFailure failure,
+        out int observedCandidates)
+    {
+        removed = 0;
+        failure = PublicationArtifactReapFailure.None;
+        observedCandidates = 0;
+        try
+        {
+            if (_stageName is not null ||
+                !ownershipLease.IsActive ||
+                !destinationClaim.IsActiveFor(
+                    ownershipLease.WorkspaceIdentity, DatabaseAuthorityPath) ||
+                IndexDestinationClaim.ReadState(
+                    _workspacePath, DatabaseAuthorityPath) is not
+                    (IndexDestinationClaimState.Ready or
+                     IndexDestinationClaimState.Rebuilding) ||
+                !TryGetWorkspaceIdentity(out string? workspaceIdentity) ||
+                !string.Equals(workspaceIdentity, ownershipLease.WorkspaceIdentity,
+                    StringComparison.Ordinal))
+            {
+                failure = PublicationArtifactReapFailure.OwnershipChanged;
+                return false;
+            }
+
+            string directoryPath = OperatingSystem.IsWindows()
+                ? Path.GetDirectoryName(_dbPath)!
+                : $"/proc/{Environment.ProcessId}/fd/" +
+                  $"{_directoryHandle.DangerousGetHandle()}";
+            if (!TrySelectPrivatePublicationArtifactNames(
+                    Directory.EnumerateFileSystemEntries(directoryPath),
+                    MaxAbandonedPublicationArtifacts,
+                    AbandonedPublicationScanBudget,
+                    out List<string> candidates,
+                    out failure,
+                    out observedCandidates))
+                return false;
+            if (candidates.Count == 0) return true;
+
+            bool reaped = OperatingSystem.IsWindows()
+                ? TryReapWindowsArtifacts(candidates, out removed)
+                : TryReapLinuxArtifacts(candidates, out removed);
+            if (!reaped)
+                failure = PublicationArtifactReapFailure.UnsafeArtifactSet;
+            return reaped;
+        }
+        catch
+        {
+            removed = 0;
+            failure = PublicationArtifactReapFailure.UnsafeArtifactSet;
+            return false;
+        }
+    }
+
+    internal static string DescribePublicationArtifactReapFailure(
+        PublicationArtifactReapFailure failure, int observedCandidates) =>
+        failure switch
+        {
+            PublicationArtifactReapFailure.CandidateLimitExceeded =>
+                $"abandoned publication artifact discovery exceeded the " +
+                $"{MaxAbandonedPublicationArtifacts}-artifact cap " +
+                $"(at least {observedCandidates} candidates observed); remove stale " +
+                ".phoenix-stage-* and .phoenix-publish-* entries manually and retry",
+            PublicationArtifactReapFailure.ScanBudgetExceeded =>
+                $"abandoned publication artifact discovery exceeded the " +
+                $"{AbandonedPublicationScanBudget.TotalSeconds:0}-second budget after " +
+                $"{observedCandidates} candidate(s); inspect the index directory and retry",
+            PublicationArtifactReapFailure.OwnershipChanged =>
+                "index destination ownership changed before abandoned publication artifacts " +
+                "could be cleaned",
+            _ => "abandoned publication artifact link set could not be cleaned safely",
+        };
+
+    private bool TryReapWindowsArtifacts(IReadOnlyList<string> names, out int removed)
+    {
+        removed = 0;
+        var candidates = new List<WindowsArtifactCandidate>(names.Count);
+        try
+        {
+            string directory = Path.GetDirectoryName(_dbPath)!;
+            foreach (string name in names)
+            {
+                SafeFileHandle handle = OpenWindowsFile(
+                    Path.Combine(directory, name),
+                    GenericRead,
+                    FileShareRead | FileShareWrite);
+                if (handle.IsInvalid)
+                {
+                    int error = Marshal.GetLastPInvokeError();
+                    handle.Dispose();
+                    if (error is 2 or 3) continue;
+                    return false;
+                }
+                if (!TryGetWindowsInfo(handle, out WinFileInfo info) ||
+                    (info.FileAttributes & (FileAttributeReparsePoint | 0x10)) != 0 ||
+                    info.NumberOfLinks == 0)
+                {
+                    handle.Dispose();
+                    return false;
+                }
+                candidates.Add(new WindowsArtifactCandidate(
+                    name, handle, WinFileIdentity.From(info), info.NumberOfLinks));
+            }
+
+            foreach (IGrouping<WinFileIdentity, WindowsArtifactCandidate> group in
+                     candidates.GroupBy(candidate => candidate.Identity))
+            {
+                uint links = group.First().Links;
+                if (group.Any(candidate => candidate.Links != links) ||
+                    links != group.Count())
+                    return false;
+            }
+
+            // Retained read handles prevent any link in a candidate inode from being renamed or
+            // deleted while the complete set is inspected. Release them before the delete pass:
+            // a DELETE-access handle cannot coexist with a handle that deliberately withheld
+            // FILE_SHARE_DELETE. Each exact name is then reopened without following reparses,
+            // and both identity and the remaining link count are checked immediately before its
+            // delete-on-close disposition is armed.
+            foreach (WindowsArtifactCandidate candidate in candidates)
+                candidate.Handle.Dispose();
+            var remainingLinks = candidates
+                .GroupBy(candidate => candidate.Identity)
+                .ToDictionary(group => group.Key, group => (uint)group.Count());
+            foreach (WindowsArtifactCandidate candidate in candidates)
+            {
+                string path = Path.Combine(directory, candidate.Name);
+                using SafeFileHandle deletionHandle = OpenWindowsFile(
+                    path, GenericRead | DeleteAccess,
+                    FileShareRead | FileShareWrite);
+                if (deletionHandle.IsInvalid ||
+                    !TryGetWindowsInfo(deletionHandle, out WinFileInfo current) ||
+                    (current.FileAttributes & (FileAttributeReparsePoint | 0x10)) != 0 ||
+                    WinFileIdentity.From(current) != candidate.Identity ||
+                    !remainingLinks.TryGetValue(candidate.Identity, out uint expectedLinks) ||
+                    current.NumberOfLinks != expectedLinks ||
+                    !MarkWindowsDeleteOnClose(deletionHandle))
+                    return false;
+                removed++;
+                remainingLinks[candidate.Identity] = expectedLinks - 1;
+            }
+            return true;
+        }
+        finally
+        {
+            foreach (WindowsArtifactCandidate candidate in candidates)
+                candidate.Handle.Dispose();
+        }
+    }
+
+    private bool TryReapLinuxArtifacts(IReadOnlyList<string> names, out int removed)
+    {
+        removed = 0;
+        int directoryFd = _directoryHandle.DangerousGetHandle().ToInt32();
+        var candidates = new List<LinuxArtifactCandidate>(names.Count);
+        try
+        {
+            foreach (string name in names)
+            {
+                int fd = openat(directoryFd, name, LinuxFileInspectFlags, 0);
+                if (fd < 0)
+                {
+                    if (Marshal.GetLastPInvokeError() == 2) continue;
+                    return false;
+                }
+                var handle = new SafeFileHandle((IntPtr)fd, ownsHandle: true);
+                if (!TryStatxFd(fd, out StatxIdentity identity) ||
+                    !identity.IsRegular || identity.Links == 0)
+                {
+                    handle.Dispose();
+                    return false;
+                }
+                candidates.Add(new LinuxArtifactCandidate(name, handle, identity));
+            }
+
+            foreach (IGrouping<(ulong Device, ulong Inode), LinuxArtifactCandidate> group in
+                     candidates.GroupBy(candidate =>
+                         (candidate.Identity.Device, candidate.Identity.Inode)))
+            {
+                uint links = group.First().Identity.Links;
+                if (group.Any(candidate => candidate.Identity.Links != links) ||
+                    links != group.Count())
+                    return false;
+            }
+
+            foreach (LinuxArtifactCandidate candidate in candidates)
+            {
+                if (!TryStatxAt(directoryFd, candidate.Name, out StatxIdentity named) ||
+                    named.Device != candidate.Identity.Device ||
+                    named.Inode != candidate.Identity.Inode ||
+                    unlinkat(directoryFd, candidate.Name, 0) != 0)
+                    return false;
+                removed++;
+            }
+            return true;
+        }
+        finally
+        {
+            foreach (LinuxArtifactCandidate candidate in candidates)
+                candidate.Handle.Dispose();
+        }
+    }
+
+    internal static bool TrySelectPrivatePublicationArtifactNames(
+        IEnumerable<string> entries, int maxCandidates, TimeSpan scanBudget,
+        out List<string> candidates,
+        out PublicationArtifactReapFailure failure,
+        out int observedCandidates,
+        Func<TimeSpan>? elapsedForTest = null)
+    {
+        candidates = new List<string>(Math.Min(Math.Max(maxCandidates, 0), 16));
+        failure = PublicationArtifactReapFailure.None;
+        observedCandidates = 0;
+        if (maxCandidates < 0)
+        {
+            failure = PublicationArtifactReapFailure.CandidateLimitExceeded;
+            return false;
+        }
+        if (scanBudget <= TimeSpan.Zero)
+        {
+            failure = PublicationArtifactReapFailure.ScanBudgetExceeded;
+            return false;
+        }
+        long started = Stopwatch.GetTimestamp();
+        Func<TimeSpan> elapsed = elapsedForTest ??
+            (() => Stopwatch.GetElapsedTime(started));
+        foreach (string entry in entries)
+        {
+            if (elapsed() >= scanBudget)
+            {
+                failure = PublicationArtifactReapFailure.ScanBudgetExceeded;
+                return false;
+            }
+            string? name = Path.GetFileName(entry);
+            if (name is null || !IsPrivatePublicationArtifactName(name)) continue;
+            observedCandidates++;
+            if (candidates.Count == maxCandidates)
+            {
+                failure = PublicationArtifactReapFailure.CandidateLimitExceeded;
+                return false;
+            }
+            candidates.Add(name);
+        }
+        return true;
+    }
+
+    internal static bool IsPrivatePublicationArtifactName(string name)
+    {
+        string stem = name;
+        foreach (string suffix in new[] { "-wal", "-shm", "-journal" })
+        {
+            if (!stem.EndsWith(suffix, StringComparison.Ordinal)) continue;
+            stem = stem[..^suffix.Length];
+            break;
+        }
+        if (!stem.EndsWith(".db", StringComparison.Ordinal)) return false;
+        stem = stem[..^3];
+
+        const string stagePrefix = ".phoenix-stage-";
+        const string publishPrefix = ".phoenix-publish-";
+        string token;
+        if (stem.StartsWith(stagePrefix, StringComparison.Ordinal))
+            token = stem[stagePrefix.Length..];
+        else if (stem.StartsWith(publishPrefix, StringComparison.Ordinal))
+            token = stem[publishPrefix.Length..];
+        else
+            return false;
+        return token.Length == 32 && token.All(Uri.IsHexDigit);
+    }
 
     /// <summary>Whether this platform and path layout require the handle-pinned publication path.
     /// A false result is an intentional compatibility fallback (macOS or an external database);
@@ -943,6 +1236,12 @@ internal sealed class AnchoredIndexDestination : IDisposable
     private sealed record SidecarGuard(string Name, SafeFileHandle Handle,
         WinFileIdentity? WindowsIdentity, StatxIdentity? LinuxIdentity,
         bool DeleteAccessHeld, bool MayContainSqliteBytes);
+
+    private sealed record WindowsArtifactCandidate(string Name, SafeFileHandle Handle,
+        WinFileIdentity Identity, uint Links);
+
+    private sealed record LinuxArtifactCandidate(string Name, SafeFileHandle Handle,
+        StatxIdentity Identity);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct FileAttributeTagInfo { internal uint FileAttributes; internal uint ReparseTag; }

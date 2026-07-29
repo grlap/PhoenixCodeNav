@@ -177,7 +177,8 @@ public static class IndexBuilder
                 {
                     bool rebind = EnsureExistingDatabaseWorkspace(root,
                         authority.DatabasePath, allowMissingStoredRootRebind: true,
-                        allowLegacySchemaRebind: true);
+                        allowLegacySchemaRebind: true,
+                        configuredDatabasePath: database);
                     if (rebind)
                         progress?.Invoke("Rebinding moved index database to the current workspace root ...");
                     BeforeAnchoredDestinationOpenForTest?.Invoke();
@@ -190,6 +191,17 @@ public static class IndexBuilder
                         {
                             EnsureStagedDestinationAuthority(
                                 root, database, ownershipLease!, authority, anchored);
+                            if (!anchored.TryReapAbandonedPublicationArtifacts(
+                                    ownershipLease!, destinationClaim!, out int reaped,
+                                    out PublicationArtifactReapFailure reapFailure,
+                                    out int observedCandidates))
+                                throw new IOException(
+                                    AnchoredIndexDestination
+                                        .DescribePublicationArtifactReapFailure(
+                                            reapFailure, observedCandidates));
+                            if (reaped != 0)
+                                progress?.Invoke(
+                                    $"Removed {reaped} abandoned index publication artifact(s) ...");
                             string stagePath = anchored.CreateStagePath();
                             AnchoredStageReadyForTest?.Invoke(stagePath);
                             BuildResult staged = BuildOwned(
@@ -259,10 +271,6 @@ public static class IndexBuilder
             retained != staged)
             throw new IOException(
                 "staged index destination differs from the retained index authority");
-        if (!authority.MatchesLiveDatabasePath(databasePath))
-            throw new IOException(
-                "live index destination differs from the retained index authority");
-
         EnsureLiveWorkspaceAuthority(workspaceRoot, ownershipLease);
         if (!destination.TryGetWorkspaceIdentity(out string? anchoredWorkspace) ||
             anchoredWorkspace is null ||
@@ -270,6 +278,10 @@ public static class IndexBuilder
                 StringComparison.Ordinal))
             throw new IOException(
                 "staged index workspace differs from the retained workspace authority");
+
+        if (!authority.MatchesLiveDatabasePath(databasePath))
+            throw new IOException(
+                "live index destination differs from the retained index authority");
     }
 
     private static void EnsureInstalledDestinationAuthority(
@@ -310,7 +322,8 @@ public static class IndexBuilder
         bool allowMissingStoredRootRebind = false,
         bool allowLegacySchemaRebind = false,
         Func<string, (WorkspaceIdentityProbeResult Result, string? Identity)>?
-            identityProbe = null)
+            identityProbe = null,
+        string? configuredDatabasePath = null)
     {
         if (!File.Exists(databasePath)) return false;
         try
@@ -356,7 +369,8 @@ public static class IndexBuilder
             if (storedResult == WorkspaceIdentityProbeResult.Found &&
                 allowLegacySchemaRebind &&
                 string.Equals(storedSchema, "19", StringComparison.Ordinal) &&
-                WorkspacePaths.FullPathsEqual(databasePath,
+                WorkspacePaths.FullPathsEqual(
+                    configuredDatabasePath ?? databasePath,
                     DefaultDbPath(workspaceRoot)))
                 return true;
 
@@ -959,6 +973,7 @@ public static class IndexBuilder
             if (promoted > 0) progress?.Invoke($"Test classification: {promoted} project rows promoted (compiled test attributes + same-name uniformity)");
             CommitTracked(tx);
         }
+        store.ConfirmBulkLoadCommitted();
 
         store.SetMeta("index_version", Guid.NewGuid().ToString("N"));
         store.SetMeta("indexed_at_utc", DateTime.UtcNow.ToString("O"));

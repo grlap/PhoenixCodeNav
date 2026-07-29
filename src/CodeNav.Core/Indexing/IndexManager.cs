@@ -594,6 +594,34 @@ public sealed class IndexManager : IDisposable
         !AnchoredIndexDestination.IsAnchoredPublicationRequired(
             _workspaceRoot, _workspaceRoot, _dbPath);
 
+    private void ReapAbandonedPublicationArtifacts()
+    {
+        if (!AnchoredIndexDestination.IsAnchoredPublicationRequired(
+                _workspaceRoot, _workspaceRoot, _dbPath))
+            return;
+        if (_ownershipLease is null || _destinationClaim is null ||
+            !AnchoredIndexDestination.TryOpen(
+                _workspaceRoot, _workspaceRoot, _dbPath,
+                createIndexDirectory: false,
+                out AnchoredIndexDestination? destination))
+            throw new IOException(
+                "anchored index destination could not be reopened for abandoned-stage cleanup");
+
+        using (destination!)
+        {
+            EnsureStagedDestinationAuthority(destination!);
+            if (!destination!.TryReapAbandonedPublicationArtifacts(
+                    _ownershipLease, _destinationClaim, out int reaped,
+                    out PublicationArtifactReapFailure reapFailure,
+                    out int observedCandidates))
+                throw new IOException(
+                    AnchoredIndexDestination.DescribePublicationArtifactReapFailure(
+                        reapFailure, observedCandidates));
+            if (reaped != 0)
+                _log($"Removed {reaped} abandoned index publication artifact(s).");
+        }
+    }
+
     private void EnsureStagedDestinationAuthority(AnchoredIndexDestination destination)
     {
         EnsureDatabaseAuthority();
@@ -608,10 +636,6 @@ public sealed class IndexManager : IDisposable
                 StringComparison.Ordinal))
             throw new IOException(
                 "staged index destination differs from the retained index authority");
-        if (!HasSafeLiveDatabaseAuthority())
-            throw new IOException(
-                "live index destination differs from the retained index authority");
-
         if (!destination.TryGetWorkspaceIdentity(out string? anchoredWorkspace) ||
             anchoredWorkspace is null ||
             !string.Equals(anchoredWorkspace, _ownershipLease.WorkspaceIdentity,
@@ -619,6 +643,10 @@ public sealed class IndexManager : IDisposable
             !HasSafeWorkspaceAuthority())
             throw new IOException(
                 "staged index workspace differs from the retained workspace authority");
+
+        if (!HasSafeLiveDatabaseAuthority())
+            throw new IOException(
+                "live index destination differs from the retained index authority");
     }
 
     private void EnsureInstalledDestinationAuthority(AnchoredIndexDestination destination)
@@ -799,7 +827,9 @@ public sealed class IndexManager : IDisposable
                 rebindWorkspaceRoot = IndexBuilder.EnsureExistingDatabaseWorkspace(
                     _workspaceRoot, _databaseIoPath,
                     allowMissingStoredRootRebind: forceRebuild,
-                    allowLegacySchemaRebind: forceRebuild);
+                    allowLegacySchemaRebind: forceRebuild,
+                    configuredDatabasePath: _dbPath);
+                ReapAbandonedPublicationArtifacts();
             }
             catch (IndexWorkspaceRebindRequiredException ex)
             {
@@ -878,6 +908,11 @@ public sealed class IndexManager : IDisposable
                             string? onDisk = check.GetMeta("schema_version");
                             compatibleExistingPublication = string.Equals(onDisk,
                                 IndexBuilder.SchemaVersion, StringComparison.Ordinal);
+                            if (compatibleExistingPublication)
+                            {
+                                ResetCachedFreshnessMetadata();
+                                CacheMeta(check);
+                            }
                             // Rebuild when the on-disk index predates the current schema/indexer
                             // format. A force rebuild still performs this read so a compatible old
                             // publication may remain available while its private replacement builds.
@@ -1324,7 +1359,10 @@ public sealed class IndexManager : IDisposable
     /// </summary>
     private void InitGitTracking()
     {
-        if (_disposed) return; // teardown began before we got here — skip the git shell-outs
+        lock (_disposeLock)
+        {
+            if (_disposed) return; // teardown began before we got here — skip the git shell-outs
+        }
         if (!GitInfo.GitAvailable)
         {
             // Say WHY the feature is off (h99): silently degrading to watcher-only made
@@ -2781,13 +2819,20 @@ public sealed class IndexManager : IDisposable
 
     public void Dispose()
     {
-        lock (_disposeLock) { _disposed = true; } // block any in-flight watcher publication
+        WorkspaceWatcher? watcher;
+        GitWatcher? gitWatcher;
+        lock (_disposeLock)
+        {
+            _disposed = true; // block any in-flight watcher publication
+            watcher = Interlocked.Exchange(ref _watcher, null);
+            gitWatcher = Interlocked.Exchange(ref _gitWatcher, null);
+        }
         Telemetry.Dispose();                 // epuc.1: flush the bounded stream (2s cap)
         TelemetryIpc.Dispose();              // x5ls.1: stop the IPC producer (2s cap)
-        _gitWatcher?.Dispose();              // stop git HEAD signals
+        gitWatcher?.Dispose();               // stop git HEAD signals
         _gitHeadRetry?.Dispose();            // 17zd: stop the null-HEAD retry (callback checks _disposed)
         _refreshRecoverySweepRetry?.Dispose(); // stop stale-input recovery retries
-        _watcher?.Dispose();                 // stop new events reaching the queue
+        watcher?.Dispose();                  // stop new events reaching the queue
         _refreshQueue.Writer.TryComplete();  // let the pump drain and exit its loop
 
         // Let the startup task settle first (it may still be opening the store), then wait
@@ -2798,8 +2843,8 @@ public sealed class IndexManager : IDisposable
         try { startDone = _startTask?.Wait(DisposeWaitTimeoutForTest) ?? true; } catch { /* faulted/cancelled */ }
         // The start task may have created the watchers after the first Dispose() calls above
         // saw null — tear those down too (Dispose is idempotent).
-        _gitWatcher?.Dispose();
-        _watcher?.Dispose();
+        Interlocked.Exchange(ref _gitWatcher, null)?.Dispose();
+        Interlocked.Exchange(ref _watcher, null)?.Dispose();
         try { pumpDone = _pump?.Wait(DisposeWaitTimeoutForTest) ?? true; } catch { /* faulted/cancelled */ }
 
         if (startDone && pumpDone)
