@@ -16,7 +16,9 @@ The portal tails the existing bounded, privacy-safe
 `.codenav/telemetry/phoenix-*.jsonl` files through anchored no-follow regular-file handles and
 observes only an equally anchored `.codenav/index.db` file's presence and size. It never opens
 SQLite, scans full tables for counts, follows workspace reparse points, or writes to the
-workspace. Live files provide semantic operations, full-build progress, and per-process
+workspace. Linux directory/no-follow opens use the running architecture's ABI, and bounded Unix
+directory records stop at their first NUL instead of admitting padding as a filename. Live files
+provide semantic operations, full-build progress, and per-process
 version/schema/platform/feature identity. If neither source exists, the bounded fixture remains
 visible for UI preview. An observed index without telemetry stays explicitly partial; oversized
 telemetry strings and unsafe numeric/timestamp ranges are rejected per record without stopping the

@@ -437,8 +437,7 @@ internal static class PortalPathGuard
                     nameLength = Math.Max(0, recordLength - nameOffset);
                 }
 
-                string? name = Marshal.PtrToStringUTF8(entry + nameOffset, nameLength)?
-                    .TrimEnd('\0');
+                string? name = ReadNullTerminatedUtf8(entry + nameOffset, nameLength);
                 if (!string.IsNullOrEmpty(name) && name is not "." and not "..")
                     result.Add(name);
             }
@@ -534,6 +533,14 @@ internal static class PortalPathGuard
         }
     }
 
+    internal static string? ReadNullTerminatedUtf8(IntPtr address, int maximumBytes)
+    {
+        int length = 0;
+        while (length < maximumBytes && Marshal.ReadByte(address, length) != 0)
+            length++;
+        return length == 0 ? string.Empty : Marshal.PtrToStringUTF8(address, length);
+    }
+
     private static bool TryGetFinalPath(SafeFileHandle handle, out string path)
     {
         var buffer = new StringBuilder(32768);
@@ -615,13 +622,51 @@ internal static class PortalPathGuard
         OperatingSystem.IsMacOS() ? 0x01000000 : 0x00080000;
 
     private static int UnixNoFollow =>
-        OperatingSystem.IsMacOS() ? 0x00000100 : 0x00020000;
+        OperatingSystem.IsMacOS()
+            ? 0x00000100
+            : LinuxNoFollowForArchitecture(RuntimeInformation.ProcessArchitecture);
 
     private static int UnixNonBlocking =>
         OperatingSystem.IsMacOS() ? 0x00000004 : 0x00000800;
 
     private static int UnixDirectoryFlag =>
-        OperatingSystem.IsMacOS() ? 0x00100000 : 0x00010000;
+        OperatingSystem.IsMacOS()
+            ? 0x00100000
+            : LinuxDirectoryForArchitecture(RuntimeInformation.ProcessArchitecture);
+
+    internal static int LinuxDirectoryForArchitecture(Architecture architecture) =>
+        architecture switch
+        {
+            Architecture.X86 or
+            Architecture.X64 or
+            Architecture.S390x or
+            Architecture.LoongArch64 or
+            Architecture.RiscV64 => 0x00010000,
+            Architecture.Arm or
+            Architecture.Armv6 or
+            Architecture.Arm64 or
+            Architecture.Ppc64le => 0x00004000,
+            _ => throw UnsupportedLinuxArchitecture(architecture)
+        };
+
+    internal static int LinuxNoFollowForArchitecture(Architecture architecture) =>
+        architecture switch
+        {
+            Architecture.X86 or
+            Architecture.X64 or
+            Architecture.S390x or
+            Architecture.LoongArch64 or
+            Architecture.RiscV64 => 0x00020000,
+            Architecture.Arm or
+            Architecture.Armv6 or
+            Architecture.Arm64 or
+            Architecture.Ppc64le => 0x00008000,
+            _ => throw UnsupportedLinuxArchitecture(architecture)
+        };
+
+    private static PlatformNotSupportedException UnsupportedLinuxArchitecture(
+        Architecture architecture) =>
+        new($"Linux open(2) flag mapping is not defined for {architecture}.");
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
     private static extern int UnixOpen(

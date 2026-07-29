@@ -2668,10 +2668,10 @@ public static class GitInfo
     private const int UnixDirectory = 0x4000;
     private const int UnixRegularFile = 0x8000;
     private const int UnixOpenNonBlockingLinux = 0x800;
-    private const int UnixOpenNoFollowLinux = 0x20000;
+    private static int UnixOpenNoFollowLinux => LinuxOpenFlags.NoFollow;
     private const int UnixOpenNoControllingTerminalLinux = 0x100;
     private const int UnixOpenCloseOnExecLinux = 0x80000;
-    private const int UnixOpenDirectoryLinux = 0x10000;
+    private static int UnixOpenDirectoryLinux => LinuxOpenFlags.Directory;
     private const int UnixOpenNonBlockingBsd = 0x4;
     private const int UnixOpenNoFollowBsd = 0x100;
     private const int UnixOpenNoControllingTerminalMac = 0x20000;

@@ -176,7 +176,9 @@ under one three-minute deadline shared by the local drain and remaining install 
 atomically installs the stage. The anchored stage must match the writer's retained destination
 identity before its build and again before installation, so a Linux lexical directory replacement
 cannot split publication from the manager's read authority; a fresh no-follow destination open is
-also compared with the installed stage identity after installation before reads reopen. Linux scans
+also compared with the installed stage identity after installation before reads reopen. Linux maps
+`O_DIRECTORY` and `O_NOFOLLOW` through the running architecture ABI, preserving the same anchored
+authority on x64 and ARM64. Linux scans
 through the retained workspace
 handle. Windows scans the lexical path, then relies on the same pre/post-build and post-install
 identity checks to refuse publication if that path changes. Both store the original lexical root
@@ -634,7 +636,8 @@ Schema 17 and server version 0.12.7 keep these outcomes distinct:
 
 On Unix, source capture walks from an anchored directory with relative `openat` calls using
 read-only, no-follow, non-blocking, close-on-exec, and no-controlling-terminal flags; directory
-components also require directory-only opens. The leaf must pass regular-file `fstat`, remain under
+components also require directory-only opens. Linux resolves its directory/no-follow flag values
+from the process architecture rather than assuming the x86 ABI. The leaf must pass regular-file `fstat`, remain under
 the byte limit, and produce exactly its measured bytes with no extra byte. Windows uses relative
 `NtCreateFile` calls with `FILE_OPEN` semantics, read-data/read-attributes access,
 read/write/delete sharing, reparse-point refusal, and a non-directory leaf requirement. These

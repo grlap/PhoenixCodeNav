@@ -133,6 +133,9 @@ same three-minute publication deadline covers both that local drain and the rema
 retries. The stage must identify the same retained destination authority before both build and
 publication. After installation, the live database must identify the reserved stage inode and a
 fresh no-follow open must still identify the retained destination.
+Linux selects `O_DIRECTORY` and `O_NOFOLLOW` from the running architecture ABI, so the same
+fail-closed retained-directory authority works on x64 and ARM64 instead of interpreting x86 flag
+values as unrelated ARM64 options.
 Linux source scans resolve through the retained workspace handle; Windows scans the lexical path
 and relies on the same pre/post-build and post-install identity revalidation. The user-facing
 lexical root is stored separately and must still identify the ownership-lease workspace before

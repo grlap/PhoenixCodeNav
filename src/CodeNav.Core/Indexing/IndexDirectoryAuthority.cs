@@ -21,7 +21,7 @@ internal sealed class IndexDirectoryAuthority : IDisposable
     private const uint FileFlagOpenReparsePoint = 0x00200000;
     private const uint FileAttributeDirectory = 0x10;
     private const uint FileAttributeReparsePoint = 0x400;
-    private const int LinuxDirectoryFlags = 0x010000 | 0x020000 | 0x080000;
+    private static int LinuxDirectoryFlags => LinuxOpenFlags.DirectoryOpen;
 
     private readonly List<SafeFileHandle> _handles;
     private readonly SafeFileHandle? _directoryHandle;

@@ -1196,6 +1196,7 @@ public sealed class Batch45IndexFollowerTests
             "codenav-45-private-stage-failure").FullName;
         string database = IndexBuilder.DefaultDbPath(root);
         using var completed = new ManualResetEventSlim(false);
+        IndexHealth? completedHealth = null;
         try
         {
             WriteWorkspace(root);
@@ -1206,7 +1207,11 @@ public sealed class Batch45IndexFollowerTests
             string oldVersion = writer.Health().IndexVersion!;
             writer.FullRebuildPrivateStageReadyForTest = _ =>
                 throw new InvalidOperationException("decisive staged-build failure");
-            writer.FullRebuildCompletedForTest = () => completed.Set();
+            writer.FullRebuildCompletedForTest = () =>
+            {
+                completedHealth = writer.Health();
+                completed.Set();
+            };
 
             Assert.True(writer.RequestFullRebuild());
             Assert.True(completed.Wait(TimeSpan.FromSeconds(10)),
@@ -1215,7 +1220,8 @@ public sealed class Batch45IndexFollowerTests
             Assert.Equal(oldVersion, writer.Health().IndexVersion);
             Assert.Equal(IndexDestinationClaimState.Ready,
                 IndexDestinationClaim.ReadState(root, database));
-            Assert.Contains("previous index remains available", writer.Health().Error);
+            Assert.NotNull(completedHealth);
+            Assert.Contains("previous index remains available", completedHealth.Error);
             using (IndexQueries oldQueries = writer.OpenQueries())
                 Assert.Single(oldQueries.SearchSymbols("Alpha45", "exact", null, 2));
             Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(

@@ -596,7 +596,7 @@ internal sealed class AnchoredIndexDestination : IDisposable
 
         int dirFd = _directoryHandle.DangerousGetHandle().ToInt32();
         int stageFd = openat(dirFd, _stageName,
-            0x0002 | 0x0040 | 0x0080 | 0x020000 | 0x080000,
+            LinuxOpenFlags.ExclusiveCreateReadWrite,
             Convert.ToUInt32("600", 8)); // RDWR|CREAT|EXCL|NOFOLLOW|CLOEXEC
         if (stageFd < 0) throw new IOException("could not reserve index stage");
         _stageHandle = new SafeFileHandle((IntPtr)stageFd, ownsHandle: true);
@@ -727,7 +727,7 @@ internal sealed class AnchoredIndexDestination : IDisposable
             {
                 int dirFd = _directoryHandle.DangerousGetHandle().ToInt32();
                 int fd = openat(dirFd, name,
-                    0x0002 | 0x0040 | 0x0080 | 0x020000 | 0x080000,
+                    LinuxOpenFlags.ExclusiveCreateReadWrite,
                     Convert.ToUInt32("600", 8));
                 if (fd < 0 && !sqliteCompatible &&
                     Marshal.GetLastPInvokeError() == 17)
@@ -740,7 +740,7 @@ internal sealed class AnchoredIndexDestination : IDisposable
                         return SidecarReservationResult.Failed;
                     }
                     fd = openat(dirFd, name,
-                        0x0002 | 0x0040 | 0x0080 | 0x020000 | 0x080000,
+                        LinuxOpenFlags.ExclusiveCreateReadWrite,
                         Convert.ToUInt32("600", 8));
                 }
                 if (fd < 0 || !TryStatxFd(fd, out StatxIdentity identity) ||
@@ -879,7 +879,7 @@ internal sealed class AnchoredIndexDestination : IDisposable
             !identity.IsRegular || identity.Links != 1) return false;
 
         string procPath = $"/proc/{Environment.ProcessId}/fd/{fd}";
-        int readFd = open(procPath, 0x080000 | 0x0800, 0); // CLOEXEC|NONBLOCK
+        int readFd = open(procPath, LinuxOpenFlags.ReadNonBlocking, 0);
         if (readFd < 0 || !TryStatxFd(readFd, out StatxIdentity readIdentity) ||
             readIdentity.Device != identity.Device || readIdentity.Inode != identity.Inode)
         {
@@ -1189,8 +1189,8 @@ internal sealed class AnchoredIndexDestination : IDisposable
 
     private static int OpenLinuxDirectory(string path) =>
         open(path, LinuxDirectoryFlags, 0);
-    private const int LinuxDirectoryFlags = 0x010000 | 0x020000 | 0x080000;
-    private const int LinuxFileInspectFlags = 0x200000 | 0x020000 | 0x080000;
+    private static int LinuxDirectoryFlags => LinuxOpenFlags.DirectoryOpen;
+    private static int LinuxFileInspectFlags => LinuxOpenFlags.PathInspect;
 
     public void Dispose()
     {

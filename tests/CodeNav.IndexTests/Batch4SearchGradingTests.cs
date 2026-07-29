@@ -294,6 +294,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("index-deferred-fts-rebuild", ids);
         Assert.Contains("index-size-prioritized-csharp-build-scheduling", ids);
         Assert.Contains("index-abandoned-private-stage-reaping", ids);
+        Assert.Contains("linux-arm64-anchored-authority", ids);
+        Assert.Contains("portal-directory-entry-nul-decoding", ids);
         Assert.Contains("operations-portal-jsonl-readonly", ids);
         Assert.Contains("operations-portal-live-build-status", ids);
         Assert.Contains("refresh-recovery-self-heal", ids);
@@ -616,6 +618,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("evaluationIncomplete", "review-project-shape-completeness"),
                       ("review.project_files_changed", "review-project-file-guidance"),
                       ("review.solution_files_changed", "review-solution-metadata-guidance"),
+                      ("Linux ARM64 ABI", "linux-arm64-anchored-authority"),
+                      ("first bounded NUL", "portal-directory-entry-nul-decoding"),
                       ("unsupportedLanguageFiles", "review-fsharp-file-coverage"),
                       ("git_index_baseline_unavailable", "review-default-baseline-honesty"),
                       ("unmappedChanges", "review-unmapped-change-coverage"),
