@@ -413,7 +413,7 @@ public class Batch46SemanticBudgetTests
             {
                 if (Interlocked.Exchange(ref rebuildRequested, 1) != 0) return;
                 Assert.True(manager.RequestFullRebuild());
-                Assert.True(waiting.Wait(TimeSpan.FromSeconds(10)),
+                Assert.True(waiting.Wait(TimeSpan.FromSeconds(30)),
                     "full rebuild never observed the semantic read guard");
             };
             try

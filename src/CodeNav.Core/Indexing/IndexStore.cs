@@ -26,24 +26,29 @@ public sealed class IndexStore : IDisposable
     private readonly SqliteConnection _write;
     private readonly bool _privateStaging;
     private bool _secondaryIndexesPending;
+    private bool _ftsRebuildPending;
 
     public IndexStore(string dbPath, bool createNew, bool privateStaging = false,
         TimeSpan? replacementWaitTimeout = null, Action? waitingForReaders = null)
         : this(dbPath, createNew, privateStaging, replacementWaitTimeout,
-            waitingForReaders, deferSecondaryIndexes: false)
+            waitingForReaders, deferSecondaryIndexes: false,
+            reservedEmptyDatabase: false)
     {
     }
 
     private IndexStore(string dbPath, bool createNew, bool privateStaging,
         TimeSpan? replacementWaitTimeout, Action? waitingForReaders,
-        bool deferSecondaryIndexes)
+        bool deferSecondaryIndexes, bool reservedEmptyDatabase)
     {
         _dbPath = dbPath;
         _privateStaging = privateStaging;
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
         if (createNew && privateStaging)
         {
-            DeleteExistingDatabaseFiles();
+            // AnchoredIndexDestination reserves and pins an empty regular file before SQLite
+            // opens it. Keep that exact inode: deleting/recreating it would discard the handle-
+            // verified stage and reopen a lexical path that could have changed underneath us.
+            if (!reservedEmptyDatabase) DeleteExistingDatabaseFiles();
             _write = Open(coldBuild: true);
         }
         else
@@ -62,6 +67,7 @@ public sealed class IndexStore : IDisposable
                 CreateSchema();
                 _tSchema += Stopwatch.GetTimestamp() - schemaStarted;
                 _secondaryIndexesPending = deferSecondaryIndexes;
+                _ftsRebuildPending = deferSecondaryIndexes;
                 if (!deferSecondaryIndexes) CreateSecondaryIndexes(tx: null);
             }
             InitializeFileIdCounter();
@@ -77,14 +83,26 @@ public sealed class IndexStore : IDisposable
     }
 
     /// <summary>
-    /// Opens a fresh store whose query-facing secondary indexes are created only after the
-    /// caller has loaded every bulk row. Direct IndexStore construction remains eager so an
-    /// ad-hoc store can never escape with an incomplete schema.
+    /// Opens a fresh store whose FTS index and query-facing secondary indexes are created only
+    /// after the caller has loaded every bulk row. Direct IndexStore construction remains eager so
+    /// an ad-hoc store can never escape with incomplete query structures.
     /// </summary>
     internal static IndexStore CreateForBulkBuild(string dbPath,
         TimeSpan? replacementWaitTimeout = null, Action? waitingForReaders = null) =>
         new(dbPath, createNew: true, privateStaging: false, replacementWaitTimeout,
-            waitingForReaders, deferSecondaryIndexes: true);
+            waitingForReaders, deferSecondaryIndexes: true,
+            reservedEmptyDatabase: false);
+
+    /// <summary>
+    /// Creates the cold-build schema inside the exact empty file already reserved and pinned by
+    /// <see cref="AnchoredIndexDestination"/>. The private stage uses MEMORY/OFF journaling and
+    /// defers FTS population and secondary indexes just like the ordinary bulk-build path, but
+    /// never removes or reopens the reserved inode.
+    /// </summary>
+    internal static IndexStore CreateForReservedBulkBuild(string dbPath) =>
+        new(dbPath, createNew: true, privateStaging: true,
+            replacementWaitTimeout: null, waitingForReaders: null,
+            deferSecondaryIndexes: true, reservedEmptyDatabase: true);
 
     private SqliteConnection OpenFreshDatabase(TimeSpan timeout, Action? waitingForReaders)
     {
@@ -166,14 +184,11 @@ public sealed class IndexStore : IDisposable
     private static double ToMs(long ticks) =>
         ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 
-    /// <summary>lf4p (owner-directed config pass): cold builds keep WAL semantics (mid-build
-    /// followers may probe/read concurrently — MEMORY journal would turn those reads into BUSY
-    /// failures) but get a GB-class page-cache cap and wal_autocheckpoint=0, so b-tree/FTS pages
-    /// churn in RAM and no mid-build checkpoint stalls the single writer; Optimize() flushes the
-    /// WAL and restores the steady-state autocheckpoint before the index is published. Staging
-    /// databases are private by construction and stay on MEMORY/OFF (now with the same big
-    /// cache). Live (createNew:false) connections are unchanged. cache_size is a lazily-filled
-    /// per-connection LIMIT, not an allocation.</summary>
+    /// <summary>lf4p (owner-directed config pass): anchored cold builds write a private staging
+    /// database with MEMORY/OFF journaling and a GB-class page-cache cap, while followers keep
+    /// reading the separate live WAL database. The in-place compatibility fallback keeps its
+    /// historical cold-build WAL/autocheckpoint behavior. Live (createNew:false) connections are
+    /// unchanged. cache_size is a lazily-filled per-connection LIMIT, not an allocation.</summary>
     private SqliteConnection Open(bool coldBuild)
     {
         var connectionString = new SqliteConnectionStringBuilder
@@ -314,19 +329,34 @@ public sealed class IndexStore : IDisposable
     }
 
     /// <summary>
-    /// Creates the query-facing B-trees after a cold build has loaded all rows. SQLite can then
-    /// scan and sort each populated table once instead of incrementally maintaining every index
-    /// for every inserted row. Primary keys and UNIQUE constraints remain present throughout the
-    /// load and continue to enforce persisted identity.
+    /// Builds FTS once from its complete external-content table, then creates the query-facing
+    /// B-trees after a cold build has loaded all rows. SQLite can scan each populated source once
+    /// instead of incrementally maintaining these structures for every inserted row. Primary keys
+    /// and UNIQUE constraints remain present throughout the load and enforce persisted identity.
     /// </summary>
     internal void CompleteBulkLoad(SqliteTransaction tx)
     {
-        if (!_secondaryIndexesPending) return;
+        if (!_secondaryIndexesPending && !_ftsRebuildPending) return;
         if (!ReferenceEquals(tx.Connection, _write))
             throw new InvalidOperationException(
                 "Bulk-load completion requires this IndexStore's active write transaction.");
-        CreateSecondaryIndexes(tx);
-        _secondaryIndexesPending = false;
+        if (_ftsRebuildPending)
+        {
+            long started = Stopwatch.GetTimestamp();
+            using var rebuild = _write.CreateCommand();
+            rebuild.Transaction = tx;
+            rebuild.CommandText =
+                "INSERT INTO fts_content(fts_content) VALUES('rebuild');";
+            rebuild.ExecuteNonQuery();
+            _tFtsRows += Stopwatch.GetTimestamp() - started;
+            _ftsRebuildPending = false;
+            _ftsRebuildExecutions++;
+        }
+        if (_secondaryIndexesPending)
+        {
+            CreateSecondaryIndexes(tx);
+            _secondaryIndexesPending = false;
+        }
     }
 
     private void CreateSecondaryIndexes(SqliteTransaction? tx)
@@ -486,13 +516,117 @@ public sealed class IndexStore : IDisposable
 
     private SqliteCommand? _contentInsertCmd;
     private SqliteCommand? _ftsInsertCmd;
+    private const int ContentColumns = 2;
+    private readonly sqlite3_stmt?[] _contentBatchInsertStatements =
+        new sqlite3_stmt?[FileChunkRows + 1];
+    private readonly sqlite3_stmt?[] _ftsBatchInsertStatements =
+        new sqlite3_stmt?[FileChunkRows + 1];
+    private readonly long[] _contentBatchInsertExecutions =
+        new long[FileChunkRows + 1];
+    private readonly long[] _ftsBatchInsertExecutions =
+        new long[FileChunkRows + 1];
+    private long _contentSingleInsertExecutions;
+    private long _ftsRebuildExecutions;
+
+    internal long ContentBatchInsertExecutionCountForTest(int rowsPerStatement) =>
+        rowsPerStatement is >= 1 and <= FileChunkRows
+            ? _contentBatchInsertExecutions[rowsPerStatement]
+            : throw new ArgumentOutOfRangeException(nameof(rowsPerStatement));
+
+    internal long FtsBatchInsertExecutionCountForTest(int rowsPerStatement) =>
+        rowsPerStatement is >= 1 and <= FileChunkRows
+            ? _ftsBatchInsertExecutions[rowsPerStatement]
+            : throw new ArgumentOutOfRangeException(nameof(rowsPerStatement));
+
+    internal long ContentInsertStatementCount =>
+        _contentBatchInsertExecutions.Sum() + _contentSingleInsertExecutions;
+
+    internal long FtsInsertStatementCount =>
+        _ftsBatchInsertExecutions.Sum() + _ftsRebuildExecutions;
+
+    private sqlite3_stmt BuildContentBatchInsert(int rowsPerStatement, bool fts)
+    {
+        var sql = new System.Text.StringBuilder(fts
+            ? "INSERT INTO fts_content(rowid,content) VALUES "
+            : "INSERT INTO file_contents(file_id,content) VALUES ");
+        for (int row = 0; row < rowsPerStatement; row++)
+        {
+            sql.Append(row > 0 ? ",(?,?)" : "(?,?)");
+        }
+        int rc = raw.sqlite3_prepare_v3(
+            _write.Handle,
+            sql.ToString(),
+            (uint)raw.SQLITE_PREPARE_PERSISTENT,
+            out sqlite3_stmt statement);
+        if (rc != raw.SQLITE_OK)
+            throw RawSqliteException(fts
+                ? "prepare FTS content batch insert"
+                : "prepare content batch insert", rc);
+        return statement;
+    }
+
+    private void BindContentBatch(sqlite3_stmt statement, long firstFileId,
+        IReadOnlyList<string> contents, int offset, int count)
+    {
+        for (int row = 0; row < count; row++)
+        {
+            int parameter = row * ContentColumns + 1;
+            BindRawInt64(statement, parameter++, firstFileId + offset + row);
+            BindRawText(statement, parameter, contents[offset + row]);
+        }
+    }
+
+    /// <summary>
+    /// Persists one ordered content wave. File ids are the contiguous range beginning at
+    /// <paramref name="firstFileId"/>; the caller obtains that range from <see cref="InsertFiles"/>.
+    /// Cold bulk stores defer FTS population until <see cref="CompleteBulkLoad"/>; eager and live
+    /// stores preserve the matching exact-width FTS insert. Incremental and structural paths retain
+    /// <see cref="InsertContent"/> so their transaction and publication semantics do not change.
+    /// </summary>
+    internal void InsertContents(SqliteTransaction tx, long firstFileId,
+        IReadOnlyList<string> contents)
+    {
+        if (contents.Count == 0)
+            throw new ArgumentException("A content batch cannot be empty.", nameof(contents));
+        if (!ReferenceEquals(tx.Connection, _write))
+            throw new InvalidOperationException(
+                "Content inserts require this IndexStore's active write transaction.");
+
+        int done = 0;
+        while (done < contents.Count)
+        {
+            int statementRows = Math.Min(FileChunkRows, contents.Count - done);
+
+            long contentStarted = Stopwatch.GetTimestamp();
+            sqlite3_stmt contentStatement =
+                _contentBatchInsertStatements[statementRows] ??=
+                    BuildContentBatchInsert(statementRows, fts: false);
+            BindContentBatch(contentStatement, firstFileId, contents, done, statementRows);
+            ExecuteRawInsert(contentStatement, "content batch");
+            _contentBatchInsertExecutions[statementRows]++;
+            _tContentRows += Stopwatch.GetTimestamp() - contentStarted;
+
+            if (!_ftsRebuildPending)
+            {
+                long ftsStarted = Stopwatch.GetTimestamp();
+                sqlite3_stmt ftsStatement =
+                    _ftsBatchInsertStatements[statementRows] ??=
+                        BuildContentBatchInsert(statementRows, fts: true);
+                BindContentBatch(ftsStatement, firstFileId, contents, done, statementRows);
+                ExecuteRawInsert(ftsStatement, "FTS content batch");
+                _ftsBatchInsertExecutions[statementRows]++;
+                _tFtsRows += Stopwatch.GetTimestamp() - ftsStarted;
+            }
+
+            done += statementRows;
+        }
+    }
 
     public void InsertContent(SqliteTransaction tx, long fileId, string content)
     {
-        // lf4p: the raw row and the FTS row were one batched command; they are executed (and
-        // timed) SEPARATELY now because "is the writer FTS-tokenization-bound?" is exactly the
-        // second-writer-split question. The extra command round-trip is µs-scale against the
-        // ms-scale tokenization it isolates.
+        // Live/delta and eager stores update raw content and FTS in the same transaction. Cold bulk
+        // stores return after file_contents: their complete external-content table is rebuilt into
+        // FTS once during finalization, before schema_version can be published.
         long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         if (_contentInsertCmd is null)
         {
@@ -506,8 +640,10 @@ public sealed class IndexStore : IDisposable
         _contentInsertCmd.Parameters[0].Value = fileId;
         _contentInsertCmd.Parameters[1].Value = content;
         _contentInsertCmd.ExecuteNonQuery();
+        _contentSingleInsertExecutions++;
         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
         _tContentRows += t1 - t0;
+        if (_ftsRebuildPending) return;
         if (_ftsInsertCmd is null)
         {
             _ftsInsertCmd = _write.CreateCommand();
@@ -1117,6 +1253,20 @@ public sealed class IndexStore : IDisposable
             if (statement is null) continue;
             raw.sqlite3_finalize(statement);
             _fileInsertStatements[i] = null;
+        }
+        for (int i = 1; i < _contentBatchInsertStatements.Length; i++)
+        {
+            sqlite3_stmt? statement = _contentBatchInsertStatements[i];
+            if (statement is null) continue;
+            raw.sqlite3_finalize(statement);
+            _contentBatchInsertStatements[i] = null;
+        }
+        for (int i = 1; i < _ftsBatchInsertStatements.Length; i++)
+        {
+            sqlite3_stmt? statement = _ftsBatchInsertStatements[i];
+            if (statement is null) continue;
+            raw.sqlite3_finalize(statement);
+            _ftsBatchInsertStatements[i] = null;
         }
         // Slot zero is intentionally unused: every executed statement contains 1..32 rows.
         for (int i = 1; i < _symbolInsertStatements.Length; i++)

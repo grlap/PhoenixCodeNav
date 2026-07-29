@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -678,7 +679,7 @@ public sealed class Batch45IndexFollowerTests
             follower.Start();
             Assert.True(WaitUntil(() => follower.IsQueryable, 20_000), follower.Health().Error);
 
-            writer.FullRebuildDestructiveBoundaryForTest = _ =>
+            writer.FullRebuildPrivateStageCompletedForTest = () =>
             {
                 boundary.Set();
                 Assert.True(release.Wait(TimeSpan.FromSeconds(15)));
@@ -890,6 +891,8 @@ public sealed class Batch45IndexFollowerTests
 
         string root = Directory.CreateTempSubdirectory("codenav-45-review-drain").FullName;
         string database = IndexBuilder.DefaultDbPath(root);
+        using var stageReady = new ManualResetEventSlim(false);
+        using var releaseStageBuild = new ManualResetEventSlim(false);
         using var boundary = new ManualResetEventSlim(false);
         using var completed = new ManualResetEventSlim(false);
         IndexReadSnapshot? snapshot = null;
@@ -917,11 +920,31 @@ public sealed class Batch45IndexFollowerTests
                 boundary.Set();
             };
             writer.FullRebuildAfterTelemetryStartedForTest = () =>
-                Assert.Equal(IndexDestinationClaimState.Rebuilding,
+                Assert.Equal(IndexDestinationClaimState.Ready,
                     IndexDestinationClaim.ReadState(root, database));
+            writer.FullRebuildPrivateStageReadyForTest = _ =>
+            {
+                stageReady.Set();
+                Assert.True(releaseStageBuild.Wait(TimeSpan.FromSeconds(15)));
+            };
             writer.FullRebuildCompletedForTest = () => completed.Set();
 
             Assert.True(writer.RequestFullRebuild());
+            Assert.True(stageReady.Wait(TimeSpan.FromSeconds(10)),
+                "writer never opened its private rebuild stage");
+            Assert.Equal(IndexDestinationClaimState.Ready,
+                IndexDestinationClaim.ReadState(root, database));
+            Assert.True(writer.IsQueryable,
+                "the writer stopped serving the prior publication during private staging");
+            using (IndexQueries stagingWriterQuery = writer.OpenQueries())
+                Assert.Single(stagingWriterQuery.SearchSymbols("Alpha45", "exact", null, 2));
+            Assert.True(follower.IsQueryable,
+                "the follower stopped serving the prior publication during private staging");
+            using (IndexQueries stagingFollowerQuery = follower.OpenQueries())
+                Assert.Single(stagingFollowerQuery.SearchSymbols("Alpha45", "exact", null, 2));
+            Assert.False(boundary.IsSet,
+                "the publication boundary ran before the private stage was released");
+            releaseStageBuild.Set();
             Assert.True(boundary.Wait(TimeSpan.FromSeconds(10)),
                 "writer never reached its local destructive boundary");
             Assert.Equal(0, activeAtBoundary);
@@ -961,10 +984,944 @@ public sealed class Batch45IndexFollowerTests
         }
         finally
         {
+            releaseStageBuild.Set();
             snapshot?.Dispose();
             secondSnapshot?.Dispose();
             Cleanup(root);
         }
+    }
+
+    [Fact]
+    public void SupportedHostFullRebuildPublishesACompletePrivateStage()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-private-stage-publish").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var stageCompleted = new ManualResetEventSlim(false);
+        using var releaseStage = new ManualResetEventSlim(false);
+        using var waitingForWriterQuery = new ManualResetEventSlim(false);
+        using var completed = new ManualResetEventSlim(false);
+        IndexManager? follower = null;
+        IndexQueries? heldWriterQuery = null;
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            using var writer = new IndexManager(root, database);
+            writer.Start();
+            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000), writer.Health().Error);
+            if (OperatingSystem.IsWindows())
+            {
+                follower = new IndexManager(root, database);
+                follower.Start();
+                Assert.True(WaitUntil(() => follower.IsQueryable, 20_000),
+                    follower.Health().Error);
+            }
+            string oldVersion = writer.Health().IndexVersion!;
+
+            File.WriteAllText(Path.Combine(root, "Beta.cs"),
+                "namespace Batch45; public class PrivateStageBeta45 { }");
+            writer.FullRebuildPrivateStageCompletedForTest = () =>
+            {
+                stageCompleted.Set();
+                Assert.True(releaseStage.Wait(TimeSpan.FromSeconds(15)));
+            };
+            writer.FullRebuildWaitingForLocalSnapshotsForTest =
+                () => waitingForWriterQuery.Set();
+            writer.FullRebuildCompletedForTest = () => completed.Set();
+            heldWriterQuery = writer.OpenQueries();
+
+            Assert.True(writer.RequestFullRebuild());
+            Assert.True(stageCompleted.Wait(TimeSpan.FromSeconds(20)),
+                "private rebuild never reached its publication boundary");
+            Assert.Equal(IndexDestinationClaimState.Ready,
+                IndexDestinationClaim.ReadState(root, database));
+            Assert.Equal(oldVersion, writer.Health().IndexVersion);
+            Assert.True(writer.IsQueryable,
+                "the writer stopped serving the old publication during private staging");
+            Assert.Empty(heldWriterQuery.SearchSymbols(
+                "PrivateStageBeta45", "exact", null, 2));
+            if (follower is not null)
+            {
+                Assert.True(follower.IsQueryable,
+                    "the old publication stopped serving before B was published");
+                using IndexQueries oldQueries = follower.OpenQueries();
+                Assert.Empty(oldQueries.SearchSymbols(
+                    "PrivateStageBeta45", "exact", null, 2));
+            }
+
+            releaseStage.Set();
+            Assert.True(waitingForWriterQuery.Wait(TimeSpan.FromSeconds(10)),
+                "publication did not wait for an ordinary writer query");
+            Assert.Equal(IndexDestinationClaimState.Rebuilding,
+                IndexDestinationClaim.ReadState(root, database));
+            Assert.False(completed.IsSet,
+                "publication crossed an ordinary writer query lifetime");
+            Assert.Equal(oldVersion, writer.Health().IndexVersion);
+            Assert.Empty(heldWriterQuery.SearchSymbols(
+                "PrivateStageBeta45", "exact", null, 2));
+            if (follower is not null)
+                Assert.False(follower.IsQueryable,
+                    "the follower barged after staged publication entered B");
+
+            heldWriterQuery.Dispose();
+            heldWriterQuery = null;
+            Assert.True(completed.Wait(TimeSpan.FromSeconds(40)),
+                "private rebuild did not finish after the writer query drained");
+            Assert.True(WaitUntil(() => writer.IsQueryable &&
+                writer.Health().IndexVersion != oldVersion, 30_000), writer.Health().Error);
+            Assert.Equal(IndexDestinationClaimState.Ready,
+                IndexDestinationClaim.ReadState(root, database));
+            if (follower is not null)
+            {
+                Assert.True(WaitUntil(() =>
+                {
+                    try
+                    {
+                        using IndexQueries published = follower.OpenQueries();
+                        return published.SearchSymbols(
+                            "PrivateStageBeta45", "exact", null, 2).Count == 1;
+                    }
+                    catch (IOException)
+                    {
+                        return false;
+                    }
+                }, 10_000), "follower did not observe the atomically published private stage");
+            }
+            using IndexQueries writerPublished = writer.OpenQueries();
+            Assert.Single(writerPublished.SearchSymbols(
+                "PrivateStageBeta45", "exact", null, 2));
+        }
+        finally
+        {
+            releaseStage.Set();
+            heldWriterQuery?.Dispose();
+            follower?.Dispose();
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void LocalReaderDrainUsesThePublicationDeadline()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-private-local-timeout").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var completed = new ManualResetEventSlim(false);
+        var logs = new ConcurrentQueue<string>();
+        IndexQueries? heldWriterQuery = null;
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            using var writer = new IndexManager(root, database, logs.Enqueue)
+            {
+                FullRebuildPublicationTimeoutForTest = TimeSpan.FromMilliseconds(100),
+                FullRebuildCompletedForTest = () => completed.Set(),
+            };
+            writer.Start();
+            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000), writer.Health().Error);
+            string oldVersion = writer.Health().IndexVersion!;
+            heldWriterQuery = writer.OpenQueries();
+
+            Assert.True(writer.RequestFullRebuild());
+            Assert.True(completed.Wait(TimeSpan.FromSeconds(30)),
+                "local-reader timeout did not return control to the refresh pump");
+            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000), writer.Health().Error);
+            Assert.Equal(oldVersion, writer.Health().IndexVersion);
+            Assert.Equal(IndexDestinationClaimState.Ready,
+                IndexDestinationClaim.ReadState(root, writer.DatabaseIoPath));
+            Assert.Single(heldWriterQuery.SearchSymbols("Alpha45", "exact", null, 2));
+            Assert.Contains(logs, message => message.Contains(
+                "timed out waiting for local index readers", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(
+                    Path.GetDirectoryName(database)!),
+                path => Path.GetFileName(path).StartsWith(
+                    ".phoenix-stage-", StringComparison.Ordinal) ||
+                        Path.GetFileName(path).StartsWith(
+                            ".phoenix-publish-", StringComparison.Ordinal));
+        }
+        finally
+        {
+            heldWriterQuery?.Dispose();
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void WriterQueryConstructionFailureReleasesItsPublicationLease()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-writer-query-construction-failure").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            using var writer = new IndexManager(root, database);
+            writer.Start();
+            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000),
+                writer.Health().Error);
+            writer.WriterQueryAfterRegistrationForTest = () =>
+                throw new InvalidOperationException("decisive construction failure");
+
+            Assert.Throws<InvalidOperationException>(() => writer.OpenQueries());
+            Assert.Equal(0, writer.ActiveWriterQueriesForTest);
+
+            writer.WriterQueryAfterRegistrationForTest = null;
+            using IndexQueries queries = writer.OpenQueries();
+            Assert.Single(queries.SearchSymbols("Alpha45", "exact", null, 2));
+            Assert.Equal(1, writer.ActiveWriterQueriesForTest);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void SupportedHostPrivateStageFailureKeepsThePriorPublication()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-private-stage-failure").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var completed = new ManualResetEventSlim(false);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            using var writer = new IndexManager(root, database);
+            writer.Start();
+            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000), writer.Health().Error);
+            string oldVersion = writer.Health().IndexVersion!;
+            writer.FullRebuildPrivateStageReadyForTest = _ =>
+                throw new InvalidOperationException("decisive staged-build failure");
+            writer.FullRebuildCompletedForTest = () => completed.Set();
+
+            Assert.True(writer.RequestFullRebuild());
+            Assert.True(completed.Wait(TimeSpan.FromSeconds(10)),
+                "failed private rebuild did not return to the pump");
+            Assert.True(writer.IsQueryable, writer.Health().Error);
+            Assert.Equal(oldVersion, writer.Health().IndexVersion);
+            Assert.Equal(IndexDestinationClaimState.Ready,
+                IndexDestinationClaim.ReadState(root, database));
+            Assert.Contains("previous index remains available", writer.Health().Error);
+            using (IndexQueries oldQueries = writer.OpenQueries())
+                Assert.Single(oldQueries.SearchSymbols("Alpha45", "exact", null, 2));
+            Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(
+                    Path.GetDirectoryName(database)!),
+                path => Path.GetFileName(path).StartsWith(
+                    ".phoenix-stage-", StringComparison.Ordinal) ||
+                        Path.GetFileName(path).StartsWith(
+                            ".phoenix-publish-", StringComparison.Ordinal));
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void SupportedHostInstallEnvelopeFailureReopensThePriorPublication()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-private-install-failure").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var completed = new ManualResetEventSlim(false);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            using var writer = new IndexManager(root, database);
+            writer.Start();
+            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000), writer.Health().Error);
+            string oldVersion = writer.Health().IndexVersion!;
+            writer.FullRebuildBeforeStageInstallForTest = () =>
+                throw new InvalidOperationException("decisive install-envelope failure");
+            writer.FullRebuildCompletedForTest = () => completed.Set();
+
+            Assert.True(writer.RequestFullRebuild());
+            Assert.True(completed.Wait(TimeSpan.FromSeconds(30)),
+                "failed install envelope did not return to the pump");
+            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000), writer.Health().Error);
+            Assert.Equal(oldVersion, writer.Health().IndexVersion);
+            Assert.Equal(IndexDestinationClaimState.Ready,
+                IndexDestinationClaim.ReadState(root, writer.DatabaseIoPath));
+            using (IndexQueries oldQueries = writer.OpenQueries())
+                Assert.Single(oldQueries.SearchSymbols("Alpha45", "exact", null, 2));
+            Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(
+                    Path.GetDirectoryName(database)!),
+                path => Path.GetFileName(path).StartsWith(
+                    ".phoenix-stage-", StringComparison.Ordinal) ||
+                        Path.GetFileName(path).StartsWith(
+                            ".phoenix-publish-", StringComparison.Ordinal));
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void SupportedHostPostInstallFailureUsesTheStableFailedDiagnostic()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-private-post-install-failure").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var completed = new ManualResetEventSlim(false);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            using var writer = new IndexManager(root, database)
+            {
+                FullRebuildAfterStageInstallForTest = () =>
+                    throw new InvalidOperationException("decisive post-install failure"),
+                FullRebuildCompletedForTest = () => completed.Set(),
+            };
+            writer.Start();
+            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000), writer.Health().Error);
+
+            Assert.True(writer.RequestFullRebuild());
+            Assert.True(completed.Wait(TimeSpan.FromSeconds(30)),
+                "post-install failure did not return control to the refresh pump");
+            Assert.Equal("failed", writer.State);
+            Assert.False(writer.IsQueryable);
+            IOException error = Assert.Throws<IOException>(() => writer.OpenQueries());
+            Assert.Contains("full rebuild failed", error.Message,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("being published", error.Message,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(IndexDestinationClaimState.Rebuilding,
+                IndexDestinationClaim.ReadState(root, writer.DatabaseIoPath));
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void SupportedHostStartupForceRebuildServesTheCompatiblePriorPublication()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-startup-private-readable").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var stageReady = new ManualResetEventSlim(false);
+        using var releaseStage = new ManualResetEventSlim(false);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            string oldVersion = ReadMeta(database, "index_version")!;
+            const string oldRefresh = "2001-02-03T04:05:06.0000000Z";
+            const string oldCommit = "old-startup-publication-commit";
+            const string oldBranch = "old-startup-publication-branch";
+            WriteFollowerMetadata(database, oldRefresh, oldCommit, oldBranch);
+            using var manager = new IndexManager(root, database)
+            {
+                FullRebuildPrivateStageReadyForTest = _ =>
+                {
+                    stageReady.Set();
+                    Assert.True(releaseStage.Wait(TimeSpan.FromSeconds(15)));
+                },
+            };
+
+            manager.Start(forceRebuild: true);
+            Assert.True(stageReady.Wait(TimeSpan.FromSeconds(10)),
+                "startup rebuild never opened its private stage");
+            Assert.Equal("building", manager.State);
+            Assert.True(manager.IsQueryable,
+                "startup force rebuild hid the compatible prior publication");
+            Assert.Equal(oldVersion, manager.Health().IndexVersion);
+            Assert.Equal(oldRefresh, manager.Health().LastRefreshUtc);
+            Assert.Equal(oldCommit, manager.Health().IndexedCommit);
+            Assert.Equal(oldBranch, manager.Health().IndexedBranch);
+            Assert.Equal(IndexDestinationClaimState.Ready,
+                IndexDestinationClaim.ReadState(root, manager.DatabaseIoPath));
+            using (IndexQueries oldQueries = manager.OpenQueries())
+                Assert.Single(oldQueries.SearchSymbols("Alpha45", "exact", null, 2));
+            using (var semantic = new SemanticService(manager))
+            {
+                var tools = new NavigationTools(manager, semantic);
+                JsonElement response = Parse(
+                    tools.SearchSymbol("Alpha45", match: "exact"));
+                JsonElement meta = response.GetProperty("meta");
+                Assert.Equal("building",
+                    meta.GetProperty("indexStatus").GetString());
+                Assert.Equal(IndexManager.RefreshSweepPendingCause,
+                    meta.GetProperty("partialReason").GetString());
+                string statusNote =
+                    meta.GetProperty("statusNote").GetString()!;
+                Assert.Contains("previous index publication", statusNote);
+                Assert.Contains("freshness convergence", statusNote);
+            }
+
+            releaseStage.Set();
+            Assert.True(WaitUntil(() => manager.IsQueryable &&
+                manager.Health().IndexVersion != oldVersion, 40_000), manager.Health().Error);
+            Assert.NotEqual(oldRefresh, manager.Health().LastRefreshUtc);
+            Assert.NotEqual(oldCommit, manager.Health().IndexedCommit);
+            Assert.NotEqual(oldBranch, manager.Health().IndexedBranch);
+        }
+        finally
+        {
+            releaseStage.Set();
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void SupportedHostStartupStageFailureKeepsTheCompatiblePriorPublication()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-startup-private-failure").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            string oldVersion = ReadMeta(database, "index_version")!;
+            using var manager = new IndexManager(root, database)
+            {
+                FullRebuildPrivateStageReadyForTest = _ =>
+                    throw new InvalidOperationException("decisive startup stage failure"),
+            };
+
+            manager.Start(forceRebuild: true);
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000), manager.Health().Error);
+            Assert.Equal(oldVersion, manager.Health().IndexVersion);
+            Assert.Equal(IndexDestinationClaimState.Ready,
+                IndexDestinationClaim.ReadState(root, manager.DatabaseIoPath));
+            using (IndexQueries oldQueries = manager.OpenQueries())
+                Assert.Single(oldQueries.SearchSymbols("Alpha45", "exact", null, 2));
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void SupportedHostStartupRestoreFailureSettlesInFailedState()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-startup-restore-failure").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            using var manager = new IndexManager(root, database)
+            {
+                FullRebuildBeforeStageInstallForTest = () =>
+                    throw new InvalidOperationException("decisive install failure"),
+                StartupPriorPublicationRestoreForTest = () =>
+                    throw new InvalidOperationException("decisive restore failure"),
+            };
+
+            manager.Start(forceRebuild: true);
+            Assert.True(WaitUntil(() => manager.State == "failed", 30_000),
+                manager.Health().Error);
+            Assert.False(manager.IsQueryable);
+            IOException error = Assert.Throws<IOException>(() => manager.OpenQueries());
+            Assert.Contains("during index startup", error.Message,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("being published", error.Message,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void SupportedHostStartupRestoreDoesNotResurrectResourcesAfterDispose()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-startup-dispose-restore").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        IndexManager? manager = null;
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            manager = new IndexManager(root, database)
+            {
+                DisposeWaitTimeoutForTest = TimeSpan.FromMilliseconds(10),
+            };
+            manager.FullRebuildBeforeStageInstallForTest = () =>
+            {
+                manager.Dispose();
+                throw new InvalidOperationException("failure after concurrent dispose");
+            };
+
+            manager.Start(forceRebuild: true);
+            Assert.True(WaitUntil(() => manager.State == "failed", 30_000),
+                manager.Health().Error);
+            Assert.False(manager.HasOwnedStoreForTest);
+            Assert.False(manager.HasWorkspaceWatcherForTest);
+        }
+        finally
+        {
+            manager?.Dispose();
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void SupportedHostPumpRestoreDoesNotResurrectResourcesAfterDispose()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-pump-dispose-restore").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var completed = new ManualResetEventSlim(false);
+        IndexManager? manager = null;
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            manager = new IndexManager(root, database)
+            {
+                DisposeWaitTimeoutForTest = TimeSpan.FromMilliseconds(10),
+                FullRebuildCompletedForTest = () => completed.Set(),
+            };
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000),
+                manager.Health().Error);
+            manager.FullRebuildBeforeStageInstallForTest = () =>
+            {
+                manager.Dispose();
+                throw new InvalidOperationException("failure after concurrent dispose");
+            };
+
+            Assert.True(manager.RequestFullRebuild());
+            Assert.True(completed.Wait(TimeSpan.FromSeconds(30)),
+                "disposed pump rebuild did not return");
+            Assert.False(manager.HasOwnedStoreForTest);
+            Assert.False(manager.HasWorkspaceWatcherForTest);
+        }
+        finally
+        {
+            manager?.Dispose();
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void LinuxStagedRebuildReadsThePinnedWorkspaceAndRejectsAReplacementRoot()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-linux-workspace-swap").FullName;
+        string retainedRoot = root + "-retained";
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var completed = new ManualResetEventSlim(false);
+        IndexManager? manager = null;
+        bool moved = false;
+        bool stagedPinnedSource = false;
+        bool stagedLexicalMetadata = false;
+        string? stagePath = null;
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            manager = new IndexManager(root, database);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000),
+                manager.Health().Error);
+            string oldVersion = manager.Health().IndexVersion!;
+            manager.FullRebuildPrivateStageReadyForTest = path =>
+            {
+                stagePath = path;
+                Directory.Move(root, retainedRoot);
+                moved = true;
+                Directory.CreateDirectory(root);
+                WriteWorkspace(root, "ReplacementWorkspaceBeta45");
+            };
+            manager.FullRebuildPrivateStageCompletedForTest = () =>
+            {
+                using var stageStore = new IndexStore(stagePath!, createNew: false);
+                stagedLexicalMetadata = string.Equals(
+                    Path.GetFullPath(root), stageStore.GetMeta("workspace_root"),
+                    StringComparison.Ordinal);
+                using var stageQueries = new IndexQueries(stagePath!,
+                    pinReadSnapshot: false, pooling: false);
+                stagedPinnedSource =
+                    stageQueries.SearchSymbols("Alpha45", "exact", null, 2).Count == 1 &&
+                    stageQueries.SearchSymbols(
+                        "ReplacementWorkspaceBeta45", "exact", null, 2).Count == 0;
+            };
+            manager.FullRebuildCompletedForTest = () => completed.Set();
+
+            Assert.True(manager.RequestFullRebuild());
+            Assert.True(completed.Wait(TimeSpan.FromSeconds(30)),
+                "workspace-authority mismatch did not return to the refresh pump");
+            Assert.True(stagedPinnedSource,
+                "the private stage did not read through the retained workspace handle");
+            Assert.True(stagedLexicalMetadata,
+                "the private stage did not preserve the lexical workspace_root metadata");
+            Assert.Equal("failed", manager.State);
+            Assert.False(manager.IsQueryable);
+            Assert.Equal(oldVersion, manager.Health().IndexVersion);
+
+            manager.Dispose();
+            manager = null;
+            string retainedDatabase = IndexBuilder.DefaultDbPath(retainedRoot);
+            using var retainedQueries = new IndexQueries(retainedDatabase,
+                pinReadSnapshot: false, pooling: false);
+            Assert.Single(retainedQueries.SearchSymbols("Alpha45", "exact", null, 2));
+            Assert.Empty(retainedQueries.SearchSymbols(
+                "ReplacementWorkspaceBeta45", "exact", null, 2));
+            Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(
+                    Path.GetDirectoryName(retainedDatabase)!),
+                path => Path.GetFileName(path).StartsWith(
+                            ".phoenix-stage-", StringComparison.Ordinal) ||
+                        Path.GetFileName(path).StartsWith(
+                            ".phoenix-publish-", StringComparison.Ordinal));
+        }
+        finally
+        {
+            manager?.Dispose();
+            RestoreMovedWorkspace(root, retainedRoot, moved);
+        }
+    }
+
+    [Fact]
+    public void LinuxStartupRebuildReadsThePinnedWorkspaceAndRejectsAReplacementRoot()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-linux-startup-workspace-swap").FullName;
+        string retainedRoot = root + "-retained";
+        string database = IndexBuilder.DefaultDbPath(root);
+        IndexManager? manager = null;
+        bool moved = false;
+        bool stagedPinnedSource = false;
+        bool stagedLexicalMetadata = false;
+        string? stagePath = null;
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            string oldVersion = ReadMeta(database, "index_version")!;
+            manager = new IndexManager(root, database);
+            manager.FullRebuildPrivateStageReadyForTest = path =>
+            {
+                stagePath = path;
+                Directory.Move(root, retainedRoot);
+                moved = true;
+                Directory.CreateDirectory(root);
+                WriteWorkspace(root, "ReplacementStartupBeta45");
+            };
+            manager.FullRebuildPrivateStageCompletedForTest = () =>
+            {
+                using var stageStore = new IndexStore(stagePath!, createNew: false);
+                stagedLexicalMetadata = string.Equals(
+                    Path.GetFullPath(root), stageStore.GetMeta("workspace_root"),
+                    StringComparison.Ordinal);
+                using var stageQueries = new IndexQueries(stagePath!,
+                    pinReadSnapshot: false, pooling: false);
+                stagedPinnedSource =
+                    stageQueries.SearchSymbols("Alpha45", "exact", null, 2).Count == 1 &&
+                    stageQueries.SearchSymbols(
+                        "ReplacementStartupBeta45", "exact", null, 2).Count == 0;
+            };
+
+            manager.Start(forceRebuild: true);
+            Assert.True(WaitUntil(() => manager.State == "failed", 30_000),
+                manager.Health().Error);
+            Assert.True(stagedPinnedSource,
+                "the startup stage did not read through the retained workspace handle");
+            Assert.True(stagedLexicalMetadata,
+                "the startup stage did not preserve lexical workspace_root metadata");
+            Assert.False(manager.IsQueryable);
+            Assert.Equal(oldVersion, manager.Health().IndexVersion);
+
+            manager.Dispose();
+            manager = null;
+            string retainedDatabase = IndexBuilder.DefaultDbPath(retainedRoot);
+            using var retainedQueries = new IndexQueries(retainedDatabase,
+                pinReadSnapshot: false, pooling: false);
+            Assert.Single(retainedQueries.SearchSymbols("Alpha45", "exact", null, 2));
+            Assert.Empty(retainedQueries.SearchSymbols(
+                "ReplacementStartupBeta45", "exact", null, 2));
+            Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(
+                    Path.GetDirectoryName(retainedDatabase)!),
+                path => Path.GetFileName(path).StartsWith(
+                            ".phoenix-stage-", StringComparison.Ordinal) ||
+                        Path.GetFileName(path).StartsWith(
+                            ".phoenix-publish-", StringComparison.Ordinal));
+        }
+        finally
+        {
+            manager?.Dispose();
+            RestoreMovedWorkspace(root, retainedRoot, moved);
+        }
+    }
+
+    [Fact]
+    public void LinuxPumpRebuildRejectsAWholeRootReplacementAfterStageInstall()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-linux-pump-post-install-root-swap").FullName;
+        string retainedRoot = root + "-retained";
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var completed = new ManualResetEventSlim(false);
+        IndexManager? manager = null;
+        bool moved = false;
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            manager = new IndexManager(root, database);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000),
+                manager.Health().Error);
+            string oldVersion = manager.Health().IndexVersion!;
+            manager.FullRebuildAfterStageInstallForTest = () =>
+            {
+                Directory.Move(root, retainedRoot);
+                moved = true;
+                Directory.CreateDirectory(root);
+                WriteWorkspace(root, "LatePumpReplacementBeta45");
+                Directory.CreateDirectory(Path.GetDirectoryName(database)!);
+            };
+            manager.FullRebuildCompletedForTest = () => completed.Set();
+
+            Assert.True(manager.RequestFullRebuild());
+            Assert.True(completed.Wait(TimeSpan.FromSeconds(30)),
+                "late pump root replacement did not return to the refresh pump");
+            Assert.Equal("failed", manager.State);
+            Assert.False(manager.IsQueryable);
+            Assert.Equal(oldVersion, manager.Health().IndexVersion);
+            Assert.False(File.Exists(database));
+
+            manager.Dispose();
+            manager = null;
+            string retainedDatabase = IndexBuilder.DefaultDbPath(retainedRoot);
+            Assert.NotEqual(oldVersion, ReadMeta(retainedDatabase, "index_version"));
+            using var retainedQueries = new IndexQueries(retainedDatabase,
+                pinReadSnapshot: false, pooling: false);
+            Assert.Single(retainedQueries.SearchSymbols(
+                "Alpha45", "exact", null, 2));
+            Assert.Empty(retainedQueries.SearchSymbols(
+                "LatePumpReplacementBeta45", "exact", null, 2));
+            AssertNoPublicationArtifacts(Path.GetDirectoryName(retainedDatabase)!);
+            AssertNoPublicationArtifacts(Path.GetDirectoryName(database)!);
+        }
+        finally
+        {
+            manager?.Dispose();
+            RestoreMovedWorkspace(root, retainedRoot, moved);
+        }
+    }
+
+    [Fact]
+    public void LinuxStartupRebuildRejectsAWholeRootReplacementAfterStageInstall()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-linux-startup-post-install-root-swap").FullName;
+        string retainedRoot = root + "-retained";
+        string database = IndexBuilder.DefaultDbPath(root);
+        IndexManager? manager = null;
+        bool moved = false;
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            string oldVersion = ReadMeta(database, "index_version")!;
+            manager = new IndexManager(root, database)
+            {
+                FullRebuildAfterStageInstallForTest = () =>
+                {
+                    Directory.Move(root, retainedRoot);
+                    moved = true;
+                    Directory.CreateDirectory(root);
+                    WriteWorkspace(root, "LateStartupReplacementBeta45");
+                    Directory.CreateDirectory(Path.GetDirectoryName(database)!);
+                },
+            };
+
+            manager.Start(forceRebuild: true);
+            Assert.True(WaitUntil(() => manager.State == "failed", 30_000),
+                manager.Health().Error);
+            Assert.False(manager.IsQueryable);
+            Assert.Equal(oldVersion, manager.Health().IndexVersion);
+            Assert.False(File.Exists(database));
+
+            manager.Dispose();
+            manager = null;
+            string retainedDatabase = IndexBuilder.DefaultDbPath(retainedRoot);
+            Assert.NotEqual(oldVersion, ReadMeta(retainedDatabase, "index_version"));
+            using var retainedQueries = new IndexQueries(retainedDatabase,
+                pinReadSnapshot: false, pooling: false);
+            Assert.Single(retainedQueries.SearchSymbols(
+                "Alpha45", "exact", null, 2));
+            Assert.Empty(retainedQueries.SearchSymbols(
+                "LateStartupReplacementBeta45", "exact", null, 2));
+            AssertNoPublicationArtifacts(Path.GetDirectoryName(retainedDatabase)!);
+            AssertNoPublicationArtifacts(Path.GetDirectoryName(database)!);
+        }
+        finally
+        {
+            manager?.Dispose();
+            RestoreMovedWorkspace(root, retainedRoot, moved);
+        }
+    }
+
+    [Fact]
+    public void LinuxPumpRebuildFailsClosedWhenWorkspaceMovesBeforeAnchorOpen()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-linux-pump-pre-anchor-move").FullName;
+        string retainedRoot = root + "-retained";
+        string database = IndexBuilder.DefaultDbPath(root);
+        using var completed = new ManualResetEventSlim(false);
+        IndexManager? manager = null;
+        bool moved = false;
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            manager = new IndexManager(root, database);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000),
+                manager.Health().Error);
+            string oldVersion = manager.Health().IndexVersion!;
+            manager.FullRebuildBeforeAnchoredDestinationOpenForTest = () =>
+            {
+                Directory.Move(root, retainedRoot);
+                moved = true;
+            };
+            manager.FullRebuildCompletedForTest = () => completed.Set();
+
+            Assert.True(manager.RequestFullRebuild());
+            Assert.True(completed.Wait(TimeSpan.FromSeconds(20)),
+                "pre-anchor workspace move did not return to the refresh pump");
+            Assert.Equal("failed", manager.State);
+            Assert.False(manager.IsQueryable);
+            Assert.Equal(oldVersion, manager.Health().IndexVersion);
+
+            manager.Dispose();
+            manager = null;
+            string retainedDatabase = IndexBuilder.DefaultDbPath(retainedRoot);
+            using var retainedQueries = new IndexQueries(retainedDatabase,
+                pinReadSnapshot: false, pooling: false);
+            Assert.Single(retainedQueries.SearchSymbols(
+                "Alpha45", "exact", null, 2));
+            Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(
+                    Path.GetDirectoryName(retainedDatabase)!),
+                path => Path.GetFileName(path).StartsWith(
+                            ".phoenix-stage-", StringComparison.Ordinal) ||
+                        Path.GetFileName(path).StartsWith(
+                            ".phoenix-publish-", StringComparison.Ordinal));
+        }
+        finally
+        {
+            manager?.Dispose();
+            RestoreMovedWorkspace(root, retainedRoot, moved);
+        }
+    }
+
+    [Fact]
+    public void LinuxStartupRebuildFailsClosedWhenWorkspaceMovesBeforeAnchorOpen()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-linux-startup-pre-anchor-move").FullName;
+        string retainedRoot = root + "-retained";
+        string database = IndexBuilder.DefaultDbPath(root);
+        IndexManager? manager = null;
+        bool moved = false;
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            string oldVersion = ReadMeta(database, "index_version")!;
+            manager = new IndexManager(root, database);
+            manager.FullRebuildBeforeAnchoredDestinationOpenForTest = () =>
+            {
+                Directory.Move(root, retainedRoot);
+                moved = true;
+            };
+
+            manager.Start(forceRebuild: true);
+            Assert.True(WaitUntil(() => manager.State == "failed", 20_000),
+                manager.Health().Error);
+            Assert.False(manager.IsQueryable);
+            Assert.Equal(oldVersion, manager.Health().IndexVersion);
+
+            manager.Dispose();
+            manager = null;
+            string retainedDatabase = IndexBuilder.DefaultDbPath(retainedRoot);
+            using var retainedQueries = new IndexQueries(retainedDatabase,
+                pinReadSnapshot: false, pooling: false);
+            Assert.Single(retainedQueries.SearchSymbols(
+                "Alpha45", "exact", null, 2));
+            Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(
+                    Path.GetDirectoryName(retainedDatabase)!),
+                path => Path.GetFileName(path).StartsWith(
+                            ".phoenix-stage-", StringComparison.Ordinal) ||
+                        Path.GetFileName(path).StartsWith(
+                            ".phoenix-publish-", StringComparison.Ordinal));
+        }
+        finally
+        {
+            manager?.Dispose();
+            RestoreMovedWorkspace(root, retainedRoot, moved);
+        }
+    }
+
+    [Fact]
+    public void LinuxStagedRebuildRejectsAReplacementDestinationDirectory()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-45-linux-authority-swap").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        string indexDirectory = Path.GetDirectoryName(database)!;
+        string retainedDirectory = indexDirectory + "-retained";
+        using var completed = new ManualResetEventSlim(false);
+        try
+        {
+            WriteWorkspace(root);
+            IndexBuilder.Build(root, database);
+            using var manager = new IndexManager(root, database);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000), manager.Health().Error);
+            string oldVersion = manager.Health().IndexVersion!;
+            manager.FullRebuildCompletedForTest = () => completed.Set();
+
+            Directory.Move(indexDirectory, retainedDirectory);
+            Directory.CreateDirectory(indexDirectory);
+
+            Assert.True(manager.RequestFullRebuild());
+            Assert.True(completed.Wait(TimeSpan.FromSeconds(20)),
+                "authority-mismatched rebuild did not return to the pump");
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000), manager.Health().Error);
+            Assert.Equal(oldVersion, manager.Health().IndexVersion);
+            Assert.Equal(IndexDestinationClaimState.Ready,
+                IndexDestinationClaim.ReadState(root, manager.DatabaseIoPath));
+            using (IndexQueries oldQueries = manager.OpenQueries())
+                Assert.Single(oldQueries.SearchSymbols("Alpha45", "exact", null, 2));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(indexDirectory));
+        }
+        finally { Cleanup(root); }
     }
 
     [Fact]
@@ -1055,6 +2012,16 @@ public sealed class Batch45IndexFollowerTests
 
             successor = new IndexManager(root, database)
             {
+                FullRebuildPrivateStageReadyForTest = _ =>
+                {
+                    Assert.Equal(IndexDestinationClaimState.Ready,
+                        IndexDestinationClaim.ReadState(root, database));
+                    Assert.True(follower!.IsQueryable,
+                        "successor startup hid the old publication during private staging");
+                    using IndexQueries oldQueries = follower.OpenQueries();
+                    Assert.Single(oldQueries.SearchSymbols(
+                        "Alpha45", "exact", null, 2));
+                },
                 FullRebuildDestructiveBoundaryForTest = _ => boundary.Set(),
                 FullRebuildCompletedForTest = () => completed.Set(),
             };
@@ -1554,13 +2521,40 @@ public sealed class Batch45IndexFollowerTests
         return condition();
     }
 
-    private static void WriteWorkspace(string root)
+    private static void WriteWorkspace(string root) =>
+        WriteWorkspace(root, "Alpha45");
+
+    private static void WriteWorkspace(string root, string className)
     {
         File.WriteAllText(Path.Combine(root, "Batch45.csproj"),
             "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
             "<TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
         File.WriteAllText(Path.Combine(root, "Alpha.cs"),
-            "namespace Batch45;\n\npublic class Alpha45\n{\n}\n");
+            $"namespace Batch45;\n\npublic class {className}\n{{\n}}\n");
+    }
+
+    private static void RestoreMovedWorkspace(
+        string root, string retainedRoot, bool moved)
+    {
+        TestWorkspaceCleanup.ClearIndexPools(root);
+        TestWorkspaceCleanup.ClearIndexPools(retainedRoot);
+        if (moved)
+        {
+            Cleanup(root);
+            if (Directory.Exists(retainedRoot))
+                Directory.Move(retainedRoot, root);
+        }
+        Cleanup(root);
+        Cleanup(retainedRoot);
+    }
+
+    private static void AssertNoPublicationArtifacts(string indexDirectory)
+    {
+        Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(indexDirectory),
+            path => Path.GetFileName(path).StartsWith(
+                        ".phoenix-stage-", StringComparison.Ordinal) ||
+                    Path.GetFileName(path).StartsWith(
+                        ".phoenix-publish-", StringComparison.Ordinal));
     }
 
     private static void Cleanup(string root)

@@ -64,6 +64,22 @@ internal sealed class IndexDirectoryAuthority : IDisposable
     internal bool TryGetLeaseIdentity(out IndexLeaseIdentity? identity) =>
         TryGetDatabaseStatus(out identity, out _);
 
+    /// <summary>Compares the retained directory/database identity with a fresh no-follow open of
+    /// the configured lexical path. Publication uses this after test/failure seams and atomic
+    /// installation so a rename-and-replacement cannot split retained I/O from the advertised
+    /// workspace-local destination.</summary>
+    internal bool MatchesLiveDatabasePath(string dbPath)
+    {
+        if (!TryGetLeaseIdentity(out IndexLeaseIdentity? retained) || retained is null ||
+            !TryOpen(dbPath, createDirectory: false, out IndexDirectoryAuthority? live) ||
+            live is null)
+            return false;
+        using (live)
+            return live.TryGetLeaseIdentity(out IndexLeaseIdentity? current) &&
+                   current is not null &&
+                   current == retained;
+    }
+
     /// <summary>Returns identity and length from the same no-follow inspection. The length is
     /// intentionally zero on macOS: that platform has no retained directory handle suitable for
     /// a race-free path-relative metadata read, so health remains conservative.</summary>

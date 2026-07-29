@@ -128,22 +128,124 @@ internal sealed class AnchoredIndexDestination : IDisposable
         }
     }
 
+    /// <summary>Returns the retained destination-directory identity plus the identity of the
+    /// installed stage at the live database name. Unlike <see cref="TryGetLeaseIdentity"/>, this
+    /// deliberately does not consult the pre-install database handle: a successful replacement
+    /// makes that handle stale on Linux and closes it on Windows.</summary>
+    internal bool TryGetInstalledLeaseIdentity(out IndexLeaseIdentity? identity)
+    {
+        identity = null;
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                if (_stageWindowsIdentity is not { } expected ||
+                    !TryGetWindowsInfo(_directoryHandle, out WinFileInfo directory))
+                    return false;
+                using SafeFileHandle installed = OpenWindowsFile(
+                    _dbPath, GenericRead, FileShareRead | FileShareWrite);
+                if (installed.IsInvalid ||
+                    !TryGetWindowsInfo(installed, out WinFileInfo database) ||
+                    (database.FileAttributes & (FileAttributeReparsePoint | 0x10)) != 0 ||
+                    database.NumberOfLinks != 1 ||
+                    WinFileIdentity.From(database) != expected)
+                    return false;
+                string directoryId = $"W:{directory.VolumeSerialNumber:X8}:" +
+                    $"{directory.FileIndexHigh:X8}{directory.FileIndexLow:X8}";
+                string databaseId = $"W:{database.VolumeSerialNumber:X8}:" +
+                    $"{database.FileIndexHigh:X8}{database.FileIndexLow:X8}";
+                identity = new IndexLeaseIdentity(directoryId, databaseId);
+                return true;
+            }
+
+            if (_stageLinuxIdentity is not { } expectedLinux)
+                return false;
+            int directoryFd = _directoryHandle.DangerousGetHandle().ToInt32();
+            if (!TryStatxFd(directoryFd, out StatxIdentity directoryIdentity) ||
+                !TryStatxAt(directoryFd, Path.GetFileName(_dbPath),
+                    out StatxIdentity installedLinux) ||
+                !installedLinux.IsRegular || installedLinux.Links != 1 ||
+                installedLinux.Device != expectedLinux.Device ||
+                installedLinux.Inode != expectedLinux.Inode)
+                return false;
+            string directoryIdLinux = $"U:{directoryIdentity.Device:X16}:" +
+                $"{directoryIdentity.Inode:X16}";
+            string databaseIdLinux = $"U:{installedLinux.Device:X16}:" +
+                $"{installedLinux.Inode:X16}";
+            identity = new IndexLeaseIdentity(directoryIdLinux, databaseIdLinux);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal bool TryGetWorkspaceIdentity(out string? identity)
+    {
+        identity = null;
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                if (!TryGetWindowsInfo(_workspaceHandle, out WinFileInfo workspace) ||
+                    (workspace.FileAttributes &
+                        (FileAttributeReparsePoint | 0x00000010)) != 0x00000010)
+                    return false;
+                identity = $"W:{workspace.VolumeSerialNumber:X8}:" +
+                    $"{workspace.FileIndexHigh:X8}{workspace.FileIndexLow:X8}";
+                return true;
+            }
+
+            if (!TryStatxFd(_workspaceHandle.DangerousGetHandle().ToInt32(),
+                    out StatxIdentity workspaceIdentity))
+                return false;
+            identity = $"U:{workspaceIdentity.Device:X16}:{workspaceIdentity.Inode:X16}";
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     internal string WorkspaceReadPath => OperatingSystem.IsWindows()
         ? _workspacePath
         : $"/proc/{Environment.ProcessId}/fd/{_workspaceHandle.DangerousGetHandle()}";
 
-    internal static bool TryOpen(string gitRoot, string workspacePath, string dbPath,
-        bool createIndexDirectory, out AnchoredIndexDestination? destination)
+    /// <summary>Whether this platform and path layout require the handle-pinned publication path.
+    /// A false result is an intentional compatibility fallback (macOS or an external database);
+    /// a true result means TryOpen failure is a safety refusal, never permission to rebuild
+    /// lexically.</summary>
+    internal static bool IsAnchoredPublicationRequired(
+        string gitRoot, string workspacePath, string dbPath)
     {
-        destination = null;
-        if (OperatingSystem.IsMacOS()) return false; // no handle-relative source path equivalent
+        if (OperatingSystem.IsMacOS()) return false;
         try
         {
             string root = Path.GetFullPath(gitRoot);
             string workspace = Path.GetFullPath(workspacePath);
             string database = Path.GetFullPath(dbPath);
-            if (!WorkspacePaths.IsSameOrDescendantPath(workspace, root) ||
-                !WorkspacePaths.IsSameOrDescendantPath(database, workspace)) return false;
+            return WorkspacePaths.IsSameOrDescendantPath(workspace, root) &&
+                   WorkspacePaths.IsSameOrDescendantPath(database, workspace);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static bool TryOpen(string gitRoot, string workspacePath, string dbPath,
+        bool createIndexDirectory, out AnchoredIndexDestination? destination)
+    {
+        destination = null;
+        if (!IsAnchoredPublicationRequired(gitRoot, workspacePath, dbPath))
+            return false;
+        try
+        {
+            string root = Path.GetFullPath(gitRoot);
+            string workspace = Path.GetFullPath(workspacePath);
+            string database = Path.GetFullPath(dbPath);
             string indexDirectory = Path.GetDirectoryName(database)!;
 
             bool opened = OperatingSystem.IsWindows()

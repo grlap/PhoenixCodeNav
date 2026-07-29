@@ -325,7 +325,9 @@ internal sealed record Meta(
     public static Meta From(IndexHealth h, string confidence, string layer)
     {
         // Pending watcher changes mean results may lag the working tree.
-        string status = h.RefreshIncompleteReason is not null && h.State != "refreshing"
+        string status = h.State == "building"
+            ? "building"
+            : h.RefreshIncompleteReason is not null && h.State != "refreshing"
             ? "stale"
             : h.State == "ready" && h.PendingChanges > 0 ? "stale" : h.State;
         string effectiveConfidence = h.RefreshIncompleteReason is not null &&
@@ -341,24 +343,47 @@ internal sealed record Meta(
             : null;
         // 9z4 (field: couldn't tell whether 'refreshing' meant "results may be wrong" or "background
         // catch-up, results fine"): one line of meaning, only when the status needs it.
-        string? statusNote = h.AccessMode == IndexManager.FollowerAccessMode
-            ? h.RefreshIncompleteReason is null
+        string? statusNote;
+        if (h.AccessMode == IndexManager.FollowerAccessMode)
+        {
+            statusNote = h.RefreshIncompleteReason is null
                 ? "read-only follower — index-backed evidence reflects committed writer state; live source, Git, and semantic evidence may be newer; this process cannot observe the writer's pending queue"
                 : h.RefreshIncompleteReason == IndexManager.RefreshSweepPendingCause
                     ? "read-only follower — the writer's freshness convergence is pending; index-backed evidence reflects the last committed state and may lag recent workspace edits; only the writer can complete or retry the sweep"
-                    : "read-only follower — the writer reports incomplete source capture; index-backed evidence reflects the last complete committed state and cannot claim current source evidence or exact confidence"
-            : h.RefreshIncompleteReason is not null
-                ? h.RefreshIncompleteReason == IndexManager.RefreshSweepPendingCause
-                    ? "freshness convergence pending — results may lag recent workspace edits; if this state persists, call refresh_index to retry"
-                    : status == "refreshing"
-                        ? "source capture retry in progress — results reflect the last complete index and cannot claim current source evidence"
-                        : "source capture incomplete — affected results cannot claim current source evidence or exact confidence; retry refresh before relying on them"
-            : status switch
+                    : "read-only follower — the writer reports incomplete source capture; index-backed evidence reflects the last complete committed state and cannot claim current source evidence or exact confidence";
+        }
+        else if (status == "building")
+        {
+            const string rebuilding =
+                "full rebuild in progress — results reflect the previous index publication";
+            statusNote = h.RefreshIncompleteReason switch
+            {
+                IndexManager.RefreshSweepPendingCause =>
+                    rebuilding +
+                    "; freshness convergence for that publication is also pending and results may lag recent workspace edits",
+                not null =>
+                    rebuilding +
+                    "; source capture for that publication is incomplete and exact confidence is unavailable",
+                _ => rebuilding,
+            };
+        }
+        else if (h.RefreshIncompleteReason is not null)
+        {
+            statusNote = h.RefreshIncompleteReason == IndexManager.RefreshSweepPendingCause
+                ? "freshness convergence pending — results may lag recent workspace edits; if this state persists, call refresh_index to retry"
+                : status == "refreshing"
+                    ? "source capture retry in progress — results reflect the last complete index and cannot claim current source evidence"
+                    : "source capture incomplete — affected results cannot claim current source evidence or exact confidence; retry refresh before relying on them";
+        }
+        else
+        {
+            statusNote = status switch
             {
                 "refreshing" => "background non-blocking refresh — results reflect the index as of lastRefreshUtc/indexedAtUtc",
                 "stale" => $"watcher changes pending ({h.PendingChanges}) — results may lag the working tree slightly",
                 _ => null,
             };
+        }
         // ddp (field: "I can programmatically check what's deployed — make it inline"): every
         // response self-identifies its build, ~20 bytes. indexSchema likewise (asked twice) —
         // schema bumps force reindexes, and a caller watching for one shouldn't need a second call.

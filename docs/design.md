@@ -146,18 +146,50 @@ evidence may use newer workspace bytes. Other platforms remain writer-only for n
 **Build** (`IndexBuilder`): scan the tree (excluding `.git`, `bin`, `obj`, `packages`,
 `node_modules`, `.vs`, generated files, and symlink/junction targets); parse every `.csproj` and
 `.fsproj` directly, independent of solution membership; index `.cs`, `.fs`, `.fsi`, `.fsx`, `.md`,
-and `.sql` text, while parsing only `.cs` with Roslyn syntax during indexing. Symbol rows stream through a
-bounded channel to the single writer. Since v0.12.24, that writer caches raw SQLite statements for
-every exact symbol-batch size from 1 through 32 and binds by ordinal, avoiding provider-level
+and `.sql` text, while parsing only `.cs` with Roslyn syntax during indexing. Parsed C# rows cross a
+bounded synchronous queue to the single writer, so backpressure cannot strand every parser behind a
+ThreadPool-scheduled async continuation. Since v0.12.39, cold builds schedule C# files by descending
+scanned byte size with an ordinal-path tie-breaker, overlapping giant Roslyn parses with ordinary
+parse-and-persist work instead of leaving them as final stragglers. Since v0.12.24, that writer
+caches raw SQLite statements for every exact symbol-batch size from 1 through 32 and binds by
+ordinal, avoiding provider-level
 parameter-name lookup and per-execution parameter allocation without changing row or ID semantics;
 the same insertion path is used by delta refresh. Since v0.12.35, file ids are also assigned by the
 single writer and persisted through cached raw ordinal statements; full C# builds batch exact
-groups of up to 32 files, while delta and structural writes use the same one-row statement. Cold
-builds create tables, primary keys, and uniqueness constraints first, bulk-load every row, then
-construct all nine query-facing secondary indexes in the unpublished finalization transaction
-before writing the compatible schema marker. The writer split reports schema, secondary-index
-groups, project/graph/compile-item SQL, file-statement count, commits, FTS, analysis, and checkpoint
-costs independently. F# outlines are parsed on demand and are not stored. Solution files are
+groups of up to 32 files, while delta and structural writes use the same one-row statement. Since
+v0.12.37, each cold C# wave persists its associated `file_contents` through cached raw ordinal
+statements at the same exact width. Since v0.12.38, cold builds defer FTS5 population until every
+`file_contents` row is present, then issue one external-content rebuild during the unpublished
+finalization transaction; live delta writes still update content and FTS together. Cold builds
+create tables, primary keys, and uniqueness constraints first, bulk-load every row, then complete
+FTS and construct all nine query-facing secondary indexes before writing the compatible schema
+marker. The writer split reports schema, secondary-index groups, project/graph/compile-item SQL,
+file/content/FTS statement counts, commits, analysis, and checkpoint costs independently. Since
+v0.12.36, supported
+Windows/Linux workspace-local full rebuilds perform
+that complete load in a pinned private database using MEMORY/OFF journaling while the previous live
+WAL database remains queryable. Only final publication closes local reads, marks the destination
+`rebuilding`, drains every admitted writer query, pinned review snapshot, and old follower handle
+under one three-minute deadline shared by the local drain and remaining install retries, and
+atomically installs the stage. The anchored stage must match the writer's retained destination
+identity before its build and again before installation, so a Linux lexical directory replacement
+cannot split publication from the manager's read authority; a fresh no-follow destination open is
+also compared with the installed stage identity after installation before reads reopen. Linux scans
+through the retained workspace
+handle. Windows scans the lexical path, then relies on the same pre/post-build and post-install
+identity checks to refuse publication if that path changes. Both store the original lexical root
+only as publication metadata and revalidate it against the workspace ownership lease before
+publication. Replacing the whole root therefore fails closed instead of serving the replacement
+tree. A
+platform/path layout that requires anchoring also fails closed when the anchor cannot be opened;
+the destructive compatibility path is reserved for macOS or an index outside the workspace and
+first revalidates the acquisition-time workspace identity. A pre-install failure or local-drain
+timeout cleans the stage, refreshes cached metadata, schedules a convergence sweep, and returns the
+prior publication to `ready` only while workspace authority still matches. Compatible startup
+force-rebuilds expose that prior publication through the new writer while the private stage builds;
+responses preserve `building` even when that prior publication also carries a freshness-convergence
+warning. F# outlines are parsed on demand and are not stored.
+Solution files are
 optional editor inventory: they never select projects or provide build, dependency, ownership,
 or symbol-resolution authority. A cold build of a
 multi-thousand-project workspace completes in minutes at most; live progress counters
@@ -513,12 +545,16 @@ The index is kept live without rebuilding on every keystroke:
   promotion to writer is deliberately restart-only. When a successor publishes a replacement, the
   follower reopens it on the next request.
 - There is no cross-process reader registry or writer-intent turnstile. The writer still drains its
-  own in-process pinned snapshots before rebuilding. The sole writer also holds
+  own in-process ordinary queries and pinned review snapshots at the final publication boundary.
+  The sole writer also holds
   `<index-db>.phoenix-owner`, a fixed-size claim containing its physical workspace identity and a
   `ready`/`rebuilding` state. Windows followers validate the claim before and after each SQLite
   open. Once the writer publishes `rebuilding`, new opens fail honestly while existing bounded
-  handles retain their consistent old database; replacement creation retries until those handles
-  drain. The retry budget is three minutes, above Phoenix's longest semantic operation deadline
+  handles retain their consistent old database; the already-complete private replacement waits
+  only for those handles to drain before atomic install. One three-minute publication budget covers
+  the writer's local reader drain plus the remaining OS-handle install retries; a local timeout
+  restores the prior publication before its store is released. That budget is above Phoenix's
+  longest semantic operation deadline
   (120 seconds). The claim is not a reader registry: followers never write it or register slots.
   POSIX contenders remain unavailable, so Windows is the only advertised follower platform today.
 

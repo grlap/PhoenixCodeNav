@@ -39,16 +39,20 @@ internal sealed class IndexOwnershipLease : IDisposable
     private readonly Thread _ownerThread;
     private int _disposed;
 
-    private IndexOwnershipLease(Mutex mutex, ManualResetEventSlim ready,
+    private IndexOwnershipLease(Mutex mutex, string workspaceIdentity,
+        ManualResetEventSlim ready,
         Action<IndexLeaseAcquireResult> publishResult)
     {
         _mutex = mutex;
+        WorkspaceIdentity = workspaceIdentity;
         _ownerThread = new Thread(() => OwnMutex(ready, publishResult))
         {
             IsBackground = true,
             Name = "PhoenixCodeNav index lease",
         };
     }
+
+    internal string WorkspaceIdentity { get; }
 
     internal static bool TryAcquire(string ownershipRoot, string dbPath,
         out IndexOwnershipLease? lease)
@@ -70,9 +74,11 @@ internal sealed class IndexOwnershipLease : IDisposable
         _ = anchoredIdentity;
         lease = null;
         string name;
+        string workspaceIdentity;
         try
         {
-            name = BuildMutexName(ownershipRoot);
+            workspaceIdentity = GetWorkspaceIdentity(ownershipRoot);
+            name = BuildMutexNameFromIdentity(workspaceIdentity);
         }
         catch
         {
@@ -91,7 +97,8 @@ internal sealed class IndexOwnershipLease : IDisposable
 
         using var ready = new ManualResetEventSlim(false);
         IndexLeaseAcquireResult result = IndexLeaseAcquireResult.Failed;
-        var candidate = new IndexOwnershipLease(mutex, ready, value => result = value);
+        var candidate = new IndexOwnershipLease(
+            mutex, workspaceIdentity, ready, value => result = value);
         try
         {
             candidate._ownerThread.Start();
@@ -232,9 +239,8 @@ internal sealed class IndexOwnershipLease : IDisposable
         }
     }
 
-    private static string BuildMutexName(string ownershipRoot)
+    private static string BuildMutexNameFromIdentity(string directoryIdentity)
     {
-        string directoryIdentity = GetWorkspaceIdentity(ownershipRoot);
         string prefix = OperatingSystem.IsWindows() ? "Global\\" : "";
         return prefix + "PhoenixCodeNav.WorkspaceWriter." + Hash(directoryIdentity);
     }

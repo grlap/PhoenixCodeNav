@@ -288,6 +288,11 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("index-raw-ordinal-symbol-batching", ids);
         Assert.Contains("index-raw-ordinal-file-batching", ids);
         Assert.Contains("index-deferred-secondary-index-build", ids);
+        Assert.Contains("index-private-staged-rebuild-publication", ids);
+        Assert.Contains("index-raw-ordinal-content-fts-batching", ids);
+        Assert.Contains("index-bounded-synchronous-csharp-build-handoff", ids);
+        Assert.Contains("index-deferred-fts-rebuild", ids);
+        Assert.Contains("index-size-prioritized-csharp-build-scheduling", ids);
         Assert.Contains("operations-portal-jsonl-readonly", ids);
         Assert.Contains("operations-portal-live-build-status", ids);
         Assert.Contains("refresh-recovery-self-heal", ids);

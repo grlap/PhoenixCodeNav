@@ -110,9 +110,35 @@ that recovers even a corrupted index without shell access, and cold builds expos
 counters (no fabricated ETAs). Cold rebuilds keep primary-key and uniqueness enforcement active
 while bulk-loading rows, then construct the nine query-facing secondary indexes once inside the
 still-unpublished finalization transaction. File rows use client-assigned ids and cached raw
-ordinal SQLite statements; C# persistence batches up to 32 file rows before writing their content
-and symbols. The final schema and query behavior are unchanged, while the build log separately
-reports file-statement, structural-SQL, schema, secondary-index, commit, FTS, and checkpoint costs.
+ordinal SQLite statements; C# persistence batches up to 32 file rows, then persists the associated
+content through a cached raw ordinal statement at the same exact width before writing their symbols.
+Prepared C# sources cross a bounded synchronous producer/writer queue, avoiding ThreadPool
+starvation without retaining an unbounded parse backlog. Cold builds schedule those sources by
+descending scanned byte size with an ordinal path tie-breaker, so giant Roslyn parses overlap
+ordinary parse-and-persist work instead of extending the final build tail. After all cold content is
+present, Phoenix rebuilds the external-content FTS5 index once; live incremental refreshes continue
+to update content and FTS transactionally. The final schema and query behavior are unchanged, while
+the build log separately reports file, content, and FTS statement counts plus structural-SQL,
+schema, secondary-index, commit, and checkpoint costs.
+On supported Windows/Linux workspace-local destinations, a full rebuild writes and finalizes a
+pinned private database while the last compatible index remains queryable. Phoenix publishes the
+destination as `rebuilding` only for the final bounded reader drain and anchored atomic install.
+Every admitted writer query and pinned review snapshot holds that boundary until disposal, and the
+same three-minute publication deadline covers both that local drain and the remaining atomic-install
+retries. The stage must identify the same retained destination authority before both build and
+publication. After installation, the live database must identify the reserved stage inode and a
+fresh no-follow open must still identify the retained destination.
+Linux source scans resolve through the retained workspace handle; Windows scans the lexical path
+and relies on the same pre/post-build and post-install identity revalidation. The user-facing
+lexical root is stored separately and must still identify the ownership-lease workspace before
+publication. A root replacement therefore fails closed without publishing replacement-tree rows.
+Where this anchored path is required, failure to open
+the anchor is also a safety refusal; the destructive compatibility fallback is limited to macOS or
+an index outside the workspace and still rechecks the acquired workspace identity first. A failed
+or timed-out staged build leaves the previous publication intact, schedules a convergence sweep
+when its workspace authority is still valid, and removes its private artifacts. Successful results
+served from the previous publication during this window report `building` with an explanatory
+status note, while any simultaneous freshness-convergence warning remains visible separately.
 
 On Windows, Phoenix uses **one writer process and many read-only follower processes per index**.
 One crash-recoverable named mutex, keyed by the physical workspace/worktree directory identity,
@@ -132,7 +158,8 @@ turnstile. A small `<index-db>.phoenix-owner` claim binds that destination to th
 workspace identity and publishes `ready` or `rebuilding`. Followers check it before and after every
 SQLite open. Publishing `rebuilding` therefore stops new opens from barging while existing bounded
 operations keep their consistent old handle; the sole writer waits up to three minutes for those
-handles before publishing the replacement. A different workspace cannot claim the same
+handles before publishing the already-complete staged replacement. A different workspace cannot
+claim the same
 `--index-db`, and a same-workspace process configured with another database refuses follower mode
 instead of reading a path its writer does not maintain. If a database moves with its workspace,
 an ordinary open refuses to guess while the old root may be temporarily unavailable. An explicit

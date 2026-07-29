@@ -469,7 +469,7 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
     }
 
     // 9z4 (field: couldn't tell if 'refreshing' meant "results wrong" or "background catch-up"):
-    // refreshing/stale statuses carry a one-line meaning; plain ready does not.
+    // building/refreshing/stale statuses carry a one-line meaning; plain ready does not.
     [Fact]
     public void StatusNoteExplainsRefreshingAndStale()
     {
@@ -484,6 +484,36 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
         var refreshing = Meta.From(ready with { State = "refreshing" }, "indexed", "text");
         Assert.Equal("refreshing", refreshing.IndexStatus);
         Assert.Contains("non-blocking", refreshing.StatusNote);
+
+        var building = Meta.From(ready with { State = "building" }, "indexed", "text");
+        Assert.Equal("building", building.IndexStatus);
+        Assert.Contains("previous index publication", building.StatusNote);
+
+        var buildingPending = Meta.From(ready with
+        {
+            State = "building",
+            RefreshIncompleteReason = IndexManager.RefreshSweepPendingCause,
+        }, "exact", "semantic");
+        Assert.Equal("building", buildingPending.IndexStatus);
+        Assert.Equal("indexed", buildingPending.Confidence);
+        Assert.Equal(IndexManager.RefreshSweepPendingCause,
+            buildingPending.PartialReason);
+        Assert.Contains("previous index publication", buildingPending.StatusNote);
+        Assert.Contains("freshness convergence", buildingPending.StatusNote);
+
+        var buildingIncomplete = Meta.From(ready with
+        {
+            State = "building",
+            RefreshIncompleteReason = IndexManager.RefreshInputUnavailableCause,
+        }, "exact", "semantic");
+        Assert.Equal("building", buildingIncomplete.IndexStatus);
+        Assert.Equal("indexed", buildingIncomplete.Confidence);
+        Assert.Equal(IndexManager.RefreshInputUnavailableCause,
+            buildingIncomplete.PartialReason);
+        Assert.Contains("previous index publication", buildingIncomplete.StatusNote);
+        Assert.Contains("source capture", buildingIncomplete.StatusNote);
+        Assert.Contains("exact confidence is unavailable",
+            buildingIncomplete.StatusNote);
     }
 
     [Fact]

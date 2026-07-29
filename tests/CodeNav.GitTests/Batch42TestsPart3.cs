@@ -792,7 +792,7 @@ public class Batch42TestsPart3
                     Interlocked.Exchange(ref rebuildRequests, 1) != 0)
                     return;
                 manager.RequestFullRebuild();
-                Assert.True(waiting.Wait(TimeSpan.FromSeconds(10)),
+                Assert.True(waiting.Wait(TimeSpan.FromSeconds(30)),
                     "full rebuild did not reach the active-review gate");
                 Assert.False(completed.IsSet,
                     "full rebuild crossed its destructive boundary while a review snapshot was active");

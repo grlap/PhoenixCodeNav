@@ -41,11 +41,32 @@ Focus: Deterministic convergence from the working tree to the index, truthful Gi
 
 7. **Full rebuild recovery**
    - Runs on the refresh pump and cannot interleave with deltas.
-   - Publishes destination `rebuilding` before releasing writer handles; followers validate that
-     state before and after opens so new reads cannot barge while existing handles drain.
-   - Deletes the main database and then stale SQLite sidecars before creating the replacement.
-   - Cold bulk loading retains primary/unique constraints and completes every deferred secondary
-     index before the compatible `schema_version` marker can be published.
+   - On supported anchored destinations, builds and finalizes a private database while the previous
+     publication remains readable; a pre-install failure preserves that publication and cleans the
+     stage.
+   - Publishes destination `rebuilding` only at the final installation boundary and before
+     releasing writer handles; local and follower gates prevent new reads from barging while every
+     admitted writer query, pinned review snapshot, and follower handle drains under the bounded
+     observable timeout. One deadline covers the local drain and remaining atomic-install retries,
+     and local timeout restores the prior publication before its store is disposed.
+   - Proves that the stage and the retained manager/builder authority identify the same destination
+     before staging and after test seams. After installation, proves that the live database has the
+     reserved stage identity and that a fresh no-follow lexical open reaches the retained
+     destination; a directory replacement fails closed before reads or readiness are published.
+   - On Linux, reads a staged build through the retained workspace handle. On Windows, scans the
+     lexical path and relies on pre/post-build and post-install identity checks. Both persist the
+     original lexical root only as metadata and revalidate that it still identifies the
+     ownership-lease workspace before publication; a whole-root replacement fails closed.
+   - Treats failure to establish a required Windows/Linux workspace-local anchor as a safety
+     refusal; only an intentionally unsupported path layout may use the destructive fallback, and
+     that fallback first revalidates the acquisition-time workspace identity.
+   - Atomically installs the complete stage; the in-place compatibility fallback still removes the
+     main database and stale SQLite sidecars before creating its replacement.
+   - Restoring a prior publication refreshes cached metadata and schedules a detect-all convergence
+     sweep before reporting it readable.
+   - Cold bulk loading retains primary/unique constraints and completes the deferred external-
+     content FTS rebuild plus every deferred secondary index before the compatible `schema_version`
+     marker can be published.
    - Clears stale cached metadata and prior error state.
    - Reattaches filesystem and Git tracking when recovering from startup failure.
 

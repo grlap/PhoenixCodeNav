@@ -1,9 +1,9 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.IO.Hashing;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
-using System.Threading.Channels;
 using CodeNav.Core.Discovery;
 
 namespace CodeNav.Core.Indexing;
@@ -30,7 +30,9 @@ internal sealed record FSharpPipelineTestHooks(
 
 internal sealed record BuildCaptureTestHooks(
     Func<string, string, int, GitInfo.WorkspaceFileReadResult> Reader,
-    Action<string>? FirstCaptureFailureRetained = null);
+    Action<string>? FirstCaptureFailureRetained = null,
+    int? CSharpQueueCapacity = null,
+    Action? CSharpQueueSaturated = null);
 
 internal sealed class IndexWorkspaceMismatchException : IOException
 {
@@ -111,6 +113,11 @@ public static class IndexBuilder
     /// v20: sibling-worktree publications persist the target workspace_root rather than the seed
     /// workspace root, making stored ownership metadata authoritative for follower attachment.</summary>
     public const string SchemaVersion = "20";
+    internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
+    internal static Action<string>? AnchoredStageReadyForTest { get; set; }
+    internal static Action<string>? AnchoredStageCompletedForTest { get; set; }
+    internal static Action? BeforeAnchoredStageInstallForTest { get; set; }
+    internal static Action? AnchoredStageInstalledForTest { get; set; }
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
         BuildProgress? liveProgress = null) =>
@@ -125,6 +132,15 @@ public static class IndexBuilder
         BuildCore(workspaceRoot, dbPath: null, progress, liveProgress,
             Math.Max(1, sourceWriteBatchSize), fSharpPipelineTestHooks,
             buildCaptureTestHooks);
+
+    internal static IOrderedEnumerable<ScannedFile> PrioritizeCSharpFilesForColdBuild(
+        IEnumerable<ScannedFile> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        return files
+            .OrderByDescending(static file => file.Size)
+            .ThenBy(static file => file.RelPath, StringComparer.Ordinal);
+    }
 
     private static BuildResult BuildCore(string workspaceRoot, string? dbPath,
         Action<string>? progress, BuildProgress? liveProgress, int sourceWriteBatchSize,
@@ -164,6 +180,49 @@ public static class IndexBuilder
                         allowLegacySchemaRebind: true);
                     if (rebind)
                         progress?.Invoke("Rebinding moved index database to the current workspace root ...");
+                    BeforeAnchoredDestinationOpenForTest?.Invoke();
+                    if (AnchoredIndexDestination.TryOpen(root, root, database,
+                            createIndexDirectory: true,
+                            out AnchoredIndexDestination? destination))
+                    {
+                        AnchoredIndexDestination anchored = destination!;
+                        using (anchored)
+                        {
+                            EnsureStagedDestinationAuthority(
+                                root, database, ownershipLease!, authority, anchored);
+                            string stagePath = anchored.CreateStagePath();
+                            AnchoredStageReadyForTest?.Invoke(stagePath);
+                            BuildResult staged = BuildOwned(
+                                anchored.WorkspaceReadPath, stagePath, progress,
+                                liveProgress, sourceWriteBatchSize, fSharpPipelineTestHooks,
+                                buildCaptureTestHooks, reservedPrivateStage: true,
+                                publishedWorkspaceRoot: root);
+                            AnchoredStageCompletedForTest?.Invoke(stagePath);
+                            EnsureStagedDestinationAuthority(
+                                root, database, ownershipLease!, authority, anchored);
+                            BeforeAnchoredStageInstallForTest?.Invoke();
+                            EnsureStagedDestinationAuthority(
+                                root, database, ownershipLease!, authority, anchored);
+                            IndexQueries.ClearPoolsFor(authority.DatabasePath);
+                            if (!string.Equals(authority.DatabasePath, database,
+                                    StringComparison.OrdinalIgnoreCase))
+                                IndexQueries.ClearPoolsFor(database);
+                            if (!anchored.InstallStage(waitingForReaders: () =>
+                                    progress?.Invoke(
+                                        "Waiting for existing index readers to drain ...")))
+                                throw new IOException(
+                                    "staged index publication could not replace the live database");
+                            AnchoredStageInstalledForTest?.Invoke();
+                            EnsureInstalledDestinationAuthority(
+                                root, database, ownershipLease!, authority, anchored);
+                            return staged;
+                        }
+                    }
+                    EnsureLiveWorkspaceAuthority(root, ownershipLease!);
+                    if (AnchoredIndexDestination.IsAnchoredPublicationRequired(
+                            root, root, database))
+                        throw new IOException(
+                            "required anchored index publication could not be opened safely");
                     return BuildOwned(root, authority.DatabasePath, progress, liveProgress,
                         sourceWriteBatchSize, fSharpPipelineTestHooks,
                         buildCaptureTestHooks,
@@ -172,6 +231,72 @@ public static class IndexBuilder
                 }
             }
         }
+    }
+
+    private static void EnsureLiveWorkspaceAuthority(
+        string workspaceRoot, IndexOwnershipLease ownershipLease)
+    {
+        if (IndexOwnershipLease.ProbeWorkspaceIdentity(
+                workspaceRoot, out string? currentWorkspace) !=
+                WorkspaceIdentityProbeResult.Found ||
+            !string.Equals(currentWorkspace, ownershipLease.WorkspaceIdentity,
+                StringComparison.Ordinal))
+            throw new IOException(
+                "index workspace differs from the retained workspace authority");
+    }
+
+    private static void EnsureStagedDestinationAuthority(
+        string workspaceRoot,
+        string databasePath,
+        IndexOwnershipLease ownershipLease,
+        IndexDirectoryAuthority authority,
+        AnchoredIndexDestination destination)
+    {
+        if (!authority.TryGetLeaseIdentity(out IndexLeaseIdentity? retained) ||
+            !destination.TryGetLeaseIdentity(out IndexLeaseIdentity? staged) ||
+            retained is null ||
+            staged is null ||
+            retained != staged)
+            throw new IOException(
+                "staged index destination differs from the retained index authority");
+        if (!authority.MatchesLiveDatabasePath(databasePath))
+            throw new IOException(
+                "live index destination differs from the retained index authority");
+
+        EnsureLiveWorkspaceAuthority(workspaceRoot, ownershipLease);
+        if (!destination.TryGetWorkspaceIdentity(out string? anchoredWorkspace) ||
+            anchoredWorkspace is null ||
+            !string.Equals(anchoredWorkspace, ownershipLease.WorkspaceIdentity,
+                StringComparison.Ordinal))
+            throw new IOException(
+                "staged index workspace differs from the retained workspace authority");
+    }
+
+    private static void EnsureInstalledDestinationAuthority(
+        string workspaceRoot,
+        string databasePath,
+        IndexOwnershipLease ownershipLease,
+        IndexDirectoryAuthority authority,
+        AnchoredIndexDestination destination)
+    {
+        if (!authority.TryGetLeaseIdentity(out IndexLeaseIdentity? retained) ||
+            !destination.TryGetInstalledLeaseIdentity(out IndexLeaseIdentity? installed) ||
+            retained is null ||
+            installed is null ||
+            retained != installed)
+            throw new IOException(
+                "installed index destination differs from the retained index authority");
+        if (!authority.MatchesLiveDatabasePath(databasePath))
+            throw new IOException(
+                "live index destination differs from the retained index authority");
+
+        EnsureLiveWorkspaceAuthority(workspaceRoot, ownershipLease);
+        if (!destination.TryGetWorkspaceIdentity(out string? anchoredWorkspace) ||
+            anchoredWorkspace is null ||
+            !string.Equals(anchoredWorkspace, ownershipLease.WorkspaceIdentity,
+                StringComparison.Ordinal))
+            throw new IOException(
+                "installed index workspace differs from the retained workspace authority");
     }
 
     /// <summary>
@@ -279,7 +404,9 @@ public static class IndexBuilder
         FSharpPipelineTestHooks? fSharpPipelineTestHooks = null,
         BuildCaptureTestHooks? buildCaptureTestHooks = null,
         TimeSpan? replacementWaitTimeout = null,
-        Action? waitingForReaders = null)
+        Action? waitingForReaders = null,
+        bool reservedPrivateStage = false,
+        string? publishedWorkspaceRoot = null)
     {
         var total = Stopwatch.StartNew();
         progress?.Invoke($"Scanning {workspaceRoot} ...");
@@ -328,9 +455,11 @@ public static class IndexBuilder
         liveProgress?.SetProjectsFailed(parsedProjects.Count(p => p.LoadStatus.StartsWith("failed", StringComparison.Ordinal)));
         var projectTime = sw.Elapsed;
 
-        using var store = IndexStore.CreateForBulkBuild(dbPath,
-            replacementWaitTimeout: replacementWaitTimeout,
-            waitingForReaders: waitingForReaders);
+        using var store = reservedPrivateStage
+            ? IndexStore.CreateForReservedBulkBuild(dbPath)
+            : IndexStore.CreateForBulkBuild(dbPath,
+                replacementWaitTimeout: replacementWaitTimeout,
+                waitingForReaders: waitingForReaders);
         long commitTicks = 0; // lf4p: every cold-build commit, reported with the store's split
         void CommitTracked(Microsoft.Data.Sqlite.SqliteTransaction transaction)
         {
@@ -451,15 +580,24 @@ public static class IndexBuilder
         liveProgress?.SetPhase("indexing_files");
         progress?.Invoke($"Parsing {scan.CsFiles.Count} C# files on {Environment.ProcessorCount} cores ...");
 
-        var channel = Channel.CreateBounded<PreparedCSharpSource>(
-            new BoundedChannelOptions(1024) { SingleReader = true });
+        int csharpQueueCapacity = Math.Max(
+            1, buildCaptureTestHooks?.CSharpQueueCapacity ?? 1024);
+        using var csharpQueue =
+            new BlockingCollection<PreparedCSharpSource>(csharpQueueCapacity);
+        using var csharpProducerCancellation = new CancellationTokenSource();
         Exception? csharpCaptureFailure = null;
 
         var producer = Task.Run(() =>
         {
             try
             {
-                Parallel.ForEach(scan.CsFiles, (scanned, loop) =>
+                Parallel.ForEach(
+                    PrioritizeCSharpFilesForColdBuild(scan.CsFiles),
+                    new ParallelOptions
+                    {
+                        CancellationToken = csharpProducerCancellation.Token,
+                    },
+                    (scanned, loop) =>
                 {
                     if (Volatile.Read(ref csharpCaptureFailure) is not null)
                     {
@@ -474,10 +612,13 @@ public static class IndexBuilder
                         ulong hash = XxHash64.HashToUInt64(bytes);
                         string content = DecodeUtf8(bytes);
                         var parsed = SyntaxIndexer.Parse(scanned.RelPath, content);
-                        channel.Writer.WriteAsync(
-                                new PreparedCSharpSource(scanned, parsed, hash, bytes.Length))
-                            .AsTask()
-                            .GetAwaiter().GetResult();
+                        var prepared =
+                            new PreparedCSharpSource(scanned, parsed, hash, bytes.Length);
+                        if (!csharpQueue.TryAdd(prepared))
+                        {
+                            buildCaptureTestHooks?.CSharpQueueSaturated?.Invoke();
+                            csharpQueue.Add(prepared, csharpProducerCancellation.Token);
+                        }
                     }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                     {
@@ -495,25 +636,32 @@ public static class IndexBuilder
                     }
                 });
             }
+            catch (OperationCanceledException)
+                when (csharpProducerCancellation.IsCancellationRequested)
+            {
+                // The single writer failed and canceled blocked producers before propagating its
+                // original exception. No queued parsed source may outlive the failed build.
+            }
             finally
             {
-                channel.Writer.Complete();
+                csharpQueue.CompleteAdding();
             }
         });
 
         long symbolCount = 0, lineCount = 0;
         int csCount = 0;
         {
-            var reader = channel.Reader;
             var tx = store.BeginTransaction();
             int inTx = 0;
             var parsedBatch = new List<PreparedCSharpSource>(IndexStore.FileChunkRows);
             var fileRows = new List<BulkFileRow>(IndexStore.FileChunkRows);
+            var contents = new List<string>(IndexStore.FileChunkRows);
 
             void FlushCSharpBatch()
             {
                 if (parsedBatch.Count == 0) return;
                 fileRows.Clear();
+                contents.Clear();
                 foreach (PreparedCSharpSource item in parsedBatch)
                 {
                     fileRows.Add(new BulkFileRow(
@@ -525,14 +673,15 @@ public static class IndexBuilder
                         item.Parsed.LineCount,
                         item.Parsed.LooksGenerated,
                         item.Parsed.HasTestAttributes));
+                    contents.Add(item.Parsed.Content);
                 }
 
                 long firstFileId = store.InsertFiles(tx, fileRows);
+                store.InsertContents(tx, firstFileId, contents);
                 for (int i = 0; i < parsedBatch.Count; i++)
                 {
                     PreparedCSharpSource item = parsedBatch[i];
                     long fileId = firstFileId + i;
-                    store.InsertContent(tx, fileId, item.Parsed.Content);
                     store.InsertSymbols(tx, fileId, item.Parsed.Symbols);
                     fileIds[item.File.RelPath] = fileId;
                     symbolCount += item.Parsed.Symbols.Count;
@@ -565,9 +714,10 @@ public static class IndexBuilder
                 }
             }
 
-            while (reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
+            Exception? writerFailure = null;
+            try
             {
-                while (reader.TryRead(out var item))
+                foreach (PreparedCSharpSource item in csharpQueue.GetConsumingEnumerable())
                 {
                     parsedBatch.Add(item);
                     int rowsBeforeCommit = Math.Max(1, sourceWriteBatchSize - inTx);
@@ -575,14 +725,31 @@ public static class IndexBuilder
                             IndexStore.FileChunkRows, rowsBeforeCommit))
                         FlushCSharpBatch();
                 }
-                // Do not retain parsed source while waiting for the next producer wave. A saturated
-                // channel still reaches the 32-row fast path; a parse straggler pays no extra latency.
                 FlushCSharpBatch();
             }
-            CommitTracked(tx);
-            tx.Dispose();
+            catch (Exception ex)
+            {
+                writerFailure = ex;
+                csharpProducerCancellation.Cancel();
+            }
+            finally
+            {
+                if (writerFailure is null)
+                    CommitTracked(tx);
+                tx.Dispose();
+                try
+                {
+                    producer.GetAwaiter().GetResult();
+                }
+                catch when (writerFailure is not null &&
+                            csharpProducerCancellation.IsCancellationRequested)
+                {
+                    // Preserve the writer's original SQLite or persistence failure.
+                }
+            }
+            if (writerFailure is not null)
+                ExceptionDispatchInfo.Capture(writerFailure).Throw();
         }
-        producer.GetAwaiter().GetResult();
         if (csharpCaptureFailure is not null)
             ExceptionDispatchInfo.Capture(csharpCaptureFailure).Throw();
 
@@ -795,7 +962,8 @@ public static class IndexBuilder
 
         store.SetMeta("index_version", Guid.NewGuid().ToString("N"));
         store.SetMeta("indexed_at_utc", DateTime.UtcNow.ToString("O"));
-        store.SetMeta("workspace_root", Path.GetFullPath(workspaceRoot));
+        store.SetMeta("workspace_root",
+            Path.GetFullPath(publishedWorkspaceRoot ?? workspaceRoot));
         store.SetMeta("unresolved_project_refs", unresolvedRefs.ToString());
         // A new database is compatible only after its manager attaches the watcher and commits
         // the post-build detect-all pass. Write the follower-visible marker before schema_version,
@@ -820,7 +988,10 @@ public static class IndexBuilder
                              + bt.Schema + secondaryIndexMs + st.ProjectRows + st.GraphRows
                              + st.CompileItemRows + st.Classification;
         progress?.Invoke(
-            $"Writer split (lf4p): fts {wt.FtsRows / 1000:F1}s, content {wt.ContentRows / 1000:F1}s, " +
+            $"Writer split (lf4p): fts {wt.FtsRows / 1000:F1}s " +
+            $"({store.FtsInsertStatementCount:N0} cold-build statements), " +
+            $"content {wt.ContentRows / 1000:F1}s " +
+            $"({store.ContentInsertStatementCount:N0} cold-build statements), " +
             $"symbols {wt.SymbolRows / 1000:F1}s, base-edges {wt.BaseEdgeRows / 1000:F1}s, " +
             $"files {wt.FileRows / 1000:F1}s ({store.FileInsertStatementCount:N0} statements), " +
             $"projects {st.ProjectRows / 1000:F1}s, graph {st.GraphRows / 1000:F1}s, " +
@@ -832,6 +1003,7 @@ public static class IndexBuilder
             $"analyze {wt.Analyze / 1000:F1}s, checkpoint {wt.Checkpoint / 1000:F1}s " +
             $"— writer statements total {writerTotal / 1000:F1}s");
 
+        if (reservedPrivateStage) store.CheckpointForAtomicInstall();
         var parseTime = sw.Elapsed;
         long dbBytes = new FileInfo(dbPath).Length;
 

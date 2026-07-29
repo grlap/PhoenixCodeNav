@@ -141,6 +141,7 @@ public sealed partial class IndexQueries : IDisposable
     private readonly SqliteTransaction? _readSnapshot;
     private readonly Action<string>? _afterQueryForTest;
     private readonly Action<string>? _beforeQueryForTest;
+    private Action? _releasePublicationLease;
     private readonly Dictionary<(string Path, string Name),
         (byte[] ContentHash, List<(int Start, int End)> Offsets)>
         _declarationOffsets = new();
@@ -202,11 +203,13 @@ public sealed partial class IndexQueries : IDisposable
 
     internal IndexQueries(string dbPath, bool pinReadSnapshot,
         Action<string>? afterQueryForTest = null, Action<string>? beforeQueryForTest = null,
-        bool pooling = true, CancellationToken cancellationToken = default)
+        bool pooling = true, CancellationToken cancellationToken = default,
+        Action? releasePublicationLease = null)
     {
         _conn = new SqliteConnection(ReadConnectionString(dbPath, pinReadSnapshot, pooling));
         _afterQueryForTest = afterQueryForTest;
         _beforeQueryForTest = beforeQueryForTest;
+        _releasePublicationLease = releasePublicationLease;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -244,7 +247,14 @@ public sealed partial class IndexQueries : IDisposable
             // A failed constructor cannot be disposed by its caller. Release both the partially
             // pinned transaction and connection before any outer ownership lease can unwind.
             try { _readSnapshot?.Dispose(); }
-            finally { _conn.Dispose(); }
+            finally
+            {
+                try { _conn.Dispose(); }
+                finally
+                {
+                    Interlocked.Exchange(ref _releasePublicationLease, null)?.Invoke();
+                }
+            }
             throw;
         }
     }
@@ -3330,7 +3340,14 @@ public sealed partial class IndexQueries : IDisposable
 
     public void Dispose()
     {
-        _readSnapshot?.Dispose();
-        _conn.Dispose();
+        try
+        {
+            try { _readSnapshot?.Dispose(); }
+            finally { _conn.Dispose(); }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _releasePublicationLease, null)?.Invoke();
+        }
     }
 }

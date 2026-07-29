@@ -1357,6 +1357,9 @@ public sealed class UnavailableSourceRefreshTests
             manager.Start();
             Assert.True(SpinWait.SpinUntil(() => manager.State == "ready",
                 TimeSpan.FromSeconds(20)), manager.Health().Error);
+            string oldVersion = manager.Health().IndexVersion!;
+            using var rebuildCompleted = new ManualResetEventSlim(false);
+            manager.FullRebuildCompletedForTest = () => rebuildCompleted.Set();
             using (var sparse = new FileStream(source, FileMode.Open, FileAccess.Write,
                        FileShare.ReadWrite))
             {
@@ -1364,11 +1367,30 @@ public sealed class UnavailableSourceRefreshTests
             }
 
             Assert.True(manager.RequestFullRebuild());
-            Assert.True(SpinWait.SpinUntil(() => manager.State == "failed",
-                TimeSpan.FromSeconds(20)), manager.Health().Error);
-            Assert.False(manager.IsQueryable);
-            Assert.Contains(nameof(RefreshInputOversizedException),
-                manager.Health().Error, StringComparison.Ordinal);
+            Assert.True(rebuildCompleted.Wait(TimeSpan.FromSeconds(30)),
+                "oversized full rebuild did not return control to the refresh pump");
+            if (OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
+            {
+                Assert.True(manager.IsQueryable, manager.Health().Error);
+                Assert.Equal(oldVersion, manager.Health().IndexVersion);
+                Assert.NotEqual("failed", manager.State);
+                string? error = manager.Health().Error;
+                Assert.True(
+                    error?.Contains("previous index remains available",
+                        StringComparison.Ordinal) == true ||
+                    string.Equals(error, "refresh_input_oversized",
+                        StringComparison.Ordinal),
+                    $"unexpected restored-publication error: {error}");
+                using IndexQueries queries = manager.OpenQueries();
+                Assert.Single(queries.SearchSymbols("Before", "exact", null, 2));
+            }
+            else
+            {
+                Assert.Equal("failed", manager.State);
+                Assert.False(manager.IsQueryable);
+                Assert.Contains(nameof(RefreshInputOversizedException),
+                    manager.Health().Error, StringComparison.Ordinal);
+            }
         }
         finally
         {

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Threading.Channels;
 
 namespace CodeNav.Core.Indexing;
@@ -65,6 +66,8 @@ public sealed class IndexManager : IDisposable
         "This Phoenix process is a read-only follower; run this operation from the writer process.";
     private const string FollowerIndexUnavailable =
         "read-only follower requires a compatible index from the writer; wait for the writer to finish building or rebuilding, then retry or restart this process";
+    private const string WriterPublicationUnavailable =
+        "index replacement is being published; wait for the rebuild to finish, then retry";
     private const int RefreshIncompletePathLimit = 32;
     internal const string RefreshIncompleteReasonMeta = "refresh_incomplete_reason";
     internal const string RefreshIncompletePathsMeta = "refresh_incomplete_paths";
@@ -162,6 +165,16 @@ public sealed class IndexManager : IDisposable
     internal Action<int>? FullRebuildDestructiveBoundaryForTest { get; set; }
     internal Action? FullRebuildCompletedForTest { get; set; }
     internal Action? FullRebuildAfterTelemetryStartedForTest { get; set; }
+    internal Action? FullRebuildBeforeAnchoredDestinationOpenForTest { get; set; }
+    internal Action<string>? FullRebuildPrivateStageReadyForTest { get; set; }
+    internal Action? FullRebuildPrivateStageCompletedForTest { get; set; }
+    internal Action? FullRebuildBeforeStageInstallForTest { get; set; }
+    internal Action? FullRebuildAfterStageInstallForTest { get; set; }
+    internal Action? WriterQueryAfterRegistrationForTest { get; set; }
+    internal int ActiveWriterQueriesForTest => Volatile.Read(ref _activeWriterQueries);
+    internal Action? StartupPriorPublicationRestoreForTest { get; set; }
+    internal TimeSpan FullRebuildPublicationTimeoutForTest { get; set; } =
+        TimeSpan.FromMinutes(3);
     internal Action? RefreshRequestDequeuedForTest { get; set; }
     internal Action? RefreshRequestPassedStartupBarrierForTest { get; set; }
     internal Func<string, string, int, GitInfo.WorkspaceFileReadResult>?
@@ -177,8 +190,14 @@ public sealed class IndexManager : IDisposable
     internal TimeSpan DisposeWaitTimeoutForTest { get; set; } = TimeSpan.FromSeconds(5);
     private readonly object _reviewSnapshotGate = new();
     private readonly ManualResetEventSlim _noActiveReviewSnapshots = new(initialState: true);
+    private readonly ManualResetEventSlim _noActiveWriterQueries = new(initialState: true);
     private readonly ManualResetEventSlim _stableIndexEpoch = new(initialState: true);
     private int _activeReviewSnapshots;
+    private int _activeWriterQueries;
+    // Writer-side reads remain available while a full rebuild writes its private stage. The gate
+    // closes only at publication, under _reviewSnapshotGate, so no new local query can barge
+    // between the last readiness check and the destination-claim B boundary.
+    private int _writerReadsAllowed = 1;
     private readonly object _resourceReleaseLock = new();
     private bool _ownedResourcesReleased;
     private int _serverInfoEmitted;
@@ -542,10 +561,91 @@ public sealed class IndexManager : IDisposable
     private bool HasSafeDatabaseAuthority() =>
         TryGetSafeDatabaseStatus(out _, out _);
 
+    private bool HasSafeLiveDatabaseAuthority() =>
+        _directoryAuthority?.MatchesLiveDatabasePath(_dbPath) == true;
+
+    private void EnsureLivePublicationAuthority()
+    {
+        EnsureDatabaseAuthority();
+        if (!HasSafeLiveDatabaseAuthority())
+            throw new IOException(
+                "live index destination differs from the retained index authority");
+        if (!HasSafeWorkspaceAuthority())
+            throw new IOException(
+                "live workspace differs from the retained workspace authority");
+    }
+
     private void EnsureDatabaseAuthority()
     {
         if (!HasSafeDatabaseAuthority())
             throw new IOException("index destination authority is no longer safe");
+    }
+
+    private bool HasSafeWorkspaceAuthority() =>
+        _ownershipLease is not null &&
+        IndexOwnershipLease.ProbeWorkspaceIdentity(
+            _workspaceRoot, out string? currentWorkspace) ==
+            WorkspaceIdentityProbeResult.Found &&
+        string.Equals(currentWorkspace, _ownershipLease.WorkspaceIdentity,
+            StringComparison.Ordinal);
+
+    private bool CanUseDirectFullRebuildFallback() =>
+        HasSafeWorkspaceAuthority() &&
+        !AnchoredIndexDestination.IsAnchoredPublicationRequired(
+            _workspaceRoot, _workspaceRoot, _dbPath);
+
+    private void EnsureStagedDestinationAuthority(AnchoredIndexDestination destination)
+    {
+        EnsureDatabaseAuthority();
+        if (_ownershipLease is null ||
+            _directoryAuthority is null ||
+            !_directoryAuthority.TryGetLeaseIdentity(out IndexLeaseIdentity? retained) ||
+            !destination.TryGetLeaseIdentity(out IndexLeaseIdentity? staged) ||
+            retained is null ||
+            staged is null ||
+            retained != staged ||
+            !string.Equals(staged.DirectoryIdentity, _authorityDirectoryIdentity,
+                StringComparison.Ordinal))
+            throw new IOException(
+                "staged index destination differs from the retained index authority");
+        if (!HasSafeLiveDatabaseAuthority())
+            throw new IOException(
+                "live index destination differs from the retained index authority");
+
+        if (!destination.TryGetWorkspaceIdentity(out string? anchoredWorkspace) ||
+            anchoredWorkspace is null ||
+            !string.Equals(anchoredWorkspace, _ownershipLease.WorkspaceIdentity,
+                StringComparison.Ordinal) ||
+            !HasSafeWorkspaceAuthority())
+            throw new IOException(
+                "staged index workspace differs from the retained workspace authority");
+    }
+
+    private void EnsureInstalledDestinationAuthority(AnchoredIndexDestination destination)
+    {
+        EnsureDatabaseAuthority();
+        if (_ownershipLease is null ||
+            _directoryAuthority is null ||
+            !_directoryAuthority.TryGetLeaseIdentity(out IndexLeaseIdentity? retained) ||
+            !destination.TryGetInstalledLeaseIdentity(out IndexLeaseIdentity? installed) ||
+            retained is null ||
+            installed is null ||
+            retained != installed ||
+            !string.Equals(installed.DirectoryIdentity, _authorityDirectoryIdentity,
+                StringComparison.Ordinal))
+            throw new IOException(
+                "installed index destination differs from the retained index authority");
+        if (!HasSafeLiveDatabaseAuthority())
+            throw new IOException(
+                "live index destination differs from the retained index authority");
+
+        if (!destination.TryGetWorkspaceIdentity(out string? anchoredWorkspace) ||
+            anchoredWorkspace is null ||
+            !string.Equals(anchoredWorkspace, _ownershipLease.WorkspaceIdentity,
+                StringComparison.Ordinal) ||
+            !HasSafeWorkspaceAuthority())
+            throw new IOException(
+                "installed index workspace differs from the retained workspace authority");
     }
 
     /// <summary>Opens the existing index or builds a new one in the background; returns immediately.</summary>
@@ -758,23 +858,30 @@ public sealed class IndexManager : IDisposable
 
             _startTask = Task.Run(() =>
             {
+                bool restoreReadyClaimOnFailure = false;
+                bool stagedPublicationInstalled = false;
+                bool startupMutationActive = false;
                 try
                 {
                     if (_disposed) return;
                     StartupAfterLeaseAcquiredForTest?.Invoke();
-                    bool build = forceRebuild || !File.Exists(_databaseIoPath);
+                    bool databaseExists = File.Exists(_databaseIoPath);
+                    bool build = forceRebuild || !databaseExists;
+                    bool compatibleExistingPublication = false;
                     // x5ls.1.2: honest v1 build reason — which gate actually forced the build.
                     string buildReason = forceRebuild ? "explicit_full" : "startup_missing";
-                    if (!build)
+                    if (databaseExists)
                     {
-                        // Rebuild when the on-disk index predates the current schema/indexer format —
-                        // otherwise a freshly deployed binary would query columns the old index lacks,
-                        // or trust field values (accessibility, signatures) the old indexer got wrong.
                         try
                         {
                             using var check = new IndexStore(_databaseIoPath, createNew: false);
                             string? onDisk = check.GetMeta("schema_version");
-                            if (!string.Equals(onDisk, IndexBuilder.SchemaVersion, StringComparison.Ordinal))
+                            compatibleExistingPublication = string.Equals(onDisk,
+                                IndexBuilder.SchemaVersion, StringComparison.Ordinal);
+                            // Rebuild when the on-disk index predates the current schema/indexer
+                            // format. A force rebuild still performs this read so a compatible old
+                            // publication may remain available while its private replacement builds.
+                            if (!forceRebuild && !compatibleExistingPublication)
                             {
                                 _log($"Index format stale (have {onDisk ?? "none"}, need {IndexBuilder.SchemaVersion}); rebuilding.");
                                 build = true;
@@ -783,9 +890,13 @@ public sealed class IndexManager : IDisposable
                         }
                         catch (Exception ex)
                         {
-                            _log($"Index open/version-check failed ({ex.Message}); rebuilding.");
-                            build = true;
-                            buildReason = "recovery";
+                            compatibleExistingPublication = false;
+                            if (!forceRebuild)
+                            {
+                                _log($"Index open/version-check failed ({ex.Message}); rebuilding.");
+                                build = true;
+                                buildReason = "recovery";
+                            }
                         }
                     }
                     if (build)
@@ -795,24 +906,104 @@ public sealed class IndexManager : IDisposable
                         // v5 monolith reindex): published before the build starts, cleared after —
                         // Health() surfaces it only while state == "building".
                         _buildProgress = new BuildProgress();
-                        int activeAtBoundary;
-                        lock (_reviewSnapshotGate)
-                            activeAtBoundary = _activeReviewSnapshots;
-                        FullRebuildDestructiveBoundaryForTest?.Invoke(activeAtBoundary);
                         _log($"Building index for {_workspaceRoot} ...");
                         var startupBuildProgress = _buildProgress; // review B6: finally-safe local
                         var (buildId, progressTimer) = // x5ls.1.2
                             BeginBuildTelemetry(buildReason, startupBuildProgress);
                         try
                         {
-                            FullRebuildAfterTelemetryStartedForTest?.Invoke();
-                            var buildResult = IndexBuilder.BuildOwned(_workspaceRoot,
-                                _databaseIoPath, _log, startupBuildProgress,
-                                waitingForReaders: () =>
+                            BuildResult buildResult;
+                            FullRebuildBeforeAnchoredDestinationOpenForTest?.Invoke();
+                            if (AnchoredIndexDestination.TryOpen(_workspaceRoot,
+                                    _workspaceRoot, _dbPath, createIndexDirectory: false,
+                                    out AnchoredIndexDestination? destination))
+                            {
+                                AnchoredIndexDestination anchored = destination!;
+                                using (anchored)
                                 {
-                                    _error = "startup rebuild is waiting for existing index readers to drain";
-                                    _log("Startup rebuild is waiting for existing index readers to drain.");
-                                });
+                                    EnsureStagedDestinationAuthority(anchored);
+                                    if (compatibleExistingPublication)
+                                    {
+                                        var priorStore = new IndexStore(
+                                            _databaseIoPath, createNew: false);
+                                        try
+                                        {
+                                            if (priorStore.GetMeta(
+                                                    RefreshIncompleteReasonMeta) is null)
+                                                PersistRefreshSweepPending(priorStore);
+                                            CacheMeta(priorStore);
+                                            _destinationClaim?.SetReady();
+                                            _store = priorStore;
+                                        }
+                                        catch
+                                        {
+                                            priorStore.Dispose();
+                                            throw;
+                                        }
+                                        _error = _refreshIncompleteReason;
+                                        // The claim is born B. Once the compatible old database
+                                        // is published through this manager, return it to R for the
+                                        // long private build and close it only at atomic install.
+                                        restoreReadyClaimOnFailure = true;
+                                    }
+                                    FullRebuildAfterTelemetryStartedForTest?.Invoke();
+                                    string stagePath = anchored.CreateStagePath();
+                                    FullRebuildPrivateStageReadyForTest?.Invoke(stagePath);
+                                    buildResult = IndexBuilder.BuildOwned(
+                                        anchored.WorkspaceReadPath, stagePath, _log,
+                                        startupBuildProgress, reservedPrivateStage: true,
+                                        publishedWorkspaceRoot: _workspaceRoot);
+                                    FullRebuildPrivateStageCompletedForTest?.Invoke();
+                                    EnsureStagedDestinationAuthority(anchored);
+                                    startupMutationActive = true;
+                                    var publicationWait = Stopwatch.StartNew();
+                                    TimeSpan publicationTimeout =
+                                        FullRebuildPublicationTimeoutForTest;
+                                    BeginFullRebuildPublicationBoundary();
+                                    _destinationClaim?.SetRebuilding();
+                                    DrainLocalReadersAtPublication(publicationWait,
+                                        publicationTimeout, () =>
+                                        {
+                                            _error = "startup rebuild is waiting for existing index readers to drain";
+                                            _log("Startup rebuild is waiting for existing index readers to drain.");
+                                        });
+                                    _store?.Dispose();
+                                    _store = null;
+                                    ClearOwnedDatabasePools();
+                                    EnsureStagedDestinationAuthority(anchored);
+                                    FullRebuildBeforeStageInstallForTest?.Invoke();
+                                    EnsureStagedDestinationAuthority(anchored);
+                                    TimeSpan installTimeout = RemainingPublicationWait(
+                                        publicationWait, publicationTimeout);
+                                    if (installTimeout <= TimeSpan.Zero ||
+                                        !anchored.InstallStage(installTimeout,
+                                            waitingForReaders: () =>
+                                        {
+                                            _error = "startup rebuild is waiting for existing index readers to drain";
+                                            _log("Startup rebuild is waiting for existing index readers to drain.");
+                                        }))
+                                        throw new IOException(
+                                            "staged startup index could not replace the live database");
+                                    stagedPublicationInstalled = true;
+                                    FullRebuildAfterStageInstallForTest?.Invoke();
+                                    EnsureInstalledDestinationAuthority(anchored);
+                                }
+                            }
+                            else
+                            {
+                                if (!CanUseDirectFullRebuildFallback())
+                                    throw new IOException(
+                                        "required anchored startup publication could not be opened safely");
+                                FullRebuildAfterTelemetryStartedForTest?.Invoke();
+                                FullRebuildDestructiveBoundaryForTest?.Invoke(0);
+                                buildResult = IndexBuilder.BuildOwned(_workspaceRoot,
+                                    _databaseIoPath, _log, startupBuildProgress,
+                                    waitingForReaders: () =>
+                                    {
+                                        _error = "startup rebuild is waiting for existing index readers to drain";
+                                        _log("Startup rebuild is waiting for existing index readers to drain.");
+                                    });
+                            }
                             _error = null;
                             _log($"Index built: {buildResult.CsFiles} C# + {buildResult.FsFiles} F# files, " +
                                  $"{buildResult.Symbols} symbols in " +
@@ -841,6 +1032,7 @@ public sealed class IndexManager : IDisposable
                             _buildProgress = null;
                         }
                         FullRebuildCompletedForTest?.Invoke();
+                        EnsureLivePublicationAuthority();
                     }
 
                     var store = new IndexStore(_databaseIoPath, createNew: false);
@@ -855,6 +1047,7 @@ public sealed class IndexManager : IDisposable
                     // before publication so Windows followers cannot observe a false-ready epoch.
                     if (store.GetMeta(RefreshIncompleteReasonMeta) is null)
                         PersistRefreshSweepPending(store);
+                    ResetCachedFreshnessMetadata();
                     CacheMeta(store);              // read meta before publishing the store
 
                     // If Dispose ran while we were building/opening, don't publish or start the
@@ -864,6 +1057,7 @@ public sealed class IndexManager : IDisposable
                         store.Dispose();
                         return;
                     }
+                    EnsureLivePublicationAuthority();
 
                     _store = store;
                     _error = _refreshIncompleteReason;
@@ -883,19 +1077,76 @@ public sealed class IndexManager : IDisposable
                     // that commit and watcher attachment would otherwise be permanently missed.
                     _refreshQueue.Writer.TryWrite(new RefreshRequest(null, Reason: "full_sweep")); // detect-all
                     InitGitTracking(); // watch HEAD, then atomically sample and reconcile it
+                    EnsureLivePublicationAuthority();
                     _destinationClaim?.SetReady();
+                    if (startupMutationActive)
+                    {
+                        ReopenWriterReadsAfterPublication();
+                        EndIndexMutation();
+                        startupMutationActive = false;
+                    }
                 }
                 catch (Exception ex)
                 {
-                    // Client-visible error carries the exception TYPE only (9vw): ex.Message can embed
-                    // absolute filesystem paths, account names, or SQLite connection details — internals
-                    // that don't belong in a tool response. The full exception goes to the server log.
-                    _error = $"{ex.GetType().Name} during index startup (see server log)";
-                    _state = "failed";
+                    bool priorPublicationRestored = false;
+                    if (restoreReadyClaimOnFailure && !stagedPublicationInstalled)
+                    {
+                        try
+                        {
+                            if (_disposed || !HasSafeWorkspaceAuthority() ||
+                                !HasSafeLiveDatabaseAuthority())
+                                throw new ObjectDisposedException(nameof(IndexManager));
+                            if (_store is null)
+                                _store = new IndexStore(_databaseIoPath, createNew: false);
+                            if (_store.GetMeta(RefreshIncompleteReasonMeta) is null)
+                                PersistRefreshSweepPending(_store);
+                            ResetCachedFreshnessMetadata();
+                            CacheMeta(_store);
+                            StartupPriorPublicationRestoreForTest?.Invoke();
+                            if (_disposed)
+                                throw new ObjectDisposedException(nameof(IndexManager));
+                            if (_watcher is null) StartWatcher();
+                            _refreshQueue.Writer.TryWrite(
+                                new RefreshRequest(null, Reason: "full_sweep"));
+                            if (_gitWatcher is null) InitGitTracking();
+                            if (_disposed)
+                                throw new ObjectDisposedException(nameof(IndexManager));
+                            EnsureLivePublicationAuthority();
+                            _destinationClaim?.SetReady();
+                            if (startupMutationActive)
+                            {
+                                ReopenWriterReadsAfterPublication();
+                                EndIndexMutation();
+                                startupMutationActive = false;
+                            }
+                            _error =
+                                "startup rebuild failed; the previous index remains available";
+                            _state = "stale";
+                            priorPublicationRestored = true;
+                        }
+                        catch (Exception restoreError)
+                        {
+                            _log($"Could not restore the previous startup publication claim: " +
+                                 $"{restoreError}");
+                        }
+                    }
+                    if (!priorPublicationRestored)
+                    {
+                        // Client-visible error carries the exception TYPE only (9vw): ex.Message
+                        // can embed absolute filesystem paths, account names, or SQLite connection
+                        // details — internals that don't belong in a tool response.
+                        _error = $"{ex.GetType().Name} during index startup (see server log)";
+                        _state = "failed";
+                    }
                     _log($"Index startup failed: {ex}");
                 }
                 finally
                 {
+                    if (startupMutationActive)
+                    {
+                        EndIndexMutation();
+                        startupMutationActive = false;
+                    }
                     _startupComplete.TrySetResult(true);
                 }
             });
@@ -942,6 +1193,8 @@ public sealed class IndexManager : IDisposable
 
     internal IndexMetadataSnapshot? FollowerMetadataForTest =>
         CurrentFollowerPublication.Metadata;
+    internal bool HasOwnedStoreForTest => _store is not null;
+    internal bool HasWorkspaceWatcherForTest => _watcher is not null;
 
     private bool PublishFollowerReady(IndexMetadataSnapshot metadata)
     {
@@ -1451,22 +1704,8 @@ public sealed class IndexManager : IDisposable
             RefreshRequestPassedStartupBarrierForTest?.Invoke();
             if (req.FullRebuild)
             {
-                BeginIndexMutation();
-                try
-                {
-                    lock (_reviewSnapshotGate)
-                    {
-                        if (_activeReviewSnapshots > 0)
-                            FullRebuildWaitingForLocalSnapshotsForTest?.Invoke();
-                    }
-                    _noActiveReviewSnapshots.Wait();
-                    int activeAtBoundary;
-                    lock (_reviewSnapshotGate) activeAtBoundary = _activeReviewSnapshots;
-                    FullRebuildDestructiveBoundaryForTest?.Invoke(activeAtBoundary);
-                    FullRebuildInPump();
-                    FullRebuildCompletedForTest?.Invoke();
-                }
-                finally { EndIndexMutation(); }
+                FullRebuildInPump();
+                FullRebuildCompletedForTest?.Invoke();
                 continue;
             }
             if (req.RevalidateRecordCommit)
@@ -1813,15 +2052,270 @@ public sealed class IndexManager : IDisposable
             IndexQueries.ClearPoolsFor(_dbPath);
     }
 
-    /// <summary>The pump-side rebuild-from-scratch (tky): runs ON the pump thread so no delta
-    /// batch can interleave with the teardown. Discards the store, deletes the db, rebuilds with
-    /// live progress (the same building-state surface as a first run), reopens, and re-records
-    /// the git baseline (the fresh build reflects HEAD, and the old indexed_commit died with the
-    /// db). Failure latches state 'failed' with the sanitized error — from which this same hatch
-    /// remains the recovery path.</summary>
+    /// <summary>The pump-side rebuild-from-scratch (tky). Windows/Linux workspace-local
+    /// destinations build into a pinned private file while the last publication remains readable,
+    /// then close the local read gate, publish B, drain bounded old handles, and atomically install
+    /// the complete stage. Unsupported destinations retain the established in-place fallback.</summary>
     private void FullRebuildInPump()
     {
+        FullRebuildBeforeAnchoredDestinationOpenForTest?.Invoke();
+        if (AnchoredIndexDestination.TryOpen(_workspaceRoot, _workspaceRoot, _dbPath,
+                createIndexDirectory: false, out AnchoredIndexDestination? destination))
+        {
+            AnchoredIndexDestination anchored = destination!;
+            using (anchored)
+                FullRebuildStagedInPump(anchored);
+            return;
+        }
+
+        if (!CanUseDirectFullRebuildFallback())
+        {
+            _error = "full rebuild failed (see server log)";
+            _state = "failed";
+            _log("Full rebuild refused: required anchored publication or workspace authority " +
+                 "could not be verified.");
+            return;
+        }
+
+        bool mutationActive = false;
+        try
+        {
+            mutationActive = true;
+            BeginFullRebuildPublicationBoundary();
+            FullRebuildDirectInPump();
+        }
+        finally
+        {
+            if (_store is not null && _state is "ready" or "refreshing" or "stale")
+                ReopenWriterReadsAfterPublication();
+            if (mutationActive) EndIndexMutation();
+        }
+    }
+
+    private void BeginFullRebuildPublicationBoundary()
+    {
+        BeginIndexMutation();
+        lock (_reviewSnapshotGate)
+            Volatile.Write(ref _writerReadsAllowed, 0);
+    }
+
+    private void DrainLocalReadersAtPublication(Stopwatch publicationWait,
+        TimeSpan publicationTimeout, Action waitingForReaders)
+    {
+        bool hasActiveReaders;
+        lock (_reviewSnapshotGate)
+        {
+            hasActiveReaders = _activeReviewSnapshots > 0 || _activeWriterQueries > 0;
+            if (hasActiveReaders)
+                FullRebuildWaitingForLocalSnapshotsForTest?.Invoke();
+        }
+        if (hasActiveReaders) waitingForReaders();
+        if (!WaitForPublicationReaders(_noActiveReviewSnapshots, publicationWait,
+                publicationTimeout) ||
+            !WaitForPublicationReaders(_noActiveWriterQueries, publicationWait,
+                publicationTimeout))
+            throw new TimeoutException(
+                "timed out waiting for local index readers to drain before publication");
+        int activeAtBoundary;
+        lock (_reviewSnapshotGate)
+            activeAtBoundary = _activeReviewSnapshots + _activeWriterQueries;
+        FullRebuildDestructiveBoundaryForTest?.Invoke(activeAtBoundary);
+    }
+
+    private static bool WaitForPublicationReaders(ManualResetEventSlim readersDrained,
+        Stopwatch publicationWait, TimeSpan publicationTimeout)
+    {
+        if (readersDrained.IsSet) return true;
+        TimeSpan remaining = RemainingPublicationWait(publicationWait, publicationTimeout);
+        return remaining > TimeSpan.Zero && readersDrained.Wait(remaining);
+    }
+
+    private static TimeSpan RemainingPublicationWait(Stopwatch publicationWait,
+        TimeSpan publicationTimeout)
+    {
+        TimeSpan remaining = publicationTimeout - publicationWait.Elapsed;
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+    }
+
+    private void ResetCachedFreshnessMetadata()
+    {
+        _lastRefreshUtc = null;
+        _indexedCommit = null;
+        _indexedBranch = null;
+    }
+
+    private void ReopenWriterReadsAfterPublication()
+    {
+        lock (_reviewSnapshotGate)
+            Volatile.Write(ref _writerReadsAllowed, 1);
+    }
+
+    private void FullRebuildStagedInPump(AnchoredIndexDestination destination)
+    {
+        _log("Full rebuild requested (refresh_index force:'full') — building a private replacement index.");
+        string priorState = _state;
+        bool priorPublicationReadable = _store is not null &&
+            priorState is "ready" or "refreshing" or "stale";
+        _state = "building";
+        _buildProgress = new BuildProgress();
+        BuildProgress rebuildProgress = _buildProgress;
+        string? buildId = null;
+        System.Threading.Timer? progressTimer = null;
+        bool buildCompleted = false;
+        bool buildCancelled = false;
+        bool mutationActive = false;
+        bool oldStoreDisposed = false;
+        bool stageInstalled = false;
+        try
+        {
+            EnsureStagedDestinationAuthority(destination);
+            string stagePath = destination.CreateStagePath();
+            (buildId, progressTimer) = BeginBuildTelemetry("explicit_full", rebuildProgress);
+            FullRebuildAfterTelemetryStartedForTest?.Invoke();
+            FullRebuildPrivateStageReadyForTest?.Invoke(stagePath);
+            BuildResult result = IndexBuilder.BuildOwned(
+                destination.WorkspaceReadPath, stagePath, _log,
+                rebuildProgress, reservedPrivateStage: true,
+                publishedWorkspaceRoot: _workspaceRoot);
+            _log($"Private full rebuild ready: {result.CsFiles} C# + {result.FsFiles} F# files, " +
+                 $"{result.Symbols} symbols in {result.TotalTime.TotalSeconds:F0}s; publishing ...");
+            FullRebuildPrivateStageCompletedForTest?.Invoke();
+            EnsureStagedDestinationAuthority(destination);
+
+            // Keep the old publication and claim R throughout scanning, parsing, and bulk SQL.
+            // Only the short installation envelope closes new local reads, drains registered
+            // snapshots, then publishes B immediately before releasing/replacing SQLite handles.
+            mutationActive = true;
+            var publicationWait = Stopwatch.StartNew();
+            TimeSpan publicationTimeout = FullRebuildPublicationTimeoutForTest;
+            BeginFullRebuildPublicationBoundary();
+            _destinationClaim?.SetRebuilding();
+            DrainLocalReadersAtPublication(publicationWait, publicationTimeout, () =>
+            {
+                _error = "full rebuild is waiting for existing index readers to drain";
+                _log("Full rebuild is waiting for existing index readers to drain.");
+            });
+            _store?.Dispose();
+            _store = null;
+            oldStoreDisposed = true;
+            ClearOwnedDatabasePools();
+            EnsureStagedDestinationAuthority(destination);
+            FullRebuildBeforeStageInstallForTest?.Invoke();
+            EnsureStagedDestinationAuthority(destination);
+            TimeSpan installTimeout =
+                RemainingPublicationWait(publicationWait, publicationTimeout);
+            if (installTimeout <= TimeSpan.Zero ||
+                !destination.InstallStage(installTimeout, waitingForReaders: () =>
+                {
+                    _error = "full rebuild is waiting for existing index readers to drain";
+                    _log("Full rebuild is waiting for existing index readers to drain; " +
+                         "new follower requests will retry against the replacement.");
+                }))
+                throw new IOException("staged index publication could not replace the live database");
+            stageInstalled = true;
+            FullRebuildAfterStageInstallForTest?.Invoke();
+            EnsureInstalledDestinationAuthority(destination);
+
+            OpenFullRebuildPublication();
+            ReopenWriterReadsAfterPublication();
+            EndIndexMutation();
+            mutationActive = false;
+
+            _log($"Full rebuild done: {result.CsFiles} C# + {result.FsFiles} F# files, " +
+                 $"{result.Symbols} symbols in {result.TotalTime.TotalSeconds:F0}s");
+            DrainDisposeBuildTimer(progressTimer);
+            EmitBuildCompleted(buildId, "explicit_full", rebuildProgress,
+                (long)result.TotalTime.TotalMilliseconds);
+            buildCompleted = true;
+        }
+        catch (OperationCanceledException ex)
+        {
+            buildCancelled = true;
+            RestorePriorPublicationAfterStagedFailure();
+            _log($"Full rebuild cancelled: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            RestorePriorPublicationAfterStagedFailure();
+            _log($"Full rebuild failed: {ex}");
+        }
+        finally
+        {
+            if (mutationActive)
+            {
+                if (_store is not null && _state is "ready" or "refreshing" or "stale")
+                    ReopenWriterReadsAfterPublication();
+                EndIndexMutation();
+            }
+            if (progressTimer is not null) DrainDisposeBuildTimer(progressTimer);
+            if (buildId is not null && !buildCompleted)
+            {
+                if (buildCancelled)
+                    EmitBuildCancelled(buildId, "explicit_full", rebuildProgress);
+                else
+                    EmitBuildFailed(buildId, "explicit_full", rebuildProgress);
+            }
+            _buildProgress = null;
+        }
+        return;
+
+        void RestorePriorPublicationAfterStagedFailure()
+        {
+            if (_disposed || !HasSafeWorkspaceAuthority() ||
+                !HasSafeLiveDatabaseAuthority())
+            {
+                _error = buildCancelled
+                    ? "full rebuild cancelled"
+                    : "full rebuild failed (see server log)";
+                _state = "failed";
+                return;
+            }
+
+            if (!stageInstalled && priorPublicationReadable)
+            {
+                try
+                {
+                    if (oldStoreDisposed && _store is null)
+                        _store = new IndexStore(_databaseIoPath, createNew: false);
+                    if (_store!.GetMeta(RefreshIncompleteReasonMeta) is null)
+                        PersistRefreshSweepPending(_store);
+                    ResetCachedFreshnessMetadata();
+                    CacheMeta(_store);
+                    _state = "stale";
+                    _error = "full rebuild failed; the previous index remains available";
+                    if (_watcher is null) StartWatcher();
+                    _refreshQueue.Writer.TryWrite(
+                        new RefreshRequest(null, Reason: "full_sweep"));
+                    if (_gitWatcher is null) InitGitTracking();
+                    if (_disposed)
+                        throw new ObjectDisposedException(nameof(IndexManager));
+                    _destinationClaim?.SetReady();
+                    return;
+                }
+                catch (Exception restoreError)
+                {
+                    _log($"Could not reopen the previous index after staged rebuild failure: " +
+                         $"{restoreError}");
+                }
+            }
+
+            _error = buildCancelled
+                ? "full rebuild cancelled"
+                : "full rebuild failed (see server log)";
+            _state = "failed";
+        }
+    }
+
+    /// <summary>Compatibility fallback for destinations that cannot use the retained
+    /// Windows/Linux anchored stage (currently macOS and database paths outside the workspace).
+    /// The caller has already closed new local reads; this method drains every writer query and
+    /// review snapshot admitted before the publication boundary.</summary>
+    private void FullRebuildDirectInPump()
+    {
         _log("Full rebuild requested (refresh_index force:'full') — rebuilding the index from scratch.");
+        string priorState = _state;
+        bool priorPublicationReadable = _store is not null &&
+            priorState is "ready" or "refreshing" or "stale";
         _state = "building";
         // x5ls.1.2 review B5: the pre-build teardown (store dispose and pool clears) is NOT
         // building — the build lifecycle (and the phase clock that feeds phaseDurations) starts
@@ -1840,6 +2334,13 @@ public sealed class IndexManager : IDisposable
             // this claim before and after every open, so no new reader can barge while the
             // already-open bounded snapshots drain through the replacement boundary.
             _destinationClaim?.SetRebuilding();
+            var publicationWait = Stopwatch.StartNew();
+            DrainLocalReadersAtPublication(publicationWait,
+                FullRebuildPublicationTimeoutForTest, () =>
+                {
+                    _error = "full rebuild is waiting for existing index readers to drain";
+                    _log("Full rebuild is waiting for existing index readers to drain.");
+                });
             _store?.Dispose();
             _store = null;
             ClearOwnedDatabasePools();
@@ -1868,58 +2369,7 @@ public sealed class IndexManager : IDisposable
                 (long)result.TotalTime.TotalMilliseconds);
             buildCompleted = true;
 
-            var store = new IndexStore(_databaseIoPath, createNew: false);
-            // Reset cached meta BEFORE CacheMeta: its ??= semantics would otherwise resurrect
-            // values from the deleted index (stale indexed_commit on a fresh db).
-            _lastRefreshUtc = null;
-            _indexedCommit = null;
-            _indexedBranch = null;
-            CacheMeta(store);
-            _store = store;
-            // A rebuild replaces the database that the pending unavailable-source reconcile
-            // targeted. Do not graft that obsolete target, or an ordered publication already
-            // queued behind this rebuild, onto the post-build convergence sweep.
-            _refreshRecoveryPendingGitCommit = null;
-            Volatile.Write(ref _refreshRecoveryGitRevalidationRequiredGeneration, 0);
-            Volatile.Write(ref _refreshRecoveryGitSnapshotRetiredThroughGeneration,
-                Volatile.Read(ref _refreshRecoveryGitSnapshotGeneration));
-            // BuildOwned persists refresh_sweep_pending before it writes the compatibility
-            // barrier. Keep the replacement queryable only as stale until the queued detect-all
-            // sweep succeeds and clears that marker.
-            _error = _refreshIncompleteReason;
-            _state = "stale";
-
-            // Review F1: recovery FROM FAILED never had a watcher or git tracking — startup died
-            // before attaching them, and the recovered index silently went stale (PendingChanges
-            // read 0 with no watcher at all; branch switches never reconciled). Attach whatever
-            // is missing; null-guards keep the from-READY rebuild from double-attaching.
-            if (_watcher is null) StartWatcher();
-            // Recovery can start from a failed state with no watcher. Queue a detect-all pass
-            // after attachment so edits during BuildOwned's pre-watcher interval converge too.
-            _refreshQueue.Writer.TryWrite(new RefreshRequest(null, Reason: "full_sweep"));
-            if (_gitWatcher is null)
-            {
-                // Resolves _gitDir, attaches GitWatcher, then queues the sampled baseline —
-                // the same first-run path Start uses (queued behind us on this very pump).
-                InitGitTracking();
-            }
-            else if (_gitDir is not null)
-            {
-                GitInfo.HeadSnapshot snapshot;
-                lock (_gitHeadObservationGate)
-                {
-                    snapshot = ReadGitHeadSnapshot();
-                    if (snapshot.IsResolved)
-                    {
-                        // From-READY rebuild: tracking is live. Publish commit and attachment
-                        // through the serialized refresh transaction queued behind convergence.
-                        _latestObservedGitHead = snapshot;
-                        QueueGitMetadataRefresh(snapshot);
-                    }
-                }
-                if (!snapshot.IsResolved) ScheduleGitHeadRetry();
-            }
-            _destinationClaim?.SetReady();
+            OpenFullRebuildPublication();
         }
         catch (OperationCanceledException ex)
         {
@@ -1927,6 +2377,18 @@ public sealed class IndexManager : IDisposable
             _error = "full rebuild cancelled";
             _state = "failed";
             _log($"Full rebuild cancelled: {ex.Message}");
+        }
+        catch (TimeoutException ex) when (priorPublicationReadable && _store is not null)
+        {
+            if (_store.GetMeta(RefreshIncompleteReasonMeta) is null)
+                PersistRefreshSweepPending(_store);
+            ResetCachedFreshnessMetadata();
+            CacheMeta(_store);
+            _state = "stale";
+            _error = "full rebuild timed out; the previous index remains available";
+            _refreshQueue.Writer.TryWrite(new RefreshRequest(null, Reason: "full_sweep"));
+            _destinationClaim?.SetReady();
+            _log($"Full rebuild publication timed out before replacing the prior index: {ex}");
         }
         catch (Exception ex)
         {
@@ -1949,6 +2411,61 @@ public sealed class IndexManager : IDisposable
                     EmitBuildFailed(buildId, "explicit_full", rebuildProgress!);
             }
             _buildProgress = null;
+        }
+    }
+
+    private void OpenFullRebuildPublication()
+    {
+        EnsureLivePublicationAuthority();
+        var store = new IndexStore(_databaseIoPath, createNew: false);
+        try
+        {
+            // Reset cached meta BEFORE CacheMeta: its ??= semantics would otherwise resurrect
+            // values from the replaced index (stale indexed_commit on a fresh database).
+            ResetCachedFreshnessMetadata();
+            CacheMeta(store);
+            EnsureLivePublicationAuthority();
+            _store = store;
+            // A rebuild replaces the database that the pending unavailable-source reconcile
+            // targeted. Do not graft that obsolete target, or an ordered publication already
+            // queued behind this rebuild, onto the post-build convergence sweep.
+            _refreshRecoveryPendingGitCommit = null;
+            Volatile.Write(ref _refreshRecoveryGitRevalidationRequiredGeneration, 0);
+            Volatile.Write(ref _refreshRecoveryGitSnapshotRetiredThroughGeneration,
+                Volatile.Read(ref _refreshRecoveryGitSnapshotGeneration));
+            // BuildOwned persists refresh_sweep_pending before it writes the compatibility barrier.
+            // Keep the replacement queryable only as stale until the queued detect-all succeeds.
+            _error = _refreshIncompleteReason;
+            _state = "stale";
+
+            if (_watcher is null) StartWatcher();
+            _refreshQueue.Writer.TryWrite(new RefreshRequest(null, Reason: "full_sweep"));
+            if (_gitWatcher is null)
+            {
+                InitGitTracking();
+            }
+            else if (_gitDir is not null)
+            {
+                GitInfo.HeadSnapshot snapshot;
+                lock (_gitHeadObservationGate)
+                {
+                    snapshot = ReadGitHeadSnapshot();
+                    if (snapshot.IsResolved)
+                    {
+                        _latestObservedGitHead = snapshot;
+                        QueueGitMetadataRefresh(snapshot);
+                    }
+                }
+                if (!snapshot.IsResolved) ScheduleGitHeadRetry();
+            }
+            EnsureLivePublicationAuthority();
+            _destinationClaim?.SetReady();
+        }
+        catch
+        {
+            if (ReferenceEquals(_store, store)) _store = null;
+            store.Dispose();
+            throw;
         }
     }
 
@@ -2025,7 +2542,10 @@ public sealed class IndexManager : IDisposable
             if (IsFollower && !FollowerDestinationAllowsRead()) return false;
             if (IsFollower && !TryRefreshFollowerMetadata(force: false)) return false;
             string state = State;
-            return state is "ready" or "refreshing" or "stale" &&
+            bool readableState = state is "ready" or "refreshing" or "stale" ||
+                (!IsFollower && state == "building" && _store is not null);
+            return readableState &&
+                   (IsFollower || Volatile.Read(ref _writerReadsAllowed) != 0) &&
                    TryGetSafeDatabaseStatus(out IndexLeaseIdentity? current, out _) &&
                    current?.DatabaseIdentity is not null;
         }
@@ -2035,8 +2555,32 @@ public sealed class IndexManager : IDisposable
     {
         if (!IsFollower)
         {
-            EnsureDatabaseAuthority();
-            return new IndexQueries(_databaseIoPath);
+            lock (_reviewSnapshotGate)
+            {
+                if (Volatile.Read(ref _writerReadsAllowed) == 0)
+                    throw new IOException(_state == "failed"
+                        ? _error ?? "index is unavailable after a failed rebuild"
+                        : WriterPublicationUnavailable);
+                _activeWriterQueries++;
+                if (_activeWriterQueries == 1) _noActiveWriterQueries.Reset();
+            }
+
+            Action? registeredRelease = ReleaseWriterQuery;
+            void ReleaseRegisteredQueryOnce() =>
+                Interlocked.Exchange(ref registeredRelease, null)?.Invoke();
+            try
+            {
+                WriterQueryAfterRegistrationForTest?.Invoke();
+                EnsureDatabaseAuthority();
+                // The connection owns the same idempotent release after successful construction.
+                return new IndexQueries(_databaseIoPath, pinReadSnapshot: false,
+                    releasePublicationLease: ReleaseRegisteredQueryOnce);
+            }
+            catch
+            {
+                ReleaseRegisteredQueryOnce();
+                throw;
+            }
         }
 
         FollowerMetadataBeforeGateForTest?.Invoke();
@@ -2128,7 +2672,8 @@ public sealed class IndexManager : IDisposable
             }
             long after = Volatile.Read(ref _refreshEpoch);
             if (followerStable && before == after && (after & 1) == 0 &&
-                health.State is "ready" or "stale")
+                (health.State is "ready" or "stale" ||
+                 (!IsFollower && health.State == "building" && _store is not null)))
             {
                 var snapshot = new IndexReadSnapshot(queries, health,
                     ReleaseReviewSnapshot);
@@ -2164,6 +2709,14 @@ public sealed class IndexManager : IDisposable
         lock (_reviewSnapshotGate)
         {
             if (--_activeReviewSnapshots == 0) _noActiveReviewSnapshots.Set();
+        }
+    }
+
+    private void ReleaseWriterQuery()
+    {
+        lock (_reviewSnapshotGate)
+        {
+            if (--_activeWriterQueries == 0) _noActiveWriterQueries.Set();
         }
     }
 
