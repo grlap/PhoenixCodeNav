@@ -324,6 +324,79 @@ public class Batch42TestsPart2
     }
 
     [Fact]
+    public void SolutionEditDoesNotInvalidateSameProjectDeclarationSurvivorProof()
+    {
+        if (!GitInfo.GitAvailable) return;
+        string root = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-42-solution-survivor").FullName);
+        try
+        {
+            WriteReviewRepo(root);
+            const string solutionPath = "Phoenix.sln";
+            const string oldPath = "Lib/OldSolutionRelocatedMember.cs";
+            const string newPath = "Lib/NewSolutionRelocatedMember.cs";
+            File.WriteAllText(Path.Combine(root, solutionPath),
+                "Microsoft Visual Studio Solution File, Format Version 12.00\n");
+            File.WriteAllText(Path.Combine(root, oldPath),
+                "namespace Lib { public class SolutionRelocatedMember42 { public void Gone() { } public int Value => 1; } }\n");
+            File.WriteAllText(Path.Combine(root, "Consumer", "UseSolutionRelocatedMember.cs"),
+                "namespace Consumer { public class UseSolutionRelocatedMember { public void Run(Lib.SolutionRelocatedMember42 value) { value.Gone(); } } }\n");
+            Git(root, "add -A");
+            Git(root, "commit -q -m solution-relocated-member-fixture");
+
+            using var manager = StartManager(root);
+            var tools = new NavigationTools(manager, new SemanticService(manager));
+
+            File.Delete(Path.Combine(root, oldPath));
+            File.WriteAllText(Path.Combine(root, newPath),
+                "namespace Lib { public class SolutionRelocatedMember42 { public int Value => 2; } }\n");
+            File.AppendAllText(Path.Combine(root, solutionPath),
+                "# editor inventory changed\n");
+            manager.RequestRefresh(new[] { oldPath, newPath, solutionPath });
+            Assert.True(WaitUntil(() =>
+            {
+                using var q = manager.OpenQueries();
+                return q.ContentByPath(oldPath) is null &&
+                       q.Outline(newPath).Any(symbol =>
+                           symbol.Name == "SolutionRelocatedMember42") &&
+                       q.Outline(newPath).All(symbol => symbol.Name != "Gone");
+            }, 20_000), "index did not reflect the solution edit plus member relocation");
+
+            JsonElement pack = SemanticRetry.ParseWithRetry(
+                () => tools.ReviewPack(maxBytes: 24576),
+                json => json.TryGetProperty("deletedFiles", out _),
+                "review_pack with solution edit and declaration survivor");
+            JsonElement deleted = Assert.Single(pack.GetProperty("deletedFiles").EnumerateArray(),
+                file => file.GetProperty("path").GetString() == oldPath);
+            JsonElement survivingType = Assert.Single(
+                deleted.GetProperty("formerTypes").EnumerateArray(),
+                symbol => symbol.GetProperty("name").GetString() ==
+                          "SolutionRelocatedMember42");
+            Assert.True(survivingType.TryGetProperty("danglingCandidates",
+                out JsonElement typeDangling), survivingType.GetRawText());
+            Assert.Equal(0, typeDangling.GetInt32());
+            Assert.Equal("project_candidate_survivor",
+                survivingType.GetProperty("danglingStatus").GetString());
+
+            JsonElement formerFile = pack.GetProperty("formerSymbols").EnumerateArray()
+                .Single(file => file.GetProperty("path").GetString() == oldPath);
+            JsonElement gone = formerFile.GetProperty("formerSymbols").EnumerateArray()
+                .Single(symbol => symbol.GetProperty("name").GetString() == "Gone");
+            Assert.True(gone.GetProperty("danglingCandidates").GetInt32() > 0,
+                gone.GetRawText());
+            Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() == "review.former_symbol_dangling");
+            Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() == "review.solution_files_changed");
+            Assert.DoesNotContain(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() == "review.project_files_changed");
+            Assert.DoesNotContain(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() == "review.deleted_dangling");
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
     public void IdenticalFqnInUnrelatedProjectRemainsAdvisoryInsteadOfExactZero()
     {
         if (!GitInfo.GitAvailable) return;

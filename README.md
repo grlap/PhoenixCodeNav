@@ -102,7 +102,9 @@ and NuGet-cache package dlls, in-cluster project references. It works identicall
 Index updates are incremental: the writer process's file watcher applies debounced C#, F#,
 Markdown, and SQL deltas (edit/add/delete, FTS-consistent); `.csproj` and `.fsproj` changes rebuild compile
 ownership and the authoritative project graph, while solution changes update only
-non-authoritative editor inventory. A startup sweep catches
+non-authoritative editor inventory. `review_pack` still reports changed solution metadata in
+`changedProjectFiles` with `review.solution_files_changed`, but those changes do not invalidate
+exact ownership, move, or declaration evidence. A startup sweep catches
 offline edits, and branch switches / pulls are detected by watching `.git` (`repo_overview.git`
 reports indexed vs HEAD commit). Every response carries `indexStatus` / `indexVersion`
 freshness metadata; `refresh_index` is an in-band writer hatch (`force: 'incremental' | 'full'`)

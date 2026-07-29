@@ -225,6 +225,11 @@ projects per target framework, select projects by output directory, or merge phy
 solely because they share an assembly name. Any such change requires a separately justified
 design backed by a concrete reproducer.
 
+`review_pack` preserves changed `.sln`, `.slnx`, and `.slnf` paths in
+`changedProjectFiles` and emits `review.solution_files_changed`, while treating those files as
+non-authoritative. Only changed project or build inputs can invalidate exact ownership, move,
+or declaration evidence.
+
 For symbol search, FTS generates and ranks candidates; syntax or compiler evidence decides
 identity. `implementations` and `type_hierarchy` select generic declarations by the stored
 syntax arity (explicit `arity`, or a `search_symbol` `symbolId`). A bare exact name spanning

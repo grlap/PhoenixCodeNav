@@ -533,11 +533,18 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("review.project_shape_incomplete",
             Summary("review-project-shape-completeness"));
         string projectFiles = Summary("review-project-file-guidance");
-        Assert.Contains("one classifier drives changedProjectFiles", projectFiles);
-        Assert.Contains("review.project_files_changed", projectFiles);
-        Assert.Contains("modified or deleted", projectFiles);
-        Assert.Contains(".csproj/.fsproj/.csproj.user/.fsproj.user/.shproj/.proj/.projitems/.sln/.slnx/.slnf", projectFiles);
-        Assert.Contains("Directory.Build.rsp and MSBuild.rsp", projectFiles);
+        Assert.Contains("changedProjectFiles reports every modified or deleted project, build, and solution input",
+            projectFiles);
+        Assert.Contains("review.project_files_changed counts only authoritative", projectFiles);
+        Assert.Contains(".csproj/.fsproj/.csproj.user/.fsproj.user/.shproj/.proj/.projitems/.props/.targets",
+            projectFiles);
+        Assert.Contains("Directory.Build.rsp/MSBuild.rsp", projectFiles);
+        string solutionMetadata = Summary("review-solution-metadata-guidance");
+        Assert.Contains(".sln/.slnx/.slnf", solutionMetadata);
+        Assert.Contains("changedProjectFiles", solutionMetadata);
+        Assert.Contains("review.solution_files_changed", solutionMetadata);
+        Assert.Contains("never invalidates exact-move, declaration-survivor, ownership, dependency, build, or symbol-resolution proof",
+            solutionMetadata);
         string defaultBaseline = Summary("review-default-baseline-honesty");
         Assert.Contains("bounded git_index_baseline_unavailable", defaultBaseline);
         Assert.Contains("refresh_index", defaultBaseline);
@@ -608,6 +615,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("segment, operation, or deadline exhaustion", "review-project-glob-budget"),
                       ("evaluationIncomplete", "review-project-shape-completeness"),
                       ("review.project_files_changed", "review-project-file-guidance"),
+                      ("review.solution_files_changed", "review-solution-metadata-guidance"),
                       ("unsupportedLanguageFiles", "review-fsharp-file-coverage"),
                       ("git_index_baseline_unavailable", "review-default-baseline-honesty"),
                       ("unmappedChanges", "review-unmapped-change-coverage"),

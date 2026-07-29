@@ -267,7 +267,7 @@ public sealed partial class NavigationTools
         }
         int untrackedCount = 0;
         var untrackedPaths = new HashSet<string>(StringComparer.Ordinal);
-        bool projectShapeChanged = false;
+        bool projectBuildAuthorityChanged = false;
         if (paths is not null)
         {
             foreach (var p in SplitCsv(paths) ?? new List<string>())
@@ -321,8 +321,9 @@ public sealed partial class NavigationTools
                     "Git could not safely enumerate working-tree changes; no partial result was returned - pass explicit 'paths' instead.",
                     maxBytes, Meta.From(pinnedIndexHealth, "indexed", "text"));
             }
-            projectShapeChanged = hunks.Any(file => IsProjectShapePath(file.Path)) ||
-                                  untracked.Any(IsProjectShapePath);
+            projectBuildAuthorityChanged =
+                hunks.Any(file => IsProjectBuildAuthorityPath(file.Path)) ||
+                untracked.Any(IsProjectBuildAuthorityPath);
             foreach (var f in hunks)
             {
                 if (f.Deleted)
@@ -333,7 +334,7 @@ public sealed partial class NavigationTools
                         movedFiles.Add(new ReviewMovedFile(f.Path, f.MovedToPath, "exact_blob"));
                         if (resolvedBase is null || !MovePreservesReviewableCSharp(root,
                                 f.Path, f.MovedToPath, q, BaseContent, OwnerIds, Outline,
-                                projectShapeChanged))
+                                projectBuildAuthorityChanged))
                         {
                             deleted.Add(f.Path);
                         }
@@ -420,11 +421,22 @@ public sealed partial class NavigationTools
             .Distinct(StringComparer.Ordinal)
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
-        projectShapeChanged |= projectFiles.Count > 0;
-        if (projectFiles.Count > 0)
+        var authoritativeProjectFiles = projectFiles
+            .Where(IsProjectBuildAuthorityPath)
+            .ToList();
+        var solutionMetadataFiles = projectFiles
+            .Where(IsSolutionMetadataPath)
+            .ToList();
+        projectBuildAuthorityChanged |= authoritativeProjectFiles.Count > 0;
+        if (authoritativeProjectFiles.Count > 0)
         {
             notes.Add(new ReviewNote(NoteIds.ReviewProjectFilesChanged,
-                $"{projectFiles.Count} project/build file(s) changed — dependency edges, compile sets, or test classification may shift; check project_graph on the affected projects."));
+                $"{authoritativeProjectFiles.Count} authoritative project/build file(s) changed — dependency edges, compile sets, or test classification may shift; check project_graph on the affected projects."));
+        }
+        if (solutionMetadataFiles.Count > 0)
+        {
+            notes.Add(new ReviewNote(NoteIds.ReviewSolutionFilesChanged,
+                $"{solutionMetadataFiles.Count} solution metadata file(s) changed — inspect the raw diff for editor-inventory changes; solution membership does not provide build, dependency, ownership, or symbol-resolution authority."));
         }
 
         // ---- 3. Hunks -> symbols (span intersection, innermost policy) ----
@@ -641,7 +653,8 @@ public sealed partial class NavigationTools
 
         void PreflightLaterDeletedOwnerProof()
         {
-            if (projectShapeChanged || provisionallyPreservedMoveSources.Count == 0) return;
+            if (projectBuildAuthorityChanged || provisionallyPreservedMoveSources.Count == 0)
+                return;
 
             // Exact-move suppression is provisional because ordinary deleted files can inspect
             // additional owner paths later. Run that bounded owner work before finalizing the
@@ -858,7 +871,8 @@ public sealed partial class NavigationTools
                         "unavailable"));
                     continue;
                 }
-                HashSet<long> likelyOldOwners = projectShapeChanged ? [] : OwnerIds(path);
+                HashSet<long> likelyOldOwners =
+                    projectBuildAuthorityChanged ? [] : OwnerIds(path);
                 var allFormerTypes = parsed.Symbols
                     .Where(s => string.IsNullOrEmpty(s.Container) &&
                                 s.Kind is "class" or "interface" or "struct" or "record" or "record_struct" or "enum" or "delegate")
@@ -878,7 +892,7 @@ public sealed partial class NavigationTools
                         .Select(hit => hit.FilePath).Distinct(StringComparer.Ordinal)
                         .OrderBy(candidate => candidate, StringComparer.Ordinal).ToList();
                     List<SymbolHit> provenDeclarations = [];
-                    if (!projectShapeChanged && likelyOldOwners.Count > 0)
+                    if (!projectBuildAuthorityChanged && likelyOldOwners.Count > 0)
                     {
                         var survivingOwnerIds = survivingDeclarations
                             .SelectMany(hit => OwnerIds(hit.FilePath))
@@ -1705,6 +1719,17 @@ public sealed partial class NavigationTools
                fileName.Equals("MSBuild.rsp", StringComparison.OrdinalIgnoreCase);
     }
 
+    internal static bool IsSolutionMetadataPath(string path)
+    {
+        string normalized = CodeNav.Core.WorkspacePaths.Normalize(path);
+        return normalized.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
+               normalized.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase) ||
+               normalized.EndsWith(".slnf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool IsProjectBuildAuthorityPath(string path) =>
+        IsProjectShapePath(path) && !IsSolutionMetadataPath(path);
+
     private static List<(int Start, int End)> UncoveredLineRanges(
         (int Start, int End) target, IEnumerable<(int Start, int End)> coveredRanges)
     {
@@ -1734,9 +1759,9 @@ public sealed partial class NavigationTools
         Func<string, string?> baseContent,
         Func<string, HashSet<long>> ownerIds,
         Func<string, List<SymbolHit>> outline,
-        bool projectShapeChanged)
+        bool projectBuildAuthorityChanged)
     {
-        if (projectShapeChanged ||
+        if (projectBuildAuthorityChanged ||
             !fromPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
             !toPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
             !CodeNav.Core.WorkspacePaths.TryResolveGitPathInside(root, toPath,

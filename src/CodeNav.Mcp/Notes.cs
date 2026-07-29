@@ -16,7 +16,8 @@ internal static class NoteIds
     // review_pack
     public const string ReviewIndexedOnly = "review.indexed_only";               // digests are index-backed; escalate via handles
     public const string ReviewDeletedDangling = "review.deleted_dangling";       // deleted file's former symbols still referenced
-    public const string ReviewProjectFilesChanged = "review.project_files_changed"; // project/solution/build shape in the diff — graph may shift
+    public const string ReviewProjectFilesChanged = "review.project_files_changed"; // authoritative project/build shape in the diff — graph may shift
+    public const string ReviewSolutionFilesChanged = "review.solution_files_changed"; // non-authoritative editor solution inventory changed
     // Kept for backwards compatibility with v0.11.0 responses. New emitters use one id per
     // cause below so clients can distinguish a caller-selected symbol cap from a byte budget.
     public const string ReviewSymbolsTruncated = "review.symbols_truncated";

@@ -105,27 +105,28 @@ public class Batch42TestsPart3
     }
 
     [Theory]
-    [InlineData("src/App.csproj", true)]
-    [InlineData("src/App.csproj.user", true)]
-    [InlineData("src/App.fsproj", true)]
-    [InlineData("src/App.fsproj.user", true)]
-    [InlineData("shared/Shared.shproj", true)]
-    [InlineData("build/Build.proj", true)]
-    [InlineData("shared/Imports.projitems", true)]
-    [InlineData("Phoenix.sln", true)]
-    [InlineData("Phoenix.slnx", true)]
-    [InlineData("Phoenix.slnf", true)]
-    [InlineData("config/Directory.Build.props", true)]
-    [InlineData("config/Directory.Build.targets", true)]
-    [InlineData("config/Directory.Build.rsp", true)]
-    [InlineData("config/MSBuild.rsp", true)]
-    [InlineData("config/directory.build.RSP", true)]
-    [InlineData("config/notes.rsp", false)]
-    [InlineData("src/App.cs", false)]
+    [InlineData("src/App.csproj", true, true)]
+    [InlineData("src/App.csproj.user", true, true)]
+    [InlineData("src/App.fsproj", true, true)]
+    [InlineData("src/App.fsproj.user", true, true)]
+    [InlineData("shared/Shared.shproj", true, true)]
+    [InlineData("build/Build.proj", true, true)]
+    [InlineData("shared/Imports.projitems", true, true)]
+    [InlineData("Phoenix.sln", true, false)]
+    [InlineData("Phoenix.slnx", true, false)]
+    [InlineData("Phoenix.slnf", true, false)]
+    [InlineData("config/Directory.Build.props", true, true)]
+    [InlineData("config/Directory.Build.targets", true, true)]
+    [InlineData("config/Directory.Build.rsp", true, true)]
+    [InlineData("config/MSBuild.rsp", true, true)]
+    [InlineData("config/directory.build.RSP", true, true)]
+    [InlineData("config/notes.rsp", false, false)]
+    [InlineData("src/App.cs", false, false)]
     public void ProjectShapePathsRecognizeEveryBuildAndSolutionShape(string path,
-        bool expected)
+        bool expectedReportable, bool expectedAuthority)
     {
-        Assert.Equal(expected, NavigationTools.IsProjectShapePath(path));
+        Assert.Equal(expectedReportable, NavigationTools.IsProjectShapePath(path));
+        Assert.Equal(expectedAuthority, NavigationTools.IsProjectBuildAuthorityPath(path));
     }
 
     [Fact]
@@ -161,6 +162,60 @@ public class Batch42TestsPart3
                 .Select(item => item.GetString()!).ToArray();
             Assert.Equal(paths.OrderBy(path => path, StringComparer.Ordinal), actual);
             Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() == "review.project_files_changed");
+            Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() == "review.solution_files_changed");
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void SolutionOnlyChangeDoesNotInvalidateExactMoveOwnershipProof()
+    {
+        if (!GitInfo.GitAvailable) return;
+        string root = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-42-solution-nonauthority").FullName);
+        try
+        {
+            WriteReviewRepo(root);
+            const string solutionPath = "Phoenix.sln";
+            const string moveSource = "Lib/Widget.cs";
+            const string moveTarget = "Lib/MovedWidget.cs";
+            File.WriteAllText(Path.Combine(root, solutionPath),
+                "Microsoft Visual Studio Solution File, Format Version 12.00\n");
+            Git(root, "add -A");
+            Git(root, "commit -q -m solution-nonauthority-baseline");
+
+            using var manager = StartManager(root);
+            var tools = new NavigationTools(manager, new SemanticService(manager));
+            File.Move(Path.Combine(root,
+                    moveSource.Replace('/', Path.DirectorySeparatorChar)),
+                Path.Combine(root, moveTarget.Replace('/', Path.DirectorySeparatorChar)));
+            File.AppendAllText(Path.Combine(root, solutionPath),
+                "# editor inventory changed\n");
+            manager.RequestRefresh(new[] { moveSource, moveTarget, solutionPath });
+            Assert.True(WaitUntil(() =>
+            {
+                using var q = manager.OpenQueries();
+                return manager.State == "ready" && q.ContentByPath(moveSource) is null &&
+                       q.Outline(moveTarget).Any(symbol => symbol.Name == "Widget");
+            }, 20_000), "index did not reflect the exact move plus solution metadata edit");
+
+            JsonElement pack = SemanticRetry.ParseWithRetry(
+                () => tools.ReviewPack(maxBytes: 24576),
+                json => json.TryGetProperty("changedFiles", out _),
+                "review_pack with solution metadata and exact move");
+            Assert.Contains(pack.GetProperty("movedFiles").GetProperty("items")
+                .EnumerateArray(), move =>
+                move.GetProperty("from").GetString() == moveSource &&
+                move.GetProperty("to").GetString() == moveTarget);
+            Assert.Equal(0, pack.GetProperty("changedFiles").GetProperty("deleted").GetInt32());
+            Assert.False(pack.TryGetProperty("deletedFiles", out _));
+            Assert.Contains(pack.GetProperty("changedProjectFiles").EnumerateArray(),
+                path => path.GetString() == solutionPath);
+            Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() == "review.solution_files_changed");
+            Assert.DoesNotContain(pack.GetProperty("notes").EnumerateArray(), note =>
                 note.GetProperty("id").GetString() == "review.project_files_changed");
         }
         finally { Cleanup(root); }
