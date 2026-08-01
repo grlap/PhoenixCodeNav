@@ -157,6 +157,7 @@ public sealed partial class NavigationTools
                 new { id = "indexed-path-suggestions", summary = "v0.12.31 outline/source_context not-found errors and first-page exact-path find_file misses may include a byte-budgeted pathSuggestions object with up to three pinned-index paths, exact total and truncation state; basename matches rank by preserved suffix then prefix and are never substituted" },
                 new { id = "source-context-range-alias", summary = "v0.12.32 source_context accepts range as a compatibility alias when canonical spans is omitted; conflicting simultaneous values return bad_request instead of applying silent precedence" },
                 new { id = "batch-outline-json-array-paths", summary = "v0.12.29 batch_outline accepts its documented comma-separated paths or a serialized JSON string array, rejects malformed/non-string arrays before lookup, and refuses more than 12 paths instead of silently dropping them" },
+                new { id = "csharp-symbol-free-outline", summary = "v0.12.43 outline and batch_outline return normal indexed syntax envelopes with symbols:[] and file-level generated state for indexed declaration-free C# files" },
                 new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry initial or event-driven serialized requests after bounded 100/250/1000 ms delays; timer-initiated stale-index recovery uses its separately declared paced cadence" },
                 new { id = "refresh-sweep-publication-gating", summary = "v0.12.7 builds and refreshes persist a follower-visible refresh_sweep_pending marker before publication or row mutation and clear it only after the serialized convergence sweep commits" },
                 new { id = "refresh-incomplete-freshness", summary = "v0.12.7 exhausted source capture keeps index state stale, preserves the Git baseline, exposes a stable refreshIncompleteReason plus bounded paths, and widens the next request to a recovery sweep" },
@@ -857,7 +858,7 @@ public sealed partial class NavigationTools
         }
 
         var meta = Meta.From(_manager.Health(), "indexed", "syntax");
-        bool generated = rows[0].FileIsGenerated;
+        bool generated = file.IsGenerated;
 
         string BuildNested(bool includeMembers, bool truncated) => Json.Serialize(new
         {

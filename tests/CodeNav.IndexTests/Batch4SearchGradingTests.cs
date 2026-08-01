@@ -301,6 +301,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("refresh-recovery-self-heal", ids);
         Assert.Contains("git-awareness", ids);
         Assert.Contains("batch-outline-json-array-paths", ids);
+        Assert.Contains("csharp-symbol-free-outline", ids);
         Assert.Contains("search-symbol-filtered-existence", ids);
         Assert.Contains("search-symbol-type-relevance", ids);
         Assert.Contains("indexed-path-suggestions", ids);
@@ -311,6 +312,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(1, idList.Count(id => id == "indexed-path-suggestions"));
         Assert.Equal(1, idList.Count(id => id == "source-context-range-alias"));
         Assert.Equal(1, idList.Count(id => id == "markdown-sql-text-indexing"));
+        Assert.Equal(1, idList.Count(id => id == "csharp-symbol-free-outline"));
         Assert.Equal(
             1,
             idList.Count(id => id == "operations-portal-jsonl-readonly"));
@@ -620,6 +622,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("review.solution_files_changed", "review-solution-metadata-guidance"),
                       ("Linux ARM64 ABI", "linux-arm64-anchored-authority"),
                       ("first bounded NUL", "portal-directory-entry-nul-decoding"),
+                      ("declaration-free C# files", "csharp-symbol-free-outline"),
                       ("unsupportedLanguageFiles", "review-fsharp-file-coverage"),
                       ("git_index_baseline_unavailable", "review-default-baseline-honesty"),
                       ("unmappedChanges", "review-unmapped-change-coverage"),
