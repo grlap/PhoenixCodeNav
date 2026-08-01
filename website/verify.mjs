@@ -108,8 +108,10 @@ const structuredData = matches(/<script\b[^>]*type="application\/ld\+json"[^>]*>
 check(structuredData.length === 1, "The page must contain exactly one JSON-LD block.");
 if (structuredData.length === 1) {
   try {
-    JSON.parse(structuredData[0][1]);
+    const data = JSON.parse(structuredData[0][1]);
     check(true, "Structured data must be valid JSON.");
+    check(data.operatingSystem === "Windows",
+      "Structured data must match the Windows setup path documented by this page.");
   } catch (error) {
     check(false, `Structured data must be valid JSON: ${error.message}`);
   }
@@ -169,6 +171,8 @@ if (definitionExampleText) {
     "The definition example must not borrow fields from other MCP operations.");
     check(example.meta.confidence === "exact" && example.meta.navigationLayer === "semantic", "The definition example must label compiler evidence as exact semantic navigation.");
     check(/^[0-9a-f]{32}$/.test(example.meta.indexVersion), "The representative indexVersion must preserve the emitted opaque GUID format.");
+    check(/^\d+\.\d+\.\d+\+(?:[0-9a-f]{12}|unknown)$/.test(example.meta.build),
+      "The representative build stamp must use a twelve-character commit or unknown.");
   } catch (error) {
     check(false, `The definition response example must be valid JSON after HTML entity decoding: ${error.message}`);
   }
@@ -197,6 +201,13 @@ check(Boolean(portalCard), "The proof dashboard must contain the Operations port
 check(ordinaryProofCards.at(-1) === portalCard, "Operations portal must remain the fifth ordinary proof card.");
 check(/\bproof-card--wide\b/i.test(portalCardTag), "The Operations portal card must declare its wide-card layout intent.");
 check(/style="[^"]*grid-column:\s*1\s*\/\s*-1\s*;?[^"]*"/i.test(portalCardTag), "The Operations portal card must span the full grid at desktop and tablet widths.");
+check(/early-access/i.test(portalCard), "The Operations portal card must disclose its early-access status.");
+check(/up to eight configured workspaces/i.test(portalCard),
+  "The Operations portal card must disclose its configured-workspace bound.");
+check(!/every local instance/i.test(portalCard),
+  "The Operations portal card must not claim unbounded local-instance discovery.");
+check(/href="https:\/\/github\.com\/grlap\/PhoenixCodeNav\/blob\/main\/src\/CodeNav\.Portal\/README\.md"/i.test(portalCard),
+  "The Operations portal card must link to its setup guide.");
 check(proofCards.filter((card) => /\bproof-card--wide\b/i.test(/^<article\b[^>]*>/i.exec(card)?.[0] ?? "")).length === 1,
   "Only the Operations portal card may use the wide-card grid rule.");
 

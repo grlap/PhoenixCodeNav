@@ -34,55 +34,24 @@ Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`proje
 `impact`, `related_tests`). Solution files may be inventoried for editor context, but they
 never select projects or contribute build, ownership, dependency, or symbol-resolution authority.
 
-Phoenix indexes `.fs`, `.fsi`, and `.fsx` text, parses `.fsproj` compile ownership and references,
-and preserves C#↔F# project edges. Project-owned `.fs` and `.fsi` files also have an on-demand,
-syntax-only `outline` backed by a pinned FSharp.Compiler.Service adapter; `.fsx` remains text-only.
-When the same file is owned by an exact legacy `Project.fsproj` plus dual-target
-`Project.Net.fsproj` migration pair, outline syntax defaults to the single-target legacy project's
-parse context and reports up to 64 available project/TFM parse contexts with
-total/returned/truncated coverage. A parse context controls only F# `#if` symbols and parser
-options; it does not select assemblies, builds, reference resolution, or semantic workspaces. A
-lone multi-target project uses its first declared TFM and reports that default as partial.
-F# Stage 2A also supports position-based `symbol_at` and `definition` through a bounded FCS type
-check of one physical `.fsproj` and one target framework. A file with exactly one owner/TFM is
-selected automatically; every other shape requires explicit `projectPath` + `targetFramework` and
-returns bounded `selectedFSharpTypeCheckContext` / `availableFSharpTypeCheckContexts` coverage.
-This selection does not merge the legacy and `.Net.fsproj` migration projects. Stage 2A accepts
-literal ordered compile items plus a bounded evaluation-lite subset used by legacy projects:
-simple properties that precede semantic items, comparisons/boolean/`Exists` conditions, `Choose`, and literal
-workspace-local `.props` imports. For each selected F# project, Phoenix also discovers the nearest
-indexed ancestor `Directory.Build.props` and `Directory.Build.targets`, evaluates them before and
-after the project respectively, and supports bounded `Reference Include` / `Remove` mutations whose
-item-list inputs are literal and metadata-free. Chained local `.props`/`.targets` files are inspected;
-irrelevant targets are ignored, while any active target/task that can mutate semantic inputs still
-fails closed. Recognized compiler target imports are terminal boundaries; Phoenix never executes
-targets/tasks, property functions, item transforms, or item metadata inheritance. Conventional self-default
-properties are evaluated as unset; other unresolved ambient/global condition properties fail closed.
-Import paths are selected only from canonical paths in the pinned index using the host path policy;
-ambiguous Windows case aliases fail closed, and semantic evaluation never walks the mutable live
-filesystem to resolve casing.
-The standard `Microsoft.NET.Sdk` and recognized compiler-toolchain implicit authority are disclosed
-as partial; custom/child/qualified SDK authority and Directory.Build mutations outside the bounded
-property/condition/reference projection fail closed. Toolchain disclosure also covers unobservable
-build authority above the workspace root.
-Workspace-contained managed
-`HintPath` binaries are copied into request-private immutable snapshots. A host-selected
-`FSharp.Core` asset is disclosed as partial rather than
-treated as project-evaluated authority. Package/project-reference closure, name-based F# search,
-references, implementations, callers/callees, and hierarchy remain
-unsupported instead of falling back to an empty or falsely exact result. Indexed searches stay
-language-neutral by default. An explicit F#-only `search_symbol` path scope is rejected, while a
-mixed C#/F# scope returns its C# symbols with `partialReason="unsupported_language_files_skipped"`.
-For C# name lookup, exact-name type declarations receive a soft relevance preference over
-same-named members without hiding either. A first-page empty `search_symbol` response remains a
-clean result and reports `existsUnfiltered`; `appliedFilters` identifies the active narrowing, and
-`unfilteredKinds` identifies declarations that become visible when those filters are dropped.
-Exact path lookup remains strict, but a miss is recoverable: `outline` and `source_context`
-not-found responses, plus a first-page exact-path `find_file` miss, may include up to three
-workspace-relative paths under `pathSuggestions.paths` from the pinned index. The object also
-reports the exact same-basename `total` and whether the returned sample was `truncated`.
-Candidates are ranked by the longest matching path-segment suffix, then preserved prefix; Phoenix
-never substitutes a suggestion or consults Git history for deleted files.
+**F# support is real, and deliberately bounded.** Phoenix indexes `.fs`, `.fsi`, and `.fsx` text,
+parses `.fsproj` compile ownership and references, and preserves C#↔F# project edges. Compile-owned
+`.fs` / `.fsi` files get syntax-only `outline`s from a pinned FSharp.Compiler.Service adapter, plus
+position-based `symbol_at` and same-project `definition` through a bounded FCS type check. F# name
+search, references, implementations, callers/callees, and hierarchy stay **unsupported** rather than
+returning an empty or falsely exact answer. Phoenix never executes MSBuild targets or tasks: it
+evaluates a documented subset of project files (simple properties and conditions, `Choose`, literal workspace-local
+`.props`, and the nearest ancestor `Directory.Build.props`/`.targets`). Unsupported authority either
+fails closed with a stable cause or continues only with an explicit partial cause; partial
+continuation is limited to standard `Microsoft.NET.Sdk` / recognized compiler-toolchain implicit
+authority and a host-selected `FSharp.Core`. See [`docs/design.md`](docs/design.md) for the exact
+evaluation boundaries and how ambiguous project/TFM ownership is disclosed.
+
+**A miss is recoverable, and never disguised.** A first-page empty `search_symbol` response stays a
+clean result but reports `existsUnfiltered` and `appliedFilters`, so a declaration hidden by your
+own narrowing never looks like one that does not exist. Exact-path misses in `outline`,
+`source_context`, and `find_file` may offer up to three indexed `pathSuggestions.paths` — Phoenix
+never silently substitutes a suggestion, and never consults Git history for deleted files.
 
 The dependency graph also sees what MSBuild's project view hides in large legacy codebases:
 binary `<Reference Include>` + HintPath couplings from **multi-staged builds** (phase one
@@ -99,91 +68,43 @@ and NuGet-cache package dlls, in-cluster project references. It works identicall
 
 ## Keeping the index fresh
 
-Index updates are incremental: the writer process's file watcher applies debounced C#, F#,
-Markdown, and SQL deltas (edit/add/delete, FTS-consistent); `.csproj` and `.fsproj` changes rebuild compile
-ownership and the authoritative project graph, while solution changes update only
-non-authoritative editor inventory. `review_pack` still reports changed solution metadata in
-`changedProjectFiles` with `review.solution_files_changed`, but those changes do not invalidate
-exact ownership, move, or declaration evidence. A startup sweep catches
-offline edits, and branch switches / pulls are detected by watching `.git` (`repo_overview.git`
-reports indexed vs HEAD commit). Every response carries `indexStatus` / `indexVersion`
-freshness metadata; `refresh_index` is an in-band writer hatch (`force: 'incremental' | 'full'`)
-that recovers even a corrupted index without shell access, and cold builds expose live progress
-counters (no fabricated ETAs). Cold rebuilds keep primary-key and uniqueness enforcement active
-while bulk-loading rows, then construct the nine query-facing secondary indexes once inside the
-still-unpublished finalization transaction. File rows use client-assigned ids and cached raw
-ordinal SQLite statements; C# persistence batches up to 32 file rows, then persists the associated
-content through a cached raw ordinal statement at the same exact width before writing their symbols.
-Prepared C# sources cross a bounded synchronous producer/writer queue, avoiding ThreadPool
-starvation without retaining an unbounded parse backlog. Cold builds schedule those sources by
-descending scanned byte size with an ordinal path tie-breaker, so giant Roslyn parses overlap
-ordinary parse-and-persist work instead of extending the final build tail. After all cold content is
-present, Phoenix rebuilds the external-content FTS5 index once; live incremental refreshes continue
-to update content and FTS transactionally. The final schema and query behavior are unchanged, while
-the build log separately reports file, content, and FTS statement counts plus structural-SQL,
-schema, secondary-index, commit, and checkpoint costs.
-The compatible `schema_version` marker is rejected until deferred FTS and all secondary indexes
-have completed in a committed finalization transaction. Rolling that transaction back leaves the
-barrier armed, so a future build-path refactor cannot publish a partially queryable schema.
-On supported Windows/Linux workspace-local destinations, a full rebuild writes and finalizes a
-pinned private database while the last compatible index remains queryable. Phoenix publishes the
-destination as `rebuilding` only for the final bounded reader drain and anchored atomic install.
-Every admitted writer query and pinned review snapshot holds that boundary until disposal, and the
-same three-minute publication deadline covers both that local drain and the remaining atomic-install
-retries. The stage must identify the same retained destination authority before both build and
-publication. After installation, the live database must identify the reserved stage inode and a
-fresh no-follow open must still identify the retained destination.
-Linux selects `O_DIRECTORY` and `O_NOFOLLOW` from the running architecture ABI, so the same
-fail-closed retained-directory authority works on x64 and ARM64 instead of interpreting x86 flag
-values as unrelated ARM64 options.
-Linux source scans resolve through the retained workspace handle; Windows scans the lexical path
-and relies on the same pre/post-build and post-install identity revalidation. The user-facing
-lexical root is stored separately and must still identify the ownership-lease workspace before
-publication. A root replacement therefore fails closed without publishing replacement-tree rows.
-Where this anchored path is required, failure to open
-the anchor is also a safety refusal; the destructive compatibility fallback is limited to macOS or
-an index outside the workspace and still rechecks the acquired workspace identity first. A failed
-or timed-out staged build leaves the previous publication intact, schedules a convergence sweep
-when its workspace authority is still valid, and removes its private artifacts. Successful results
-served from the previous publication during this window report `building` with an explanatory
-status note, while any simultaneous freshness-convergence warning remains visible separately.
-After a crash, the next elected writer holds both workspace ownership and the destination claim,
-validates that any existing publication belongs to that workspace, then removes exact GUID-named
-Phoenix stage, temporary publish-link, and SQLite sidecar artifacts through retained destination
-authority. Discovery fails closed before opening artifact handles if it exceeds 256 candidates or
-five seconds; the refusal identifies which bound was reached and reports the observed candidate
-count instead of collapsing it into an unsafe-link diagnostic. A live claimed stage cannot be
-scavenged, foreign publications are never mutated, and unrelated or merely similar filenames are
-preserved.
+Index updates are incremental. The writer process watches the working tree and applies debounced
+C#, F#, Markdown, and SQL deltas; `.csproj` / `.fsproj` changes rebuild compile ownership and the
+authoritative project graph, while solution changes update only non-authoritative editor inventory.
+A startup sweep catches edits made while the server was down, and branch switches / pulls are
+detected by watching `.git` — `repo_overview.git` reports indexed vs HEAD commit. Every response
+carries `indexStatus` / `indexVersion` freshness metadata, and cold builds expose live progress
+counters (no fabricated ETAs).
 
-On Windows, Phoenix uses **one writer process and many read-only follower processes per index**.
-One crash-recoverable named mutex, keyed by the physical workspace/worktree directory identity,
-elects the process that owns builds, watchers, refreshes, and worktree-index mutations. Path aliases
-to that worktree converge on the same mutex. Additional Claude, Codex, or other MCP processes attach
-to the same compatible SQLite WAL index as followers and can use every navigation and semantic
-query tool concurrently. Check
-`server_capabilities.index.mode` or response `meta.indexMode` for `writer`, `follower`, or
-`unavailable` (the process has not attached to a database role).
-Followers never build or repair an index; `refresh_index` and `index_worktree` return the stable
-`index_writer_required` error and must be run from the writer process. A follower's index-backed
-evidence reads committed writer state, while tools explicitly labeled live and compiler-backed
-semantic operations may read newer workspace bytes. Followers cannot observe the writer process's
-pending watcher queue, so capabilities report `pendingChangesKnown: false` rather than presenting
-a local zero as freshness evidence. There is no cross-process reader registry, slot file, or
-turnstile. A small `<index-db>.phoenix-owner` claim binds that destination to the writer's physical
-workspace identity and publishes `ready` or `rebuilding`. Followers check it before and after every
-SQLite open. Publishing `rebuilding` therefore stops new opens from barging while existing bounded
-operations keep their consistent old handle; the sole writer waits up to three minutes for those
-handles before publishing the already-complete staged replacement. A different workspace cannot
-claim the same
-`--index-db`, and a same-workspace process configured with another database refuses follower mode
-instead of reading a path its writer does not maintain. If a database moves with its workspace,
-an ordinary open refuses to guess while the old root may be temporarily unavailable. An explicit
-`refresh_index(force: "full")` rebuild recognizes the missing old lexical root and rebinds
-metadata to the new location; a still-live different workspace remains a hard refusal.
-Followers reopen the compatible database on each request. If the writer exits, an existing follower
-can continue serving the last committed state but never promotes itself; restart it if that process
+`refresh_index` is the in-band writer hatch: `force: 'auto'` (the default) re-detects changes,
+`force: 'incremental'` explicitly requests that incremental sweep, and `force: 'full'` rebuilds
+from scratch — recovering even a corrupted index without shell access.
+
+**A full rebuild keeps the prior index available during private construction.** On Windows and
+Linux workspace-local destinations, Phoenix builds and finalizes a private database while the
+previous index stays queryable. During the final bounded reader drain and atomic install, new
+writer or follower queries may briefly retry or fail; already-admitted readers keep their
+consistent handles. Failures during private construction or before stage installation may return a
+previously readable publication to service, but only while workspace and live-database authority
+remain valid. Once the stage has been installed, a later failure cannot restore the previous
+publication and Phoenix fails closed. Identity or authority validation failures fail closed at any
+phase rather than re-serving a publication Phoenix can no longer prove belongs to that workspace.
+Results served from the old index during construction report `building` rather than implying
+freshness they do not have.
+
+On Windows, Phoenix runs **one writer process and many read-only follower processes per index**. A
+crash-recoverable named mutex, keyed by physical workspace/worktree identity so path aliases
+converge, elects the writer that owns builds, watchers, refreshes, and worktree seeding. Every other
+Claude, Codex, or MCP process attaches to the same compatible SQLite WAL index as a follower and can
+use every navigation and semantic tool concurrently. Check `server_capabilities.index.mode` or
+`meta.indexMode` for `writer`, `follower`, or `unavailable`. Followers never build or repair an
+index — `refresh_index` and `index_worktree` return the stable `index_writer_required` error and
+must run from the writer. Followers report `pendingChangesKnown: false` rather than presenting a
+local zero as freshness evidence, and never promote themselves: restart a follower if that process
 should become the next writer.
+
+[`docs/design.md`](docs/design.md) documents the publication, claim, drain, and crash-recovery
+mechanics in full.
 
 ## Install (work machine)
 
@@ -241,8 +162,9 @@ takes a few minutes; the server answers `index_building` hints meanwhile). On Wi
 attach once that writer has produced a compatible index; a missing, corrupt, or schema-stale index
 requires the writer rather than being repaired by a follower. The index lives in
 `<workspace>/.codenav/index.db` — add `.codenav/` to `.gitignore` — or point `--index-db`
-elsewhere. A custom destination is still owned by exactly one physical workspace; do not share one
-database path between workspace roots.
+elsewhere. On macOS, or with a non-workspace-local destination, Phoenix uses the in-place
+compatibility rebuild path instead of staged publication. A custom destination is still owned by
+exactly one physical workspace; do not share one database path between workspace roots.
 
 ## Git worktrees (review flows)
 
@@ -261,12 +183,10 @@ index_worktree(path: "../review-1234")         # MCP, on the MAIN instance: seed
                                                # then reconciles. refresh re-seeds the same way.
 ```
 
-That one-shot publisher acquires the target worktree mutex and publishes the same destination
-claim in `rebuilding` state for the entire staged install. It rewrites `workspace_root` to the
-target before publication, so an existing follower cannot barge and the sibling Phoenix accepts
-the resulting database as its own. If the target worktree's Phoenix starts while seeding owns the
-mutex, it attaches as a follower and remains one after publication; restart that worktree server
-after seeding when it should take writer ownership.
+That one-shot publisher holds the target worktree's writer mutex for the whole staged install and
+rewrites the stored workspace identity before publishing, so the sibling Phoenix accepts the result
+as its own and no follower can barge mid-install. A target worktree's Phoenix started while seeding
+is in progress attaches as a follower and stays one — restart it when it should take ownership.
 
 Platform policy: **Windows** reconciles with one targeted delta (git diff of
 `indexed_commit->HEAD` UNION git status dirt — no fresh-checkout sweep); **Linux** always
@@ -325,17 +245,13 @@ watcher, and lifecycle test projects under `tests/`.
   filters; clipped calls report `filesScanned`, `filesAtLeast`, and
   `partialReason:"candidate_file_cap"` rather than presenting bounded counts as complete.
 - F# `outline` is syntax-only and limited to compile-owned `.fs` / `.fsi`; `.fsx` is text-only.
-  F# semantic Stage 2A is position-only and limited to bounded, same-project source closure for
-  `symbol_at` and `definition`. It evaluates simple properties/conditions/`Choose`, literal
-  workspace-local `.props`, and the nearest indexed ancestor `Directory.Build.props`/`.targets`
-  for bounded metadata-free reference lists and exact `Reference Include`/`Remove` operations.
-  It does not evaluate active targets/tasks, property functions, wildcard reference operations,
-  imported compile items, property reassignment after semantic items, custom SDK authority,
-  unresolved ambient/global condition inputs, package/project references, or arbitrary
-  MSBuild. It also does not support
-  F# name search, references, implementations, callers/callees, or hierarchy. Unscoped indexed
-  search remains language-neutral; C# syntax search with an explicit F#-only scope discloses
-  `unsupported_language`, and a mixed scope marks its C# results partial.
+  F# semantics are position-only (`symbol_at`, `definition`) within one physical project and target
+  framework, over a documented MSBuild-evaluation subset. Unsupported authority either fails closed
+  with a stable cause or continues only through the explicitly partial standard-SDK/toolchain and
+  host-selected `FSharp.Core` boundaries described above. F# name search, references,
+  implementations, callers/callees, and hierarchy are not supported. Unscoped indexed search stays
+  language-neutral; an F#-only `search_symbol` scope discloses `unsupported_language`, and a mixed
+  scope marks its C# results partial.
 - Indexed `references` are whole-identifier text candidates; use `mode="semantic"` (or the
   default auto-upgrade) for compiler-exact results.
 - Semantic scans load all matching candidate projects by default (`maxProjects:0`). A positive
