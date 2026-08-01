@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
@@ -1276,13 +1277,325 @@ public class Batch42TestsPart2
                 gitPath, false, null);
             var excluded = literal with { Id = 2, FilePath = "Deleted.cs" };
             var missing = literal with { Id = 3, FilePath = "Survivors/Missing.cs" };
-            List<SymbolHit> survivors = NavigationTools.FilterExistingReviewDeclarations(root,
-                "Deleted.cs", [literal, excluded, missing]);
+            List<SymbolHit> survivors = NavigationTools.FilterExistingReviewDeclarations(
+                "Deleted.cs", ["Deleted.cs"], [literal, excluded, missing], Exists);
 
             Assert.Equal(literal, Assert.Single(survivors));
+
+            bool Exists(string path) =>
+                CodeNav.Core.WorkspacePaths.TryResolveGitPathInside(root, path,
+                    out string fullPath) &&
+                !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(root, fullPath) &&
+                File.Exists(fullPath);
         }
         finally { Cleanup(root); }
     }
+
+    [Fact]
+    public void ReviewSurvivorFilterRejectsStaleRowsOutsideTheCapturedDeletionManifest()
+    {
+        string root = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-42-stale-survivor").FullName);
+        try
+        {
+            string directory = Path.Combine(root, "Survivors");
+            Directory.CreateDirectory(directory);
+            const string livePath = "Survivors/Live.cs";
+            File.WriteAllText(Path.Combine(root, livePath),
+                "public class LiveSurvivor42 { }\n");
+            File.WriteAllText(Path.Combine(root, "Survivors", "Deleted.cs"),
+                "public class CapturedDeletedSurvivor42 { }\n");
+
+            var live = new SymbolHit(1, "class", "LiveSurvivor42", null,
+                null, "class LiveSurvivor42", "public", 1, 1, false, null,
+                livePath, false, null);
+            var stale = live with { Id = 2, FilePath = "Survivors/Stale.cs" };
+            var capturedDeleted = live with { Id = 3, FilePath = "Survivors/Deleted.cs" };
+            List<SymbolHit> survivors = NavigationTools.FilterExistingReviewDeclarations(
+                "Former.cs", ["Former.cs", capturedDeleted.FilePath],
+                [live, stale, capturedDeleted], Exists);
+
+            Assert.Equal(live, Assert.Single(survivors));
+
+            bool Exists(string path) =>
+                CodeNav.Core.WorkspacePaths.TryResolveGitPathInside(root, path,
+                    out string fullPath) &&
+                !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(root, fullPath) &&
+                File.Exists(fullPath);
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void ReviewLiveWorkspaceEvidenceDetectsContentAndExistenceMutation()
+    {
+        string root = CanonicalUnixTemp(
+            Directory.CreateTempSubdirectory("codenav-42-live-evidence-unit").FullName);
+        try
+        {
+            string observed = Path.Combine(root, "Observed.props");
+            string initiallyMissing = Path.Combine(root, "Appeared.targets");
+            File.WriteAllText(observed, "<Project Initial=\"true\" />\n");
+            var evidence = new NavigationTools.ReviewLiveWorkspaceEvidence(root, ReadForTest);
+
+            Assert.NotNull(evidence.ReadBounded(observed, 4096));
+            Assert.False(evidence.Exists(initiallyMissing));
+            Assert.True(evidence.Validate());
+
+            File.WriteAllText(observed, "<Project Rewritten=\"true\" />\n");
+            File.WriteAllText(initiallyMissing, "<Project />\n");
+
+            Assert.False(evidence.Validate());
+
+            static byte[]? ReadForTest(string path, int maxBytes)
+            {
+                byte[] bytes = File.ReadAllBytes(path);
+                return bytes.Length <= maxBytes ? bytes : null;
+            }
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void ReviewLiveWorkspaceEvidenceLatchesRepeatedExistenceFlip()
+    {
+        string root = CanonicalUnixTemp(
+            Directory.CreateTempSubdirectory("codenav-42-live-evidence-repeat").FullName);
+        try
+        {
+            string toggled = Path.Combine(root, "Directory.Build.props");
+            var evidence = new NavigationTools.ReviewLiveWorkspaceEvidence(root);
+
+            Assert.False(evidence.Exists(toggled));
+            File.WriteAllText(toggled, "<Project />\n");
+            Assert.True(evidence.Exists(toggled));
+            File.Delete(toggled);
+            Assert.False(evidence.Exists(toggled));
+
+            Assert.False(evidence.Validate());
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void ReviewLiveWorkspaceEvidenceLatchesRepeatedContentFlip()
+    {
+        string root = CanonicalUnixTemp(
+            Directory.CreateTempSubdirectory("codenav-42-live-evidence-content-repeat").FullName);
+        try
+        {
+            string observed = Path.Combine(root, "Directory.Build.targets");
+            var evidence = new NavigationTools.ReviewLiveWorkspaceEvidence(root, ReadForTest);
+
+            File.WriteAllText(observed, "<Project Initial=\"true\" />\n");
+            Assert.NotNull(evidence.ReadBounded(observed, 4096));
+            File.WriteAllText(observed, "<Project Changed=\"true\" />\n");
+            Assert.NotNull(evidence.ReadBounded(observed, 4096));
+            File.WriteAllText(observed, "<Project Initial=\"true\" />\n");
+            Assert.NotNull(evidence.ReadBounded(observed, 4096));
+
+            Assert.False(evidence.Validate());
+
+            static byte[]? ReadForTest(string path, int maxBytes)
+            {
+                byte[] bytes = File.ReadAllBytes(path);
+                return bytes.Length <= maxBytes ? bytes : null;
+            }
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void ReviewLiveWorkspaceEvidenceLatchesRegularFileToLinkTransition()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string root = CanonicalUnixTemp(
+            Directory.CreateTempSubdirectory("codenav-42-live-evidence-link").FullName);
+        string outside = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-42-live-evidence-link-target").FullName);
+        try
+        {
+            const string gitPath = "Observed.cs";
+            string observed = Path.Combine(root, gitPath);
+            string target = Path.Combine(outside, "External.cs");
+            File.WriteAllText(observed, "public class Initial42 { }\n");
+            File.WriteAllText(target, "public class External42 { }\n");
+            var evidence = new NavigationTools.ReviewLiveWorkspaceEvidence(root);
+
+            Assert.True(evidence.GitPathExists(gitPath));
+            File.Delete(observed);
+            File.CreateSymbolicLink(observed, target);
+            Assert.False(evidence.GitPathExists(gitPath));
+            File.Delete(observed);
+            File.WriteAllText(observed, "public class Initial42 { }\n");
+            Assert.True(evidence.GitPathExists(gitPath));
+
+            Assert.False(evidence.Validate());
+        }
+        finally
+        {
+            Cleanup(root);
+            Cleanup(outside);
+        }
+    }
+
+    [Fact]
+    public void ReviewLiveWorkspaceEvidenceLatchesRegularFileToFifoTransition()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string root = CanonicalUnixTemp(
+            Directory.CreateTempSubdirectory("codenav-42-live-evidence-fifo").FullName);
+        try
+        {
+            const string gitPath = "Observed.cs";
+            string observed = Path.Combine(root, gitPath);
+            File.WriteAllText(observed, "public class InitialFifo42 { }\n");
+            var evidence = new NavigationTools.ReviewLiveWorkspaceEvidence(root);
+
+            Assert.True(evidence.GitPathExists(gitPath));
+            File.Delete(observed);
+            Assert.Equal(0, UnixMkFifo(observed, 0x180));
+            Assert.False(evidence.GitPathExists(gitPath));
+            File.Delete(observed);
+            File.WriteAllText(observed, "public class InitialFifo42 { }\n");
+            Assert.True(evidence.GitPathExists(gitPath));
+
+            Assert.False(evidence.Validate());
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void ProjectShapeFallbackTreatsAboveWorkspaceAuthorityAsIncomplete()
+    {
+        string container = CanonicalUnixTemp(
+            Directory.CreateTempSubdirectory("codenav-42-parent-authority").FullName);
+        string root = Path.Combine(container, "Workspace");
+        try
+        {
+            string projectDirectory = Path.Combine(root, "P");
+            Directory.CreateDirectory(projectDirectory);
+            File.WriteAllText(Path.Combine(projectDirectory, "P.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            File.WriteAllText(Path.Combine(container, "Directory.Build.props"),
+                "<Project><ItemGroup><Compile Include=\"Shared/*.cs\" /></ItemGroup></Project>");
+            var projects = new List<ProjectRow>
+            {
+                new(1, "P/P.csproj", "P", "sdk", "net9.0", false, "parsed"),
+            };
+            var evidence = new NavigationTools.ReviewLiveWorkspaceEvidence(root, ReadForTest);
+
+            NavigationTools.ReviewProjectShapeSnapshot snapshot =
+                NavigationTools.LoadProjectShapesBounded(root, projects,
+                    readBounded: evidence.ReadBounded,
+                    pathExists: evidence.AuthorityExistsOrUnsafe);
+
+            Assert.True(snapshot.EvaluationIncomplete);
+            Assert.Empty(snapshot.Parsed);
+            Assert.True(evidence.Validate());
+
+            static byte[]? ReadForTest(string path, int maxBytes)
+            {
+                byte[] bytes = File.ReadAllBytes(path);
+                return bytes.Length <= maxBytes ? bytes : null;
+            }
+        }
+        finally { Cleanup(container); }
+    }
+
+    [Fact]
+    public void ProjectShapeFallbackTreatsLinkedAuthorityAsIncomplete()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string root = CanonicalUnixTemp(
+            Directory.CreateTempSubdirectory("codenav-42-linked-authority").FullName);
+        string outside = CanonicalUnixTemp(
+            Directory.CreateTempSubdirectory("codenav-42-linked-authority-target").FullName);
+        try
+        {
+            string projectDirectory = Path.Combine(root, "P");
+            Directory.CreateDirectory(projectDirectory);
+            File.WriteAllText(Path.Combine(projectDirectory, "P.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            string target = Path.Combine(outside, "Directory.Build.props");
+            File.WriteAllText(target, "<Project />");
+            File.CreateSymbolicLink(Path.Combine(root, "Directory.Build.props"), target);
+            var projects = new List<ProjectRow>
+            {
+                new(1, "P/P.csproj", "P", "sdk", "net9.0", false, "parsed"),
+            };
+            var evidence = new NavigationTools.ReviewLiveWorkspaceEvidence(root, ReadForTest);
+
+            NavigationTools.ReviewProjectShapeSnapshot snapshot =
+                NavigationTools.LoadProjectShapesBounded(root, projects,
+                    readBounded: evidence.ReadBounded,
+                    pathExists: evidence.AuthorityExistsOrUnsafe);
+
+            Assert.True(snapshot.EvaluationIncomplete);
+            Assert.Empty(snapshot.Parsed);
+            Assert.True(evidence.Validate());
+
+            static byte[]? ReadForTest(string path, int maxBytes)
+            {
+                byte[] bytes = File.ReadAllBytes(path);
+                return bytes.Length <= maxBytes ? bytes : null;
+            }
+        }
+        finally
+        {
+            Cleanup(root);
+            Cleanup(outside);
+        }
+    }
+
+    [Fact]
+    public void ReviewPackRejectsIgnoredBuildAuthorityAppearingAfterLiveEvidenceRead()
+    {
+        // PhoenixCodeNav-8au: macOS cannot yet open the anchored test index destination.
+        if (OperatingSystem.IsMacOS()) return;
+        if (!GitInfo.GitAvailable) return;
+        string root = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-42-live-evidence-epoch").FullName);
+        try
+        {
+            WriteReviewRepo(root);
+            File.AppendAllText(Path.Combine(root, ".gitignore"), "Directory.Build.props\n");
+            Git(root, "add .gitignore");
+            Git(root, "commit -q -m ignore-build-authority-fixture");
+
+            using var manager = StartManager(root);
+            using var semantic = new SemanticService(manager);
+            string deletedPath = Path.Combine(root, "Lib", "Old.cs");
+            File.Delete(deletedPath);
+            manager.RequestRefresh(["Lib/Old.cs"]);
+            Assert.True(WaitUntil(() =>
+            {
+                using var queries = manager.OpenQueries();
+                return queries.ContentByPath("Lib/Old.cs") is null;
+            }, 20_000), "index did not remove the deleted review fixture");
+
+            string ignoredAuthority = Path.Combine(root, "Directory.Build.props");
+            var tools = new NavigationTools(manager, semantic)
+            {
+                ReviewBeforeFinalWorkspaceValidationForTest = () =>
+                    File.WriteAllText(ignoredAuthority, "<Project />\n"),
+            };
+
+            string json = tools.ReviewPack(maxBytes: 24576);
+            JsonElement response = Parse(json);
+            Assert.Equal("git_worktree_changed", response.GetProperty("error").GetString());
+            Assert.False(response.TryGetProperty("changedFiles", out _), json);
+        }
+        finally { Cleanup(root); }
+    }
+
+    private static string CanonicalUnixTemp(string path) =>
+        OperatingSystem.IsMacOS() && path.StartsWith("/var/", StringComparison.Ordinal)
+            ? "/private" + path
+            : Path.GetFullPath(path);
+
+    [DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
+    private static extern int UnixMkFifo(string path, uint mode);
 
     [Fact]
     public void ReferenceDeclarationOffsetCacheInvalidatesWhenIndexedContentChanges()

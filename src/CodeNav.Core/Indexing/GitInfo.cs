@@ -821,6 +821,12 @@ public static class GitInfo
         /// <summary>True ordinary untracked files only. Dirty remains the compatibility union of
         /// staged, unstaged, unmerged, and untracked paths for reconcile callers.</summary>
         public List<string>? UntrackedFiles { get; init; }
+
+        /// <summary>Stable identity of the exact raw diff, typed dirt manifest, bounded untracked
+        /// move-candidate contents actually consumed, link/repository classification, and move
+        /// correlation returned by this capture. Higher-level review can recapture after its last
+        /// live read and refuse mixed epochs.</summary>
+        public string? SnapshotIdentity { get; init; }
     }
 
     /// <summary>Hunk-level diff of the WORKING TREE against <paramref name="fromCommit"/>
@@ -961,55 +967,144 @@ public static class GitInfo
             return new ReviewDiffResult(diff, null, coverage,
                 changedSubmoduleLinks, untrackedCoverage, untrackedLinkCoverage);
         }
-        if (dirty.Status == "ok" && diff.Files is not null && dirty.UntrackedFiles is not null)
+        if (dirty.UntrackedFiles is null)
         {
-            CorrelateUntrackedMoves(workspaceRoot, diff.Files, dirty.UntrackedFiles,
-                afterUntrackedMoveRead);
+            return new ReviewDiffResult(new DiffHunksResult("status_failed", null, coverage),
+                null, coverage, [], untrackedCoverage, untrackedLinkCoverage);
+        }
+        List<(string Path, byte[] Content)> moveCandidates = diff.Files is null
+            ? []
+            : CaptureUntrackedMoveCandidates(workspaceRoot, diff.Files,
+                dirty.UntrackedFiles);
+        if (moveCandidates.Count > 0)
+        {
+            bool correlate = true;
+            try { afterUntrackedMoveRead?.Invoke(); }
+            catch { correlate = false; }
+            if (correlate) CorrelateUntrackedMoveCandidates(diff.Files!, moveCandidates);
+        }
+        string? snapshotIdentity = BuildReviewSnapshotIdentity(diff, dirty, moveCandidates);
+        if (snapshotIdentity is null)
+        {
+            return new ReviewDiffResult(new DiffHunksResult("status_failed", null, coverage),
+                null, coverage, [], untrackedCoverage, untrackedLinkCoverage);
         }
         return new ReviewDiffResult(diff, dirty.Status == "ok" ? dirty.Files : null,
             coverage, changedSubmoduleLinks, untrackedCoverage, untrackedLinkCoverage)
         {
             UntrackedFiles = dirty.Status == "ok" ? dirty.UntrackedFiles : null,
+            SnapshotIdentity = snapshotIdentity,
         };
     }
 
-    private static void CorrelateUntrackedMoves(string workspaceRoot, List<DiffFile> files,
-        IReadOnlyList<string> untrackedFiles, Action? afterUntrackedMoveRead = null)
+    /// <summary>Capture only untracked C# bytes that move correlation can consume. Count,
+    /// per-file, aggregate, unavailable, and non-regular cases remain conservatively uncorrelated;
+    /// they never turn an otherwise stable review into a hard failure.</summary>
+    internal static List<(string Path, byte[] Content)> CaptureUntrackedMoveCandidates(
+        string workspaceRoot, IReadOnlyList<DiffFile> files,
+        IReadOnlyList<string> untrackedFiles,
+        Func<string, int, byte[]?>? readCandidate = null)
     {
         const int maxCandidates = 64;
         const int maxCandidateBytes = 8 * 1024 * 1024;
         const int maxAggregateBytes = 32 * 1024 * 1024;
-        var deletedByOid = files
-            .Where(file => file.Status == 'D' && file.MovedToPath is null &&
-                           IsReviewableCSharpPath(file.Path) &&
-                           IsRegularGitMode(file.OldMode) && IsFullObjectId(file.OldObjectId))
-            .GroupBy(file => file.OldObjectId!, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
-        if (deletedByOid.Count == 0) return;
+        bool hasEligibleDeletion = files.Any(file => file.Status == 'D' &&
+            file.MovedToPath is null && IsReviewableCSharpPath(file.Path) &&
+            IsRegularGitMode(file.OldMode) && IsFullObjectId(file.OldObjectId));
+        if (!hasEligibleDeletion) return [];
 
-        var candidates = new List<(string Path, byte[] Content)>();
-        int retainedBytes = 0;
-        int attempted = 0;
-        foreach (string path in untrackedFiles.Where(IsReviewableCSharpPath)
-                     .Distinct(StringComparer.Ordinal).OrderBy(path => path, StringComparer.Ordinal))
+        readCandidate ??= (path, maxBytes) =>
         {
-            if (attempted++ >= maxCandidates || retainedBytes >= maxAggregateBytes) break;
-            if (!WorkspacePaths.TryResolveGitPathInside(workspaceRoot, path, out string fullPath))
-                continue;
-            int remaining = maxAggregateBytes - retainedBytes;
-            byte[]? content = ReadExistingBoundedRegularFile(fullPath,
-                Math.Min(maxCandidateBytes, remaining), workspaceRoot);
-            if (content is null) continue;
-            candidates.Add((path, content));
-            retainedBytes += content.Length;
+            if (!WorkspacePaths.TryResolveGitPathInside(workspaceRoot, path,
+                    out string fullPath)) return null;
+            return ReadExistingBoundedRegularFile(fullPath, maxBytes, workspaceRoot);
+        };
+
+        try
+        {
+            var candidates = new List<(string Path, byte[] Content)>();
+            int retainedBytes = 0;
+            int attempted = 0;
+            foreach (string path in untrackedFiles.Where(IsReviewableCSharpPath)
+                         .Distinct(StringComparer.Ordinal)
+                         .OrderBy(path => path, StringComparer.Ordinal))
+            {
+                if (attempted++ >= maxCandidates || retainedBytes >= maxAggregateBytes) break;
+                int remaining = maxAggregateBytes - retainedBytes;
+                int readLimit = Math.Min(maxCandidateBytes, remaining);
+                byte[]? content = readCandidate(path, readLimit);
+                if (content is null || content.Length > readLimit) continue;
+                candidates.Add((path, content));
+                retainedBytes += content.Length;
+            }
+            return candidates;
         }
-        if (candidates.Count == 0) return;
-        // The bytes above were obtained through anchored component-by-component no-follow opens.
-        // Never ask a later Git process to reopen repository-controlled paths: a regular file can
-        // otherwise be swapped for a symlink/junction between validation and hash-object.
-        try { afterUntrackedMoveRead?.Invoke(); }
-        catch { return; }
-        CorrelateUntrackedMoveCandidates(files, candidates);
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static string? BuildReviewSnapshotIdentity(DiffHunksResult diff,
+        DirtyFilesResult dirty,
+        IReadOnlyList<(string Path, byte[] Content)> moveCandidates)
+    {
+        if (diff.RawCaptureDigest is null || dirty.SnapshotDigest is null) return null;
+        try
+        {
+            using IncrementalHash digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            byte[] separator = [0];
+            void Add(string? value)
+            {
+                digest.AppendData(Encoding.UTF8.GetBytes(value ?? ""));
+                digest.AppendData(separator);
+            }
+            void AddBytes(string component, byte[] value)
+            {
+                Add(component);
+                digest.AppendData(value);
+                digest.AppendData(separator);
+            }
+            void AddPaths(string component, IEnumerable<string>? paths)
+            {
+                Add(component);
+                foreach (string path in (paths ?? []).OrderBy(path => path,
+                             StringComparer.Ordinal))
+                    Add(path);
+            }
+
+            AddBytes("raw-diff", diff.RawCaptureDigest);
+            AddBytes("typed-dirt", dirty.SnapshotDigest);
+            Add(dirty.Status);
+            AddPaths("ordinary-untracked", dirty.UntrackedFiles);
+            Add("untracked-move-candidate-content");
+            foreach ((string path, byte[] content) in moveCandidates.OrderBy(
+                         candidate => candidate.Path, StringComparer.Ordinal))
+            {
+                Add(path);
+                Add(content.Length.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+                AddBytes("sha256", SHA256.HashData(content));
+            }
+            AddPaths("excluded-untracked-repositories", dirty.ExcludedUntrackedRepositories);
+            AddPaths("excluded-untracked-links", dirty.ExcludedLinkedPaths);
+            Add("move-correlation");
+            foreach (DiffFile file in (diff.Files ?? [])
+                         .Where(file => file.MovedFromPath is not null ||
+                                        file.MovedToPath is not null)
+                         .OrderBy(file => file.Path, StringComparer.Ordinal))
+            {
+                Add(file.Path);
+                Add(file.MovedFromPath);
+                Add(file.MovedToPath);
+                Add(file.MoveMatch);
+            }
+            return Convert.ToHexString(digest.GetHashAndReset());
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     internal static void CorrelateUntrackedMoveCandidates(List<DiffFile> files,
@@ -2322,6 +2417,31 @@ public static class GitInfo
     public static byte[]? ReadBoundedRegularFile(string path, int maxBytes,
         string allowedRoot) =>
         ReadBoundedRegularFileCore(path, maxBytes, allowedRoot, missingAsEmpty: true);
+
+    /// <summary>Classifies one absolute path through the same anchored, nonblocking, no-follow
+    /// traversal used for bounded reads. A non-empty regular file reports
+    /// <see cref="RegularFileClassification.Regular"/> through the zero-byte oversized disposition
+    /// without reading its content; links, special files, containment failures, and unavailable
+    /// metadata remain conservatively unsafe.</summary>
+    public static RegularFileClassification ClassifyRegularFile(string path,
+        string allowedRoot)
+    {
+        WorkspaceFileReadResult result = ReadBoundedRegularFileResultCore(path, 0, allowedRoot);
+        return result.Disposition switch
+        {
+            WorkspaceFileReadDisposition.Success or WorkspaceFileReadDisposition.Oversized =>
+                RegularFileClassification.Regular,
+            WorkspaceFileReadDisposition.Missing => RegularFileClassification.Missing,
+            _ => RegularFileClassification.UnsafeOrNonRegular,
+        };
+    }
+
+    public enum RegularFileClassification
+    {
+        Missing,
+        Regular,
+        UnsafeOrNonRegular,
+    }
 
     /// <summary>Reads one workspace-relative Git path without following links or blocking on
     /// special files. Linux worktree reconciliation may pass a pinned /proc/&lt;pid&gt;/fd directory;

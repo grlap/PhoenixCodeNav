@@ -84,6 +84,12 @@ workspace-relative paths, within a 64 KiB input string, as comma-separated text 
 JSON string array. Use the JSON form for a filename containing a comma. Blank, rooted, traversing,
 control-character, malformed, and over-limit inputs return `bad_request` before any refresh is
 queued or review lookup begins.
+`review_pack` revalidates the bounded live evidence it consumed after aggregation; Git-diff mode
+also recaptures its patch, dirt, boundary classifications, move evidence, and the bounded
+untracked move-candidate bytes it actually hashed. A mid-call mismatch fails with
+`git_worktree_changed` and no partial digest. Unreadable, non-regular, oversized, or cap-excluded
+untracked candidates remain conservatively uncorrelated instead of failing an otherwise stable
+review.
 
 **A full rebuild keeps the prior index available during private construction.** On Windows and
 Linux workspace-local destinations, Phoenix builds and finalizes a private database while the

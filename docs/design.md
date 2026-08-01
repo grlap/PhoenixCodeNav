@@ -239,6 +239,16 @@ traversing, control-character, malformed, and over-limit inputs fail with `bad_r
 lookup or queueing. A null `refresh_index.paths` alone requests the full sweep; a non-null blank
 value is invalid rather than silently widening a targeted request.
 
+After its last workspace-dependent aggregation read, `review_pack` revalidates every bounded live
+file digest and safe existence classification it consumed. Contradictory repeated observations
+latch the call unstable even when the path later returns to its first state. Git-diff mode then
+recaptures the exact patch, typed dirt, link/repository classification, move evidence, and only the
+bounded untracked move-candidate bytes it actually hashed. Unreadable, non-regular, oversized, or
+cap-excluded candidates stay conservatively uncorrelated rather than hard-failing a stable review.
+A mismatch returns `git_worktree_changed` without a partial digest, so one response never combines
+evidence from different worktree epochs; explicit-path mode applies the same live-evidence
+revalidation without requiring Git.
+
 `review_pack.movedFiles[].match` distinguishes evidence strength. `exact_blob` means the staged or
 unstaged C# relocation is byte-identical. A unique untracked worktree candidate whose CRLF bytes
 normalize to the stored LF blob is reported as `normalized_blob`; the reverse direction remains

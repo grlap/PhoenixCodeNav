@@ -480,6 +480,12 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("modes", snapshot);
         Assert.Contains("tracked bytes", snapshot);
 
+        string liveEvidence = Summary("review-live-evidence-revalidation");
+        Assert.Contains("safe existence classification", liveEvidence);
+        Assert.Contains("contradictory repeated observations", liveEvidence);
+        Assert.Contains("bounded untracked move-candidate bytes actually consumed", liveEvidence);
+        Assert.Contains("fails closed", liveEvidence);
+
         string launcher = Summary("review-git-launcher-isolation");
         Assert.Contains("canonical absolute paths", launcher);
         Assert.Contains("missing or non-directory working directory fails before spawn", launcher);
@@ -614,6 +620,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                      ("coverage.untrackedLinks", "review-untracked-link-coverage"),
                       ("git_layered_changes", "review-layered-change-refusal"),
                       ("git_worktree_changed", "review-snapshot-consistency"),
+                      ("contradictory repeated observations",
+                          "review-live-evidence-revalidation"),
                        ("protocol.allow=never", "review-git-transport-isolation"),
                        ("GIT_ALTERNATE_OBJECT_DIRECTORIES", "review-git-environment-isolation"),
                        ("literal backslashes", "unix-git-path-identity"),
