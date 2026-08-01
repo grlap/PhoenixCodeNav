@@ -232,6 +232,20 @@ design backed by a concrete reproducer.
 non-authoritative. Only changed project or build inputs can invalidate exact ownership, move,
 or declaration evidence.
 
+Explicit `review_pack` and targeted `refresh_index` path lists share one bounded input grammar:
+one to 256 exact workspace-relative paths within a 64 KiB input string, as comma-separated text or
+a serialized JSON string array. The JSON form preserves commas inside path strings. Blank, rooted,
+traversing, control-character, malformed, and over-limit inputs fail with `bad_request` before
+lookup or queueing. A null `refresh_index.paths` alone requests the full sweep; a non-null blank
+value is invalid rather than silently widening a targeted request.
+
+`review_pack.movedFiles[].match` distinguishes evidence strength. `exact_blob` means the staged or
+unstaged C# relocation is byte-identical. A unique untracked worktree candidate whose CRLF bytes
+normalize to the stored LF blob is reported as `normalized_blob`; the reverse direction remains
+uncorrelated. Normalized evidence is never promoted to byte-exact evidence, exact matches reserve
+their targets first, each target is claimed at most once, and ambiguous candidates remain
+uncorrelated.
+
 For symbol search, FTS generates and ranks candidates; syntax or compiler evidence decides
 identity. `implementations` and `type_hierarchy` select generic declarations by the stored
 syntax arity (explicit `arity`, or a `search_symbol` `symbolId`). A bare exact name spanning

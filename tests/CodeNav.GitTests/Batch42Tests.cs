@@ -1202,6 +1202,8 @@ public class Batch42Tests
             Assert.True(System.Text.Encoding.UTF8.GetByteCount(boundedJson) <= 2048);
             var projectCoverage = bounded.GetProperty("changedProjectFilesCoverage");
             Assert.Equal(80, projectCoverage.GetProperty("total").GetInt32());
+            Assert.Equal(80, projectCoverage.GetProperty("authoritative").GetInt32());
+            Assert.Equal(0, projectCoverage.GetProperty("solutionMetadata").GetInt32());
             Assert.True(projectCoverage.GetProperty("returned").GetInt32() < 80);
             Assert.True(projectCoverage.GetProperty("truncated").GetBoolean());
             Assert.Contains(bounded.GetProperty("notes").EnumerateArray(), note =>
@@ -1449,6 +1451,101 @@ public class Batch42Tests
             Assert.Equal(0, pack.GetProperty("changedFiles").GetProperty("deleted").GetInt32());
             Assert.False(pack.TryGetProperty("deletedFiles", out _));
             Assert.False(pack.TryGetProperty("deletedFilesCoverage", out _));
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void CrLfOnlyUntrackedMoveIsReportedAsNormalizedBlobEvidence()
+    {
+        if (!GitInfo.GitAvailable) return;
+        string root = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-f6l9-normalized-move").FullName);
+        try
+        {
+            WriteReviewRepo(root);
+            const string oldPath = "Lib/LineEndingOld.cs";
+            const string newPath = "Lib/LineEndingNew.cs";
+            const string sourceLf =
+                "namespace Lib;\npublic class LineEndingMove { public void Run() { } }\n";
+            File.WriteAllText(Path.Combine(root, oldPath), sourceLf);
+            Git(root, "add -A");
+            Git(root, "commit -q -m normalized-move-fixture");
+
+            using var manager = StartManager(root);
+            var tools = new NavigationTools(manager, new SemanticService(manager));
+
+            File.Move(Path.Combine(root, oldPath), Path.Combine(root, newPath));
+            File.WriteAllText(Path.Combine(root, newPath),
+                sourceLf.Replace("\n", "\r\n", StringComparison.Ordinal));
+            manager.RequestRefresh(new[] { oldPath, newPath });
+            Assert.True(WaitUntil(() =>
+            {
+                using var queries = manager.OpenQueries();
+                return queries.ContentByPath(oldPath) is null &&
+                       queries.Outline(newPath).Any(symbol =>
+                           symbol.Name == "LineEndingMove");
+            }, 20_000), "index did not reflect the CRLF-only move");
+
+            JsonElement pack = SemanticRetry.ParseWithRetry(
+                () => tools.ReviewPack(maxBytes: 24576),
+                json => json.TryGetProperty("changedFiles", out _),
+                "review_pack with normalized move evidence");
+            JsonElement move = Assert.Single(pack.GetProperty("movedFiles")
+                .GetProperty("items").EnumerateArray());
+            Assert.Equal(oldPath, move.GetProperty("from").GetString());
+            Assert.Equal(newPath, move.GetProperty("to").GetString());
+            Assert.Equal("normalized_blob", move.GetProperty("match").GetString());
+            Assert.Equal(0, pack.GetProperty("changedFiles").GetProperty("deleted").GetInt32());
+            Assert.False(pack.TryGetProperty("deletedFiles", out _));
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void ExactMoveReservesItsTargetFromCompetingNormalizedDeletion()
+    {
+        if (!GitInfo.GitAvailable) return;
+        string root = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-f6l9-one-target").FullName);
+        try
+        {
+            WriteReviewRepo(root);
+            const string oldLfPath = "Lib/OldLf.cs";
+            const string oldCrLfPath = "Lib/OldCrLf.cs";
+            const string newPath = "Lib/OnlyCandidate.cs";
+            const string sourceLf =
+                "namespace Lib;\npublic class OneTargetMove { public void Run() { } }\n";
+            string sourceCrLf = sourceLf.Replace("\n", "\r\n", StringComparison.Ordinal);
+            File.WriteAllText(Path.Combine(root, oldLfPath), sourceLf);
+            File.WriteAllText(Path.Combine(root, oldCrLfPath), sourceCrLf);
+            Git(root, "add -A");
+            Git(root, "commit -q -m competing-normalized-move-fixture");
+
+            using var manager = StartManager(root);
+            var tools = new NavigationTools(manager, new SemanticService(manager));
+
+            File.Delete(Path.Combine(root, oldLfPath));
+            File.Move(Path.Combine(root, oldCrLfPath), Path.Combine(root, newPath));
+            manager.RequestRefresh(new[] { oldLfPath, oldCrLfPath, newPath });
+            Assert.True(WaitUntil(() =>
+            {
+                using var queries = manager.OpenQueries();
+                return queries.ContentByPath(oldLfPath) is null &&
+                       queries.ContentByPath(oldCrLfPath) is null &&
+                       queries.Outline(newPath).Any(symbol => symbol.Name == "OneTargetMove");
+            }, 20_000), "index did not reflect the competing move/deletion");
+
+            JsonElement pack = SemanticRetry.ParseWithRetry(
+                () => tools.ReviewPack(maxBytes: 24576),
+                json => json.TryGetProperty("changedFiles", out _),
+                "review_pack with exact-first move evidence");
+            JsonElement move = Assert.Single(pack.GetProperty("movedFiles")
+                .GetProperty("items").EnumerateArray());
+            Assert.Equal(oldCrLfPath, move.GetProperty("from").GetString());
+            Assert.Equal(newPath, move.GetProperty("to").GetString());
+            Assert.Equal("exact_blob", move.GetProperty("match").GetString());
+            Assert.Equal(1, pack.GetProperty("changedFiles").GetProperty("deleted").GetInt32());
         }
         finally { Cleanup(root); }
     }

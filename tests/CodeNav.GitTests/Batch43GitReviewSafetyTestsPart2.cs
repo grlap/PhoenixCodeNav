@@ -16,6 +16,113 @@ namespace CodeNav.Tests;
 public class Batch43GitReviewSafetyTestsPart2
 {
     [Fact]
+    public void UntrackedMoveCorrelationLabelsCrLfNormalizationWithoutClaimingExactBytes()
+    {
+        byte[] original = System.Text.Encoding.UTF8.GetBytes(
+            "namespace P;\npublic class Moved43 { }\n");
+        byte[] worktree = System.Text.Encoding.UTF8.GetBytes(
+            "namespace P;\r\npublic class Moved43 { }\r\n");
+        string oid = BlobOid(original);
+        var files = new List<GitInfo.DiffFile>
+        {
+            new("Old.cs", Deleted: true, Ranges: [])
+            {
+                Status = 'D',
+                OldMode = "100644",
+                OldObjectId = oid,
+            },
+        };
+
+        GitInfo.CorrelateUntrackedMoveCandidates(files,
+            new[] { (Path: "New.cs", Content: worktree) });
+
+        GitInfo.DiffFile moved = Assert.Single(files);
+        Assert.Equal("New.cs", moved.MovedToPath);
+        Assert.Equal("normalized_blob", moved.MoveMatch);
+
+        files[0] = files[0] with { MovedToPath = null, MoveMatch = null };
+        GitInfo.CorrelateUntrackedMoveCandidates(files,
+            new[]
+            {
+                (Path: "Exact.cs", Content: original),
+                (Path: "Normalized.cs", Content: worktree),
+            });
+        Assert.Equal("Exact.cs", files[0].MovedToPath);
+        Assert.Equal("exact_blob", files[0].MoveMatch);
+
+        files[0] = files[0] with { MovedToPath = null, MoveMatch = null };
+        GitInfo.CorrelateUntrackedMoveCandidates(files,
+            new[]
+            {
+                (Path: "First.cs", Content: worktree),
+                (Path: "Second.cs", Content: worktree),
+            });
+        Assert.Null(files[0].MovedToPath);
+        Assert.Null(files[0].MoveMatch);
+
+        files[0] = files[0] with { MovedToPath = null, MoveMatch = null };
+        GitInfo.CorrelateUntrackedMoveCandidates(files,
+            new[]
+            {
+                (Path: "FirstExact.cs", Content: original),
+                (Path: "SecondExact.cs", Content: original),
+                (Path: "Normalized.cs", Content: worktree),
+            });
+        Assert.Null(files[0].MovedToPath);
+        Assert.Null(files[0].MoveMatch);
+
+        string crlfOid = BlobOid(worktree);
+        var competingDeletions = new List<GitInfo.DiffFile>
+        {
+            new("OldLf.cs", Deleted: true, Ranges: [])
+            {
+                Status = 'D',
+                OldMode = "100644",
+                OldObjectId = oid,
+            },
+            new("OldCrLf.cs", Deleted: true, Ranges: [])
+            {
+                Status = 'D',
+                OldMode = "100644",
+                OldObjectId = crlfOid,
+            },
+        };
+        GitInfo.CorrelateUntrackedMoveCandidates(competingDeletions,
+            new[] { (Path: "OnlyCrLfCandidate.cs", Content: worktree) });
+        GitInfo.DiffFile unmatchedLf = Assert.Single(competingDeletions,
+            file => file.Path == "OldLf.cs");
+        Assert.Null(unmatchedLf.MovedToPath);
+        Assert.Null(unmatchedLf.MoveMatch);
+        GitInfo.DiffFile exactCrLf = Assert.Single(competingDeletions,
+            file => file.Path == "OldCrLf.cs");
+        Assert.Equal("OnlyCrLfCandidate.cs", exactCrLf.MovedToPath);
+        Assert.Equal("exact_blob", exactCrLf.MoveMatch);
+
+        var reverseDirection = new List<GitInfo.DiffFile>
+        {
+            new("OldCrLf.cs", Deleted: true, Ranges: [])
+            {
+                Status = 'D',
+                OldMode = "100644",
+                OldObjectId = crlfOid,
+            },
+        };
+        GitInfo.CorrelateUntrackedMoveCandidates(reverseDirection,
+            new[] { (Path: "LfCandidate.cs", Content: original) });
+        Assert.Null(reverseDirection[0].MovedToPath);
+        Assert.Null(reverseDirection[0].MoveMatch);
+
+        static string BlobOid(byte[] content)
+        {
+            using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(
+                System.Security.Cryptography.HashAlgorithmName.SHA1);
+            hash.AppendData(System.Text.Encoding.ASCII.GetBytes($"blob {content.Length}\0"));
+            hash.AppendData(content);
+            return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        }
+    }
+
+    [Fact]
     public void ReviewExcludesSubmoduleWorktreeDirtAndReportsCoverageWithoutExecutingChildFilter()
     {
         string? gitExe = FindRealGitExe();

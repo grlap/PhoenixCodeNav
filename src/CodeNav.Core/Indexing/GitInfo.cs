@@ -788,6 +788,7 @@ public static class GitInfo
         public string? NewObjectId { get; init; }
         public string? MovedFromPath { get; init; }
         public string? MovedToPath { get; init; }
+        public string? MoveMatch { get; init; }
     }
 
     /// <summary>A diff result with an explicit failure reason. Review callers must not turn a
@@ -962,7 +963,7 @@ public static class GitInfo
         }
         if (dirty.Status == "ok" && diff.Files is not null && dirty.UntrackedFiles is not null)
         {
-            CorrelateUntrackedExactMoves(workspaceRoot, diff.Files, dirty.UntrackedFiles,
+            CorrelateUntrackedMoves(workspaceRoot, diff.Files, dirty.UntrackedFiles,
                 afterUntrackedMoveRead);
         }
         return new ReviewDiffResult(diff, dirty.Status == "ok" ? dirty.Files : null,
@@ -972,7 +973,7 @@ public static class GitInfo
         };
     }
 
-    private static void CorrelateUntrackedExactMoves(string workspaceRoot, List<DiffFile> files,
+    private static void CorrelateUntrackedMoves(string workspaceRoot, List<DiffFile> files,
         IReadOnlyList<string> untrackedFiles, Action? afterUntrackedMoveRead = null)
     {
         const int maxCandidates = 64;
@@ -1005,11 +1006,25 @@ public static class GitInfo
         if (candidates.Count == 0) return;
         // The bytes above were obtained through anchored component-by-component no-follow opens.
         // Never ask a later Git process to reopen repository-controlled paths: a regular file can
-        // otherwise be swapped for a symlink/junction between validation and hash-object. Raw-byte
-        // equality is deliberately conservative; a CRLF-only relocation may remain uncorrelated.
+        // otherwise be swapped for a symlink/junction between validation and hash-object.
         try { afterUntrackedMoveRead?.Invoke(); }
         catch { return; }
-        var additionsByOid = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        CorrelateUntrackedMoveCandidates(files, candidates);
+    }
+
+    internal static void CorrelateUntrackedMoveCandidates(List<DiffFile> files,
+        IReadOnlyList<(string Path, byte[] Content)> candidates)
+    {
+        var deletedByOid = files
+            .Where(file => file.Status == 'D' && file.MovedToPath is null &&
+                           IsReviewableCSharpPath(file.Path) &&
+                           IsRegularGitMode(file.OldMode) && IsFullObjectId(file.OldObjectId))
+            .GroupBy(file => file.OldObjectId!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        if (deletedByOid.Count == 0 || candidates.Count == 0) return;
+
+        var exactByOid = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var normalizedByOid = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         try
         {
             bool needsSha1 = deletedByOid.Keys.Any(oid => oid.Length == 40);
@@ -1017,29 +1032,102 @@ public static class GitInfo
             foreach (var candidate in candidates)
             {
                 if (needsSha1)
-                    AddCandidateOid(GitBlobObjectId(candidate.Content, HashAlgorithmName.SHA1));
+                    AddCandidateOid(exactByOid,
+                        GitBlobObjectId(candidate.Content, HashAlgorithmName.SHA1));
                 if (needsSha256)
-                    AddCandidateOid(GitBlobObjectId(candidate.Content, HashAlgorithmName.SHA256));
-                void AddCandidateOid(string oid)
+                    AddCandidateOid(exactByOid,
+                        GitBlobObjectId(candidate.Content, HashAlgorithmName.SHA256));
+
+                byte[]? normalized = NormalizeCrLfBlob(candidate.Content);
+                if (normalized is not null)
                 {
-                    if (!additionsByOid.TryGetValue(oid, out List<string>? paths))
-                        additionsByOid[oid] = paths = [];
+                    if (needsSha1)
+                        AddCandidateOid(normalizedByOid,
+                            GitBlobObjectId(normalized, HashAlgorithmName.SHA1));
+                    if (needsSha256)
+                        AddCandidateOid(normalizedByOid,
+                            GitBlobObjectId(normalized, HashAlgorithmName.SHA256));
+                }
+
+                void AddCandidateOid(Dictionary<string, List<string>> destination, string oid)
+                {
+                    if (!destination.TryGetValue(oid, out List<string>? paths))
+                        destination[oid] = paths = [];
                     paths.Add(candidate.Path);
                 }
             }
         }
         catch { return; }
+        var claims = new Dictionary<string, (string Target, string Match)>(StringComparer.Ordinal);
+        var claimedTargets = new HashSet<string>(StringComparer.Ordinal);
+
+        // Raw-byte identity has first claim on every target. Each source object and each target
+        // must be unique before it can suppress deletion/former-symbol evidence.
         foreach (var (oid, deleted) in deletedByOid)
         {
-            if (deleted.Count != 1 || !additionsByOid.TryGetValue(oid,
-                    out List<string>? additions) || additions.Count != 1)
-            {
-                continue;
-            }
-            int index = files.FindIndex(file =>
-                string.Equals(file.Path, deleted[0].Path, StringComparison.Ordinal));
-            if (index >= 0) files[index] = files[index] with { MovedToPath = additions[0] };
+            if (deleted.Count != 1 ||
+                !exactByOid.TryGetValue(oid, out List<string>? exact) || exact.Count != 1 ||
+                !claimedTargets.Add(exact[0])) continue;
+            claims[deleted[0].Path] = (exact[0], "exact_blob");
         }
+
+        // Normalized evidence is a conservative second tier. Exact-tier ambiguity is not
+        // permission to fall through, and a target already claimed exactly cannot be reused.
+        foreach (var (oid, deleted) in deletedByOid)
+        {
+            if (deleted.Count != 1 || exactByOid.ContainsKey(oid) ||
+                !normalizedByOid.TryGetValue(oid, out List<string>? normalized)) continue;
+            List<string> available = normalized
+                .Where(path => !claimedTargets.Contains(path))
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            if (available.Count != 1 || !claimedTargets.Add(available[0])) continue;
+            claims[deleted[0].Path] = (available[0], "normalized_blob");
+        }
+
+        foreach (var (source, claim) in claims)
+        {
+            int index = files.FindIndex(file =>
+                string.Equals(file.Path, source, StringComparison.Ordinal));
+            if (index >= 0)
+                files[index] = files[index] with
+                {
+                    MovedToPath = claim.Target,
+                    MoveMatch = claim.Match,
+                };
+        }
+    }
+
+    private static byte[]? NormalizeCrLfBlob(byte[] content)
+    {
+        if (content.AsSpan().IndexOf((byte)0) >= 0) return null;
+        int pairs = 0;
+        for (int i = 0; i + 1 < content.Length; i++)
+        {
+            if (content[i] == (byte)'\r' && content[i + 1] == (byte)'\n')
+            {
+                pairs++;
+                i++;
+            }
+        }
+        if (pairs == 0) return null;
+
+        var normalized = new byte[content.Length - pairs];
+        int write = 0;
+        for (int read = 0; read < content.Length; read++)
+        {
+            if (content[read] == (byte)'\r' && read + 1 < content.Length &&
+                content[read + 1] == (byte)'\n')
+            {
+                normalized[write++] = (byte)'\n';
+                read++;
+            }
+            else
+            {
+                normalized[write++] = content[read];
+            }
+        }
+        return normalized;
     }
 
     private static string GitBlobObjectId(byte[] content, HashAlgorithmName algorithm)
@@ -1532,8 +1620,16 @@ public static class GitInfo
             }
             DiffFile oldFile = deleted[0];
             DiffFile newFile = added[0];
-            manifest[oldFile.Path] = oldFile with { MovedToPath = newFile.Path };
-            manifest[newFile.Path] = newFile with { MovedFromPath = oldFile.Path };
+            manifest[oldFile.Path] = oldFile with
+            {
+                MovedToPath = newFile.Path,
+                MoveMatch = "exact_blob",
+            };
+            manifest[newFile.Path] = newFile with
+            {
+                MovedFromPath = oldFile.Path,
+                MoveMatch = "exact_blob",
+            };
         }
     }
 

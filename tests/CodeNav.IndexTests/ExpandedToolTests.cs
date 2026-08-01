@@ -127,7 +127,6 @@ public class ExpandedToolTests
             " leading.cs",
             "leading.cs",
             "trailing.cs ",
-            "\tTabbed.cs",
             "comma,name.cs",
             "Unicode/文件.cs",
         };
@@ -145,6 +144,7 @@ public class ExpandedToolTests
     [Theory]
     [InlineData("[\"first.cs\",]")]
     [InlineData("[\"first.cs\",42]")]
+    [InlineData("[\"Tab\\tbed.cs\"]")]
     [InlineData("\"first.cs,second.cs\"")]
     public void BatchOutlineRejectsJsonShapedInvalidInputBeforePathLookup(string paths)
     {

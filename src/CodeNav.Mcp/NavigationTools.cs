@@ -18,6 +18,8 @@ public sealed partial class NavigationTools
 {
     internal const int CapabilityDynamicTextBytes = 1024;
     internal const int CapabilityIdentityTextBytes = 96;
+    internal const int ExplicitPathInputLimit = 256;
+    internal const int PathListInputByteLimit = 64 * 1024;
 
     private readonly IndexManager _manager;
     private readonly SemanticService _semantic;
@@ -156,8 +158,9 @@ public sealed partial class NavigationTools
                 new { id = "search-symbol-type-relevance", summary = "v0.12.30 exact-name type declarations receive a soft relevance preference over same-named members without filtering or omitting either result class" },
                 new { id = "indexed-path-suggestions", summary = "v0.12.31 outline/source_context not-found errors and first-page exact-path find_file misses may include a byte-budgeted pathSuggestions object with up to three pinned-index paths, exact total and truncation state; basename matches rank by preserved suffix then prefix and are never substituted" },
                 new { id = "source-context-range-alias", summary = "v0.12.32 source_context accepts range as a compatibility alias when canonical spans is omitted; conflicting simultaneous values return bad_request instead of applying silent precedence" },
-                new { id = "batch-outline-json-array-paths", summary = "v0.12.29 batch_outline accepts its documented comma-separated paths or a serialized JSON string array, rejects malformed/non-string arrays before lookup, and refuses more than 12 paths instead of silently dropping them" },
+                new { id = "batch-outline-json-array-paths", summary = "v0.12.29 batch_outline accepts comma-separated paths or a serialized JSON string array; v0.12.44 applies the shared 64 KiB exact workspace-relative grammar, rejecting rooted, traversing, control-character, malformed, non-string, and over-12 inputs before lookup" },
                 new { id = "csharp-symbol-free-outline", summary = "v0.12.43 outline and batch_outline return normal indexed syntax envelopes with symbols:[] and file-level generated state for indexed declaration-free C# files" },
+                new { id = "refresh-review-json-array-paths", summary = "v0.12.44 refresh_index and review_pack accept comma-separated paths or serialized string arrays within a 64 KiB input bound, preserve comma-bearing JSON paths without wrapper leakage, reject non-relative, traversing, malformed, and over-limit items before lookup, and refuse more than 256 explicit paths" },
                 new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry initial or event-driven serialized requests after bounded 100/250/1000 ms delays; timer-initiated stale-index recovery uses its separately declared paced cadence" },
                 new { id = "refresh-sweep-publication-gating", summary = "v0.12.7 builds and refreshes persist a follower-visible refresh_sweep_pending marker before publication or row mutation and clear it only after the serialized convergence sweep commits" },
                 new { id = "refresh-incomplete-freshness", summary = "v0.12.7 exhausted source capture keeps index state stale, preserves the Git baseline, exposes a stable refreshIncompleteReason plus bounded paths, and widens the next request to a recovery sweep" },
@@ -203,14 +206,15 @@ public sealed partial class NavigationTools
                 new { id = "review-former-symbol-evidence", summary = "v0.11.2 former-symbol evidence: review_pack reparses bounded base blobs and reports formerSymbols for removed or renamed members, including members lost from modified relocations or deleted partial declarations; current declaration survivors are project-domain/advisory evidence rather than workspace-global proof" },
                 new { id = "review-reference-declaration-budget", summary = "Name-scoped former-reference exclusion is bounded; declarationExclusionBudgetHit plus review.reference_declaration_budget disclose lower-bound candidates" },
                 new { id = "review-declaration-identity", summary = "v0.11.5 review declaration identity (index schema v14) includes parameter types, ancestor generic arity, checked-vs-unchecked operators, and explicit-interface operator qualifiers; tuple labels are omitted while tuple types and nesting remain identity-bearing" },
-                new { id = "review-exact-move-evidence", summary = "v0.11.2 exact move evidence: movedFiles reports unique staged or unstaged .cs raw-byte relocations; untracked candidates are read through size/count-bounded anchored no-follow handles, and normalization-only, oversized, or excess candidates conservatively remain uncorrelated" },
+                new { id = "review-exact-move-evidence", summary = "v0.11.2 exact move evidence: movedFiles reports unique staged or unstaged .cs raw-byte relocations as exact_blob; untracked candidates are read through size/count-bounded anchored no-follow handles, while oversized or excess candidates conservatively remain uncorrelated" },
+                new { id = "review-normalized-move-evidence", summary = "v0.12.44 review_pack correlates a unique untracked C# worktree CRLF candidate whose normalized bytes match a stored LF blob as normalized_blob, never exact_blob; raw-byte identity remains preferred, each target is claimed at most once, and ambiguous candidates remain uncorrelated" },
                 new { id = "review-base-blob-recovery-honesty", summary = "v0.11.2 base-blob recovery honesty: per-file size plus cumulative character/attempt/time bounds appear in baseBlobRecoveryCoverage; batch-check rejects oversized blobs before content streaming, failures emit review.base_blob_unavailable, cumulative exhaustion emits review.base_blob_budget, and recoveryStatus/unmapped evidence omits unknown former-type totals instead of serializing false zero coverage" },
                 new { id = "review-namespace-analysis-budget", summary = "v0.11.2 namespace analysis budget: namespace-only classification loads indexed content only for uncovered ranges and stops at per-file plus cumulative character/file/time bounds; namespaceAnalysisCoverage and review.namespace_analysis_budget mark conservative file_level fallback" },
                 new { id = "review-project-shape-budget", summary = "Bounded no-follow XML caps project count, bytes, and time; projectOwnershipFallbackCoverage plus review.project_shape_budget disclose incomplete deleted-path proof" },
                 new { id = "review-project-glob-budget", summary = "Iterative project-ownership glob budget covers default-SDK checks and Include/Exclude; globBudgetHit plus review.project_glob_budget expose segment, operation, or deadline exhaustion and fail proof closed" },
                 new { id = "review-project-shape-completeness", summary = "Unevaluated imports/SDKs/conditions/expressions block deleted-path proof; projectOwnershipFallbackCoverage.evaluationIncomplete and review.project_shape_incomplete disclose it" },
                 new { id = "review-project-file-guidance", summary = "v0.12.41 changedProjectFiles reports every modified or deleted project, build, and solution input; review.project_files_changed counts only authoritative .csproj/.fsproj/.csproj.user/.fsproj.user/.shproj/.proj/.projitems/.props/.targets and Directory.Build.rsp/MSBuild.rsp inputs and warns that dependency, compile-set, or test-classification evidence may shift" },
-                new { id = "review-solution-metadata-guidance", summary = "v0.12.41 .sln/.slnx/.slnf changes remain visible in changedProjectFiles and emit review.solution_files_changed, but solution metadata never invalidates exact-move, declaration-survivor, ownership, dependency, build, or symbol-resolution proof" },
+                new { id = "review-solution-metadata-guidance", summary = "v0.12.44 .sln/.slnx/.slnf changes remain visible in changedProjectFiles and emit review.solution_files_changed, while changedProjectFilesCoverage splits authoritative and solutionMetadata counts; solution metadata never invalidates exact-move, declaration-survivor, ownership, dependency, build, or symbol-resolution proof" },
                 new { id = "review-default-baseline-honesty", summary = "v0.11.4 bounded git_index_baseline_unavailable gives refresh_index or explicit baseRef guidance; caller-supplied invalid refs remain bad_request" },
                 new { id = "review-unmapped-change-coverage", summary = "v0.11.2 unmapped change coverage: namespace and file-level C# regions not fully covered by reviewable indexed symbols appear in bounded unmappedChanges records with explicit side, old/new coordinates, reason, and total/returned/truncated" },
                 new { id = "review-index-epoch-consistency", summary = "review_pack pins rows and response metadata to one stable SQLite read epoch; an overlapping refresh cannot mix old symbols with new ownership or health evidence" },
@@ -2167,7 +2171,7 @@ public sealed partial class NavigationTools
     [McpServerTool(Name = "refresh_index")]
     [Description("Queue an index refresh from the writer process. Read-only followers return index_writer_required. force='auto'/'incremental': targeted paths or a change-detection sweep — hash-identical files are SKIPPED, so this never rebuilds an intact-looking index. force='full': the 'I know the db is wrong' hatch — delete the index and REBUILD FROM SCRATCH (works even from state 'failed'; watch server_capabilities.index.progress). Normally unnecessary — the writer's file watcher keeps the index fresh.")]
     public string RefreshIndex(
-        [Description("Optional comma-separated EXACT workspace-relative paths to refresh — no globs (a glob silently matches nothing). Use '/' on Unix, where backslash is a legal filename character; Windows accepts either separator. Ignored with force='full'.")] string? paths = null,
+        [Description("Optional EXACT workspace-relative paths as comma-separated text or a JSON-array string (maximum 256 paths and 64 KiB input) — no globs (a glob silently matches nothing). Rooted, traversing, malformed, or control-character paths return bad_request. Use '/' on Unix, where a single backslash remains a legal filename character; Windows accepts either separator. Ignored with force='full'.")] string? paths = null,
         [Description("'auto' (default) / 'incremental': delta refresh, unchanged files skipped. 'full': rebuild from scratch — corruption/recovery hatch.")] string force = "auto")
     {
         // The two paths are EXPLICIT by contract (field: "calling refresh_index and hoping is
@@ -2194,10 +2198,17 @@ public sealed partial class NavigationTools
                 meta = Meta.From(_manager.Health(), "indexed", "text"),
             });
         }
+        List<string>? parsedPaths = null;
+        if (paths is not null &&
+            !TryParsePathList(paths, ExplicitPathInputLimit, out parsedPaths, out string? detail))
+        {
+            return Json.Serialize(new { error = "bad_request", detail });
+        }
+
         // Normalize the host platform's separator to the forward-slash form stored by the index.
         // On Unix a backslash is a legal filename character and must remain byte-for-byte distinct;
         // on Windows this still accepts either slash style (bug 9h3).
-        var list = SplitCsv(paths)?.Select(NormalizePath).ToList();
+        var list = parsedPaths?.Select(NormalizePath).ToList();
         if (!_manager.RequestRefresh(list?.Count > 0 ? list : null))
             return _manager.IsFollower ? IndexWriterRequired() : IndexMutationUnavailable();
         return Json.Serialize(new
@@ -2653,6 +2664,150 @@ public sealed partial class NavigationTools
         string.IsNullOrWhiteSpace(csv)
             ? null
             : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    internal static bool TryParsePathList(
+        string? value,
+        int maximumPaths,
+        out List<string> paths,
+        out string? detail)
+    {
+        paths = new List<string>();
+        detail = null;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            detail = "Provide 'paths'.";
+            return false;
+        }
+        if (System.Text.Encoding.UTF8.GetByteCount(value) > PathListInputByteLimit)
+        {
+            detail = $"paths accepts at most {PathListInputByteLimit} UTF-8 bytes.";
+            return false;
+        }
+
+        string trimmed = value.Trim();
+        if (trimmed[0] == '[')
+        {
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(trimmed);
+                if (document.RootElement.ValueKind != JsonValueKind.Array)
+                {
+                    detail = "paths must be comma-separated text or a JSON array of strings.";
+                    return false;
+                }
+
+                foreach (JsonElement item in document.RootElement.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.String)
+                    {
+                        detail = "Every JSON-array paths item must be a non-empty string.";
+                        return false;
+                    }
+                    if (!TryAddExplicitPath(item.GetString()!, maximumPaths, paths, out detail))
+                        return false;
+                }
+            }
+            catch (JsonException)
+            {
+                detail = "paths starts like a JSON array but is not a valid JSON array of strings.";
+                return false;
+            }
+        }
+        else if (trimmed[0] is '"' or '{')
+        {
+            detail = "paths must be comma-separated text or a JSON array of strings.";
+            return false;
+        }
+        else
+        {
+            int start = 0;
+            while (start <= value.Length)
+            {
+                int comma = value.IndexOf(',', start);
+                ReadOnlySpan<char> item = comma < 0
+                    ? value.AsSpan(start)
+                    : value.AsSpan(start, comma - start);
+                item = item.Trim();
+                if (item.IsEmpty)
+                {
+                    detail = "Every comma-separated paths item must be non-empty.";
+                    return false;
+                }
+                if (!TryAddExplicitPath(item.ToString(), maximumPaths, paths, out detail))
+                    return false;
+                if (comma < 0) break;
+                start = comma + 1;
+            }
+        }
+
+        if (paths.Count == 0)
+        {
+            detail = "Provide 'paths'.";
+            return false;
+        }
+
+        return true;
+
+        static bool TryAddExplicitPath(
+            string path,
+            int maximumPaths,
+            List<string> parsed,
+            out string? failure)
+        {
+            failure = null;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                failure = "Every paths item must be a non-empty string.";
+                return false;
+            }
+            if (parsed.Count >= maximumPaths)
+            {
+                failure = $"paths accepts at most {maximumPaths} entries.";
+                return false;
+            }
+            if (!IsExactWorkspaceRelativePath(path, OperatingSystem.IsWindows()))
+            {
+                failure = $"paths item '{SafePathForError(path)}' must be an exact workspace-relative path without traversal or control characters.";
+                return false;
+            }
+            parsed.Add(path);
+            return true;
+        }
+
+        static string SafePathForError(string path)
+        {
+            const int limit = 96;
+            string safe = new(path.Take(limit)
+                .Select(character => char.IsControl(character) ? '\uFFFD' : character)
+                .ToArray());
+            return path.Length > limit ? safe + "…" : safe;
+        }
+    }
+
+    internal static bool IsExactWorkspaceRelativePath(string path, bool windowsPathRules)
+    {
+        if (string.IsNullOrWhiteSpace(path) || path[0] == '/' ||
+            path.StartsWith("\\\\", StringComparison.Ordinal) ||
+            (path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':') ||
+            (windowsPathRules && path.Contains(':', StringComparison.Ordinal)))
+        {
+            return false;
+        }
+        if (path.Any(char.IsControl)) return false;
+
+        int segmentStart = 0;
+        for (int index = 0; index <= path.Length; index++)
+        {
+            bool boundary = index == path.Length || path[index] == '/' ||
+                (windowsPathRules && path[index] == '\\');
+            if (!boundary) continue;
+            ReadOnlySpan<char> segment = path.AsSpan(segmentStart, index - segmentStart);
+            if (segment.IsEmpty || segment.SequenceEqual(".") || segment.SequenceEqual(".."))
+                return false;
+            segmentStart = index + 1;
+        }
+        return true;
+    }
 
     internal static object? PathSuggestionsJson(
         int total,

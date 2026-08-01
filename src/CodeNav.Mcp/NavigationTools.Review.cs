@@ -136,11 +136,18 @@ public sealed partial class NavigationTools
     [Description("ONE budget-bounded review digest: diff -> touched symbols -> per-symbol impact. Default reviews the working tree against the index's recorded commit (falling back to HEAD when no indexed commit exists), so diff evidence and indexed symbols share one baseline; pass baseRef (sha or branch name, e.g. the merge-base) to choose another base, or pass explicit paths. Digests are INDEX-backed (confidence indexed) and each carries a symbolId handle. Former symbols in surviving files, exact file moves, deleted types, symbol-less C# changes, and file-level unsupported-language source changes are reported explicitly; every bounded section exposes coverage.")]
     public string ReviewPack(
         [Description("Base to diff against: a commit sha or a ref name (strict charset; typically the merge-base). Default: the index's recorded commit, so diff evidence and indexed symbols share one baseline.")] string? baseRef = null,
-        [Description("Comma-separated workspace-relative paths to review INSTEAD of a git diff (whole-file granularity; no git needed).")] string? paths = null,
+        [Description("One to 256 exact workspace-relative paths as comma-separated text or a JSON-array string (maximum 64 KiB input) to review INSTEAD of a git diff (whole-file granularity; no git needed). Rooted, traversing, malformed, or control-character paths return bad_request.")] string? paths = null,
         [Description("Byte budget (default 16384, max 65536).")] int maxBytes = 16384,
         [Description("Max touched symbols digested (default 40, max 100).")] int maxSymbols = 40)
     {
         maxBytes = Math.Clamp(maxBytes, 2048, Json.HardBudgetBytes);
+        List<string>? explicitPaths = null;
+        if (paths is not null && !TryParsePathList(paths, ExplicitPathInputLimit,
+                out explicitPaths, out string? pathDetail))
+        {
+            return BoundedReviewError("bad_request", pathDetail!, maxBytes,
+                Meta.From(_manager.Health(), "indexed", "text"));
+        }
         if (!_manager.IsQueryable)
             return BoundedReviewNotReady(_manager.Health(), maxBytes);
         maxSymbols = Math.Clamp(maxSymbols, 1, 100);
@@ -268,11 +275,11 @@ public sealed partial class NavigationTools
         int untrackedCount = 0;
         var untrackedPaths = new HashSet<string>(StringComparer.Ordinal);
         bool projectBuildAuthorityChanged = false;
-        if (paths is not null)
+        if (explicitPaths is not null)
         {
-            foreach (var p in SplitCsv(paths) ?? new List<string>())
+            foreach (string path in explicitPaths)
             {
-                changed[NormalizePath(p)] = WholeFile();
+                changed[NormalizePath(path)] = WholeFile();
             }
         }
         else
@@ -331,7 +338,8 @@ public sealed partial class NavigationTools
                     if (f.Hunks.Count > 0) changedHunks[f.Path] = f.Hunks;
                     if (f.MovedToPath is not null)
                     {
-                        movedFiles.Add(new ReviewMovedFile(f.Path, f.MovedToPath, "exact_blob"));
+                        movedFiles.Add(new ReviewMovedFile(f.Path, f.MovedToPath,
+                            f.MoveMatch ?? "exact_blob"));
                         if (resolvedBase is null || !MovePreservesReviewableCSharp(root,
                                 f.Path, f.MovedToPath, q, BaseContent, OwnerIds, Outline,
                                 projectBuildAuthorityChanged))
@@ -1206,6 +1214,8 @@ public sealed partial class NavigationTools
                 changedProjectFilesCoverage = projectFiles.Count == 0 ? null : new
                 {
                     total = projectFiles.Count,
+                    authoritative = authoritativeProjectFiles.Count,
+                    solutionMetadata = solutionMetadataFiles.Count,
                     returned = projectItems.Count,
                     truncated = projectItems.Count < projectFiles.Count ? true : (bool?)null,
                 },

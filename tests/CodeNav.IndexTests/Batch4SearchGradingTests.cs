@@ -302,6 +302,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("git-awareness", ids);
         Assert.Contains("batch-outline-json-array-paths", ids);
         Assert.Contains("csharp-symbol-free-outline", ids);
+        Assert.Contains("refresh-review-json-array-paths", ids);
         Assert.Contains("search-symbol-filtered-existence", ids);
         Assert.Contains("search-symbol-type-relevance", ids);
         Assert.Contains("indexed-path-suggestions", ids);
@@ -313,6 +314,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(1, idList.Count(id => id == "source-context-range-alias"));
         Assert.Equal(1, idList.Count(id => id == "markdown-sql-text-indexing"));
         Assert.Equal(1, idList.Count(id => id == "csharp-symbol-free-outline"));
+        Assert.Equal(1, idList.Count(id => id == "refresh-review-json-array-paths"));
         Assert.Equal(
             1,
             idList.Count(id => id == "operations-portal-jsonl-readonly"));
@@ -519,8 +521,16 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("movedFiles", exactMoves);
         Assert.Contains("size/count-bounded", exactMoves);
         Assert.Contains("anchored no-follow", exactMoves);
-        Assert.Contains("normalization-only, oversized, or excess candidates conservatively remain uncorrelated",
+        Assert.Contains("oversized or excess candidates conservatively remain uncorrelated",
             exactMoves);
+        string batchOutlinePaths = Summary("batch-outline-json-array-paths");
+        Assert.Contains("shared 64 KiB exact workspace-relative grammar", batchOutlinePaths);
+        Assert.Contains("control-character", batchOutlinePaths);
+        string normalizedMoves = Summary("review-normalized-move-evidence");
+        Assert.Contains("normalized_blob", normalizedMoves);
+        Assert.Contains("never exact_blob", normalizedMoves);
+        Assert.Contains("each target is claimed at most once", normalizedMoves);
+        Assert.Contains("ambiguous candidates remain uncorrelated", normalizedMoves);
         Assert.Contains("review.base_blob_unavailable", Summary("review-base-blob-recovery-honesty"));
         Assert.Contains("namespaceAnalysisCoverage", Summary("review-namespace-analysis-budget"));
         Assert.Contains("projectOwnershipFallbackCoverage",
@@ -546,6 +556,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         string solutionMetadata = Summary("review-solution-metadata-guidance");
         Assert.Contains(".sln/.slnx/.slnf", solutionMetadata);
         Assert.Contains("changedProjectFiles", solutionMetadata);
+        Assert.Contains("changedProjectFilesCoverage", solutionMetadata);
+        Assert.Contains("authoritative and solutionMetadata counts", solutionMetadata);
         Assert.Contains("review.solution_files_changed", solutionMetadata);
         Assert.Contains("never invalidates exact-move, declaration-survivor, ownership, dependency, build, or symbol-resolution proof",
             solutionMetadata);
@@ -613,6 +625,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("declarationExclusionBudgetHit", "review-reference-declaration-budget"),
                       ("explicit-interface", "review-declaration-identity"),
                       ("movedFiles", "review-exact-move-evidence"),
+                      ("normalized_blob", "review-normalized-move-evidence"),
                       ("review.base_blob_unavailable", "review-base-blob-recovery-honesty"),
                       ("namespaceAnalysisCoverage", "review-namespace-analysis-budget"),
                       ("review.project_shape_budget", "review-project-shape-budget"),
@@ -623,6 +636,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("Linux ARM64 ABI", "linux-arm64-anchored-authority"),
                       ("first bounded NUL", "portal-directory-entry-nul-decoding"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),
+                      ("comma-bearing JSON paths", "refresh-review-json-array-paths"),
                       ("unsupportedLanguageFiles", "review-fsharp-file-coverage"),
                       ("git_index_baseline_unavailable", "review-default-baseline-honesty"),
                       ("unmappedChanges", "review-unmapped-change-coverage"),

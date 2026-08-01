@@ -16,6 +16,47 @@ namespace CodeNav.Tests;
 public class Batch42TestsPart3
 {
     [Fact]
+    public void ReviewPackAcceptsJsonArrayPathsAndRejectsMalformedOrOversizedLists()
+    {
+        if (!GitInfo.GitAvailable) return;
+        string root = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-51dh-review-paths").FullName);
+        try
+        {
+            WriteReviewRepo(root);
+            using var manager = StartManager(root);
+            var tools = new NavigationTools(manager, new SemanticService(manager));
+
+            string exactPaths = JsonSerializer.Serialize(new[]
+            {
+                "Lib/Widget.cs",
+                "Consumer/Use.cs",
+            });
+            JsonElement pack = Parse(tools.ReviewPack(paths: exactPaths, maxBytes: 24576));
+            Assert.False(pack.TryGetProperty("error", out _));
+            Assert.Equal(2, pack.GetProperty("changedFiles").GetProperty("cs").GetInt32());
+            Assert.Contains(pack.GetProperty("symbols").EnumerateArray(), symbol =>
+                symbol.GetProperty("symbol").GetProperty("path").GetString() ==
+                "Lib/Widget.cs");
+            Assert.Contains(pack.GetProperty("symbols").EnumerateArray(), symbol =>
+                symbol.GetProperty("symbol").GetProperty("path").GetString() ==
+                "Consumer/Use.cs");
+
+            JsonElement malformed = Parse(tools.ReviewPack(
+                paths: "[\"Lib/Widget.cs\",]", maxBytes: 24576));
+            Assert.Equal("bad_request", malformed.GetProperty("error").GetString());
+
+            string oversized = JsonSerializer.Serialize(Enumerable.Range(0, 257)
+                .Select(index => $"Generated/F{index:D3}.cs"));
+            JsonElement tooMany = Parse(tools.ReviewPack(paths: oversized, maxBytes: 24576));
+            Assert.Equal("bad_request", tooMany.GetProperty("error").GetString());
+            Assert.Contains("at most 256", tooMany.GetProperty("detail").GetString(),
+                StringComparison.Ordinal);
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
     public void ProjectOwnershipFallbackAppliesCompileOperationsInDocumentOrder()
     {
         if (!GitInfo.GitAvailable) return;
@@ -161,6 +202,12 @@ public class Batch42TestsPart3
             string[] actual = pack.GetProperty("changedProjectFiles").EnumerateArray()
                 .Select(item => item.GetString()!).ToArray();
             Assert.Equal(paths.OrderBy(path => path, StringComparer.Ordinal), actual);
+            JsonElement coverage = pack.GetProperty("changedProjectFilesCoverage");
+            Assert.Equal(8, coverage.GetProperty("authoritative").GetInt32());
+            Assert.Equal(3, coverage.GetProperty("solutionMetadata").GetInt32());
+            Assert.Equal(coverage.GetProperty("total").GetInt32(),
+                coverage.GetProperty("authoritative").GetInt32() +
+                coverage.GetProperty("solutionMetadata").GetInt32());
             Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
                 note.GetProperty("id").GetString() == "review.project_files_changed");
             Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
@@ -217,6 +264,131 @@ public class Batch42TestsPart3
                 note.GetProperty("id").GetString() == "review.solution_files_changed");
             Assert.DoesNotContain(pack.GetProperty("notes").EnumerateArray(), note =>
                 note.GetProperty("id").GetString() == "review.project_files_changed");
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void EverySolutionMetadataStateRemainsNonAuthoritativeForExactMoves()
+    {
+        if (!GitInfo.GitAvailable) return;
+        string root = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-8mi5-solution-matrix").FullName);
+        try
+        {
+            WriteReviewRepo(root);
+            string[] extensions = [".sln", ".slnx", ".slnf"];
+            string[] modified = extensions.Select(extension => $"Modified{extension}").ToArray();
+            string[] deleted = extensions.Select(extension => $"Deleted{extension}").ToArray();
+            string[] untracked = extensions.Select(extension => $"Untracked{extension}").ToArray();
+            foreach (string path in modified.Concat(deleted))
+                File.WriteAllText(Path.Combine(root, path), "solution metadata baseline\n");
+            Git(root, "add -A");
+            Git(root, "commit -q -m solution-state-matrix-baseline");
+
+            using var manager = StartManager(root);
+            var tools = new NavigationTools(manager, new SemanticService(manager));
+            const string moveSource = "Lib/Widget.cs";
+            const string moveTarget = "Lib/MatrixMovedWidget.cs";
+            File.Move(Path.Combine(root, moveSource.Replace('/', Path.DirectorySeparatorChar)),
+                Path.Combine(root, moveTarget.Replace('/', Path.DirectorySeparatorChar)));
+            foreach (string path in modified)
+                File.AppendAllText(Path.Combine(root, path), "modified\n");
+            foreach (string path in deleted) File.Delete(Path.Combine(root, path));
+            foreach (string path in untracked)
+                File.WriteAllText(Path.Combine(root, path), "untracked solution metadata\n");
+
+            string[] refreshPaths = modified.Concat(deleted).Concat(untracked)
+                .Append(moveSource).Append(moveTarget).ToArray();
+            manager.RequestRefresh(refreshPaths);
+            Assert.True(WaitUntil(() =>
+            {
+                using var queries = manager.OpenQueries();
+                return queries.ContentByPath(moveSource) is null &&
+                       queries.Outline(moveTarget).Any(symbol => symbol.Name == "Widget");
+            }, 20_000), "index did not reflect solution matrix plus exact move");
+
+            JsonElement pack = SemanticRetry.ParseWithRetry(
+                () => tools.ReviewPack(maxBytes: 24576),
+                json => json.TryGetProperty("changedProjectFiles", out _),
+                "review_pack with every solution metadata state");
+            string[] expectedSolutions = modified.Concat(deleted).Concat(untracked)
+                .OrderBy(path => path, StringComparer.Ordinal).ToArray();
+            string[] actualSolutions = pack.GetProperty("changedProjectFiles")
+                .EnumerateArray().Select(path => path.GetString()!).ToArray();
+            Assert.Equal(expectedSolutions, actualSolutions);
+            JsonElement coverage = pack.GetProperty("changedProjectFilesCoverage");
+            Assert.Equal(0, coverage.GetProperty("authoritative").GetInt32());
+            Assert.Equal(9, coverage.GetProperty("solutionMetadata").GetInt32());
+            Assert.Contains(pack.GetProperty("movedFiles").GetProperty("items")
+                .EnumerateArray(), move =>
+                move.GetProperty("from").GetString() == moveSource &&
+                move.GetProperty("to").GetString() == moveTarget);
+            Assert.Equal(0, pack.GetProperty("changedFiles").GetProperty("deleted").GetInt32());
+            Assert.False(pack.TryGetProperty("deletedFiles", out _));
+            Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() == "review.solution_files_changed");
+            Assert.DoesNotContain(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() == "review.project_files_changed");
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void SolutionMetadataCannotMaskAuthoritativeProjectChangeDuringExactMove()
+    {
+        if (!GitInfo.GitAvailable) return;
+        string root = Path.GetFullPath(
+            Directory.CreateTempSubdirectory("codenav-8mi5-solution-authority").FullName);
+        try
+        {
+            WriteReviewRepo(root);
+            const string solutionPath = "Phoenix.sln";
+            const string projectPath = "Lib/Lib.csproj";
+            const string moveSource = "Lib/Widget.cs";
+            const string moveTarget = "Lib/AuthorityMovedWidget.cs";
+            File.WriteAllText(Path.Combine(root, solutionPath), "solution metadata baseline\n");
+            Git(root, "add -A");
+            Git(root, "commit -q -m solution-authority-baseline");
+
+            using var manager = StartManager(root);
+            var tools = new NavigationTools(manager, new SemanticService(manager));
+            File.Move(Path.Combine(root, moveSource.Replace('/', Path.DirectorySeparatorChar)),
+                Path.Combine(root, moveTarget.Replace('/', Path.DirectorySeparatorChar)));
+            File.AppendAllText(Path.Combine(root, solutionPath), "modified\n");
+            File.AppendAllText(Path.Combine(root, projectPath), "<!-- authority changed -->\n");
+            manager.RequestRefresh(new[]
+            {
+                moveSource,
+                moveTarget,
+                solutionPath,
+                projectPath,
+            });
+            Assert.True(WaitUntil(() =>
+            {
+                using var queries = manager.OpenQueries();
+                return queries.ContentByPath(moveSource) is null &&
+                       queries.Outline(moveTarget).Any(symbol => symbol.Name == "Widget");
+            }, 20_000), "index did not reflect authority change plus exact move");
+
+            JsonElement pack = SemanticRetry.ParseWithRetry(
+                () => tools.ReviewPack(maxBytes: 24576),
+                json => json.TryGetProperty("deletedFiles", out _),
+                "review_pack with solution and authoritative project changes");
+            Assert.Contains(pack.GetProperty("movedFiles").GetProperty("items")
+                .EnumerateArray(), move =>
+                move.GetProperty("from").GetString() == moveSource &&
+                move.GetProperty("to").GetString() == moveTarget);
+            Assert.Equal(1, pack.GetProperty("changedFiles").GetProperty("deleted").GetInt32());
+            Assert.Contains(pack.GetProperty("deletedFiles").EnumerateArray(), file =>
+                file.GetProperty("path").GetString() == moveSource);
+            JsonElement coverage = pack.GetProperty("changedProjectFilesCoverage");
+            Assert.Equal(1, coverage.GetProperty("authoritative").GetInt32());
+            Assert.Equal(1, coverage.GetProperty("solutionMetadata").GetInt32());
+            Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() == "review.project_files_changed");
+            Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() == "review.solution_files_changed");
         }
         finally { Cleanup(root); }
     }
