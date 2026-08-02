@@ -234,8 +234,268 @@ const readableFontSize = (value) => {
   const pixelSizes = matches(/\d+(?:\.\d+)?px/gi, normalized).map((match) => Number.parseFloat(match[0]));
   return supported && pixelSizes.length > 0 && pixelSizes.every((size) => size >= 12);
 };
-const fontSizeDeclarations = matches(/font-size:\s*([^;}{]+)\s*;/gi, stylesheet)
-  .map((match) => match[1]);
+const isCssWhitespace = (character) => character === " " || character === "\t" ||
+  character === "\n" || character === "\r" || character === "\f";
+const isCssHexDigit = (character) => character !== undefined && /^[0-9a-f]$/i.test(character);
+const isCssNameCharacter = (character) => character !== undefined &&
+  (/[a-z0-9_-]/i.test(character) || character.codePointAt(0) >= 0x80);
+
+function skipCssComment(value, start) {
+  const end = value.indexOf("*/", start + 2);
+  return end < 0 ? { index: value.length, complete: false } : { index: end + 2, complete: true };
+}
+
+function skipCssString(value, start) {
+  const quote = value[start];
+  let index = start + 1;
+  while (index < value.length) {
+    const character = value[index];
+    if (character === quote) return { index: index + 1, complete: true };
+    if (character === "\n" || character === "\r" || character === "\f") {
+      return { index, complete: false };
+    }
+    if (character === "\\") {
+      index += 1;
+      if (index >= value.length) return { index, complete: false };
+      if (value[index] === "\r" && value[index + 1] === "\n") index += 2;
+      else index += 1;
+      continue;
+    }
+    index += 1;
+  }
+  return { index, complete: false };
+}
+
+function readCssEscape(value, start) {
+  let index = start + 1;
+  if (index >= value.length || value[index] === "\n" || value[index] === "\r" || value[index] === "\f") {
+    return { index, decoded: "", complete: false };
+  }
+  if (!isCssHexDigit(value[index])) {
+    const decoded = value[index];
+    return { index: index + 1, decoded, complete: true };
+  }
+  let hex = "";
+  while (index < value.length && hex.length < 6 && isCssHexDigit(value[index])) {
+    hex += value[index];
+    index += 1;
+  }
+  if (isCssWhitespace(value[index])) {
+    if (value[index] === "\r" && value[index + 1] === "\n") index += 2;
+    else index += 1;
+  }
+  const codePoint = Number.parseInt(hex, 16);
+  const decoded = codePoint === 0 || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)
+    ? "\ufffd"
+    : String.fromCodePoint(codePoint);
+  return { index, decoded, complete: true };
+}
+
+function readCssIdentifier(value, start) {
+  let index = start;
+  let decoded = "";
+  while (index < value.length) {
+    if (isCssNameCharacter(value[index])) {
+      decoded += value[index];
+      index += 1;
+      continue;
+    }
+    if (value[index] !== "\\") break;
+    const escaped = readCssEscape(value, index);
+    if (!escaped.complete) return { index: escaped.index, decoded, complete: false };
+    decoded += escaped.decoded;
+    index = escaped.index;
+  }
+  return { index, decoded, complete: decoded.length > 0 };
+}
+
+function skipCssTrivia(value, start) {
+  let index = start;
+  while (index < value.length) {
+    if (isCssWhitespace(value[index])) {
+      index += 1;
+      continue;
+    }
+    if (value[index] === "/" && value[index + 1] === "*") {
+      const comment = skipCssComment(value, index);
+      if (!comment.complete) return comment;
+      index = comment.index;
+      continue;
+    }
+    break;
+  }
+  return { index, complete: true };
+}
+
+function skipUnquotedCssUrl(value, start) {
+  let index = start;
+  while (index < value.length) {
+    const character = value[index];
+    if (character === ")") return { index: index + 1, complete: true };
+    if (isCssWhitespace(character)) {
+      while (isCssWhitespace(value[index])) index += 1;
+      return value[index] === ")"
+        ? { index: index + 1, complete: true }
+        : { index, complete: false };
+    }
+    if (character === "\\") {
+      const escaped = readCssEscape(value, index);
+      if (!escaped.complete) return { index: escaped.index, complete: false };
+      index = escaped.index;
+      continue;
+    }
+    if (character === "\"" || character === "'" || character === "(" ||
+        character === "\n" || character === "\r" || character === "\f") {
+      return { index, complete: false };
+    }
+    index += 1;
+  }
+  return { index, complete: false };
+}
+
+function scanCssItem(value, start) {
+  let index = start;
+  let parentheses = 0;
+  let brackets = 0;
+  while (index < value.length) {
+    const character = value[index];
+    if (character === "/" && value[index + 1] === "*") {
+      const comment = skipCssComment(value, index);
+      if (!comment.complete) return { index: comment.index, terminator: "", complete: false };
+      index = comment.index;
+      continue;
+    }
+    if (character === "\"" || character === "'") {
+      const string = skipCssString(value, index);
+      if (!string.complete) return { index: string.index, terminator: "", complete: false };
+      index = string.index;
+      continue;
+    }
+    if (isCssNameCharacter(character) || character === "\\") {
+      const identifier = readCssIdentifier(value, index);
+      if (!identifier.complete) return { index: identifier.index, terminator: "", complete: false };
+      if (identifier.decoded.toLowerCase() === "url" && value[identifier.index] === "(") {
+        let contentStart = identifier.index + 1;
+        while (isCssWhitespace(value[contentStart])) contentStart += 1;
+        if (value[contentStart] !== "\"" && value[contentStart] !== "'") {
+          const url = skipUnquotedCssUrl(value, contentStart);
+          if (!url.complete) return { index: url.index, terminator: "", complete: false };
+          index = url.index;
+          continue;
+        }
+      }
+      index = identifier.index;
+      continue;
+    }
+    if (character === "(") parentheses += 1;
+    else if (character === ")") {
+      if (parentheses === 0) return { index, terminator: "", complete: false };
+      parentheses -= 1;
+    } else if (character === "[") brackets += 1;
+    else if (character === "]") {
+      if (brackets === 0) return { index, terminator: "", complete: false };
+      brackets -= 1;
+    } else if (parentheses === 0 && brackets === 0 && (character === ";" || character === "{" || character === "}")) {
+      return { index, terminator: character, complete: true };
+    }
+    index += 1;
+  }
+  return { index, terminator: "", complete: parentheses === 0 && brackets === 0 };
+}
+
+function inspectFontSizeDeclarations(value) {
+  let index = 0;
+  let depth = 0;
+  let atItemStart = false;
+  let lexicallyComplete = true;
+  let discovered = 0;
+  const values = [];
+
+  while (index < value.length) {
+    const trivia = skipCssTrivia(value, index);
+    if (!trivia.complete) {
+      lexicallyComplete = false;
+      break;
+    }
+    index = trivia.index;
+    if (index >= value.length) break;
+
+    if (depth > 0 && value[index] === "}") {
+      depth -= 1;
+      index += 1;
+      atItemStart = depth > 0;
+      continue;
+    }
+    if (depth > 0 && value[index] === ";") {
+      index += 1;
+      atItemStart = true;
+      continue;
+    }
+
+    let property = null;
+    let valueStart = index;
+    if (depth > 0 && atItemStart && (isCssNameCharacter(value[index]) || value[index] === "\\")) {
+      const identifier = readCssIdentifier(value, index);
+      if (!identifier.complete) {
+        lexicallyComplete = false;
+        break;
+      }
+      const afterIdentifier = skipCssTrivia(value, identifier.index);
+      if (!afterIdentifier.complete) {
+        lexicallyComplete = false;
+        break;
+      }
+      if (value[afterIdentifier.index] === ":") {
+        property = identifier.decoded.toLowerCase();
+        const afterColon = skipCssTrivia(value, afterIdentifier.index + 1);
+        if (!afterColon.complete) {
+          if (property === "font-size") discovered += 1;
+          lexicallyComplete = false;
+          break;
+        }
+        valueStart = afterColon.index;
+      }
+    }
+
+    const item = scanCssItem(value, valueStart);
+    if (!item.complete || !item.terminator) {
+      if (property === "font-size") discovered += 1;
+      lexicallyComplete = false;
+      break;
+    }
+    if (item.terminator === "{") {
+      depth += 1;
+      index = item.index + 1;
+      atItemStart = true;
+      continue;
+    }
+    if (property === "font-size") {
+      discovered += 1;
+      values.push(value.slice(valueStart, item.index).trim());
+    }
+    if (item.terminator === ";") {
+      index = item.index + 1;
+      atItemStart = depth > 0;
+      continue;
+    }
+    if (depth === 0) {
+      lexicallyComplete = false;
+      break;
+    }
+    depth -= 1;
+    index = item.index + 1;
+    atItemStart = depth > 0;
+  }
+
+  return { lexicallyComplete: lexicallyComplete && depth === 0, discovered, values };
+}
+
+const fontSizeInspection = inspectFontSizeDeclarations(stylesheet);
+const fontSizeDeclarations = fontSizeInspection.values;
+check(fontSizeInspection.lexicallyComplete,
+  "The stylesheet must not contain an unterminated comment or string.");
+check(fontSizeInspection.discovered === fontSizeDeclarations.length,
+  "Every discovered font-size declaration must be parsed and validated.");
 check(fontSizeDeclarations.length > 0 && fontSizeDeclarations.every(readableFontSize),
   "Readable site text must use a supported font-size with no pixel bound below 12px.");
 check([
@@ -246,6 +506,36 @@ check([
   "0.75rem",
 ].every((value) => !readableFontSize(value)),
   "The font-size guard must fail closed for sub-12px and unsupported computed values.");
+check([
+  ".good{font-size:12px;}.bad{font-size : 8px;}",
+  ".good{font-size:12px;}.bad{font-size:8px}",
+  String.raw`.good{font-size:12px}.bad{font-\73ize:8px}`,
+  ".good{font-size:12px}.outer{.inner{color:red}font-size:8px}",
+].every((fixture) => {
+  const inspection = inspectFontSizeDeclarations(fixture);
+  return inspection.lexicallyComplete && inspection.discovered === 2 &&
+    inspection.values.length === inspection.discovered &&
+    !inspection.values.every(readableFontSize);
+}), "The font-size declaration parser must reject whitespace, closing-brace, escaped-name, and nested-rule bypasses.");
+check([
+  "/*font-size:8px*/.a{font-size:12px;}",
+  '.a{content:";}/*";font-size:12px;}',
+  ".a{background:url(a/*b);font-size:12px;}",
+].every((fixture) => {
+  const inspection = inspectFontSizeDeclarations(fixture);
+  return inspection.lexicallyComplete && inspection.discovered === 1 &&
+    inspection.values.length === 1 && readableFontSize(inspection.values[0]);
+}), "The font-size declaration parser must ignore comments, strings, and unquoted URL token contents.");
+check([
+  ".a{/*",
+  '.a{content:"unterminated',
+  '.a{content:"raw newline\nclosed later";font-size:12px;}',
+].every((fixture) => !inspectFontSizeDeclarations(fixture).lexicallyComplete),
+"The font-size declaration parser must fail closed on unterminated comments and strings.");
+const malformedFontSizeFixture = inspectFontSizeDeclarations(`{font-size:${" ".repeat(32768)}`);
+check(!malformedFontSizeFixture.lexicallyComplete && malformedFontSizeFixture.discovered === 1 &&
+  malformedFontSizeFixture.values.length === 0,
+"The font-size declaration parser must scan large malformed values deterministically and fail closed.");
 check(stylesheet.includes(".no-js .atlas__controls") && stylesheet.includes(".no-js .config-tabs__list"), "CSS must hide dead atlas and tab controls without JavaScript.");
 check(stylesheet.includes(".motion-paused *"), "CSS must pause continuous animation in the global motion-paused state.");
 check(/function updatePauseButton\(\)[\s\S]*?setGlobalMotionPaused\(userPaused/.test(script), "The atlas pause state must invoke the global motion controller.");
