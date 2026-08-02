@@ -1617,18 +1617,31 @@ public sealed partial class NavigationTools
     }
 
     private static string SyntaxIdentity(SymbolRow symbol,
-        IReadOnlyList<SymbolRow> symbols) => string.Join('\u001f',
-        SyntaxAncestorIdentity(symbol, symbols), symbol.Kind, symbol.Name,
-        symbol.Namespace ?? "", symbol.Arity.ToString(
-            System.Globalization.CultureInfo.InvariantCulture),
-        symbol.DeclarationKey ?? symbol.Signature);
+        IReadOnlyList<SymbolRow> symbols)
+    {
+        string? declarationKey = string.IsNullOrEmpty(symbol.DeclarationKey)
+            ? null
+            : symbol.DeclarationKey;
+        return string.Join('\u001f', SyntaxAncestorIdentity(symbol, symbols), symbol.Kind,
+            declarationKey ?? symbol.Name, symbol.Namespace ?? "", symbol.Arity.ToString(
+                System.Globalization.CultureInfo.InvariantCulture),
+            declarationKey is null ? symbol.Signature : "");
+    }
+
+    internal static string SyntaxIdentityForTest(SymbolRow symbol,
+        IReadOnlyList<SymbolRow> symbols) => SyntaxIdentity(symbol, symbols);
 
     private static string SyntaxIdentity(SymbolHit symbol,
-        IReadOnlyDictionary<long, SymbolHit> symbolsById) => string.Join('\u001f',
-        SyntaxAncestorIdentity(symbol, symbolsById), symbol.Kind, symbol.Name,
-        symbol.Ns ?? "", symbol.Arity.ToString(
-            System.Globalization.CultureInfo.InvariantCulture),
-        symbol.DeclarationKey ?? symbol.Signature);
+        IReadOnlyDictionary<long, SymbolHit> symbolsById)
+    {
+        string? declarationKey = string.IsNullOrEmpty(symbol.DeclarationKey)
+            ? null
+            : symbol.DeclarationKey;
+        return string.Join('\u001f', SyntaxAncestorIdentity(symbol, symbolsById), symbol.Kind,
+            declarationKey ?? symbol.Name, symbol.Ns ?? "", symbol.Arity.ToString(
+                System.Globalization.CultureInfo.InvariantCulture),
+            declarationKey is null ? symbol.Signature : "");
+    }
 
     private static string SyntaxAncestorIdentity(SymbolRow symbol,
         IReadOnlyList<SymbolRow> symbols)

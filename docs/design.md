@@ -67,6 +67,11 @@ for code identifiers.
    type check for position-based `symbol_at` and same-physical-project `definition`. An F# type-check
    context is exactly one physical `.fsproj` plus one target framework; ambiguous files require
    explicit selection, and the selection never changes or merges ownership/reference graph facts.
+   C# conversion handles bridge syntax rows to Roslyn with the uncapped declaration key, not the
+   capped display signature. Until conversion-use enumeration is implemented, every conversion
+   reference census carries `references.conversion_usage_enumeration_gap` and remains partial.
+   Compiler-reported totals are labeled lower bounds only while project-model authority is proven;
+   otherwise the response makes no directional count guarantee.
 
 Exact path identity is never fuzzy. When `outline` or `source_context` cannot resolve a path, or
 the first page of an exact-path `find_file` query is empty, the MCP layer asks `IndexQueries` for
@@ -550,7 +555,13 @@ This implementation changes only C# semantic cluster materialization. Initial in
 parallel file capture/parsing with a single SQLite writer and is a separate pipeline. Since v0.12.20,
 C# declaration extraction traverses nested namespaces and types with an explicit depth-first work
 stack rather than recursive calls, so machine-generated nesting remains fully indexed on bounded-stack
-parallel workers without changing symbol order or parent links. F# semantic
+parallel workers without changing symbol order or parent links. Since v0.12.46 / schema v21, that
+syntax index also persists implicit and explicit C# conversions as `operator` rows with
+target-bearing display names, canonical target/parameter declaration identity, modifiers, source
+order, and parent links. Since schema v22, a persisted context key is the full SHA-256 digest of
+the parent context digest plus each local declaration key, so a rebuilt `idx:` row cannot validate
+against an identical-looking declaration from another namespace or containing type. The fixed-size
+digest retains complete chained identity without quadratic deep-nesting storage. F# semantic
 resolution currently captures and type-checks one selected physical project behind its own
 single-slot gate; cross-project F# loading or parallel FCS requests require a separate design and
 must not be implied by this change.

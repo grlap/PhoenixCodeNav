@@ -45,6 +45,10 @@ internal static class NoteIds
 
     // retrofits (additive noteId beside the existing prose note)
     public const string ReferencesZeroLoadingGap = "references.zero_loading_gap";       // exact 0 but base-list namers exist
+    public const string ReferencesConversionUsageEnumerationGap =
+        "references.conversion_usage_enumeration_gap"; // Roslyn did not prove conversion usage sites
+    public const string ReferencesCandidateFilesCap =
+        "references.candidate_file_cap"; // indexed candidate file scan stopped at caller maxFiles
     public const string ImpactTransitiveSingleCount = "impact.transitive_single_count"; // by-design single transitive number
     public const string HierarchyHeuristicFallback = "type_hierarchy.heuristic_fallback"; // derived list degraded to base-list
     public const string SearchDidYouMean = "search_text.did_you_mean";           // a probed variant/spelling suggestion exists

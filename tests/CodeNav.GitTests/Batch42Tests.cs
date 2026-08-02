@@ -24,6 +24,153 @@ public class Batch42Tests
 {
 
     [Fact]
+    public void ExplicitInterfaceConversionReviewDigestIsNotPublicApi()
+    {
+        if (!GitInfo.GitAvailable) return;
+        string temporaryRoot = Directory.CreateTempSubdirectory(
+            "codenav-42-conversion-access").FullName;
+        string root = OperatingSystem.IsMacOS() &&
+                      temporaryRoot.StartsWith("/var/", StringComparison.Ordinal)
+            ? "/private" + temporaryRoot
+            : Path.GetFullPath(temporaryRoot);
+        try
+        {
+            WriteReviewRepo(root);
+            const string relativePath = "Lib/Conversion.cs";
+            string path = Path.Combine(root, relativePath);
+            File.WriteAllText(path,
+                """
+                namespace Lib;
+                public interface IConvert<TSelf> where TSelf : IConvert<TSelf>
+                {
+                    static abstract explicit operator int(TSelf value);
+                }
+                public readonly struct ConversionValue : IConvert<ConversionValue>
+                {
+                    static explicit IConvert<ConversionValue>.operator int(ConversionValue value) => 0;
+                }
+                """);
+            Git(root, "add -A");
+            Git(root, "commit -q -m conversion-access-fixture");
+
+            using var manager = StartManager(root);
+            using var semantic = new SemanticService(manager);
+            var tools = new NavigationTools(manager, semantic);
+            File.WriteAllText(path, File.ReadAllText(path).Replace("=> 0;", "=> 1;"));
+            manager.RequestRefresh([relativePath]);
+            Assert.True(WaitUntil(() =>
+            {
+                using var queries = manager.OpenQueries();
+                return (queries.ContentByPath(relativePath) ?? "").Contains("=> 1;",
+                    StringComparison.Ordinal);
+            }, 20_000), "index did not reflect the explicit-interface conversion edit");
+
+            string rawPack = "";
+            JsonElement pack = SemanticRetry.ParseWithRetry(
+                () => rawPack = tools.ReviewPack(maxBytes: 24576),
+                value => value.TryGetProperty("symbols", out _),
+                "review_pack with explicit-interface conversion symbol");
+            JsonElement[] digests = pack.GetProperty("symbols").EnumerateArray()
+                .Where(value => value.GetProperty("symbol").GetProperty("signature")
+                    .GetString() ==
+                    "explicit IConvert<ConversionValue>.operator int(ConversionValue value)")
+                .ToArray();
+            Assert.True(digests.Length == 1, rawPack);
+            JsonElement digest = digests[0];
+            Assert.False(digest.TryGetProperty("publicApi", out _));
+            Assert.Equal("private", digest.GetProperty("symbol").GetProperty("accessibility")
+                .GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ConversionTypeParameterRenameKeepsCanonicalReviewIdentity()
+    {
+        if (!GitInfo.GitAvailable) return;
+        string temporaryRoot = Directory.CreateTempSubdirectory(
+            "codenav-42-conversion-identity").FullName;
+        string root = OperatingSystem.IsMacOS() &&
+                      temporaryRoot.StartsWith("/var/", StringComparison.Ordinal)
+            ? "/private" + temporaryRoot
+            : Path.GetFullPath(temporaryRoot);
+        try
+        {
+            WriteReviewRepo(root);
+            const string relativePath = "Lib/GenericConversion.cs";
+            string path = Path.Combine(root, relativePath);
+            const string oldSource =
+                """
+                namespace Lib;
+                public readonly struct Scalar<T>
+                {
+                    private readonly int _padding0;
+                    private readonly int _padding1;
+                    private readonly int _padding2;
+                    private readonly int _padding3;
+                    private readonly int _padding4;
+                    private readonly int _padding5;
+                    private readonly int _padding6;
+                    private readonly int _padding7;
+                    public static implicit operator Scalar<T>(int value) => default;
+                }
+                """;
+            string newSource = oldSource.Replace(
+                "Scalar<T>", "Scalar<TRenamed>", StringComparison.Ordinal);
+            ParsedCsFile oldParsed = SyntaxIndexer.Parse(relativePath, oldSource);
+            ParsedCsFile newParsed = SyntaxIndexer.Parse(relativePath, newSource);
+            SymbolRow oldConversion = Assert.Single(oldParsed.Symbols,
+                symbol => symbol.Kind == "operator");
+            SymbolRow newConversion = Assert.Single(newParsed.Symbols,
+                symbol => symbol.Kind == "operator");
+            Assert.NotEqual(oldConversion.Name, newConversion.Name);
+            Assert.Equal(oldConversion.DeclarationKey, newConversion.DeclarationKey);
+            Assert.Equal(NavigationTools.SyntaxIdentityForTest(
+                    oldConversion, oldParsed.Symbols),
+                NavigationTools.SyntaxIdentityForTest(newConversion, newParsed.Symbols));
+
+            File.WriteAllText(path, oldSource);
+            Git(root, "add -A");
+            Git(root, "commit -q -m generic-conversion-baseline");
+
+            using var manager = StartManager(root);
+            using var semantic = new SemanticService(manager);
+            var tools = new NavigationTools(manager, semantic);
+            File.WriteAllText(path, newSource);
+            manager.RequestRefresh([relativePath]);
+            Assert.True(WaitUntil(() =>
+            {
+                using var queries = manager.OpenQueries();
+                return (queries.ContentByPath(relativePath) ?? "").Contains(
+                    "Scalar<TRenamed>", StringComparison.Ordinal);
+            }, 20_000), "index did not reflect the conversion type-parameter rename");
+
+            JsonElement pack = SemanticRetry.ParseWithRetry(
+                () => tools.ReviewPack(paths: relativePath, maxBytes: 24576),
+                value => value.TryGetProperty("symbols", out _),
+                "review_pack with canonical conversion identity");
+            Assert.NotEmpty(pack.GetProperty("symbols").EnumerateArray());
+            JsonElement[] formerConversions = pack.TryGetProperty(
+                    "formerSymbols", out JsonElement formerFiles)
+                ? formerFiles.EnumerateArray()
+                    .Where(file => file.GetProperty("path").GetString() == relativePath)
+                    .SelectMany(file => file.GetProperty("formerSymbols").EnumerateArray())
+                    .Where(symbol => symbol.GetProperty("kind").GetString() == "operator")
+                    .ToArray()
+                : [];
+            Assert.DoesNotContain(formerConversions, symbol =>
+                symbol.GetProperty("name").GetString() == "implicit operator Scalar<T>");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
     public void ReviewPackDigestsUncommittedEditsAtMemberGranularity()
     {
         if (!GitInfo.GitAvailable) return;

@@ -227,6 +227,136 @@ public sealed class SyntaxIndexerStructuralTests
         Assert.Equal(1, parsed.Symbols.Single(row => row.Name == "Factory").Arity);
     }
 
+    [Fact]
+    public void ConversionOperatorsPreserveExactRowsIdentityAndNesting()
+    {
+        ParsedCsFile parsed = ParseAndAssertStructure("""
+            namespace Conversions;
+
+            public readonly struct Scalar<T>
+            {
+                public static implicit operator Scalar<T>(int value) => default;
+                public static explicit operator int(Scalar<T> value) => 0;
+                public static explicit operator long(Scalar<T> value) => 0;
+
+                public readonly struct Nested
+                {
+                    public static implicit operator Nested(string value) => default;
+                }
+            }
+            """);
+
+        SymbolRow[] conversions = parsed.Symbols
+            .Where(row => row.Kind == "operator")
+            .ToArray();
+        Assert.Equal(
+        [
+            "2|1|implicit operator Scalar<T>|implicit operator Scalar<T>(int value)|" +
+            "public|5|5|static|operator\u001e\u001eimplicit operator Scalar\u001d<\u001d$type0_0\u001d>\u001e0\u001eint|Scalar",
+            "3|1|explicit operator int|explicit operator int(Scalar<T> value)|" +
+            "public|6|6|static|operator\u001e\u001eexplicit operator int\u001e0\u001eScalar\u001d<\u001d$type0_0\u001d>|Scalar",
+            "4|1|explicit operator long|explicit operator long(Scalar<T> value)|" +
+            "public|7|7|static|operator\u001e\u001eexplicit operator long\u001e0\u001eScalar\u001d<\u001d$type0_0\u001d>|Scalar",
+            "6|5|implicit operator Nested|implicit operator Nested(string value)|" +
+            "public|11|11|static|operator\u001e\u001eimplicit operator Nested\u001e0\u001estring|Scalar.Nested",
+        ], conversions.Select(row =>
+            $"{row.OrdinalInFile}|{row.ParentOrdinal}|{row.Name}|{row.Signature}|" +
+            $"{row.Accessibility}|{row.StartLine}|{row.EndLine}|{row.Modifiers}|" +
+            $"{row.DeclarationKey}|{row.Container}").ToArray());
+
+        Assert.Equal(4, conversions.Select(row => row.DeclarationKey).Distinct().Count());
+        Assert.Equal(4, conversions.Select(row => row.ContextKey).Distinct().Count());
+        IReadOnlyDictionary<string, List<(int Start, int End)>> identifierOffsets =
+            SyntaxIndexer.DeclarationIdentifierOffsetMap(parsed.Content);
+        Assert.All(conversions, row =>
+        {
+            (int Start, int End) = Assert.Single(identifierOffsets[row.Name]);
+            Assert.Equal(row.Name, parsed.Content[Start..End]);
+        });
+        Assert.All(conversions, row =>
+        {
+            Assert.False(row.IsPartial);
+            Assert.Equal(0, row.Arity);
+            Assert.Null(row.AttrMarkers);
+            Assert.Null(row.Accessors);
+            Assert.Null(row.BaseTypes);
+        });
+
+        SymbolRow renamedTypeParameter = ParseAndAssertStructure("""
+            namespace Conversions;
+            public readonly struct Scalar<TRenamed>
+            {
+                public static implicit operator Scalar<TRenamed>(int value) => default;
+            }
+            """).Symbols.Single(row => row.Kind == "operator");
+        Assert.Equal(conversions[0].DeclarationKey, renamedTypeParameter.DeclarationKey);
+        Assert.Equal(conversions[0].ContextKey, renamedTypeParameter.ContextKey);
+        Assert.NotEqual(conversions[0].Name, renamedTypeParameter.Name);
+    }
+
+    [Fact]
+    public void ConversionOperatorDisplayNameIgnoresTargetTypeTrivia()
+    {
+        SymbolRow conversion = ParseAndAssertStructure("""
+            namespace Conversions;
+            public readonly struct Formatted
+            {
+                public static implicit operator System . Collections . Generic . List <
+                    int /* layout-only marker */
+                >(Formatted value) => new();
+            }
+            """).Symbols.Single(row => row.Kind == "operator");
+
+        Assert.Equal("implicit operator System.Collections.Generic.List<int>", conversion.Name);
+        Assert.Equal(
+            "implicit operator System.Collections.Generic.List<int>(Formatted value)",
+            conversion.Signature);
+        Assert.DoesNotContain("marker", conversion.Name, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CheckedAndExplicitInterfaceConversionsKeepIdentityAccessibilityAndOffsets()
+    {
+        ParsedCsFile parsed = ParseAndAssertStructure("""
+            namespace Conversions;
+
+            public interface IConvert<TSelf> where TSelf : IConvert<TSelf>
+            {
+                static abstract explicit operator int(TSelf value);
+            }
+
+            public readonly struct Value : IConvert<Value>
+            {
+                public static explicit operator int(Value value) => 0;
+                public static explicit operator checked int(Value value) => 0;
+                static explicit IConvert<Value>.operator int(Value value) => 0;
+            }
+            """);
+
+        SymbolRow[] implementations = parsed.Symbols
+            .Where(row => row.Kind == "operator" && row.Container == "Value")
+            .ToArray();
+        Assert.Equal(3, implementations.Length);
+        Assert.Equal(
+        [
+            "explicit operator int(Value value)|public",
+            "explicit operator checked int(Value value)|public",
+            "explicit IConvert<Value>.operator int(Value value)|private",
+        ], implementations.Select(row => $"{row.Signature}|{row.Accessibility}").ToArray());
+        Assert.Equal(3, implementations.Select(row => row.DeclarationKey)
+            .Distinct(StringComparer.Ordinal).Count());
+
+        IReadOnlyDictionary<string, List<(int Start, int End)>> offsets =
+            SyntaxIndexer.DeclarationIdentifierOffsetMap(parsed.Content);
+        Assert.Equal(3, offsets["explicit operator int"].Count);
+        Assert.Single(offsets["explicit operator checked int"]);
+        (int Start, int End) explicitInterface = offsets["explicit operator int"]
+            .Single(span => parsed.Content[span.Start..span.End]
+                .Contains("IConvert<Value>.operator", StringComparison.Ordinal));
+        Assert.Equal("explicit IConvert<Value>.operator int",
+            parsed.Content[explicitInterface.Start..explicitInterface.End]);
+    }
+
     public static TheoryData<string, string[]> RecoveredSources => new()
     {
         { "", [] },

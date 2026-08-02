@@ -43,7 +43,11 @@ public sealed record SemanticReferences(
     // answerable from these two numbers without guessing.
     long? ClusterLoadMs = null,
     long? QueryMs = null,
-    bool ProjectModelUnproven = false);
+    bool ProjectModelUnproven = false,
+    // Roslyn currently does not prove a complete set of user-defined conversion usages. Keep
+    // every reported census partial until PhoenixCodeNav-4rk supplies a compiler-backed
+    // enumeration path; directional count guarantees still depend on project-model authority.
+    bool ConversionUsageEnumerationIncomplete = false);
 
 /// <summary>One implementation / derived class / override, tagged for hierarchy ranking.
 /// <paramref name="Via"/> names the base type that introduces the queried interface when the type
@@ -95,6 +99,13 @@ public sealed partial class SemanticService : IDisposable
     /// demand (the seam gap the salvage shipped with). Never set in production; instance-scoped
     /// so parallel tests cannot cross-trip it.</summary>
     internal Action<int>? TestOnlyPerLocationCounted;
+
+    /// <summary>TEST SEAM (hdb8): overrides user-defined-conversion classification so the
+    /// deadline-salvage path can be exercised with a symbol whose Roslyn reference finder returns
+    /// positive locations. Real conversion locations are not enumerated yet (PhoenixCodeNav-4rk).
+    /// The test asserts this classifier runs before any count can be cancelled. Never set in
+    /// production; instance-scoped so parallel tests cannot cross-trip it.</summary>
+    internal Func<ISymbol, string?, CancellationToken, bool>? TestOnlyUserDefinedConversionClassifier;
 
     /// <summary>TEST SEAM (t2b): invoked at ReferencesAsync's phase boundaries —
     /// "beforeScanSetLoad" / "afterScanSetLoad" — so a test can burn the deadline in a CHOSEN
@@ -435,7 +446,8 @@ public sealed partial class SemanticService : IDisposable
 
     public async Task<(SemanticDeclaration? Result, string? FailReason,
         bool ProjectModelUnproven, string? PartialReason)> DefinitionAsync(
-        string path, int line, int? column, string? nameHint, int timeoutMs)
+        string path, int line, int? column, string? nameHint, int timeoutMs,
+        string? declarationKeyHint = null)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 60000));
         bool loadCompleted = false;
@@ -452,7 +464,8 @@ public sealed partial class SemanticService : IDisposable
             }
             var (ownerLease, symbol, owningProject, coverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
-                statsBox: ownerBox).ConfigureAwait(false);
+                statsBox: ownerBox,
+                declarationKeyHint: declarationKeyHint).ConfigureAwait(false);
             using var ownerOperation = ownerLease;
             loadCompleted = true;
             loadMs = swOp.ElapsedMilliseconds;
@@ -504,7 +517,7 @@ public sealed partial class SemanticService : IDisposable
     public async Task<(SemanticReferences? Result, string? FailReason)> ReferencesAsync(
         string path, int line, int? column, string? nameHint, int maxProjects, int samplesPerGroup, int timeoutMs,
         bool includeGenerated = true, IReadOnlySet<string>? usageKinds = null, bool publicConsumersOnly = false,
-        bool includeTests = true)
+        bool includeTests = true, string? declarationKeyHint = null)
     {
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         string operationId = Guid.NewGuid().ToString("N")[..8];
@@ -540,7 +553,8 @@ public sealed partial class SemanticService : IDisposable
             {
                 ownerResult = await LoadOwnerAndResolveAsync(
                     path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
-                    statsBox: ownerBox, deferRetentionEviction: true).ConfigureAwait(false);
+                    statsBox: ownerBox, deferRetentionEviction: true,
+                    declarationKeyHint: declarationKeyHint).ConfigureAwait(false);
             }
             var (ownerLease, symbolA, owningProject, ownerCoverage) = ownerResult;
             using var ownerOperation = ownerLease;
@@ -560,6 +574,15 @@ public sealed partial class SemanticService : IDisposable
                     clusterLoadProcessWideCpuMs: clusterLoadProcessWideCpuMs); // epuc.1 + epuc.4
                 return (null, reason);
             }
+
+            // Classify from the already resolved owner symbol before scan planning. Conversion use
+            // sites do not contain Roslyn's op_Implicit/op_Explicit metadata name, so every resolved
+            // conversion route (handle, path, or name+position) must scan the eligible dependent
+            // closure rather than falling through to name-based candidate discovery.
+            bool conversionUsageEnumerationIncomplete =
+                TestOnlyUserDefinedConversionClassifier?.Invoke(
+                    symbolA, declarationKeyHint, cts.Token) ??
+                IsUserDefinedConversion(symbolA, declarationKeyHint, cts.Token);
 
             // Implementer seeds for TYPE targets — parity with Implementations/TypeHierarchy
             // (field 0.7.2 regression report): references was the ONLY exact tool relying purely
@@ -597,7 +620,9 @@ public sealed partial class SemanticService : IDisposable
                     indexSnapshot.Queries, cts.Token, implementerSeeds,
                     statsBox: scanBox, includeGenerated: includeGenerated,
                     includeTests: includeTests,
-                    planStatsBox: planning.ScanSet).ConfigureAwait(false);
+                    planStatsBox: planning.ScanSet,
+                    declarationKeyHint: declarationKeyHint,
+                    scanAllDependents: conversionUsageEnumerationIncomplete).ConfigureAwait(false);
             }
             var (scanLease, symbol, coverage, skipped, outOfGraph) = scanResult;
             deferredRetentionPending = false;
@@ -810,7 +835,8 @@ public sealed partial class SemanticService : IDisposable
                     (outOfGraphSample?.Count ?? 0),
                 ClusterLoadMs: clusterLoadMs,
                 QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs,
-                ProjectModelUnproven: projectModelUnproven);
+                ProjectModelUnproven: projectModelUnproven,
+                ConversionUsageEnumerationIncomplete: conversionUsageEnumerationIncomplete);
             bool unsupportedLanguageSkipped = coverage.SkippedProjects.Count > 0;
             bool candidateProjectsSkipped = skipped.Count > 0;
             bool failedLoads = coverage.FailedProjects.Count > 0;
@@ -818,10 +844,14 @@ public sealed partial class SemanticService : IDisposable
             bool outOfGraphCandidates = outOfGraph.Count > 0;
             bool incomplete = deadlineExhausted || unsupportedLanguageSkipped ||
                 candidateProjectsSkipped || failedLoads || coverageIncomplete ||
-                outOfGraphCandidates || projectModelUnproven;
+                outOfGraphCandidates || projectModelUnproven ||
+                conversionUsageEnumerationIncomplete;
             string? telemetryReason = SemanticCoverageReasons.Primary(coverage,
-                deadlineExhausted, candidateProjectsSkipped, outOfGraphCandidates,
-                projectModelUnproven);
+                    deadlineExhausted, candidateProjectsSkipped, outOfGraphCandidates,
+                    projectModelUnproven)
+                ?? (conversionUsageEnumerationIncomplete
+                    ? "conversion_usage_enumeration_gap"
+                    : null);
             long telemetryQueryMs = swPhase.ElapsedMilliseconds - clusterLoadMs;
             EmitReferencesTelemetry(operationId, incomplete ? "partial" : "exact",
                 telemetryReason,
@@ -1123,7 +1153,8 @@ public sealed partial class SemanticService : IDisposable
         string path, int line, int? column, string? nameHint, CancellationToken ct,
         IndexQueries? snapshotQueries = null, int? arityHint = null,
         SemanticWorkspace.LoadStatsBox? statsBox = null,
-        bool deferRetentionEviction = false)
+        bool deferRetentionEviction = false,
+        string? declarationKeyHint = null)
     {
         string relPath = WorkspacePaths.Normalize(path);
         string owningProject;
@@ -1156,7 +1187,8 @@ public sealed partial class SemanticService : IDisposable
         try
         {
             var symbol = await ResolveInSolutionAsync(
-                    lease.Solution, owningProject, relPath, line, column, nameHint, ct, arityHint)
+                    lease.Solution, owningProject, relPath, line, column, nameHint, ct, arityHint,
+                    declarationKeyHint)
                 .ConfigureAwait(false);
             return (lease, symbol, owningProject, lease.Coverage);
         }
@@ -1196,7 +1228,8 @@ public sealed partial class SemanticService : IDisposable
     /// </summary>
     private async Task<ISymbol?> ResolveInSolutionAsync(
         Solution solution, string owningProject, string relPath, int line, int? column,
-        string? nameHint, CancellationToken ct, int? arityHint = null)
+        string? nameHint, CancellationToken ct, int? arityHint = null,
+        string? declarationKeyHint = null)
     {
         var project = solution.Projects.FirstOrDefault(p =>
             string.Equals(p.Name, owningProject, StringComparison.OrdinalIgnoreCase));
@@ -1216,18 +1249,20 @@ public sealed partial class SemanticService : IDisposable
         if (root is null || model is null) return null;
 
         TextLine targetLine = text.Lines[line - 1];
-        if (nameHint is { Length: > 0 } && arityHint is { } exactArity)
+        if (nameHint is { Length: > 0 } &&
+            (arityHint is not null || declarationKeyHint is not null))
         {
             ISymbol? declaration = root.DescendantNodes(targetLine.Span)
-                .Select(node => model.GetDeclaredSymbol(node, ct))
-                .Where(symbol => symbol is not null &&
-                    symbol.Name.Equals(nameHint, StringComparison.Ordinal) &&
-                    ArityOf(symbol) == exactArity)
-                .OrderBy(symbol => symbol!.Locations
+                .Select(node => (Node: node, Symbol: model.GetDeclaredSymbol(node, ct)))
+                .Where(candidate => candidate.Symbol is not null &&
+                    DeclarationMatchesHint(candidate.Node, candidate.Symbol, nameHint,
+                        arityHint, declarationKeyHint))
+                .OrderBy(candidate => candidate.Symbol!.Locations
                     .Where(location => location.IsInSource)
                     .Select(location => location.SourceSpan.Start)
                     .DefaultIfEmpty(int.MaxValue)
                     .Min())
+                .Select(candidate => candidate.Symbol)
                 .FirstOrDefault();
             if (declaration is not null) return declaration;
         }
@@ -1239,8 +1274,8 @@ public sealed partial class SemanticService : IDisposable
         {
             var declared = model.GetDeclaredSymbol(node, ct);
             if (declared is not null &&
-                (nameHint is null || declared.Name.Equals(nameHint, StringComparison.Ordinal)) &&
-                (arityHint is null || ArityOf(declared) == arityHint.Value))
+                DeclarationMatchesHint(node, declared, nameHint, arityHint,
+                    declarationKeyHint))
             {
                 // With a name hint we require an exact name match: the old `token.ValueText ==
                 // declared.Name` fallback accepted a sibling declarator on a multi-variable line
@@ -1256,10 +1291,42 @@ public sealed partial class SemanticService : IDisposable
         ISymbol? positioned = await SymbolFinder.FindSymbolAtPositionAsync(document, position, ct)
             .ConfigureAwait(false);
         return positioned is not null &&
+               declarationKeyHint is null &&
                (nameHint is null || positioned.Name.Equals(nameHint, StringComparison.Ordinal)) &&
                (arityHint is null || ArityOf(positioned) == arityHint.Value)
             ? positioned
             : null;
+    }
+
+    private static bool DeclarationMatchesHint(SyntaxNode node, ISymbol symbol,
+        string? nameHint, int? arityHint, string? declarationKeyHint)
+    {
+        if (arityHint is { } exactArity && ArityOf(symbol) != exactArity) return false;
+        if (nameHint is null) return declarationKeyHint is null;
+
+        if (node is ConversionOperatorDeclarationSyntax conversion)
+        {
+            return SyntaxIndexer.ConversionOperatorName(conversion)
+                       .Equals(nameHint, StringComparison.Ordinal) &&
+                   (declarationKeyHint is null ||
+                    SyntaxIndexer.ConversionOperatorDeclarationKey(conversion)
+                        .Equals(declarationKeyHint, StringComparison.Ordinal));
+        }
+
+        return declarationKeyHint is null &&
+               symbol.Name.Equals(nameHint, StringComparison.Ordinal);
+    }
+
+    private static bool IsUserDefinedConversion(ISymbol symbol, string? declarationKeyHint,
+        CancellationToken cancellationToken)
+    {
+        // A declaration key is supplied only by an indexed conversion handle. Public path/name
+        // routes have no key, and Roslyn classifies explicit-interface conversions as
+        // ExplicitInterfaceImplementation rather than MethodKind.Conversion. Source syntax is the
+        // common identity proof across all three routes.
+        if (declarationKeyHint is not null) return true;
+        return symbol.DeclaringSyntaxReferences.Any(reference =>
+            reference.GetSyntax(cancellationToken) is ConversionOperatorDeclarationSyntax);
     }
 
     private static int ArityOf(ISymbol symbol) => symbol switch
@@ -1320,7 +1387,9 @@ public sealed partial class SemanticService : IDisposable
         IReadOnlyList<string>? prioritySeeds = null, int? arityHint = null,
         SemanticWorkspace.LoadStatsBox? statsBox = null,
         bool includeGenerated = true, bool includeTests = true,
-        ScanPlanStatsBox? planStatsBox = null)
+        ScanPlanStatsBox? planStatsBox = null,
+        string? declarationKeyHint = null,
+        bool scanAllDependents = false)
     {
         bool capturePlan = planStatsBox is not null;
         long planStarted = capturePlan ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
@@ -1389,39 +1458,66 @@ public sealed partial class SemanticService : IDisposable
             // projects that mention the name but have no graph path to the declarer. Retain all of
             // them until after the loaded-solution filter; only the public sample is capped.
             var candidates = new List<(string Project, int FileCount)>();
-            List<SemanticTextCandidateProject> discoveredCandidates;
-            long candidateStarted = capturePlan ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
-            try
+            if (scanAllDependents)
             {
-                discoveredCandidates = q.CandidateProjectsForName(symbolName, ct,
-                    includeGenerated, includeTests);
-            }
-            finally
-            {
-                if (capturePlan)
+                // Conversion uses carry no searchable method name (the compiler symbol is
+                // op_Implicit/op_Explicit while source sites can be just an assignment or cast).
+                // Once phase 1 proves the target is a conversion, scan every dependent within the
+                // caller's explicit project budget and disclose any omitted dependents through the
+                // existing skipped/partial contract. This applies equally to handles and position
+                // routes; name-based discovery cannot find implicit conversion sites.
+                Dictionary<string, bool>? projectTestFlags = includeTests
+                    ? null
+                    : q.AllProjectTestOnlyFlags();
+                string[] eligibleDependents = dependents
+                    .Where(project => includeTests ||
+                                      project.Equals(owningProject,
+                                          StringComparison.OrdinalIgnoreCase) ||
+                                      !projectTestFlags!.GetValueOrDefault(project))
+                    .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                foreach (string project in eligibleDependents)
                 {
-                    candidateDiscoveryTicks +=
-                        System.Diagnostics.Stopwatch.GetTimestamp() - candidateStarted;
+                    Consider(project);
                 }
+                candidateProjectCount = eligibleDependents.Length;
             }
-            candidateProjectCount = discoveredCandidates.Count;
-            foreach (var c in discoveredCandidates)
+            else
             {
-                // Candidate ownership is a physical fact. An F# file that mentions the symbol
-                // must not nominate a same-logical-name C# project for Roslyn loading; that would
-                // turn an unscanned use into an apparently exact zero. Retain the physical path as
-                // explicit unsupported-language coverage instead.
-                if (!c.Language.Equals("cs", StringComparison.OrdinalIgnoreCase))
+                List<SemanticTextCandidateProject> discoveredCandidates;
+                long candidateStarted = capturePlan ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+                try
                 {
-                    unsupportedCandidatePaths.Add(c.ProjectPath);
-                    continue;
+                    discoveredCandidates = q.CandidateProjectsForName(symbolName, ct,
+                        includeGenerated, includeTests);
                 }
-                if (dependents.Contains(c.Project))
-                    candidates.Add((c.Project, c.FileCount));
-                else if (!chosenSet.Contains(c.Project)) AddOutOfGraph(c.Project);
+                finally
+                {
+                    if (capturePlan)
+                    {
+                        candidateDiscoveryTicks +=
+                            System.Diagnostics.Stopwatch.GetTimestamp() - candidateStarted;
+                    }
+                }
+                candidateProjectCount = discoveredCandidates.Count;
+                foreach (var c in discoveredCandidates)
+                {
+                    // Candidate ownership is a physical fact. An F# file that mentions the symbol
+                    // must not nominate a same-logical-name C# project for Roslyn loading; that would
+                    // turn an unscanned use into an apparently exact zero. Retain the physical path as
+                    // explicit unsupported-language coverage instead.
+                    if (!c.Language.Equals("cs", StringComparison.OrdinalIgnoreCase))
+                    {
+                        unsupportedCandidatePaths.Add(c.ProjectPath);
+                        continue;
+                    }
+                    if (dependents.Contains(c.Project))
+                        candidates.Add((c.Project, c.FileCount));
+                    else if (!chosenSet.Contains(c.Project)) AddOutOfGraph(c.Project);
+                }
+                foreach (var c in candidates)
+                    Consider(c.Project);
             }
-            foreach (var c in candidates)
-                Consider(c.Project);
             foreach (string project in orderedSeeds.Where(project => !dependents.Contains(project)))
             {
                 Consider(project);
@@ -1505,7 +1601,7 @@ public sealed partial class SemanticService : IDisposable
             });
             var symbol = await ResolveInSolutionAsync(
                 solution, owningProject, WorkspacePaths.Normalize(path), line, column, nameHint, ct,
-                arityHint).ConfigureAwait(false);
+                arityHint, declarationKeyHint).ConfigureAwait(false);
             return (lease, symbol, coverage, skipped, outOfGraph);
         }
         catch

@@ -25,7 +25,7 @@ navigation questions in four layers, each labeled with how trustworthy it is:
 | Layer | Tools | Confidence |
 |---|---|---|
 | **Indexed text** (SQLite FTS5, C# + F# + Markdown + SQL) | `find_file`, `search_text`, `source_context`, `config_lookup`, `references` (candidates) | `indexed` |
-| **Syntax (C#)** (Roslyn parse, no compile) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
+| **Syntax (C#)** (Roslyn parse, no compile; includes implicit/explicit conversion operators) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
 | **Syntax (F#)** (FCS parse, no type check) | `outline` for project-owned `.fs` / `.fsi` | `indexed` |
 | **Semantic** (Roslyn for C#; bounded FCS type checks for F# Stage 2A) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at` and same-project `definition` | C# may be `exact`; bounded F# Stage 2A is `indexed` with explicit partial causes |
 
@@ -264,7 +264,18 @@ watcher, and lifecycle test projects under `tests/`.
   language-neutral; an F#-only `search_symbol` scope discloses `unsupported_language`, and a mixed
   scope marks its C# results partial.
 - Indexed `references` are whole-identifier text candidates; use `mode="semantic"` (or the
-  default auto-upgrade) for compiler-exact results.
+  default auto-upgrade) for compiler-exact results. When the caller-selected `maxFiles` boundary
+  is reached, the response reports candidate-file coverage, `totalIsLowerBound:true`, and
+  `noteId:"references.candidate_file_cap"` instead of presenting the scanned subset as complete.
+- C# conversion-operator handles pin semantic definitions with their uncapped declaration key;
+  v2 handle fingerprints also bind a full SHA-256 digest of the complete namespace/type ancestor
+  context and reject legacy fingerprints that cannot prove that identity after a rebuild. The
+  fixed-size digest preserves complete chained identity without quadratic deep-nesting storage.
+  Roslyn does not yet enumerate user-defined conversion usage sites reliably; every conversion
+  `references` census is therefore reported as partial with
+  `noteId:"references.conversion_usage_enumeration_gap"`, never as an exact completeness claim.
+  Compiler-reported totals are labeled lower bounds only when the project model is proven;
+  otherwise the response makes no directional count guarantee.
 - Semantic scans load all matching candidate projects by default (`maxProjects:0`). A positive
   `maxProjects` value is an explicit latency/memory tradeoff; bounded responses report the total
   skipped count and a size-bounded sample.

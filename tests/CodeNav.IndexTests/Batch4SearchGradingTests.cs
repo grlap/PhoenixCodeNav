@@ -282,6 +282,9 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("semantic-persistent-syntax-indexes", ids);
         Assert.Contains("references-compilation-critical-path-attribution", ids);
         Assert.Contains("stack-safe-syntax-indexing", ids);
+        Assert.Contains("csharp-conversion-operator-indexing", ids);
+        Assert.Contains("csharp-conversion-semantic-handles", ids);
+        Assert.Contains("references-candidate-file-cap-disclosure", ids);
         Assert.Contains("references-buffered-document-scope-scan", ids);
         Assert.Contains("semantic-byte-governed-retention", ids);
         Assert.Contains("references-process-cpu-attribution", ids);
@@ -314,6 +317,9 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(1, idList.Count(id => id == "source-context-range-alias"));
         Assert.Equal(1, idList.Count(id => id == "markdown-sql-text-indexing"));
         Assert.Equal(1, idList.Count(id => id == "csharp-symbol-free-outline"));
+        Assert.Equal(1, idList.Count(id => id == "csharp-conversion-operator-indexing"));
+        Assert.Equal(1, idList.Count(id => id == "csharp-conversion-semantic-handles"));
+        Assert.Equal(1, idList.Count(id => id == "references-candidate-file-cap-disclosure"));
         Assert.Equal(1, idList.Count(id => id == "refresh-review-json-array-paths"));
         Assert.Equal(
             1,
@@ -486,6 +492,35 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("bounded untracked move-candidate bytes actually consumed", liveEvidence);
         Assert.Contains("fails closed", liveEvidence);
 
+        string conversionOperators = Summary("csharp-conversion-operator-indexing");
+        Assert.Contains("v0.12.46", conversionOperators);
+        Assert.Contains("schema v21", conversionOperators);
+        Assert.Contains("implicit and explicit C# conversion declarations", conversionOperators);
+        Assert.Contains("target-bearing names", conversionOperators);
+        Assert.Contains("canonical declaration keys", conversionOperators);
+        Assert.Contains("modifiers, source order, and parent links", conversionOperators);
+
+        string conversionHandles = Summary("csharp-conversion-semantic-handles");
+        Assert.Contains("v0.12.46", conversionHandles);
+        Assert.Contains("schema v22", conversionHandles);
+        Assert.Contains("uncapped canonical declaration keys", conversionHandles);
+        Assert.Contains("full SHA-256 digest", conversionHandles);
+        Assert.Contains("complete ancestor context", conversionHandles);
+        Assert.Contains("without quadratic nesting storage", conversionHandles);
+        Assert.Contains("reject legacy identities", conversionHandles);
+        Assert.Contains("remain partial", conversionHandles);
+        Assert.Contains("claim lower-bound counts only when the project model is proven",
+            conversionHandles);
+        Assert.Contains("conversion_usage_enumeration_gap", conversionHandles);
+
+        string candidateFileCap = Summary("references-candidate-file-cap-disclosure");
+        Assert.Contains("v0.12.46", candidateFileCap);
+        Assert.Contains("existing caller-selected maxFiles", candidateFileCap);
+        Assert.Contains("coverage", candidateFileCap);
+        Assert.Contains("candidate_file_cap", candidateFileCap);
+        Assert.Contains("references.candidate_file_cap", candidateFileCap);
+        Assert.Contains("lower-bound totals", candidateFileCap);
+
         string launcher = Summary("review-git-launcher-isolation");
         Assert.Contains("canonical absolute paths", launcher);
         Assert.Contains("missing or non-directory working directory fails before spawn", launcher);
@@ -644,6 +679,9 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("Linux ARM64 ABI", "linux-arm64-anchored-authority"),
                       ("first bounded NUL", "portal-directory-entry-nul-decoding"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),
+                      ("target-bearing names", "csharp-conversion-operator-indexing"),
+                      ("conversion_usage_enumeration_gap",
+                          "csharp-conversion-semantic-handles"),
                       ("comma-bearing JSON paths", "refresh-review-json-array-paths"),
                       ("unsupportedLanguageFiles", "review-fsharp-file-coverage"),
                       ("git_index_baseline_unavailable", "review-default-baseline-honesty"),

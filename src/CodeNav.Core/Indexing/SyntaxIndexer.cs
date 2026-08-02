@@ -2,6 +2,8 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace CodeNav.Core.Indexing;
 
@@ -28,7 +30,8 @@ public sealed record SymbolRow(
                                 // differs from the member's own (hu7, field twice-asked: the private
                                 // on a setter was invisible); null when uniform or accessor-less
     string? DeclarationKey = null,
-    IReadOnlyList<BaseTypeIdentity>? BaseTypes = null); // v18: direct syntax heads before signature truncation
+    IReadOnlyList<BaseTypeIdentity>? BaseTypes = null, // v18: direct syntax heads before signature truncation
+    string? ContextKey = null); // v22: full SHA-256 ancestor/declaration identity for stale-handle validation
 
 public sealed record ParsedCsFile(
     string RelPath,
@@ -215,6 +218,15 @@ public static class SyntaxIndexer
                         $"{Compact(op.ReturnType.ToString())} {ExplicitInterface(op.ExplicitInterfaceSpecifier)}{operatorName}{ParamSig(op.ParameterList)}",
                         Access(op.Modifiers, "public"), false, 0, null);
                     break;
+                case ConversionOperatorDeclarationSyntax conversion:
+                    string conversionName = ConversionOperatorName(conversion);
+                    Add(symbols, text, member, parentOrdinal, "operator", conversionName, ns, container,
+                        ConversionOperatorSignature(conversion),
+                        conversion.ExplicitInterfaceSpecifier is null
+                            ? Access(conversion.Modifiers, "public")
+                            : "private",
+                        false, 0, null);
+                    break;
             }
         }
 
@@ -323,6 +335,18 @@ public static class SyntaxIndexer
                     operatorDeclaration.OperatorToken.Span.End);
                 continue;
             }
+            if (node is ConversionOperatorDeclarationSyntax conversionDeclaration)
+            {
+                // A conversion's indexed display name is composite. For an explicit-interface
+                // implementation the interface qualifier sits between "explicit" and "operator",
+                // so no contiguous source slice equals the display name. Retain the full header
+                // range from conversion keyword through target type; consumers key it by the
+                // supplied display name and need the complete declaration site, not substring text.
+                visit(ConversionOperatorName(conversionDeclaration),
+                    conversionDeclaration.ImplicitOrExplicitKeyword.SpanStart,
+                    conversionDeclaration.Type.Span.End);
+                continue;
+            }
             SyntaxToken? identifier = node switch
             {
                 BaseTypeDeclarationSyntax declaration => declaration.Identifier,
@@ -414,14 +438,34 @@ public static class SyntaxIndexer
         // uniformly — namespaces are MemberDeclarationSyntax too but carry no modifiers.
         string? mods = node is MemberDeclarationSyntax md ? Mods(md.Modifiers) : null;
         string? accessors = AccessorSplit(node, accessibility);
+        string declarationKey = DeclarationKey(node, kind, name, arity);
+        string? parentContextKey = parentOrdinal >= 0
+            ? symbols[parentOrdinal].ContextKey
+            : null;
+        string contextKey = ContextDigest(parentContextKey, declarationKey);
         symbols.Add(new SymbolRow(
             ordinal, parentOrdinal, kind, name, ns, container,
             signature.Length > 400 ? signature[..400] : signature,
             accessibility,
             span.Start.Line + 1, span.End.Line + 1,
             isPartial, arity, attrs, mods, accessors,
-            DeclarationKey(node, kind, name, arity), baseTypes));
+            declarationKey, baseTypes, contextKey));
         return ordinal;
+    }
+
+    /// <summary>
+    /// Carries complete ancestor identity in constant space. Chaining the full ancestor text into
+    /// every descendant made one deeply nested file retain and persist O(depth²) characters. A
+    /// full SHA-256 digest of the parent digest plus the local declaration key preserves every
+    /// ancestor distinction without truncating the identity or growing with nesting depth.
+    /// </summary>
+    private static string ContextDigest(string? parentContextKey, string declarationKey)
+    {
+        string identity = parentContextKey is null
+            ? "root\u001f" + declarationKey
+            : "child\u001f" + parentContextKey + '\u001f' + declarationKey;
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))
+            .ToLowerInvariant();
     }
 
     /// <summary>Per-accessor accessibility split, e.g. <c>get=public;set=private</c> — emitted
@@ -525,6 +569,32 @@ public static class SyntaxIndexer
         return $"operator {checkedPart}{declaration.OperatorToken.ValueText}";
     }
 
+    internal static string ConversionOperatorName(
+        ConversionOperatorDeclarationSyntax declaration)
+    {
+        string checkedPart = declaration.CheckedKeyword.IsKind(SyntaxKind.CheckedKeyword)
+            ? "checked "
+            : "";
+        return $"{declaration.ImplicitOrExplicitKeyword.ValueText} operator " +
+               $"{checkedPart}{DisplaySyntax(declaration.Type)}";
+    }
+
+    internal static string ConversionOperatorSignature(
+        ConversionOperatorDeclarationSyntax declaration)
+    {
+        string checkedPart = declaration.CheckedKeyword.IsKind(SyntaxKind.CheckedKeyword)
+            ? "checked "
+            : "";
+        return $"{declaration.ImplicitOrExplicitKeyword.ValueText} " +
+               $"{ExplicitInterface(declaration.ExplicitInterfaceSpecifier)}operator " +
+               $"{checkedPart}{DisplaySyntax(declaration.Type)}" +
+               ParamSig(declaration.ParameterList);
+    }
+
+    internal static string ConversionOperatorDeclarationKey(
+        ConversionOperatorDeclarationSyntax declaration) =>
+        DeclarationKey(declaration, "operator", ConversionOperatorName(declaration), 0);
+
     private static string ParamSig(BaseParameterListSyntax? list)
     {
         if (list is null || list.Parameters.Count == 0) return "()";
@@ -575,11 +645,25 @@ public static class SyntaxIndexer
                     : CanonicalSyntax(parameter.Type, typeParameters);
                 return modifiers.Length == 0 ? type : modifiers + " " + type;
             }));
+        string identityName = node is ConversionOperatorDeclarationSyntax conversion
+            ? ConversionOperatorIdentityName(conversion, typeParameters)
+            : name;
         return string.Join('\u001e', kind,
             explicitInterface is null
                 ? ""
                 : CanonicalSyntax(explicitInterface.Name, typeParameters),
-            name, arity.ToString(System.Globalization.CultureInfo.InvariantCulture), parameterKey);
+            identityName, arity.ToString(System.Globalization.CultureInfo.InvariantCulture), parameterKey);
+    }
+
+    private static string ConversionOperatorIdentityName(
+        ConversionOperatorDeclarationSyntax declaration,
+        IReadOnlyDictionary<string, string> typeParameters)
+    {
+        string checkedPart = declaration.CheckedKeyword.IsKind(SyntaxKind.CheckedKeyword)
+            ? "checked "
+            : "";
+        return $"{declaration.ImplicitOrExplicitKeyword.ValueText} operator " +
+               checkedPart + CanonicalSyntax(declaration.Type, typeParameters);
     }
 
     private static IReadOnlyDictionary<string, string> TypeParameterReplacements(SyntaxNode node)
@@ -630,6 +714,17 @@ public static class SyntaxIndexer
     private static bool IsQualifiedNameComponent(SyntaxToken token) =>
         token.Parent is SimpleNameSyntax simpleName &&
         simpleName.Parent is QualifiedNameSyntax or AliasQualifiedNameSyntax;
+
+    /// <summary>Stable public spelling for syntax whose source trivia is not part of its name.
+    /// Roslyn's normalized form removes comments and layout-only whitespace while retaining the
+    /// language-required separation between tokens such as <c>ref readonly</c>.</summary>
+    private static string DisplaySyntax(SyntaxNode node)
+    {
+        SyntaxNode triviaFree = node.ReplaceTokens(node.DescendantTokens(),
+            static (token, _) => token.WithLeadingTrivia(default(SyntaxTriviaList))
+                .WithTrailingTrivia(default(SyntaxTriviaList)));
+        return Compact(triviaFree.NormalizeWhitespace(elasticTrivia: false).ToFullString());
+    }
 
     /// <summary>Collapses newlines/duplicate whitespace so signatures stay single-line.</summary>
     private static string Compact(string s)

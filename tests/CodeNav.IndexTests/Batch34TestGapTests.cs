@@ -148,7 +148,7 @@ public class Batch34TestGapTests
     // ------------------------------------------------------------------ tof
 
     [Fact]
-    public void DeadlineExhaustionMidCountSalvagesALowerBound()
+    public void DeadlineExhaustionAfterConversionClassificationSalvagesALowerBound()
     {
         string root = Directory.CreateTempSubdirectory("codenav-tof").FullName;
         try
@@ -182,10 +182,24 @@ public class Batch34TestGapTests
                 if (!semantic.FrameworkRefsAvailable) return;
                 var tools = new NavigationTools(m, semantic);
 
+                int counted = 0;
+                int conversionClassifications = 0;
+                // Roslyn does not yet enumerate positive conversion-use locations (4rk), so classify
+                // this positive-reference method as a conversion through the instance test seam.
+                // The decisive assertion is ordering: classification must finish before the first
+                // cancellable count, never after the salvage catch with an expired token.
+                semantic.TestOnlyUserDefinedConversionClassifier = (_, _, token) =>
+                {
+                    Assert.Equal(0, counted);
+                    Assert.False(token.IsCancellationRequested);
+                    conversionClassifications++;
+                    return true;
+                };
                 // The seam: a "deadline" fires after the second counted location — exactly the
                 // mid-count OCE shape the 24n salvage exists for.
                 semantic.TestOnlyPerLocationCounted = total =>
                 {
+                    counted = total;
                     if (total >= 2) throw new OperationCanceledException();
                 };
                 var refs = SemanticRetry.ParseWithRetry(
@@ -199,11 +213,16 @@ public class Batch34TestGapTests
                 Assert.Equal(2, refs.GetProperty("totalReferences").GetInt32()); // counted-so-far survives
                 Assert.True(refs.GetProperty("totalIsLowerBound").GetBoolean());
                 Assert.True(refs.GetProperty("partial").GetBoolean());
-                Assert.StartsWith("at least 2", refs.GetProperty("summary").GetString());
+                Assert.Contains("2 compiler-reported locations", refs.GetProperty("summary").GetString());
+                Assert.Contains("lower bound", refs.GetProperty("summary").GetString());
                 Assert.Contains("deadline exhausted", refs.GetProperty("partialReason").GetString());
+                Assert.Contains("conversion_usage_enumeration_gap",
+                    refs.GetProperty("partialReason").GetString());
+                Assert.Equal(1, conversionClassifications);
 
                 // Seam off: the same query is a full census again — no hedge, all 3 counted.
                 semantic.TestOnlyPerLocationCounted = null;
+                semantic.TestOnlyUserDefinedConversionClassifier = null;
                 var full = SemanticRetry.ParseExactWithRetry(() => tools.References(name: "Ping", timeoutMs: 60000));
                 Assert.Equal(3, full.GetProperty("totalReferences").GetInt32());
                 Assert.False(full.TryGetProperty("totalIsLowerBound", out _));

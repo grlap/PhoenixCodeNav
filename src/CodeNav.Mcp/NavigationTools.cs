@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
@@ -195,6 +197,9 @@ public sealed partial class NavigationTools
                 new { id = "review-layered-change-refusal", summary = "v0.11.1 layered-change refusal: when independent staged and unstaged manifests contain the same path, review_pack returns git_layered_changes rather than presenting a final-worktree hunk map as coverage of both byte layers" },
                 new { id = "review-snapshot-consistency", summary = "Repeated bounded Git captures compare exact raw patch bytes with typed staged/unstaged/unmerged/untracked manifests; symlink payloads, gitlinks, modes, and tracked bytes must match; snapshot_changed becomes git_worktree_changed with no partial result from different worktree epochs" },
                 new { id = "review-live-evidence-revalidation", summary = "v0.12.45 review_pack revalidates every bounded live file digest and safe existence classification after aggregation, latches contradictory repeated observations, and recaptures only bounded untracked move-candidate bytes actually consumed; any mismatch fails closed without a partial result" },
+                new { id = "csharp-conversion-operator-indexing", summary = "v0.12.46 schema v21 indexes implicit and explicit C# conversion declarations as operator rows with target-bearing names, canonical declaration keys, modifiers, source order, and parent links" },
+                new { id = "csharp-conversion-semantic-handles", summary = "v0.12.46 schema v22 conversion idx handles pin semantic definitions and references with uncapped canonical declaration keys; fingerprints bind a full SHA-256 digest of complete ancestor context without quadratic nesting storage and reject legacy identities that cannot prove it; conversion reference censuses remain partial with stable conversion_usage_enumeration_gap disclosure, and claim lower-bound counts only when the project model is proven" },
+                new { id = "references-candidate-file-cap-disclosure", summary = "v0.12.46 indexed references disclose the existing caller-selected maxFiles candidate-file bound through coverage, candidate_file_cap, references.candidate_file_cap, and lower-bound totals instead of presenting a scanned subset as complete" },
                 new { id = "review-git-launcher-isolation", summary = "Only canonical absolute paths and trusted system cmd.exe launch Git; batch percent expansion is refused, and a missing or non-directory working directory fails before spawn" },
                 new { id = "review-git-transport-isolation", summary = "v0.11.2 Git transport isolation: the highest-precedence GIT_ALLOW_PROTOCOL denylist plus the protocol.allow=never fallback keep read-only plumbing local even when protocol-specific repository config attempts to enable a transport" },
                 new { id = "review-git-environment-isolation", summary = "v0.11.4 clears inherited repository/object/index selectors (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_ALTERNATE_OBJECT_DIRECTORIES) before discovery; the sandbox reinstates only validated paths" },
@@ -1330,11 +1335,13 @@ public sealed partial class NavigationTools
         [Description("F# position mode only: exact target framework. Required with projectPath when the file has more than one type-check context.")] string? targetFramework = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        string? semanticDeclarationKey = null;
         if (symbolId is { Length: > 0 })
         {
             var (hit, error) = ResolveSymbolIdHandle(symbolId);
             if (error is not null) return error;
             name = hit!.Name; path = hit.FilePath; line = hit.StartLine; column = 0;
+            semanticDeclarationKey = ConversionDeclarationKey(hit);
             // The handle already disambiguated the symbol — caller kinds/container filters exist to
             // narrow a bare name, so applying them here can only wrongly suppress the resolved hit.
             kinds = null; container = null;
@@ -1396,7 +1403,8 @@ public sealed partial class NavigationTools
             if (target is { } t)
             {
                 var (decl, reason, _, semanticPartialReason) = _semantic
-                    .DefinitionAsync(t.Path, t.Line, t.Column, hint, timeoutMs)
+                    .DefinitionAsync(t.Path, t.Line, t.Column, hint, timeoutMs,
+                        semanticDeclarationKey)
                     .GetAwaiter().GetResult();
                 if (decl is not null)
                 {
@@ -1836,11 +1844,13 @@ public sealed partial class NavigationTools
         [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex; a documentationCommentId is not yet accepted here.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        string? semanticDeclarationKey = null;
         if (symbolId is { Length: > 0 })
         {
             var (hit, error) = ResolveSymbolIdHandle(symbolId);
             if (error is not null) return error;
             name = hit!.Name; path = hit.FilePath; line = hit.StartLine; column = 0;
+            semanticDeclarationKey = ConversionDeclarationKey(hit);
         }
         if (UnsupportedLanguageAtPath(path, "references") is { } unsupportedLanguage)
             return unsupportedLanguage;
@@ -1882,7 +1892,10 @@ public sealed partial class NavigationTools
             if (target is { } t)
             {
                 var (result, reason) = _semantic
-                    .ReferencesAsync(t.Path, t.Line, t.Column, hint, maxProjects, Math.Clamp(samplesPerGroup, 0, 10), timeoutMs, includeGenerated, kindSet, publicConsumersOnly, includeTests)
+                    .ReferencesAsync(t.Path, t.Line, t.Column, hint, maxProjects,
+                        Math.Clamp(samplesPerGroup, 0, 10), timeoutMs, includeGenerated,
+                        kindSet, publicConsumersOnly, includeTests,
+                        semanticDeclarationKey)
                     .GetAwaiter().GetResult();
                 if (result is not null)
                 {
@@ -1902,19 +1915,31 @@ public sealed partial class NavigationTools
                     // Same for publicConsumersOnly/includeTests. And the advice is only honest
                     // when coverage was actually BOUNDED (skipped/failed/under-loaded) — post-
                     // seeds, an unfiltered zero with namers and full coverage shouldn't occur.
-                    string? zeroNote = null;
+                    string? referenceNote = null;
+                    string? referenceNoteId = null;
+                    bool conversionUsageEnumerationGap =
+                        result.ConversionUsageEnumerationIncomplete;
+                    if (conversionUsageEnumerationGap)
+                    {
+                        referenceNote = result.ProjectModelUnproven
+                            ? "Compiler reference enumeration does not currently prove user-defined conversion usage sites; totalReferences is incomplete, and project-model uncertainty prevents a directional count guarantee."
+                            : "Compiler reference enumeration does not currently prove user-defined conversion usage sites; totalReferences is a lower bound.";
+                        referenceNoteId = NoteIds.ReferencesConversionUsageEnumerationGap;
+                    }
                     bool zeroUnfiltered = kindSet is null && !publicConsumersOnly && includeTests;
                     bool coverageBounded = result.SkippedCandidateProjects.Count > 0
                         || result.Coverage.FailedProjects.Count > 0
                         || result.Coverage.LoadedProjects < result.Coverage.RequestedProjects;
-                    if (result.TotalLocations == 0 && zeroUnfiltered && coverageBounded)
+                    if (!conversionUsageEnumerationGap && result.TotalLocations == 0 &&
+                        zeroUnfiltered && coverageBounded)
                     {
                         using var qz = _manager.OpenQueries();
                         string probeName = name ?? hint ?? "";
                         int baseListNamers = probeName.Length > 0 ? qz.ImplementationCandidates(probeName, 5).Count : 0;
                         if (baseListNamers > 0)
                         {
-                            zeroNote = $"0 exact references, but {(baseListNamers >= 5 ? "5+" : baseListNamers.ToString())} indexed types name '{probeName}' in their base lists (see implementations) — coverage was bounded (see skipped/failed); raise maxProjects or scope with pathGlob.";
+                            referenceNote = $"0 exact references, but {(baseListNamers >= 5 ? "5+" : baseListNamers.ToString())} indexed types name '{probeName}' in their base lists (see implementations) — coverage was bounded (see skipped/failed); raise maxProjects or scope with pathGlob.";
+                            referenceNoteId = NoteIds.ReferencesZeroLoadingGap;
                         }
                     }
                     bool exhausted = result.DeadlineExhausted;
@@ -1930,7 +1955,7 @@ public sealed partial class NavigationTools
                     // not be described as "at least N".
                     bool monotonicScopeOmitted = exhausted || unsupportedLanguageSkipped ||
                         candidateProjectsSkipped || failedLoads || coverageIncomplete ||
-                        outOfGraphCandidates;
+                        outOfGraphCandidates || conversionUsageEnumerationGap;
                     bool partial = monotonicScopeOmitted || result.ProjectModelUnproven;
                     bool totalIsLowerBound = monotonicScopeOmitted &&
                         !result.ProjectModelUnproven;
@@ -1940,6 +1965,10 @@ public sealed partial class NavigationTools
                         indexedConfidence ? "indexed" : "exact", "semantic");
                     long elapsedMs = swSem.ElapsedMilliseconds;
                     var partialReasons = new List<string>();
+                    if (conversionUsageEnumerationGap)
+                        partialReasons.Add(result.ProjectModelUnproven
+                            ? "conversion_usage_enumeration_gap: compiler reference enumeration does not currently prove user-defined conversion usage sites; count direction is unknown while the project model is unproven"
+                            : "conversion_usage_enumeration_gap: compiler reference enumeration does not currently prove user-defined conversion usage sites; counts are a lower bound");
                     if (exhausted)
                         partialReasons.Add($"semantic_timeout: deadline exhausted after {elapsedMs}ms of {deadlineMs}ms; counts cover the scanned portion only (raise timeoutMs)");
                     if (unsupportedLanguageSkipped)
@@ -1961,6 +1990,11 @@ public sealed partial class NavigationTools
                     string? partialReason = partialReasons.Count > 0
                         ? string.Join("; ", partialReasons)
                         : null;
+                    string summary = conversionUsageEnumerationGap
+                        ? totalIsLowerBound
+                            ? $"User-defined conversion reference enumeration is incomplete; {result.TotalLocations} compiler-reported locations across {groups0.Count} projects ({mix0}) are a lower bound."
+                            : $"User-defined conversion reference enumeration is incomplete, and project-model uncertainty prevents a directional count guarantee; {result.TotalLocations} compiler-reported locations across {groups0.Count} projects ({mix0})."
+                        : $"{atLeast}{result.TotalLocations} {(indexedConfidence ? "compiler-resolved candidate" : "exact")} references across {groups0.Count} projects ({mix0}).";
                     var boundedOutOfGraph = new List<(string Value, bool Truncated)>();
                     foreach (string project in result.OutOfGraphCandidates ?? [])
                     {
@@ -1974,7 +2008,7 @@ public sealed partial class NavigationTools
                             outOfGraphItems, outOfGraphBudgetTruncated) => new
                             {
                                 symbol = SemanticSymbolJson(result.Symbol),
-                                summary = $"{atLeast}{result.TotalLocations} {(indexedConfidence ? "compiler-resolved candidate" : "exact")} references across {groups0.Count} projects ({mix0}).",
+                                summary,
                                 totalReferences = result.TotalLocations,
                                 totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
                                 // HOW the symbol is used, e.g. {"call":20,"xmldoc":480} — the anti-"500 refs
@@ -2016,9 +2050,9 @@ public sealed partial class NavigationTools
                                     item.Truncated)
                             ? true
                             : (bool?)null,
-                                note = zeroNote,
-                                noteId = zeroNote is not null ? NoteIds.ReferencesZeroLoadingGap : null, // a0b: stable, machine-matchable
-                                                                                                         // t2b: where the budget went — cluster load+resolve vs find+count.
+                                note = referenceNote,
+                                noteId = referenceNoteId, // a0b: stable, machine-matchable cause
+                                                          // t2b: where the budget went — cluster load+resolve vs find+count.
                                 timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
                                 truncated,
                                 meta = meta0,
@@ -2059,8 +2093,24 @@ public sealed partial class NavigationTools
         // and the groups describe one set. Summing the filtered groups here instead was itself
         // dishonest (review-reproduced): a file linked into TWO production projects appears in
         // both groups, so the sum double-counted it and the "filtered" total EXCEEDED the real one.
-        var (total, prod, test, groups) = q.ReferenceCandidates(
+        IndexQueries.ReferenceCandidateResult candidates = q.ReferenceCandidates(
             name, Math.Clamp(maxFiles, 10, 2000), Math.Clamp(samplesPerGroup, 0, 10), pathGlob, excludes, includeGenerated, includeTests);
+        int total = candidates.TotalHits;
+        int prod = candidates.ProdHits;
+        int test = candidates.TestHits;
+        List<ReferenceGroup> groups = candidates.Groups;
+        bool candidateFilesCapHit = candidates.CandidateFilesTruncated;
+        var indexedPartialReasons = new List<string>();
+        if (!string.IsNullOrEmpty(failReason)) indexedPartialReasons.Add(failReason);
+        if (candidateFilesCapHit)
+        {
+            indexedPartialReasons.Add(
+                $"candidate_file_cap: scanned {candidates.CandidateFilesScanned} candidate files; " +
+                $"at least {candidates.CandidateFilesAtLeast} matched (raise maxFiles)");
+        }
+        string? indexedPartialReason = indexedPartialReasons.Count > 0
+            ? string.Join("; ", indexedPartialReasons)
+            : null;
 
         // prod/test are PHYSICAL splits of `total` (each file once — 0ok: the old per-group sums
         // let "4 candidate lines (8 production)" appear when a file is linked into two projects).
@@ -2069,9 +2119,23 @@ public sealed partial class NavigationTools
         return Json.WithListBudget(groups, (items, truncated) => new
         {
             name,
-            partialReason = failReason,
-            summary = $"{total} candidate reference lines across {groups.Count} projects ({mix}).",
+            partial = candidateFilesCapHit ? true : (bool?)null,
+            partialReason = indexedPartialReason,
+            summary = candidateFilesCapHit
+                ? $"At least {total} candidate reference lines across {groups.Count} returned project groups ({mix}); the indexed scan covered {candidates.CandidateFilesScanned} of at least {candidates.CandidateFilesAtLeast} matching files."
+                : $"{total} candidate reference lines across {groups.Count} projects ({mix}).",
             totalCandidates = total,
+            totalIsLowerBound = candidateFilesCapHit ? true : (bool?)null,
+            coverage = new
+            {
+                candidateFilesScanned = candidates.CandidateFilesScanned,
+                candidateFilesTotal = candidateFilesCapHit
+                    ? (int?)null
+                    : candidates.CandidateFilesScanned,
+                candidateFilesAtLeast = candidates.CandidateFilesAtLeast,
+                candidateFileLimit = candidates.CandidateFileLimit,
+                candidateFilesCapHit = candidateFilesCapHit ? true : (bool?)null,
+            },
             groupBy = "project",
             groups = items.Select(g => new
             {
@@ -2083,9 +2147,13 @@ public sealed partial class NavigationTools
             }),
             truncated,
             note = "Candidates are whole-identifier text matches (confidence: indexed), not compiler-resolved references."
+                + (candidateFilesCapHit
+                    ? " The candidate-file scan reached maxFiles; counts are lower bounds."
+                    : "")
                 + (kindSet is not null || publicConsumersOnly
                     ? " NOTE: usageKinds/publicConsumersOnly need compiler syntax and were NOT applied on this indexed path."
                     : ""),
+            noteId = candidateFilesCapHit ? NoteIds.ReferencesCandidateFilesCap : null,
             meta,
         });
     }
@@ -2491,7 +2559,7 @@ public sealed partial class NavigationTools
                 detail = $"No indexed symbol with id {id}. 'idx:' handles are index-local — re-run search_symbol for a current handle.",
             }));
         }
-        if (fp is not null && !string.Equals(fp, Fingerprint(hit), StringComparison.Ordinal))
+        if (fp is not null && !FingerprintMatches(hit, fp))
         {
             // The rowid still exists but now holds a DIFFERENT symbol (a reindex reused it). Refuse
             // rather than return the wrong symbol as if the handle were exact.
@@ -2503,6 +2571,13 @@ public sealed partial class NavigationTools
         }
         return (hit, null);
     }
+
+    private static string? ConversionDeclarationKey(SymbolHit hit) =>
+        hit.Kind == "operator" &&
+        (hit.Name.StartsWith("implicit operator ", StringComparison.Ordinal) ||
+         hit.Name.StartsWith("explicit operator ", StringComparison.Ordinal))
+            ? hit.DeclarationKey
+            : null;
 
     /// <summary>t2b: expand the cluster_cold_load token with inline advice at the moment of
     /// confusion — the deadline died LOADING compilations (the first call after an index build
@@ -2534,15 +2609,32 @@ public sealed partial class NavigationTools
     private static bool? GroupOrphaned(string project) =>
         project == IndexQueries.NoProjectGroup ? true : null;
 
-    /// <summary>Short, stable (cross-process) identity hash of a symbol row — FNV-1a over
-    /// name/kind/arity/line/path. Embedded in the idx: handle so a rowid the index later reuses for a
-    /// different symbol fails the check instead of resolving silently.</summary>
+    /// <summary>Stable, cross-process identity hash of a symbol row. v2 includes the complete
+    /// ancestor/declaration context emitted by schema v22. The namespace/container fallback keeps
+    /// manually constructed keyless rows stronger than the legacy presentation-only identity.</summary>
     private static string Fingerprint(SymbolHit s)
     {
-        string identity = $"{s.Name}{s.Kind}{s.Arity}{s.StartLine}{s.FilePath}";
-        uint h = 2166136261u;
-        foreach (char c in identity) h = (h ^ c) * 16777619u;
-        return h.ToString("x8");
+        string localIdentity = !string.IsNullOrEmpty(s.ContextKey)
+            ? s.ContextKey
+            : string.Join('\u001e', s.Ns ?? "", s.Container ?? "",
+                !string.IsNullOrEmpty(s.DeclarationKey) ? s.DeclarationKey : s.Signature);
+        string identity = string.Join('\u001f', s.Name, s.Kind,
+            s.Arity.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            s.StartLine.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            s.FilePath, localIdentity);
+        return "v2-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
+    }
+
+    private static bool FingerprintMatches(SymbolHit s, string fingerprint)
+    {
+        if (fingerprint.StartsWith("v2-", StringComparison.Ordinal))
+            return string.Equals(fingerprint, Fingerprint(s), StringComparison.Ordinal);
+
+        // Pre-v0.12.46 fingerprints omitted namespace and complete ancestor identity. They cannot
+        // prove that a reused row id still names the same declaration, even for ordinary symbols,
+        // so schema-v21 handles fail closed instead of silently retargeting.
+        return false;
     }
 
     private static object SymbolJson(SymbolHit s) => new

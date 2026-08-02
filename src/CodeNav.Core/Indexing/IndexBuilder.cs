@@ -111,8 +111,12 @@ public static class IndexBuilder
     /// v19: Markdown and SQL files are persisted as text-only lang='md'/'sql' rows so cold builds
     /// and incremental refresh expose repository documentation and database assets through FTS.
     /// v20: sibling-worktree publications persist the target workspace_root rather than the seed
-    /// workspace root, making stored ownership metadata authoritative for follower attachment.</summary>
-    public const string SchemaVersion = "20";
+    /// workspace root, making stored ownership metadata authoritative for follower attachment.
+    /// v21: C# implicit and explicit conversion declarations persist as operator symbol rows with
+    /// target-bearing names and canonical conversion identity.
+    /// v22: every symbol persists its complete ancestor/declaration context for fail-closed
+    /// stale-handle validation.</summary>
+    public const string SchemaVersion = "22";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }
