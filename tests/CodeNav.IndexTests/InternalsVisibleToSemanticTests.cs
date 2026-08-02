@@ -314,11 +314,8 @@ public sealed class InternalsVisibleToSemanticTests
                     symbolId: conversionHit.GetProperty("symbolId").GetString(),
                     mode: "semantic", timeoutMs: 60000),
                 json => json.TryGetProperty("partialReason", out JsonElement reason) &&
-                        (reason.GetString() ?? "").Contains(
-                            "conversion_usage_enumeration_gap", StringComparison.Ordinal) &&
-                        (reason.GetString() ?? "").Contains(
-                            "project_model_unproven", StringComparison.Ordinal),
-                "conversion references retain both incompleteness causes");
+                        reason.GetString() == "project_model_unproven",
+                "conversion references retain project-model uncertainty");
             JsonElement callers = ParseUnproven(() => tools.Callers(
                 name: "Run", path: "Contracts/ISecretContract.cs", line: 4,
                 timeoutMs: 60000));
@@ -352,7 +349,13 @@ public sealed class InternalsVisibleToSemanticTests
             Assert.False(summary.StartsWith("at least ", StringComparison.OrdinalIgnoreCase),
                 $"non-monotonic project-model uncertainty is not a lower bound: {summary}");
 
-            AssertProjectModelUnprovenConversion(conversionReferences);
+            AssertProjectModelUnproven(conversionReferences);
+            Assert.Equal(1,
+                conversionReferences.GetProperty("totalReferences").GetInt32());
+            Assert.Equal(1, conversionReferences.GetProperty("kinds")
+                .GetProperty(SemanticReferenceKinds.ImplicitConversion).GetInt32());
+            Assert.False(conversionReferences.TryGetProperty("noteId", out _));
+            Assert.False(conversionReferences.TryGetProperty("totalIsLowerBound", out _));
             string conversionTelemetryLine = manager.Telemetry.Snapshot().Last(line =>
                 line.Contains("\"tool\":\"references\"", StringComparison.Ordinal));
             using JsonDocument conversionTelemetry = JsonDocument.Parse(conversionTelemetryLine);
@@ -455,29 +458,6 @@ public sealed class InternalsVisibleToSemanticTests
         Assert.Equal("indexed", result.GetProperty("meta").GetProperty("confidence").GetString());
         Assert.True(result.GetProperty("partial").GetBoolean());
         Assert.Equal("project_model_unproven", result.GetProperty("partialReason").GetString());
-    }
-
-    private static void AssertProjectModelUnprovenConversion(JsonElement result)
-    {
-        Assert.Equal("indexed", result.GetProperty("meta").GetProperty("confidence").GetString());
-        Assert.True(result.GetProperty("partial").GetBoolean());
-        Assert.Equal("references.conversion_usage_enumeration_gap",
-            result.GetProperty("noteId").GetString());
-        Assert.False(result.TryGetProperty("totalIsLowerBound", out _));
-        foreach (string prose in new[]
-                 {
-                     result.GetProperty("summary").GetString()!,
-                     result.GetProperty("note").GetString()!,
-                     result.GetProperty("partialReason").GetString()!,
-                 })
-        {
-            Assert.DoesNotContain("lower bound", prose, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("at least", prose, StringComparison.OrdinalIgnoreCase);
-        }
-        Assert.Contains("conversion_usage_enumeration_gap",
-            result.GetProperty("partialReason").GetString(), StringComparison.Ordinal);
-        Assert.Contains("project_model_unproven",
-            result.GetProperty("partialReason").GetString(), StringComparison.Ordinal);
     }
 
     private static bool WaitUntil(Func<bool> condition, int timeoutMs)

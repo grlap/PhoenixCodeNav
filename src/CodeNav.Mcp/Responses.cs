@@ -8,7 +8,8 @@ using CodeNav.Core.Indexing;
 namespace CodeNav.Mcp;
 
 /// <summary>
-/// Owns: JSON serialization policy, response budgets (8KB soft / 64KB hard), and the
+/// Owns: JSON serialization policy, response budgets (8KB soft / 64KB ordinary hard target),
+/// the complete-identity exception for intrinsically indivisible semantic symbols, and the
 /// index-metadata envelope every tool response carries.
 /// Does not own: tool logic (NavigationTools) or index queries (CodeNav.Core).
 /// </summary>
@@ -299,6 +300,66 @@ internal static class Json
             json = Serialize(build(work, truncated, auxWork, auxiliaryTruncated,
                 secondaryWork, secondaryTruncated));
         }
+        return json;
+    }
+
+    /// <summary>
+    /// Preserves a complete compiler declaration identity when that single indivisible value is
+    /// intrinsically larger than Phoenix's ordinary 64 KiB response target. List budget helpers
+    /// have already removed optional result samples before this runs; the wrapper also removes the
+    /// semantic symbol's optional declaration-site list before deciding the identity itself is
+    /// oversized. The response is allowed to exceed the target rather than truncating identity or
+    /// imposing a rejection threshold, and carries measured metadata so clients can distinguish
+    /// the deliberate exception from an undisclosed budget failure.
+    /// </summary>
+    public static string WithCompleteSemanticIdentity(string json)
+    {
+        if (Utf8Bytes(json) <= HardBudgetBytes) return json;
+
+        JsonObject root = JsonNode.Parse(json)?.AsObject()
+            ?? throw new InvalidOperationException(
+                "Semantic response did not serialize as an object.");
+
+        if (root["symbol"] is JsonObject symbol &&
+            symbol["declarations"] is JsonArray declarations && declarations.Count > 0)
+        {
+            int total = symbol["declarationsTotal"]?.GetValue<int>() ?? declarations.Count;
+            symbol.Remove("declarations");
+            symbol["declarationsTruncated"] =
+                "declaration sites omitted to honor the ordinary response budget; use definition";
+            symbol["declarationsTotal"] = total;
+            symbol["declarationsReturned"] = 0;
+            symbol["declarationsNoteId"] = NoteIds.SemanticDeclarationSitesBudget;
+            json = root.ToJsonString(Options);
+            if (Utf8Bytes(json) <= HardBudgetBytes) return json;
+        }
+
+        var budget = new JsonObject
+        {
+            ["hardBytes"] = HardBudgetBytes,
+            ["serializedBytes"] = 0,
+            ["exceeded"] = true,
+            ["reason"] = "indivisible_semantic_identity",
+            ["completeIdentity"] = true,
+        };
+        root["responseBudget"] = budget;
+
+        // serializedBytes includes its own digits. Re-serialize until the measured byte count is
+        // self-consistent; convergence takes at most a digit-boundary adjustment in practice.
+        int measured = -1;
+        for (int attempt = 0; attempt < 8; attempt++)
+        {
+            json = root.ToJsonString(Options);
+            int next = Utf8Bytes(json);
+            if (next == measured) return json;
+            measured = next;
+            budget["serializedBytes"] = measured;
+        }
+
+        json = root.ToJsonString(Options);
+        if (Utf8Bytes(json) != measured)
+            throw new InvalidOperationException(
+                "Semantic response byte accounting did not converge.");
         return json;
     }
 }

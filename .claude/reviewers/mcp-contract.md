@@ -16,7 +16,11 @@ Focus: Stable agent-facing JSON, confidence and coverage honesty, hard response 
 
 3. **Hard byte budget**
    - Measure serialized UTF-8 bytes through the shared serializer, never `string.Length`.
-   - Every output path fits `Json.HardBudgetBytes`, including errors, metadata, notes, project/deleted-file sections, and a single oversized item.
+   - Every output path fits `Json.HardBudgetBytes`, including errors, metadata, notes, and
+     project/deleted-file sections, except the owner-approved indivisible semantic-identity case.
+     That exception must preserve one complete compiler identity, remove optional lists first, and
+     expose measured `responseBudget` bytes, `exceeded:true`, `completeIdentity:true`, and the
+     stable `indivisible_semantic_identity` reason. It must not become a generic list overage.
    - Per-call `maxBytes` is clamped and enforced over the whole payload, not only its primary list.
 
 4. **Truncation honesty**
@@ -63,3 +67,6 @@ Focus: Stable agent-facing JSON, confidence and coverage honesty, hard response 
 - `UnsafeRelaxedJsonEscaping`; JSON is sent over stdio, not embedded into HTML.
 - Indexed reference candidates when explicitly labeled indexed.
 - A documented finite result cap with truthful truncation/paging.
+- The owner-approved, measured single-identity exception described under Hard byte budget; do flag
+  it if identity is incomplete, optional lists remain, metadata is inaccurate, or another payload
+  class exceeds the budget.

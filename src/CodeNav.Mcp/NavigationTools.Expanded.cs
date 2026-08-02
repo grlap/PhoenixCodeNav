@@ -142,7 +142,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "type_hierarchy")]
-    [Description("Base types, implemented interfaces, and derived/implementing types for a type (compiler-exact within the loaded cluster). Generic declarations may be selected by arity or symbolId; a bare name spanning multiple arities returns symbol_ambiguous.")]
+    [Description("Base types, implemented interfaces, and derived/implementing types for a type (compiler-exact within the loaded cluster). Generic declarations may be selected by arity or symbolId; a bare name spanning multiple arities returns symbol_ambiguous. Non-type handles, including operator handles, are rejected.")]
     public string TypeHierarchy(
         [Description("Type name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration or a usage.")] string? path = null,
@@ -151,7 +151,7 @@ public sealed partial class NavigationTools
         [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
         [Description("Deadline in ms (default 15000).")] int timeoutMs = 15000,
         [Description("Optional generic type-parameter count. Use 0 for a non-generic declaration, 1 for Foo<T>, etc. A bare name with multiple available arities is refused.")] int? arity = null,
-        [Description("Resolve by a search_symbol candidate's current idx: handle. Takes precedence over name, path+line, and arity.")] string? symbolId = null)
+        [Description("Resolve by a search_symbol candidate's current idx: type handle. Takes precedence over name, path+line, and arity; operator handles return bad_request.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;
         if (symbolId is not { Length: > 0 } &&

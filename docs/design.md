@@ -67,11 +67,22 @@ for code identifiers.
    type check for position-based `symbol_at` and same-physical-project `definition`. An F# type-check
    context is exactly one physical `.fsproj` plus one target framework; ambiguous files require
    explicit selection, and the selection never changes or merges ownership/reference graph facts.
-   C# conversion handles bridge syntax rows to Roslyn with the uncapped declaration key, not the
-   capped display signature. Until conversion-use enumeration is implemented, every conversion
-   reference census carries `references.conversion_usage_enumeration_gap` and remains partial.
-   Compiler-reported totals are labeled lower bounds only while project-model authority is proven;
-   otherwise the response makes no directional count guarantee.
+   C# regular and conversion operator handles bridge syntax rows to Roslyn with the uncapped
+   declaration key, not the display name or capped display signature. Compiler-bound operation
+   tree scans enumerate implicit, explicit, checked, stacked, nullable-tuple, and interface-dispatch
+   user-defined conversions across the selected dependent closure; supplemental Roslyn APIs cover
+   full C# compound-assignment input/output conversions,
+   primary-constructor base arguments, `foreach` elements, and deconstruction conversions that
+   are not operation-tree children. The corresponding reference
+   kinds are `implicitConversion`, `explicitConversion`, and `checkedConversion`, and source-span
+   dedup preserves distinct same-line operations. Indexed definition retains the handle-resolved
+   operator row; indexed or failed-automatic references fail closed rather than widening by name.
+   Operator implementations remain explicitly unsupported, including the meaningful static
+   abstract interface subcase. Semantic `definition` and `references` retain the ordinary 64 KiB
+   target and remove optional declaration sites first with truthful counts and stable note id
+   `semantic.declaration_sites_budget`, but one intrinsically larger identity remains
+   complete and carries measured `responseBudget` exception metadata rather than being truncated
+   or rejected.
 
 Exact path identity is never fuzzy. When `outline` or `source_context` cannot resolve a path, or
 the first page of an exact-path `find_file` query is empty, the MCP layer asks `IndexQueries` for
@@ -561,7 +572,9 @@ target-bearing display names, canonical target/parameter declaration identity, m
 order, and parent links. Since schema v22, a persisted context key is the full SHA-256 digest of
 the parent context digest plus each local declaration key, so a rebuilt `idx:` row cannot validate
 against an identical-looking declaration from another namespace or containing type. The fixed-size
-digest retains complete chained identity without quadratic deep-nesting storage. F# semantic
+digest retains complete chained identity without quadratic deep-nesting storage. Since schema v23,
+explicit-interface regular operator rows persist private accessibility, matching
+Roslyn and preventing syntax/search/review evidence from overstating public API. F# semantic
 resolution currently captures and type-checks one selected physical project behind its own
 single-slot gate; cross-project F# loading or parallel FCS requests require a separate design and
 must not be implied by this change.
@@ -777,8 +790,11 @@ caveats:
 
 ## Result discipline
 
-- **Budgets.** ~8 KB soft target, ~64 KB hard cap per response; oversized results shrink
-  (precise-first) and set `truncated: true`.
+- **Budgets.** ~8 KB soft target and ~64 KB ordinary hard target per response; oversized lists
+  shrink (precise-first) and set `truncated: true`. Optional semantic declaration sites are removed
+  with truthful counts and `semantic.declaration_sites_budget` before the single indivisible
+  compiler-identity exception is considered; that identity remains
+  complete and reports its measured overage in `responseBudget`.
 - **Cursors.** List tools return `nextCursor` for paging.
 - **Stable, line-addressable hits.** Every result carries enough path/line/span metadata
   for a follow-up `source_context`.

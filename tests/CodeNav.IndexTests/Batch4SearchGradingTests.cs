@@ -240,6 +240,9 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
+        Assert.Contains("complete compiler identity",
+            json.GetProperty("budgets")
+                .GetProperty("indivisibleSemanticIdentity").GetString());
     }
 
     // The features manifest lets a caller CONFIRM a capability without triggering its silent-when-clean
@@ -285,6 +288,10 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("csharp-conversion-operator-indexing", ids);
         Assert.Contains("csharp-conversion-semantic-handles", ids);
         Assert.Contains("references-candidate-file-cap-disclosure", ids);
+        Assert.Contains("csharp-conversion-usage-enumeration", ids);
+        Assert.Contains("csharp-operator-semantic-handles", ids);
+        Assert.Contains("csharp-explicit-interface-operator-accessibility", ids);
+        Assert.Contains("semantic-indivisible-identity-completeness", ids);
         Assert.Contains("references-buffered-document-scope-scan", ids);
         Assert.Contains("semantic-byte-governed-retention", ids);
         Assert.Contains("references-process-cpu-attribution", ids);
@@ -320,6 +327,12 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-operator-indexing"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-semantic-handles"));
         Assert.Equal(1, idList.Count(id => id == "references-candidate-file-cap-disclosure"));
+        Assert.Equal(1, idList.Count(id => id == "csharp-conversion-usage-enumeration"));
+        Assert.Equal(1, idList.Count(id => id == "csharp-operator-semantic-handles"));
+        Assert.Equal(1, idList.Count(id => id ==
+            "csharp-explicit-interface-operator-accessibility"));
+        Assert.Equal(1, idList.Count(id => id ==
+            "semantic-indivisible-identity-completeness"));
         Assert.Equal(1, idList.Count(id => id == "refresh-review-json-array-paths"));
         Assert.Equal(
             1,
@@ -508,10 +521,54 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("complete ancestor context", conversionHandles);
         Assert.Contains("without quadratic nesting storage", conversionHandles);
         Assert.Contains("reject legacy identities", conversionHandles);
-        Assert.Contains("remain partial", conversionHandles);
-        Assert.Contains("claim lower-bound counts only when the project model is proven",
-            conversionHandles);
-        Assert.Contains("conversion_usage_enumeration_gap", conversionHandles);
+
+        string conversionUsages = Summary("csharp-conversion-usage-enumeration");
+        Assert.Contains("v0.12.47", conversionUsages);
+        Assert.Contains("compiler-bound", conversionUsages);
+        Assert.Contains("implicitConversion", conversionUsages);
+        Assert.Contains("explicitConversion", conversionUsages);
+        Assert.Contains("checkedConversion", conversionUsages);
+        Assert.Contains("stacked, nullable-tuple", conversionUsages);
+        Assert.Contains("full C# compound-assignment", conversionUsages);
+        Assert.Contains("primary-constructor", conversionUsages);
+        Assert.Contains("foreach", conversionUsages);
+        Assert.Contains("deconstruction", conversionUsages);
+        Assert.Contains("interface-dispatch carriers", conversionUsages);
+        Assert.Contains("exact zero", conversionUsages);
+
+        string deadlineHonesty = Summary("deadline-honesty");
+        Assert.Contains("project+path+source-span+kind", deadlineHonesty);
+        Assert.Contains("distinct same-line operations", deadlineHonesty);
+
+        string operatorHandles = Summary("csharp-operator-semantic-handles");
+        Assert.Contains("v0.12.47", operatorHandles);
+        Assert.Contains("regular and conversion operator idx handles", operatorHandles);
+        Assert.Contains("canonical syntax declaration keys", operatorHandles);
+        Assert.Contains("checked and explicit-interface", operatorHandles);
+        Assert.Contains("indexed definition retains the resolved row", operatorHandles);
+        Assert.Contains("failed-auto references fail closed", operatorHandles);
+        Assert.Contains("implementations/type_hierarchy reject operator handles", operatorHandles);
+
+        string operatorAccessibility = Summary(
+            "csharp-explicit-interface-operator-accessibility");
+        Assert.Contains("v0.12.47", operatorAccessibility);
+        Assert.Contains("schema v23", operatorAccessibility);
+        Assert.Contains("explicit-interface regular operators as private",
+            operatorAccessibility);
+        Assert.Contains("review_pack", operatorAccessibility);
+
+        string indivisibleIdentity = Summary(
+            "semantic-indivisible-identity-completeness");
+        Assert.Contains("v0.12.47", indivisibleIdentity);
+        Assert.Contains("complete indivisible compiler symbol identity",
+            indivisibleIdentity);
+        Assert.Contains("remove optional declaration-site lists", indivisibleIdentity);
+        Assert.Contains("truthful declaration totals", indivisibleIdentity);
+        Assert.Contains("semantic.declaration_sites_budget", indivisibleIdentity);
+        Assert.Contains("responseBudget", indivisibleIdentity);
+        Assert.Contains("serializedBytes", indivisibleIdentity);
+        Assert.Contains("indivisible_semantic_identity", indivisibleIdentity);
+        Assert.Contains("without identity truncation or rejection", indivisibleIdentity);
 
         string candidateFileCap = Summary("references-candidate-file-cap-disclosure");
         Assert.Contains("v0.12.46", candidateFileCap);
@@ -666,7 +723,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("old and new coordinates", "review-two-sided-diff-ranges"),
                       ("formerSymbols", "review-former-symbol-evidence"),
                       ("declarationExclusionBudgetHit", "review-reference-declaration-budget"),
-                      ("explicit-interface", "review-declaration-identity"),
+                      ("tuple labels are omitted", "review-declaration-identity"),
                       ("movedFiles", "review-exact-move-evidence"),
                       ("normalized_blob", "review-normalized-move-evidence"),
                       ("review.base_blob_unavailable", "review-base-blob-recovery-honesty"),
@@ -680,8 +737,15 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("first bounded NUL", "portal-directory-entry-nul-decoding"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),
                       ("target-bearing names", "csharp-conversion-operator-indexing"),
-                      ("conversion_usage_enumeration_gap",
-                          "csharp-conversion-semantic-handles"),
+                      ("implicitConversion", "csharp-conversion-usage-enumeration"),
+                      ("canonical syntax declaration keys",
+                          "csharp-operator-semantic-handles"),
+                      ("explicit-interface regular operators as private",
+                          "csharp-explicit-interface-operator-accessibility"),
+                      ("indivisible_semantic_identity",
+                          "semantic-indivisible-identity-completeness"),
+                      ("semantic.declaration_sites_budget",
+                          "semantic-indivisible-identity-completeness"),
                       ("comma-bearing JSON paths", "refresh-review-json-array-paths"),
                       ("unsupportedLanguageFiles", "review-fsharp-file-coverage"),
                       ("git_index_baseline_unavailable", "review-default-baseline-honesty"),
@@ -696,11 +760,16 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                  })
         {
             Assert.Contains(token, Summary(owner));
-            Assert.DoesNotContain(features, feature =>
+            JsonElement duplicate = features.FirstOrDefault(feature =>
                 feature.GetProperty("id").GetString() != owner &&
                 feature.TryGetProperty("summary", out JsonElement otherSummary) &&
                 otherSummary.GetString()!.Contains(
                     token, StringComparison.Ordinal));
+            string? duplicateId = duplicate.ValueKind == JsonValueKind.Undefined
+                ? null
+                : duplicate.GetProperty("id").GetString();
+            Assert.True(duplicateId is null,
+                $"Feature token '{token}' is also owned by '{duplicateId}'.");
         }
     }
 

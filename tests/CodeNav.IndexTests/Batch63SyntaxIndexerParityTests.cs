@@ -4,6 +4,11 @@ using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
 using Microsoft.Data.Sqlite;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
+using Microsoft.CodeAnalysis.Text;
 
 namespace CodeNav.Tests;
 
@@ -79,7 +84,7 @@ public sealed class Batch63SyntaxIndexerParityTests
     }
 
     [Fact]
-    public void ExplicitInterfaceConversionAccessibilityPersistsAsPrivate()
+    public void ExplicitInterfaceOperatorAccessibilityPersistsAsPrivate()
     {
         string root = Directory.CreateTempSubdirectory("codenav-63-conversion-access").FullName;
         try
@@ -97,11 +102,17 @@ public sealed class Batch63SyntaxIndexerParityTests
                 {
                     static abstract explicit operator int(TSelf value);
                 }
-                public readonly struct Value : IConvert<Value>
+                public interface IAdd<TSelf> where TSelf : IAdd<TSelf>
+                {
+                    static abstract TSelf operator +(TSelf left, TSelf right);
+                }
+                public readonly struct Value : IConvert<Value>, IAdd<Value>
                 {
                     public static explicit operator int(Value value) => 0;
                     public static explicit operator checked int(Value value) => 0;
                     static explicit IConvert<Value>.operator int(Value value) => 0;
+                    public static Value operator +(Value left, Value right) => default;
+                    static Value IAdd<Value>.operator +(Value left, Value right) => default;
                 }
                 """);
 
@@ -123,6 +134,19 @@ public sealed class Batch63SyntaxIndexerParityTests
             Assert.Equal("public", checkedConversion.Accessibility);
             Assert.Equal(3, implementations.Append(checkedConversion)
                 .Select(hit => hit.DeclarationKey).Distinct(StringComparer.Ordinal).Count());
+
+            SymbolHit[] additions = queries
+                .SearchSymbols("operator +", "exact", ["operator"], 10)
+                .Where(hit => hit.Container == "Value")
+                .ToArray();
+            Assert.Equal(2, additions.Length);
+            Assert.Equal("public", additions.Single(hit =>
+                hit.Signature == "Value operator +(Value left, Value right)")
+                .Accessibility);
+            Assert.Equal("private", additions.Single(hit =>
+                hit.Signature ==
+                "Value IAdd<Value>.operator +(Value left, Value right)")
+                .Accessibility);
         }
         finally
         {
@@ -191,6 +215,41 @@ public sealed class Batch63SyntaxIndexerParityTests
                 {
                     static explicit IConvert<InterfaceScalar>.operator int(InterfaceScalar value) => 42;
                 }
+
+                public readonly struct ImplicitInterfaceScalar : IConvert<ImplicitInterfaceScalar>
+                {
+                    public static explicit operator int(ImplicitInterfaceScalar value) => 24;
+                }
+
+                public readonly struct LoopValue
+                {
+                    public static implicit operator int(LoopValue value) => 0;
+                }
+
+                public readonly struct StackSource
+                {
+                    public static explicit operator StackMid(StackSource value) => default;
+                }
+
+                public readonly struct StackMid
+                {
+                    public static implicit operator StackTarget(StackMid value) => default;
+                }
+
+                public readonly struct StackTarget { }
+
+                public readonly struct DeconstructValue
+                {
+                    public static implicit operator int(DeconstructValue value) => 0;
+                }
+
+                public readonly struct CompoundValue
+                {
+                    private readonly int _value;
+                    private CompoundValue(int value) => _value = value;
+                    public static implicit operator int(CompoundValue value) => value._value;
+                    public static implicit operator CompoundValue(int value) => new(value);
+                }
                 """);
             File.WriteAllText(Path.Combine(consumer, "Consumer.csproj"),
                 """
@@ -201,8 +260,21 @@ public sealed class Batch63SyntaxIndexerParityTests
                 """);
             File.WriteAllText(Path.Combine(consumer, "Use.cs"),
                 """
+                using System.Collections.Generic;
+                using System.Threading.Tasks;
                 using ConversionHandles;
                 namespace ConversionConsumer;
+                public sealed class DeconstructSource
+                {
+                    public void Deconstruct(
+                        out DeconstructValue left, out DeconstructValue right) =>
+                        (left, right) = (default, default);
+                }
+                public class PrimaryBase
+                {
+                    public PrimaryBase(int value) { }
+                }
+                public sealed class PrimaryDerived(LoopValue value) : PrimaryBase(value) { }
                 public static class Use
                 {
                     public static void Run()
@@ -210,10 +282,36 @@ public sealed class Batch63SyntaxIndexerParityTests
                         Scalar value = 7;
                         _ = (int)value;
                         _ = checked((long)value);
+                        CompoundValue compound = 1;
+                        compound += 1;
                     }
 
                     public static int ThroughInterface<T>(T value) where T : IConvert<T> => (int)value;
                     public static int RunInterface() => ThroughInterface(default(InterfaceScalar));
+                    public static int RunImplicitInterface() =>
+                        ThroughInterface(default(ImplicitInterfaceScalar));
+                    public static void Loop(IEnumerable<LoopValue> values)
+                    {
+                        foreach (int item in values) _ = item;
+                    }
+                    public static async Task LoopAsync(IAsyncEnumerable<LoopValue> values)
+                    {
+                        await foreach (int item in values) _ = item;
+                    }
+                    public static int[] Spread(IEnumerable<LoopValue> values) => [.. values];
+                    public static int Coalesce(CompoundValue? value) => value ?? 0;
+                    public static StackTarget Stack(StackSource value) => (StackMid)value;
+                    public static void Deconstruct(
+                        IEnumerable<(DeconstructValue Left, DeconstructValue Right)> values)
+                    {
+                        (int first, int second) = (new DeconstructValue(), new DeconstructValue());
+                        (int third, int fourth) = new DeconstructSource();
+                        (DeconstructValue Left, DeconstructValue Right) pair = default;
+                        (int fifth, int sixth) = pair;
+                        foreach ((int left, int right) in values) _ = left + right;
+                    }
+                    public static (int Left, int Right)? NullableTuple(
+                        (DeconstructValue Left, DeconstructValue Right)? pair) => pair;
                 }
                 """);
             File.WriteAllText(Path.Combine(fsharpTests, "Consumer.fsproj"),
@@ -251,22 +349,106 @@ public sealed class Batch63SyntaxIndexerParityTests
             }
             using var manager = new IndexManager(root, dbPath);
             using var semantic = new SemanticService(manager);
+            if (!semantic.FrameworkRefsAvailable) return;
             manager.Start();
             for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50);
             Assert.True(manager.IsQueryable, "conversion-handle index did not become queryable");
             var tools = new NavigationTools(manager, semantic);
 
             // Every handle must survive both semantic entry points and pin the same declaration.
-            // The references call also proves that conversion targeting widens to all dependents;
-            // Roslyn currently emits no locations for these conversion uses, tracked separately.
+            // Positive compiler-operation scans prove implicit assignment, explicit cast, and
+            // checked-cast sites independently; unused conversions prove an exact zero.
             AssertSemanticHandle(tools, "implicit operator Scalar",
-                "implicit operator Scalar(int value)");
+                "implicit operator Scalar(int value)",
+                SemanticReferenceKinds.ImplicitConversion);
             AssertSemanticHandle(tools, "explicit operator int",
-                "explicit operator int(Scalar value)");
+                "explicit operator int(Scalar value)",
+                SemanticReferenceKinds.ExplicitConversion);
             AssertSemanticHandle(tools, "explicit operator checked long",
-                "explicit operator checked long(Scalar value)");
+                "explicit operator checked long(Scalar value)",
+                SemanticReferenceKinds.CheckedConversion);
+            JsonElement loopHit = IndexedOperatorHit(tools, "implicit operator int",
+                "implicit operator int(LoopValue value)");
+            semantic.TestOnlyConversionSiteDiscovered = total =>
+            {
+                if (total >= 1) throw new OperationCanceledException();
+            };
+            JsonElement partialLoop = SemanticRetry.ParseWithRetry(
+                () => tools.References(symbolId: loopHit.GetProperty("symbolId").GetString(),
+                    mode: "semantic", timeoutMs: 90_000, includeTests: false),
+                json => json.TryGetProperty("partialReason", out JsonElement reason) &&
+                        (reason.GetString() ?? "").Contains("semantic_timeout",
+                            StringComparison.Ordinal),
+                "conversion-operation deadline salvage");
+            Assert.Equal(1, partialLoop.GetProperty("totalReferences").GetInt32());
+            Assert.True(partialLoop.GetProperty("partial").GetBoolean());
+            Assert.True(partialLoop.GetProperty("totalIsLowerBound").GetBoolean());
+            Assert.Equal("indexed", partialLoop.GetProperty("meta")
+                .GetProperty("confidence").GetString());
+            semantic.TestOnlyConversionSiteDiscovered = null;
+
+            AssertSemanticHandle(tools, "implicit operator int",
+                "implicit operator int(LoopValue value)",
+                SemanticReferenceKinds.ImplicitConversion, expectedTotal: 4);
+            AssertSemanticHandle(tools, "explicit operator StackMid",
+                "explicit operator StackMid(StackSource value)",
+                SemanticReferenceKinds.ExplicitConversion);
+            AssertSemanticHandle(tools, "implicit operator StackTarget",
+                "implicit operator StackTarget(StackMid value)",
+                SemanticReferenceKinds.ImplicitConversion);
+            AssertSemanticHandle(tools, "implicit operator int",
+                "implicit operator int(CompoundValue value)",
+                SemanticReferenceKinds.ImplicitConversion, expectedTotal: 2);
+            AssertSemanticHandle(tools, "implicit operator CompoundValue",
+                "implicit operator CompoundValue(int value)",
+                SemanticReferenceKinds.ImplicitConversion, expectedTotal: 2);
+            // Two assignment conversions and two foreach-deconstruction conversions occupy only
+            // two physical lines. A stale line-granular dedup contract would report 2, not 4.
+            int identityCacheHits = 0;
+            int identityCacheMisses = 0;
+            semantic.TestOnlyConversionIdentityCacheLookup = hit =>
+            {
+                if (hit) identityCacheHits++;
+                else identityCacheMisses++;
+            };
+            var deconstructionSites = new Dictionary<string, int>(StringComparer.Ordinal);
+            var deconstructionKinds = new HashSet<string>(StringComparer.Ordinal);
+            semantic.TestOnlyConversionSiteAdded = (location, kind) =>
+            {
+                string sourceLine = location.SourceTree!.GetText()
+                    .Lines.GetLineFromPosition(location.SourceSpan.Start).ToString().Trim();
+                deconstructionSites[sourceLine] =
+                    deconstructionSites.GetValueOrDefault(sourceLine) + 1;
+                deconstructionKinds.Add(kind);
+            };
+            AssertSemanticHandle(tools, "implicit operator int",
+                "implicit operator int(DeconstructValue value)",
+                SemanticReferenceKinds.ImplicitConversion, expectedTotal: 8);
+            semantic.TestOnlyConversionSiteAdded = null;
+            semantic.TestOnlyConversionIdentityCacheLookup = null;
+            Assert.True(identityCacheMisses > 0);
+            Assert.True(identityCacheHits >= 7,
+                $"expected the eight repeated conversion sites to reuse identity; " +
+                $"hits={identityCacheHits}, misses={identityCacheMisses}");
+            Assert.Equal(SemanticReferenceKinds.ImplicitConversion,
+                Assert.Single(deconstructionKinds));
+            Assert.Equal(2, SiteCount("(int first, int second)"));
+            Assert.Equal(2, SiteCount("(int third, int fourth)"));
+            Assert.Equal(1, SiteCount("(int fifth, int sixth)"));
+            Assert.Equal(2, SiteCount("foreach ((int left, int right)"));
+            Assert.Equal(1, SiteCount("(DeconstructValue Left, DeconstructValue Right)? pair)"));
+            Assert.Equal(8, deconstructionSites.Values.Sum());
+
+            int SiteCount(string sourceFragment) => deconstructionSites
+                .Where(pair => pair.Key.Contains(sourceFragment, StringComparison.Ordinal))
+                .Sum(pair => pair.Value);
+
             int explicitInterfaceLine = AssertSemanticHandle(tools, "explicit operator int",
-                "explicit IConvert<InterfaceScalar>.operator int(InterfaceScalar value)");
+                "explicit IConvert<InterfaceScalar>.operator int(InterfaceScalar value)",
+                SemanticReferenceKinds.ExplicitConversion, expectedTotal: 1);
+            int implicitInterfaceLine = AssertSemanticHandle(tools, "explicit operator int",
+                "explicit operator int(ImplicitInterfaceScalar value)",
+                SemanticReferenceKinds.ExplicitConversion, expectedTotal: 1);
             string signatureAtCap = $"explicit operator {targetAtSignatureCap}(Scalar value)";
             string signaturePastCap = $"explicit operator {targetPastSignatureCap}(Scalar value)";
             Assert.Equal(400, signatureAtCap.Length);
@@ -278,24 +460,210 @@ public sealed class Batch63SyntaxIndexerParityTests
 
             // Public position/name routes carry no indexed declaration key, and Roslyn exposes an
             // explicit-interface conversion as MethodKind.ExplicitInterfaceImplementation. Both
-            // routes must still identify conversion syntax and disclose the incomplete census.
-            AssertConversionReferenceGap(() => tools.References(
+            // routes must still identify conversion syntax and prove the unused declaration's zero.
+            AssertExactOperatorReferences(() => tools.References(
                     path: "Lib/Conversions.cs", line: explicitInterfaceLine,
                     mode: "semantic", timeoutMs: 90_000, includeTests: false),
                 explicitInterfaceLine,
-                expectedProjects: 2);
-            AssertConversionReferenceGap(() => tools.References(
+                expectedProjects: 2, expectedTotal: 1,
+                expectedKind: SemanticReferenceKinds.ExplicitConversion);
+            AssertExactOperatorReferences(() => tools.References(
                     name: "explicit operator int", path: "Lib/Conversions.cs",
                     line: explicitInterfaceLine, mode: "semantic", timeoutMs: 90_000,
                     includeTests: false),
-                explicitInterfaceLine, expectedProjects: 2);
+                explicitInterfaceLine, expectedProjects: 2, expectedTotal: 1,
+                expectedKind: SemanticReferenceKinds.ExplicitConversion);
+            AssertExactOperatorReferences(() => tools.References(
+                    path: "Lib/Conversions.cs", line: implicitInterfaceLine,
+                    mode: "semantic", timeoutMs: 90_000, includeTests: false),
+                implicitInterfaceLine,
+                expectedProjects: 2, expectedTotal: 1,
+                expectedKind: SemanticReferenceKinds.ExplicitConversion);
+            AssertExactOperatorReferences(() => tools.References(
+                    name: "explicit operator int", path: "Lib/Conversions.cs",
+                    line: implicitInterfaceLine, mode: "semantic", timeoutMs: 90_000,
+                    includeTests: false),
+                implicitInterfaceLine, expectedProjects: 2, expectedTotal: 1,
+                expectedKind: SemanticReferenceKinds.ExplicitConversion);
 
             string telemetryLine = manager.Telemetry.Snapshot().Last(line =>
                 line.Contains("\"tool\":\"references\"", StringComparison.Ordinal));
             using JsonDocument telemetry = JsonDocument.Parse(telemetryLine);
-            Assert.Equal("partial", telemetry.RootElement.GetProperty("result").GetString());
-            Assert.Equal("conversion_usage_enumeration_gap",
-                telemetry.RootElement.GetProperty("reason").GetString());
+            Assert.Equal("exact", telemetry.RootElement.GetProperty("result").GetString());
+            Assert.False(telemetry.RootElement.TryGetProperty("reason", out _));
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task ConversionIdentityFallbackDistinguishesSameNameAssemblies()
+    {
+        using var workspace = new AdhocWorkspace();
+        ProjectId firstId = ProjectId.CreateNewId("FirstTwin");
+        ProjectId secondId = ProjectId.CreateNewId("SecondTwin");
+        ProjectId consumerId = ProjectId.CreateNewId("Consumer");
+        MetadataReference core = MetadataReference.CreateFromFile(typeof(object).Assembly.Location);
+        Solution solution = workspace.CurrentSolution;
+        solution = solution.AddProject(ProjectInfo.Create(firstId, VersionStamp.Create(),
+                "FirstTwin", "TwinConversions", LanguageNames.CSharp,
+                compilationOptions: new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary), metadataReferences: [core]))
+            .AddDocument(DocumentId.CreateNewId(firstId), "Value.cs", SourceText.From(
+                "namespace Twin; public readonly struct Value { " +
+                "public static explicit operator int(Value value) => 0; }"));
+        solution = solution.AddProject(ProjectInfo.Create(secondId, VersionStamp.Create(),
+                "SecondTwin", "TwinConversions", LanguageNames.CSharp,
+                compilationOptions: new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary), metadataReferences: [core]))
+            .AddDocument(DocumentId.CreateNewId(secondId), "Value.cs", SourceText.From(
+                "namespace Twin; public readonly struct Value { " +
+                "public static explicit operator int(Value value) => 0; }"));
+        DocumentId useId = DocumentId.CreateNewId(consumerId);
+        solution = solution.AddProject(ProjectInfo.Create(consumerId, VersionStamp.Create(),
+                "Consumer", "Consumer", LanguageNames.CSharp,
+                compilationOptions: new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary), metadataReferences: [core]))
+            .AddProjectReference(consumerId, new ProjectReference(firstId))
+            .AddDocument(useId, "Use.cs", SourceText.From(
+                "using Twin; public static class Use { " +
+                "public static int Run(Value value) => (int)value; }"));
+        Assert.True(workspace.TryApplyChanges(solution));
+        solution = workspace.CurrentSolution;
+
+        IMethodSymbol first = ConversionOperator(await solution.GetProject(firstId)!
+            .GetCompilationAsync());
+        IMethodSymbol second = ConversionOperator(await solution.GetProject(secondId)!
+            .GetCompilationAsync());
+        Document use = solution.GetDocument(useId)!;
+        SyntaxNode root = (await use.GetSyntaxRootAsync())!;
+        SemanticModel model = (await use.GetSemanticModelAsync())!;
+        CastExpressionSyntax cast = root.DescendantNodes().OfType<CastExpressionSyntax>().Single();
+        IMethodSymbol retargeted = Assert.IsAssignableFrom<IConversionOperation>(
+            model.GetOperation(cast)).OperatorMethod!;
+
+        Assert.True(await SemanticService.SameUserDefinedConversionAsync(
+            retargeted, first, solution, CancellationToken.None));
+        Assert.False(await SemanticService.SameUserDefinedConversionAsync(
+            second, first, solution, CancellationToken.None));
+
+        static IMethodSymbol ConversionOperator(Compilation? compilation) =>
+            compilation!.GetTypeByMetadataName("Twin.Value")!.GetMembers()
+                .OfType<IMethodSymbol>().Single(method => method.MethodKind ==
+                    MethodKind.Conversion);
+    }
+
+    [Fact]
+    public void RegularOperatorHandlesPinExactDeclarationsOrRejectUnsupportedTools()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-63-regular-operator-handles").FullName;
+        try
+        {
+            string project = Path.Combine(root, "P");
+            Directory.CreateDirectory(project);
+            File.WriteAllText(Path.Combine(project, "P.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+                "<TargetFramework>net10.0</TargetFramework><LangVersion>preview</LangVersion>" +
+                "</PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(project, "Operators.cs"),
+                """
+                namespace RegularOperatorHandles;
+                public interface IAdd<TSelf> where TSelf : IAdd<TSelf>
+                {
+                    static abstract TSelf operator +(TSelf left, TSelf right);
+                }
+                public readonly struct Alpha { }
+                public readonly struct Beta { }
+                public readonly struct Box : IAdd<Box>
+                {
+                    public static Box operator +(Box left, Alpha right) => default; public static Box operator +(Box left, Beta right) => default;
+                    public static Box operator +(Box left, Box right) => default;
+                    public static Box operator checked +(Box left, Box right) => default;
+                    static Box IAdd<Box>.operator +(Box left, Box right) => default;
+                }
+                public static class Use
+                {
+                    public static Box AddAlpha(Box left, Alpha right) => left + right;
+                    public static Box AddChecked(Box left, Box right) => checked(left + right);
+                    public static T AddGeneric<T>(T left, T right) where T : IAdd<T> => left + right;
+                }
+                """);
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            using var semantic = new SemanticService(manager);
+            manager.Start();
+            Assert.True(SpinWait.SpinUntil(() => manager.IsQueryable, 30_000),
+                manager.Health().Error);
+            var tools = new NavigationTools(manager, semantic);
+
+            JsonElement[] ordinaryHits = ParseJson(tools.SearchSymbol(
+                    "operator +", kinds: "operator", match: "exact", limit: 20))
+                .GetProperty("symbols").EnumerateArray()
+                .Where(hit => hit.GetProperty("containingType").GetString() == "Box")
+                .ToArray();
+            JsonElement alpha = Assert.Single(ordinaryHits, hit =>
+                hit.GetProperty("signature").GetString() ==
+                "Box operator +(Box left, Alpha right)");
+            JsonElement beta = Assert.Single(ordinaryHits, hit =>
+                hit.GetProperty("signature").GetString() ==
+                "Box operator +(Box left, Beta right)");
+            Assert.Equal(alpha.GetProperty("startLine").GetInt32(),
+                beta.GetProperty("startLine").GetInt32());
+
+            string alphaDocumentationId = AssertRegularOperatorHandle(
+                tools, alpha, expectedReferences: 1);
+            string betaDocumentationId = AssertRegularOperatorHandle(
+                tools, beta, expectedReferences: 0);
+            Assert.NotEqual(alphaDocumentationId, betaDocumentationId);
+            Assert.Contains("Alpha", alphaDocumentationId, StringComparison.Ordinal);
+            Assert.Contains("Beta", betaDocumentationId, StringComparison.Ordinal);
+
+            JsonElement[] checkedHits = ParseJson(tools.SearchSymbol(
+                    "operator checked +", kinds: "operator", match: "exact", limit: 20))
+                .GetProperty("symbols").EnumerateArray()
+                .ToArray();
+            JsonElement checkedHit = Assert.Single(checkedHits,
+                hit => hit.GetProperty("containingType").GetString() == "Box");
+            Assert.Contains("op_CheckedAddition",
+                AssertRegularOperatorHandle(tools, checkedHit, expectedReferences: 1),
+                StringComparison.Ordinal);
+
+            JsonElement explicitInterface = Assert.Single(ordinaryHits, hit =>
+                hit.GetProperty("signature").GetString() ==
+                "Box IAdd<Box>.operator +(Box left, Box right)");
+            AssertRegularOperatorHandle(tools, explicitInterface,
+                expectedReferences: 1);
+
+            string operatorHandle = alpha.GetProperty("symbolId").GetString()!;
+            JsonElement implementations = ParseJson(tools.Implementations(
+                symbolId: operatorHandle));
+            Assert.Equal("unsupported_symbol_kind",
+                implementations.GetProperty("error").GetString());
+            Assert.Contains("does not model implementations for operator declarations",
+                implementations.GetProperty("detail").GetString(),
+                StringComparison.Ordinal);
+            JsonElement interfaceOperator = Assert.Single(ParseJson(tools.SearchSymbol(
+                    "operator +", kinds: "operator", match: "exact", limit: 20))
+                .GetProperty("symbols").EnumerateArray(), hit =>
+                (hit.GetProperty("containingType").GetString() ?? "")
+                .StartsWith("IAdd", StringComparison.Ordinal));
+            JsonElement interfaceImplementations = ParseJson(tools.Implementations(
+                symbolId: interfaceOperator.GetProperty("symbolId").GetString()));
+            Assert.Equal("unsupported_symbol_kind",
+                interfaceImplementations.GetProperty("error").GetString());
+            Assert.Contains("static abstract interface operators",
+                interfaceImplementations.GetProperty("detail").GetString(),
+                StringComparison.Ordinal);
+            JsonElement hierarchy = ParseJson(tools.TypeHierarchy(
+                symbolId: operatorHandle));
+            Assert.Equal("bad_request", hierarchy.GetProperty("error").GetString());
+            Assert.Contains("type declaration", hierarchy.GetProperty("detail").GetString(),
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -608,13 +976,9 @@ public sealed class Batch63SyntaxIndexerParityTests
             declarationKey, parentKind, parentName);
 
     private static int AssertSemanticHandle(NavigationTools tools, string name,
-        string signature)
+        string signature, string? expectedUsageKind = null, int? expectedTotal = null)
     {
-        string storedSignature = signature.Length > 400 ? signature[..400] : signature;
-        JsonElement hit = ParseJson(tools.SearchSymbol(name, kinds: "operator", match: "exact",
-                limit: 20))
-            .GetProperty("symbols").EnumerateArray()
-            .Single(symbol => symbol.GetProperty("signature").GetString() == storedSignature);
+        JsonElement hit = IndexedOperatorHit(tools, name, signature);
         Assert.Equal(Math.Min(signature.Length, 400),
             hit.GetProperty("signature").GetString()!.Length);
         string symbolId = hit.GetProperty("symbolId").GetString()!;
@@ -626,10 +990,22 @@ public sealed class Batch63SyntaxIndexerParityTests
             declaration.GetProperty("path").GetString() == "Lib/Conversions.cs" &&
             declaration.GetProperty("startLine").GetInt32() == startLine);
 
-        AssertConversionReferenceGap(() => tools.References(
-                symbolId: symbolId, mode: "semantic", timeoutMs: 90_000,
-                includeTests: false), startLine);
+        AssertExactOperatorReferences(() => tools.References(
+            symbolId: symbolId, mode: "semantic", timeoutMs: 90_000,
+                includeTests: false), startLine,
+            expectedTotal: expectedTotal ?? (expectedUsageKind is null ? 0 : 1),
+            expectedKind: expectedUsageKind);
         return startLine;
+    }
+
+    private static JsonElement IndexedOperatorHit(NavigationTools tools, string name,
+        string signature)
+    {
+        string storedSignature = signature.Length > 400 ? signature[..400] : signature;
+        return ParseJson(tools.SearchSymbol(name, kinds: "operator", match: "exact",
+                limit: 20))
+            .GetProperty("symbols").EnumerateArray()
+            .Single(symbol => symbol.GetProperty("signature").GetString() == storedSignature);
     }
 
     private static void AssertSameLineCappedSemanticHandles(NavigationTools tools,
@@ -657,17 +1033,57 @@ public sealed class Batch63SyntaxIndexerParityTests
             string documentationId = definition.GetProperty("symbol")
                 .GetProperty("documentationCommentId").GetString()!;
 
-            JsonElement references = AssertConversionReferenceGap(() => tools.References(
+            JsonElement references = AssertExactOperatorReferences(() => tools.References(
                     symbolId: symbolId, mode: "semantic", timeoutMs: 90_000,
                     includeTests: false), startLine);
             Assert.Equal(documentationId, references.GetProperty("symbol")
                 .GetProperty("documentationCommentId").GetString());
+
+            JsonElement indexedDefinition = ParseJson(tools.Definition(
+                symbolId: symbolId, mode: "indexed"));
+            JsonElement indexedDeclaration = Assert.Single(indexedDefinition
+                .GetProperty("declarations").EnumerateArray());
+            Assert.Equal(symbolId,
+                indexedDeclaration.GetProperty("symbolId").GetString());
+            JsonElement indexedReferences = ParseJson(tools.References(
+                symbolId: symbolId, mode: "indexed"));
+            Assert.Equal("semantic_required",
+                indexedReferences.GetProperty("error").GetString());
+            Assert.Equal("operator_handle_indexed_mode_unavailable",
+                indexedReferences.GetProperty("partialReason").GetString());
             return documentationId;
         }).ToArray();
 
         Assert.Equal(2, documentationIds.Distinct(StringComparer.Ordinal).Count());
         Assert.Contains(documentationIds, id => id.Contains(sourceAlpha, StringComparison.Ordinal));
         Assert.Contains(documentationIds, id => id.Contains(sourceBeta, StringComparison.Ordinal));
+
+        tools.TestOnlySemanticFailureReason = "forced_operator_semantic_failure";
+        try
+        {
+            foreach (JsonElement hit in hits)
+            {
+                string symbolId = hit.GetProperty("symbolId").GetString()!;
+                JsonElement fallbackDefinition = ParseJson(tools.Definition(
+                    symbolId: symbolId, mode: "auto"));
+                JsonElement declaration = Assert.Single(fallbackDefinition
+                    .GetProperty("declarations").EnumerateArray());
+                Assert.Equal(symbolId, declaration.GetProperty("symbolId").GetString());
+                Assert.Equal("forced_operator_semantic_failure",
+                    fallbackDefinition.GetProperty("partialReason").GetString());
+
+                JsonElement fallbackReferences = ParseJson(tools.References(
+                    symbolId: symbolId, mode: "auto"));
+                Assert.Equal("semantic_required",
+                    fallbackReferences.GetProperty("error").GetString());
+                Assert.Equal("forced_operator_semantic_failure",
+                    fallbackReferences.GetProperty("partialReason").GetString());
+            }
+        }
+        finally
+        {
+            tools.TestOnlySemanticFailureReason = null;
+        }
     }
 
     private static JsonElement IndexedConversionHit(NavigationTools tools, string signature) =>
@@ -699,17 +1115,36 @@ public sealed class Batch63SyntaxIndexerParityTests
             System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private static JsonElement AssertConversionReferenceGap(Func<string> referencesCall,
-        int startLine, int expectedProjects = 2)
+    private static string AssertRegularOperatorHandle(
+        NavigationTools tools, JsonElement hit, int expectedReferences)
     {
-        JsonElement references = SemanticRetry.ParseWithRetry(referencesCall,
-            response => response.TryGetProperty("noteId", out JsonElement noteId) &&
-                        noteId.GetString() ==
-                        "references.conversion_usage_enumeration_gap",
-            "conversion references disclose the stable enumeration-gap note");
+        string symbolId = hit.GetProperty("symbolId").GetString()!;
+        int startLine = hit.GetProperty("startLine").GetInt32();
+        JsonElement definition = SemanticRetry.ParseExactWithRetry(() => tools.Definition(
+            symbolId: symbolId, mode: "semantic", timeoutMs: 60_000));
+        Assert.Contains(definition.GetProperty("declarations").EnumerateArray(), declaration =>
+            declaration.GetProperty("path").GetString() == "P/Operators.cs" &&
+            declaration.GetProperty("startLine").GetInt32() == startLine);
+        string documentationId = definition.GetProperty("symbol")
+            .GetProperty("documentationCommentId").GetString()!;
+        JsonElement references = AssertExactOperatorReferences(() => tools.References(
+                symbolId: symbolId, mode: "semantic", timeoutMs: 90_000),
+            startLine, expectedProjects: 1, expectedTotal: expectedReferences,
+            declarationPath: "P/Operators.cs");
+        Assert.Equal(documentationId, references.GetProperty("symbol")
+            .GetProperty("documentationCommentId").GetString());
+        return documentationId;
+    }
+
+    private static JsonElement AssertExactOperatorReferences(
+        Func<string> referencesCall, int startLine, int expectedProjects = 2,
+        int expectedTotal = 0, string? expectedKind = null,
+        string declarationPath = "Lib/Conversions.cs")
+    {
+        JsonElement references = SemanticRetry.ParseExactWithRetry(referencesCall);
         Assert.Contains(references.GetProperty("symbol").GetProperty("declarations")
             .EnumerateArray(), declaration =>
-            declaration.GetProperty("path").GetString() == "Lib/Conversions.cs" &&
+            declaration.GetProperty("path").GetString() == declarationPath &&
             declaration.GetProperty("startLine").GetInt32() == startLine);
         Assert.Equal(expectedProjects, references.GetProperty("coverage").GetProperty("loadedProjects")
             .GetInt32());
@@ -717,12 +1152,28 @@ public sealed class Batch63SyntaxIndexerParityTests
             .GetInt32());
         Assert.False(references.GetProperty("coverage").TryGetProperty(
             "skippedProjects", out _));
-        Assert.True(references.GetProperty("partial").GetBoolean());
-        Assert.Contains("conversion_usage_enumeration_gap",
-            references.GetProperty("partialReason").GetString());
-        Assert.True(references.GetProperty("totalIsLowerBound").GetBoolean());
-        Assert.Equal("indexed", references.GetProperty("meta").GetProperty("confidence")
+        Assert.True(expectedTotal == references.GetProperty("totalReferences").GetInt32(),
+            references.GetRawText());
+        if (references.TryGetProperty("partial", out JsonElement partial))
+            Assert.False(partial.GetBoolean(), references.GetRawText());
+        Assert.False(references.TryGetProperty("partialReason", out _));
+        Assert.False(references.TryGetProperty("totalIsLowerBound", out _));
+        Assert.False(references.TryGetProperty("noteId", out _));
+        Assert.Equal("exact", references.GetProperty("meta").GetProperty("confidence")
             .GetString());
+        if (expectedKind is not null)
+        {
+            JsonElement kinds = references.GetProperty("kinds");
+            Assert.Equal(expectedTotal, kinds.GetProperty(expectedKind).GetInt32());
+            Assert.All(references.GetProperty("groups").EnumerateArray()
+                    .SelectMany(group => group.GetProperty("samples").EnumerateArray()),
+                sample => Assert.Equal(expectedKind,
+                    sample.GetProperty("kind").GetString()));
+        }
+        else if (expectedTotal == 0)
+        {
+            Assert.False(references.TryGetProperty("kinds", out _));
+        }
         return references;
     }
 

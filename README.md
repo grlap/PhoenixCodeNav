@@ -5,7 +5,9 @@ C#/F# workspaces** (designed for enterprise monorepos with thousands of csproj/f
 *and* SDK-style, net472-first).
 It gives coding agents (Claude Code, Codex, anything MCP) a fast, structured alternative to
 grep-driven exploration: ranked search, file outlines, exact references, project graphs, and
-compact context packs — with strict response budgets so results never flood the transcript.
+compact context packs — with strict ordinary response budgets so results stay compact. One
+declared exception preserves an intrinsically oversized compiler symbol identity intact instead
+of truncating or rejecting it, with exact byte metadata on that response.
 
 > Named after **Phoenix A**, the most massive known black hole — built to navigate the
 > heaviest repositories. No relation to Apache Phoenix.
@@ -267,15 +269,28 @@ watcher, and lifecycle test projects under `tests/`.
   default auto-upgrade) for compiler-exact results. When the caller-selected `maxFiles` boundary
   is reached, the response reports candidate-file coverage, `totalIsLowerBound:true`, and
   `noteId:"references.candidate_file_cap"` instead of presenting the scanned subset as complete.
-- C# conversion-operator handles pin semantic definitions with their uncapped declaration key;
+- C# operator handles pin semantic definitions and references with their uncapped declaration key;
   v2 handle fingerprints also bind a full SHA-256 digest of the complete namespace/type ancestor
   context and reject legacy fingerprints that cannot prove that identity after a rebuild. The
   fixed-size digest preserves complete chained identity without quadratic deep-nesting storage.
-  Roslyn does not yet enumerate user-defined conversion usage sites reliably; every conversion
-  `references` census is therefore reported as partial with
-  `noteId:"references.conversion_usage_enumeration_gap"`, never as an exact completeness claim.
-  Compiler-reported totals are labeled lower bounds only when the project model is proven;
-  otherwise the response makes no directional count guarantee.
+  Conversion `references` walk compiler-bound operation trees across the selected dependent
+  closure and supplement them with compound-operation, tuple-element, primary-constructor,
+  `foreach` element, and deconstruction conversion APIs. Implicit contextual conversions,
+  explicit and checked casts, stacked/nullable-tuple conversions, full C# compound-assignment
+  input/output conversions, and `foreach`
+  conversions are reported as `implicitConversion`, `explicitConversion`, and
+  `checkedConversion`. Exact zero is returned only after the complete loaded scope contains no
+  matching conversion. Distinct same-line operations remain distinct through source-span dedup.
+  Indexed definitions retain the exact resolved operator row, while indexed or failed-automatic
+  operator references fail closed because text candidates cannot preserve overload identity.
+  Operator handles are explicitly rejected by `implementations` and `type_hierarchy`; Phoenix
+  does not yet model the meaningful static-abstract-interface implementations subcase.
+- Semantic `definition` and `references` normally fit the advertised 64 KiB `hardBytes` target.
+  Optional declaration-site lists are removed first with truthful total/returned counts and stable
+  note id `semantic.declaration_sites_budget`. If the remaining complete compiler identity
+  is intrinsically larger, Phoenix preserves it without a new truncation or rejection limit and
+  returns `responseBudget` with measured `serializedBytes`,
+  `exceeded:true`, `completeIdentity:true`, and reason `indivisible_semantic_identity`.
 - Semantic scans load all matching candidate projects by default (`maxProjects:0`). A positive
   `maxProjects` value is an explicit latency/memory tradeoff; bounded responses report the total
   skipped count and a size-bounded sample.

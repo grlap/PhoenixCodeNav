@@ -14,11 +14,16 @@ namespace CodeNav.Core.Semantic;
 /// </summary>
 public static class SemanticReferenceKinds
 {
+    public const string ImplicitConversion = "implicitConversion";
+    public const string ExplicitConversion = "explicitConversion";
+    public const string CheckedConversion = "checkedConversion";
+
     /// <summary>All kind labels this classifier can produce (for docs/tests).</summary>
     public static readonly string[] All =
     {
         "call", "construction", "typeMention", "attribute", "nameof", "xmldoc",
-        "usingDirective", "baseList", "typeof", "other",
+        "usingDirective", "baseList", "typeof", ImplicitConversion,
+        ExplicitConversion, CheckedConversion, "other",
     };
 
     public static string Classify(SyntaxNode root, int position, bool symbolIsType)

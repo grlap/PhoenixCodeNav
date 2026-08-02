@@ -115,8 +115,10 @@ public static class IndexBuilder
     /// v21: C# implicit and explicit conversion declarations persist as operator symbol rows with
     /// target-bearing names and canonical conversion identity.
     /// v22: every symbol persists its complete ancestor/declaration context for fail-closed
-    /// stale-handle validation.</summary>
-    public const string SchemaVersion = "22";
+    /// stale-handle validation.
+    /// v23: explicit-interface regular operator rows persist compiler-accurate private
+    /// accessibility rather than the ordinary operator public default.</summary>
+    public const string SchemaVersion = "23";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }

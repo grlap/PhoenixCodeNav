@@ -44,6 +44,16 @@ public sealed partial class NavigationTools
         {
             var (hit, error) = ResolveSymbolIdHandle(symbolId);
             if (error is not null) return (null, error);
+            if (!typeOnly && hit!.Kind == "operator")
+            {
+                return (null, Json.Serialize(new
+                {
+                    error = "unsupported_symbol_kind",
+                    kind = hit.Kind,
+                    detail = "Phoenix does not model implementations for operator declarations, including static abstract interface operators; use references on the interface operator or definition/references with this symbolId.",
+                    meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+                }));
+            }
             if (typeOnly && !hierarchyKinds.Contains(hit!.Kind, StringComparer.Ordinal))
             {
                 return (null, Json.Serialize(new

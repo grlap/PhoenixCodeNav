@@ -152,7 +152,7 @@ public class SemanticColdStartLoaderTests
             using var workspace = new SemanticWorkspace(root, dbPath,
                 preparationConcurrency: 2);
             var fastPrepared = NewSignal();
-            workspace.TestOnlyAfterProjectPrepared = name =>
+            workspace.TestOnlyAfterPreparedHandlePublished = name =>
             {
                 if (name == "Fast") fastPrepared.TrySetResult(true);
             };
@@ -166,7 +166,6 @@ public class SemanticColdStartLoaderTests
             Task<SemanticSolutionLease> loading = workspace.EnsureLoadedAsync(
                 ["Fast", "Slow"], canceled.Token, statsBox: stats);
             await fastPrepared.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            await Task.Delay(30);
 
             canceled.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await loading);

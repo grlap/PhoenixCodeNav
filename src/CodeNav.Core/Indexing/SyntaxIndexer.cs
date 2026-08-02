@@ -216,7 +216,10 @@ public static class SyntaxIndexer
                     string operatorName = OperatorName(op);
                     Add(symbols, text, member, parentOrdinal, "operator", operatorName, ns, container,
                         $"{Compact(op.ReturnType.ToString())} {ExplicitInterface(op.ExplicitInterfaceSpecifier)}{operatorName}{ParamSig(op.ParameterList)}",
-                        Access(op.Modifiers, "public"), false, 0, null);
+                        op.ExplicitInterfaceSpecifier is null
+                            ? Access(op.Modifiers, "public")
+                            : "private",
+                        false, 0, null);
                     break;
                 case ConversionOperatorDeclarationSyntax conversion:
                     string conversionName = ConversionOperatorName(conversion);
@@ -561,7 +564,7 @@ public static class SyntaxIndexer
     private static string ExplicitInterface(ExplicitInterfaceSpecifierSyntax? specifier) =>
         specifier is null ? "" : Compact(specifier.Name.ToString()) + ".";
 
-    private static string OperatorName(OperatorDeclarationSyntax declaration)
+    internal static string OperatorName(OperatorDeclarationSyntax declaration)
     {
         string checkedPart = declaration.CheckedKeyword.IsKind(SyntaxKind.CheckedKeyword)
             ? "checked "
@@ -594,6 +597,9 @@ public static class SyntaxIndexer
     internal static string ConversionOperatorDeclarationKey(
         ConversionOperatorDeclarationSyntax declaration) =>
         DeclarationKey(declaration, "operator", ConversionOperatorName(declaration), 0);
+
+    internal static string OperatorDeclarationKey(OperatorDeclarationSyntax declaration) =>
+        DeclarationKey(declaration, "operator", OperatorName(declaration), 0);
 
     private static string ParamSig(BaseParameterListSyntax? list)
     {

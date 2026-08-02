@@ -60,6 +60,7 @@ public sealed partial class SemanticWorkspace
     internal Func<string, string, CancellationToken, Task>? TestOnlyBeforeSourceCaptureAsync
     { get; set; }
     internal Action<string>? TestOnlyAfterProjectPrepared { get; set; }
+    internal Action<string>? TestOnlyAfterPreparedHandlePublished { get; set; }
     internal Func<string, CancellationToken, Task>? TestOnlyBeforeIndexedFallbackAsync { get; set; }
     internal Action<string>? TestOnlyAfterIndexedFallbackLock { get; set; }
     internal Func<CancellationToken, Task>? TestOnlyBeforeCommitAsync { get; set; }
@@ -931,6 +932,10 @@ public sealed partial class SemanticWorkspace
                             PreparedProjectHandle handle = await AcquirePreparedProjectAsync(plan, ct)
                                 .ConfigureAwait(false);
                             prepared[plan.Name] = handle;
+                            // This separate seam follows publication to the aggregation dictionary.
+                            // A cancellation triggered here cannot erase a peer's completed
+                            // preparation telemetry before the finally block reads prepared.Values.
+                            TestOnlyAfterPreparedHandlePublished?.Invoke(plan.Name);
                         }).ConfigureAwait(false);
                         foreach (PreparedProjectHandle handle in prepared.Values)
                         {
@@ -1546,6 +1551,9 @@ public sealed partial class SemanticWorkspace
                         DescriptorRetainedBytes = descriptorRetainedBytes,
                         QueueTicks = projectQueueTicks,
                     };
+                    // This older seam intentionally runs before the shared preparation returns:
+                    // concurrency tests hold the preparation in-flight while another waiter joins.
+                    // Post-publication telemetry tests use the distinct seam above.
                     TestOnlyAfterProjectPrepared?.Invoke(plan.Name);
                     return preparedProject;
                 }

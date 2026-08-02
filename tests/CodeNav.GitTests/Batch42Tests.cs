@@ -24,7 +24,7 @@ public class Batch42Tests
 {
 
     [Fact]
-    public void ExplicitInterfaceConversionReviewDigestIsNotPublicApi()
+    public void ExplicitInterfaceOperatorReviewDigestsAreNotPublicApi()
     {
         if (!GitInfo.GitAvailable) return;
         string temporaryRoot = Directory.CreateTempSubdirectory(
@@ -45,9 +45,14 @@ public class Batch42Tests
                 {
                     static abstract explicit operator int(TSelf value);
                 }
-                public readonly struct ConversionValue : IConvert<ConversionValue>
+                public interface IAdd<TSelf> where TSelf : IAdd<TSelf>
+                {
+                    static abstract TSelf operator +(TSelf left, TSelf right);
+                }
+                public readonly struct ConversionValue : IConvert<ConversionValue>, IAdd<ConversionValue>
                 {
                     static explicit IConvert<ConversionValue>.operator int(ConversionValue value) => 0;
+                    static ConversionValue IAdd<ConversionValue>.operator +(ConversionValue left, ConversionValue right) => default;
                 }
                 """);
             Git(root, "add -A");
@@ -56,13 +61,16 @@ public class Batch42Tests
             using var manager = StartManager(root);
             using var semantic = new SemanticService(manager);
             var tools = new NavigationTools(manager, semantic);
-            File.WriteAllText(path, File.ReadAllText(path).Replace("=> 0;", "=> 1;"));
+            File.WriteAllText(path, File.ReadAllText(path)
+                .Replace("=> 0;", "=> 1;")
+                .Replace("=> default;", "=> new();"));
             manager.RequestRefresh([relativePath]);
             Assert.True(WaitUntil(() =>
             {
                 using var queries = manager.OpenQueries();
-                return (queries.ContentByPath(relativePath) ?? "").Contains("=> 1;",
-                    StringComparison.Ordinal);
+                string content = queries.ContentByPath(relativePath) ?? "";
+                return content.Contains("=> 1;", StringComparison.Ordinal) &&
+                       content.Contains("=> new();", StringComparison.Ordinal);
             }, 20_000), "index did not reflect the explicit-interface conversion edit");
 
             string rawPack = "";
@@ -70,16 +78,22 @@ public class Batch42Tests
                 () => rawPack = tools.ReviewPack(maxBytes: 24576),
                 value => value.TryGetProperty("symbols", out _),
                 "review_pack with explicit-interface conversion symbol");
-            JsonElement[] digests = pack.GetProperty("symbols").EnumerateArray()
-                .Where(value => value.GetProperty("symbol").GetProperty("signature")
-                    .GetString() ==
-                    "explicit IConvert<ConversionValue>.operator int(ConversionValue value)")
-                .ToArray();
-            Assert.True(digests.Length == 1, rawPack);
-            JsonElement digest = digests[0];
-            Assert.False(digest.TryGetProperty("publicApi", out _));
-            Assert.Equal("private", digest.GetProperty("symbol").GetProperty("accessibility")
-                .GetString());
+            JsonElement[] digests = pack.GetProperty("symbols").EnumerateArray().ToArray();
+            foreach (string signature in new[]
+                     {
+                         "explicit IConvert<ConversionValue>.operator int(ConversionValue value)",
+                         "ConversionValue IAdd<ConversionValue>.operator +(ConversionValue left, ConversionValue right)",
+                     })
+            {
+                JsonElement[] matching = digests.Where(value =>
+                        value.GetProperty("symbol").GetProperty("signature").GetString() ==
+                        signature)
+                    .ToArray();
+                Assert.True(matching.Length == 1, rawPack);
+                Assert.False(matching[0].TryGetProperty("publicApi", out _));
+                Assert.Equal("private", matching[0].GetProperty("symbol")
+                    .GetProperty("accessibility").GetString());
+            }
         }
         finally
         {

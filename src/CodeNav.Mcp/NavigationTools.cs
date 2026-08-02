@@ -26,6 +26,8 @@ public sealed partial class NavigationTools
     private readonly IndexManager _manager;
     private readonly SemanticService _semantic;
 
+    internal string? TestOnlySemanticFailureReason { get; set; }
+
     public NavigationTools(IndexManager manager, SemanticService semantic)
     {
         _manager = manager;
@@ -109,7 +111,7 @@ public sealed partial class NavigationTools
             // trigger its (often silent-when-clean) response fields — grep an id to verify a deploy.
             features = new object[]
             {
-                new { id = "capabilities-hard-budget", summary = "UTF-8 hardBytes; *Truncated/*Bytes and featuresCompacted/featureSummariesReturned disclose compaction; every singular feature id remains" },
+                new { id = "capabilities-hard-budget", summary = "UTF-8 hardBytes is the ordinary response target; *Truncated/*Bytes and featuresCompacted/featureSummariesReturned disclose compaction; every singular feature id remains, while an indivisible complete semantic identity uses the separately declared measured exception" },
                 new { id = "review-ref-resolution", summary = "Hex-only branch/tag names, abbreviations, and object ids are Git-validated and peeled to full commits; repository-format-width objects retain object precedence and distinct short-hex ambiguity is refused" },
                 new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic; confidenceNote only when heuristic (tier meanings live in confidenceModel here); meta.statusNote explains refreshing/stale; meta.build stamps every result meta with version+commit" },
                 new { id = "hierarchy-ranking", summary = "implementations ranks concrete hits first; conditional likelyImplementation names the sole concrete hit and via identifies indirect base derivation. implementations wraps hit metadata; type_hierarchy returns flat symbols" },
@@ -174,7 +176,7 @@ public sealed partial class NavigationTools
                 new { id = "git-awareness", summary = "v0.12.28 index tracks the workspace's indexed commit and branch; serialized HEAD snapshot acquisition, ordered recovery publication, rebuild-generation retirement, and execution-time diffs make same-commit attachment changes and rapid inverse transitions preserve final rows and attachment state, detached HEAD clears the indexed branch, unavailable recovery snapshots force older queued Git tuples to revalidate with only a resolved generation at or after the latest unavailable sample allowed to publish ready, and full rebuilds reject ordered recovery publications sampled for the replaced database. repo_overview.git reports indexed vs HEAD state and whether commits match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is logged, never silent" },
                 new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
                 new { id = "text-search", summary = "search_text: whole-word tokens, context, containingSymbol, precise/partial grading; bounded line-based .NET regex narrowed by FTS; filesTotal/budgetHit/timedOut disclose coverage. Zero hits probe elsewhere/didYouMean; suggestions are probed, never substituted, with path/line/owner samples" },
-                new { id = "reference-kinds", summary = "references (exact path): per-location usage kinds — call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/other — with a kinds breakdown, usageKinds filter (validated), and publicConsumersOnly (usages outside the symbol's declaring project); indexed fallback stays unclassified and says so" },
+                new { id = "reference-kinds", summary = "references (exact path): per-location execution, declaration, documentation, and conversion-operation kinds with a kinds breakdown, usageKinds filter (validated), and publicConsumersOnly (usages outside the symbol's declaring project); indexed fallback stays unclassified and says so" },
                 new { id = "symbol-handles", summary = "Reindex-detecting idx handles pin source_context, definition, references, impact, implementations, and type_hierarchy" },
                 new { id = "filter-honest-counts", summary = "references: totalReferences/totalCandidates, kinds, groups, and summary all honor includeTests (filtered BEFORE counting on both exact and indexed paths); linked multi-project files counted once; filtered summaries say 'test projects excluded' instead of a misleading '0 test'" },
                 new { id = "test-classification", summary = "isTest is REFERENCE-driven: test frameworks via packages OR binary <Reference> (nunit/xunit/MSTest, incl. non-standard names containing nunit.framework), plus compiled-[TestFixture]-attributes-on-graph-leaf promotion for custom-resolve builds where the framework never appears in the csproj. Name shapes are a narrow dotted-suffix fallback only — TestRoute-style names never classify. Classification broadened in schema v7 (reference signals can reclassify a large share of legacy test projects, so isTest cached from earlier schemas may differ); NAME-uniform across same-AssemblyName csproj pairs since v8" },
@@ -182,7 +184,7 @@ public sealed partial class NavigationTools
                 new { id = "arity-exact-partials", summary = "partialFiles separate Foo and Foo<T> by syntax arity" },
                 new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. 'partial' is DELIBERATELY not in this string: it has its own isPartial field on every symbol node (plus partialFiles cross-links on outline types). Members also carry 'accessors' ({get: 'public', set: 'private'}) — ONLY when an accessor's accessibility differs from the member's own, so a private setter is no longer invisible. Modifiers since schema v4; accessors since v9" },
                 new { id = "rebuild-hatch", summary = "refresh_index accepts force: 'auto'|'incremental' (delta refresh; hash-identical files skipped — never rebuilds an intact-looking index) or 'full' (delete the index and REBUILD FROM SCRATCH, pump-serialized, works even from state 'failed' — recovery re-attaches the file watcher and git tracking and clears the old error; watch index.progress). The in-band corruption-recovery hatch — no shell access needed" },
-                new { id = "deadline-honesty", summary = "Semantic tools return deadlineMs/elapsedMs. Mid-scan expiry keeps partial, totalIsLowerBound, and 'at least N'; cold load uses partialReason cluster_cold_load. references/implementations split clusterLoadMs/queryMs. Reference totals dedupe project+path+line+kind, expose solutionProjects, and retain outOfGraphCandidates" },
+                new { id = "deadline-honesty", summary = "Semantic tools return deadlineMs/elapsedMs. Mid-scan expiry keeps partial, totalIsLowerBound, and 'at least N'; cold load uses partialReason cluster_cold_load. references/implementations split clusterLoadMs/queryMs. Reference totals dedupe project+path+source-span+kind, preserving distinct same-line operations, expose solutionProjects, and retain outOfGraphCandidates" },
                 new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Assembly-name collisions (net-old/net-new csproj pairs) resolve to a name-level edge — the graph and the semantic workspace are name-keyed, so paired declarers keep all their consumer edges (schema v6+; edge recovery itself since v5). meta.indexSchema stamped on every response" },
                 new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and index_building error bodies carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal, elapsedMs} — monotonic counters, no fabricated percent; absent when ready, and background refreshes never show a cold-build bar. filesSkipped and projectsFailed appear only when >0 (efa); filesPerSecond + estimatedRemainingMs appear only during indexing_files once >=100 files over >=1s of that phase are measured (0tn); pendingProcessed is the monotonic applied-delta count paired with pendingChanges — both flat means a stuck pump (z4c)" },
                 new { id = "edge-provenance", summary = "Schema v10 edges distinguish projectReference from hintPathReference; project_graph exposes kind, dependency_path per-hop via, context_pack flags hint-path owners, and impact reports directDependentProjects viaHintPathOnly risk. Mixed paths keep one transitive count/note; dual wiring prefers project; orphan references use orphaned:true with no project" },
@@ -198,8 +200,12 @@ public sealed partial class NavigationTools
                 new { id = "review-snapshot-consistency", summary = "Repeated bounded Git captures compare exact raw patch bytes with typed staged/unstaged/unmerged/untracked manifests; symlink payloads, gitlinks, modes, and tracked bytes must match; snapshot_changed becomes git_worktree_changed with no partial result from different worktree epochs" },
                 new { id = "review-live-evidence-revalidation", summary = "v0.12.45 review_pack revalidates every bounded live file digest and safe existence classification after aggregation, latches contradictory repeated observations, and recaptures only bounded untracked move-candidate bytes actually consumed; any mismatch fails closed without a partial result" },
                 new { id = "csharp-conversion-operator-indexing", summary = "v0.12.46 schema v21 indexes implicit and explicit C# conversion declarations as operator rows with target-bearing names, canonical declaration keys, modifiers, source order, and parent links" },
-                new { id = "csharp-conversion-semantic-handles", summary = "v0.12.46 schema v22 conversion idx handles pin semantic definitions and references with uncapped canonical declaration keys; fingerprints bind a full SHA-256 digest of complete ancestor context without quadratic nesting storage and reject legacy identities that cannot prove it; conversion reference censuses remain partial with stable conversion_usage_enumeration_gap disclosure, and claim lower-bound counts only when the project model is proven" },
+                new { id = "csharp-conversion-semantic-handles", summary = "v0.12.46 schema v22 conversion idx handles pin semantic definitions and references with uncapped canonical declaration keys; fingerprints bind a full SHA-256 digest of complete ancestor context without quadratic nesting storage and reject legacy identities that cannot prove it" },
                 new { id = "references-candidate-file-cap-disclosure", summary = "v0.12.46 indexed references disclose the existing caller-selected maxFiles candidate-file bound through coverage, candidate_file_cap, references.candidate_file_cap, and lower-bound totals instead of presenting a scanned subset as complete" },
+                new { id = "csharp-conversion-usage-enumeration", summary = "v0.12.47 semantic references enumerate compiler-bound implicitConversion, explicitConversion, and checkedConversion sites across the selected dependent closure, including stacked, nullable-tuple, full C# compound-assignment, primary-constructor, foreach, deconstruction, and interface-dispatch carriers, so exact zero means no matching conversion was found in complete loaded coverage" },
+                new { id = "csharp-operator-semantic-handles", summary = "v0.12.47 regular and conversion operator idx handles pin definition/references with canonical syntax declaration keys, including checked and explicit-interface forms; indexed definition retains the resolved row, indexed/failed-auto references fail closed, and implementations/type_hierarchy reject operator handles instead of retargeting" },
+                new { id = "csharp-explicit-interface-operator-accessibility", summary = "v0.12.47 schema v23 persists explicit-interface regular operators as private so search, outline, and review_pack do not overstate public API" },
+                new { id = "semantic-indivisible-identity-completeness", summary = "v0.12.47 definition/references remove optional declaration-site lists with truthful declaration totals and stable note id semantic.declaration_sites_budget before preserving a complete indivisible compiler symbol identity above ordinary hardBytes; responseBudget then reports measured serializedBytes, exceeded:true, completeIdentity:true, and reason:indivisible_semantic_identity without identity truncation or rejection" },
                 new { id = "review-git-launcher-isolation", summary = "Only canonical absolute paths and trusted system cmd.exe launch Git; batch percent expansion is refused, and a missing or non-directory working directory fails before spawn" },
                 new { id = "review-git-transport-isolation", summary = "v0.11.2 Git transport isolation: the highest-precedence GIT_ALLOW_PROTOCOL denylist plus the protocol.allow=never fallback keep read-only plumbing local even when protocol-specific repository config attempts to enable a transport" },
                 new { id = "review-git-environment-isolation", summary = "v0.11.4 clears inherited repository/object/index selectors (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_ALTERNATE_OBJECT_DIRECTORIES) before discovery; the sandbox reinstates only validated paths" },
@@ -247,7 +253,13 @@ public sealed partial class NavigationTools
                 "project_graph", "projects_containing", "refresh_index",
                 "worktrees", "index_worktree", "review_pack",
             },
-            budgets = new { softBytes = Json.SoftBudgetBytes, hardBytes = Json.HardBudgetBytes, defaultLimit = 20 },
+            budgets = new
+            {
+                softBytes = Json.SoftBudgetBytes,
+                hardBytes = Json.HardBudgetBytes,
+                defaultLimit = 20,
+                indivisibleSemanticIdentity = "definition/references may exceed hardBytes only to preserve one complete compiler identity; responseBudget reports the measured exception",
+            },
             confidenceModel = new
             {
                 exact = "compiler-verified Roslyn semantic resolution",
@@ -1336,12 +1348,14 @@ public sealed partial class NavigationTools
     {
         if (NotReady() is { } notReady) return notReady;
         string? semanticDeclarationKey = null;
+        SymbolHit? resolvedHandleHit = null;
         if (symbolId is { Length: > 0 })
         {
             var (hit, error) = ResolveSymbolIdHandle(symbolId);
             if (error is not null) return error;
+            resolvedHandleHit = hit;
             name = hit!.Name; path = hit.FilePath; line = hit.StartLine; column = 0;
-            semanticDeclarationKey = ConversionDeclarationKey(hit);
+            semanticDeclarationKey = OperatorDeclarationKey(hit);
             // The handle already disambiguated the symbol — caller kinds/container filters exist to
             // narrow a bare name, so applying them here can only wrongly suppress the resolved hit.
             kinds = null; container = null;
@@ -1400,7 +1414,11 @@ public sealed partial class NavigationTools
             int deadlineMs = Math.Clamp(timeoutMs, 500, 60000); // mirror DefinitionAsync's clamp (24n)
             var swSem = System.Diagnostics.Stopwatch.StartNew();
             var (target, hint) = ResolveSemanticTarget(name, container, kinds, path, line, column);
-            if (target is { } t)
+            if (TestOnlySemanticFailureReason is { } forcedFailure)
+            {
+                failReason = forcedFailure;
+            }
+            else if (target is { } t)
             {
                 var (decl, reason, _, semanticPartialReason) = _semantic
                     .DefinitionAsync(t.Path, t.Line, t.Column, hint, timeoutMs,
@@ -1437,7 +1455,10 @@ public sealed partial class NavigationTools
                     // Semantic spans come from live sources — pair them with live content.
                     object? MakeSemanticBody(int budget) =>
                         d0 is null ? null : BuildDeclarationBody(d0.Path, d0.StartLine, d0.EndLine, budget, preferLive: true);
-                    return SerializeBodyBounded(BuildSemantic, includeBody ? MakeSemanticBody(bodyMaxBytes) : null, MakeSemanticBody, bodyMaxBytes);
+                    return Json.WithCompleteSemanticIdentity(
+                        SerializeBodyBounded(BuildSemantic,
+                            includeBody ? MakeSemanticBody(bodyMaxBytes) : null,
+                            MakeSemanticBody, bodyMaxBytes));
                 }
                 failReason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
             }
@@ -1466,7 +1487,10 @@ public sealed partial class NavigationTools
             var chain = q.SymbolAt(NormalizePath(path), line);
             lookupName = chain.Count > 0 ? chain[0].Name : "";
         }
-        var hits = q.SearchSymbols(lookupName, "exact", SplitCsv(kinds), 100, includeGenerated: true);
+        var hits = resolvedHandleHit is not null
+            ? new List<SymbolHit> { resolvedHandleHit }
+            : q.SearchSymbols(lookupName, "exact", SplitCsv(kinds), 100,
+                includeGenerated: true);
         if (container is { } c)
         {
             hits = hits.Where(h =>
@@ -1593,7 +1617,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "implementations")]
-    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). Generic declarations may be selected by arity or symbolId; a bare name spanning multiple arities returns symbol_ambiguous. A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to arity-aware base-list syntax matching (confidence 'heuristic', unranked). For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead.")]
+    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). Generic declarations may be selected by arity or symbolId; a bare name spanning multiple arities returns symbol_ambiguous. Operator symbolId handles are rejected as unsupported; use definition or references for them. A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to arity-aware base-list syntax matching (confidence 'heuristic', unranked). For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead.")]
     public string Implementations(
         [Description("Interface/type/member name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration or a usage (position mode).")] string? path = null,
@@ -1602,7 +1626,7 @@ public sealed partial class NavigationTools
         [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
         [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000,
         [Description("Optional generic type-parameter count. Use 0 for a non-generic declaration, 1 for Foo<T>, etc. A bare name with multiple available arities is refused.")] int? arity = null,
-        [Description("Resolve by a search_symbol candidate's current idx: handle. Takes precedence over name, path+line, and arity.")] string? symbolId = null)
+        [Description("Resolve by a search_symbol candidate's current idx: handle. Takes precedence over name, path+line, and arity. Operator handles return unsupported_symbol_kind.")] string? symbolId = null)
     {
         if (NotReady() is { } notReady) return notReady;
         if (symbolId is not { Length: > 0 } &&
@@ -1824,7 +1848,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "references")]
-    [Description("Where a symbol is used across the workspace, grouped by project with counts and sample lines. mode='auto' tries compiler-exact references (target by position path+line, or by name) scoped to candidate projects, falling back to index candidates. Exact references are usage-kind classified (kinds breakdown: call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof) — filter with usageKinds (e.g. 'call' to skip doc mentions) or publicConsumersOnly for external callers. Pass pathGlob/excludePath to scope candidates (e.g. excludePath='3rdparty/**'); a path filter runs the indexed candidate path so counts reflect the filter. Call before changing behavior.")]
+    [Description("Where a symbol is used across the workspace, grouped by project with counts and sample lines. mode='auto' tries compiler-exact references (target by position path+line, or by name) scoped to candidate projects, falling back to index candidates. Exact references are usage-kind classified (kinds breakdown: call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/implicitConversion/explicitConversion/checkedConversion/other) — filter with usageKinds (e.g. 'call' to skip doc mentions) or publicConsumersOnly for external callers. Pass pathGlob/excludePath to scope candidates (e.g. excludePath='3rdparty/**'); a path filter runs the indexed candidate path so counts reflect the filter. Call before changing behavior.")]
     public string References(
         [Description("Symbol name (whole-identifier). Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of a usage or declaration (position mode — most precise).")] string? path = null,
@@ -1833,7 +1857,7 @@ public sealed partial class NavigationTools
         [Description("'auto' (semantic first), 'semantic', or 'indexed' (fast candidates).")] string mode = "auto",
         [Description("Include usages in test projects (default true).")] bool includeTests = true,
         [Description("Include usages in generated files (default false).")] bool includeGenerated = false,
-        [Description("Comma-separated usage-kind filter — SEMANTIC (exact) path only: call, construction, typeMention, attribute, nameof, xmldoc, usingDirective, baseList, typeof, other. Counts and groups honor it (e.g. 'call,construction' = real executions only).")] string? usageKinds = null,
+        [Description("Comma-separated usage-kind filter — SEMANTIC (exact) path only: call, construction, typeMention, attribute, nameof, xmldoc, usingDirective, baseList, typeof, implicitConversion, explicitConversion, checkedConversion, other. Counts and groups honor it (e.g. 'call,construction' = real executions only).")] string? usageKinds = null,
         [Description("Only usages OUTSIDE the symbol's own declaring PROJECT (project-scoped, NOT accessibility-scoped — the name is about API blast radius, not access modifiers). The external-consumer view; semantic path only.")] bool publicConsumersOnly = false,
         [Description("Restrict candidate paths to this glob (supplying a path filter runs indexed candidates).")] string? pathGlob = null,
         [Description("Exclude candidate paths matching this glob, e.g. '3rdparty/**' (supplying a path filter runs indexed candidates).")] string? excludePath = null,
@@ -1845,12 +1869,14 @@ public sealed partial class NavigationTools
     {
         if (NotReady() is { } notReady) return notReady;
         string? semanticDeclarationKey = null;
+        SymbolHit? resolvedHandleHit = null;
         if (symbolId is { Length: > 0 })
         {
             var (hit, error) = ResolveSymbolIdHandle(symbolId);
             if (error is not null) return error;
+            resolvedHandleHit = hit;
             name = hit!.Name; path = hit.FilePath; line = hit.StartLine; column = 0;
-            semanticDeclarationKey = ConversionDeclarationKey(hit);
+            semanticDeclarationKey = OperatorDeclarationKey(hit);
         }
         if (UnsupportedLanguageAtPath(path, "references") is { } unsupportedLanguage)
             return unsupportedLanguage;
@@ -1862,6 +1888,13 @@ public sealed partial class NavigationTools
         // Path filters are honored precisely only on the indexed candidate path (semantic counts
         // are project-level and cannot be re-derived per path), so a filter forces indexed mode.
         bool hasPathFilter = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 };
+        if (resolvedHandleHit is { Kind: "operator" } &&
+            (mode == "indexed" || hasPathFilter))
+        {
+            return OperatorReferencesRequireSemantic(mode == "indexed"
+                ? "operator_handle_indexed_mode_unavailable"
+                : "operator_handle_path_filter_requires_indexed_mode");
+        }
         string? failReason = hasPathFilter && mode != "indexed" ? "path_filter_ran_indexed_candidates" : null;
         // Usage-kind buckets + external-consumers view are syntax/compiler facts — semantic path only.
         var kindSet = SplitCsv(usageKinds) is { Count: > 0 } uk
@@ -1889,7 +1922,11 @@ public sealed partial class NavigationTools
             int deadlineMs = Math.Clamp(timeoutMs, 500, 120000);
             var swSem = System.Diagnostics.Stopwatch.StartNew();
             var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column);
-            if (target is { } t)
+            if (TestOnlySemanticFailureReason is { } forcedFailure)
+            {
+                failReason = forcedFailure;
+            }
+            else if (target is { } t)
             {
                 var (result, reason) = _semantic
                     .ReferencesAsync(t.Path, t.Line, t.Column, hint, maxProjects,
@@ -2002,7 +2039,8 @@ public sealed partial class NavigationTools
                             out bool identityTruncated);
                         boundedOutOfGraph.Add((bounded, identityTruncated));
                     }
-                    return Json.WithAuxiliaryListsBudget(groups0,
+                    return Json.WithCompleteSemanticIdentity(
+                        Json.WithAuxiliaryListsBudget(groups0,
                         result.SkippedCandidateProjects, boundedOutOfGraph,
                         (items, truncated, skippedItems, skippedTruncated,
                             outOfGraphItems, outOfGraphBudgetTruncated) => new
@@ -2056,7 +2094,7 @@ public sealed partial class NavigationTools
                                 timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
                                 truncated,
                                 meta = meta0,
-                            });
+                            }));
                 }
                 failReason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
             }
@@ -2076,6 +2114,9 @@ public sealed partial class NavigationTools
                 });
             }
         }
+
+        if (resolvedHandleHit is { Kind: "operator" })
+            return OperatorReferencesRequireSemantic(failReason ?? "semantic_unavailable");
 
         // Indexed fallback (name required — derive from position when missing).
         using var q = _manager.OpenQueries();
@@ -2370,6 +2411,9 @@ public sealed partial class NavigationTools
     private static object SemanticSymbolCore(SemanticDeclaration d, bool includeDeclarations)
     {
         var sites = includeDeclarations ? d.Declarations.Take(MaxDeclarationSites + 1).ToList() : null;
+        int returnedDeclarations = Math.Min(d.Declarations.Count, MaxDeclarationSites);
+        bool declarationSitesTruncated = includeDeclarations &&
+                                         d.Declarations.Count > MaxDeclarationSites;
         return new
         {
             display = d.SymbolDisplay,
@@ -2379,9 +2423,14 @@ public sealed partial class NavigationTools
             ns = d.Namespace,
             assembly = d.Assembly,
             declarations = sites?.Take(MaxDeclarationSites).Select(s => new { s.Path, s.StartLine, s.EndLine, project = s.Project }),
-            declarationsTruncated = sites is { Count: > MaxDeclarationSites }
+            declarationsTotal = includeDeclarations ? d.Declarations.Count : (int?)null,
+            declarationsReturned = includeDeclarations ? returnedDeclarations : (int?)null,
+            declarationsTruncated = declarationSitesTruncated
                 ? $"more than {MaxDeclarationSites} declaration sites — narrow the query or use references"
                 : (string?)null,
+            declarationsNoteId = declarationSitesTruncated
+                ? NoteIds.SemanticDeclarationSitesBudget
+                : null,
         };
     }
 
@@ -2572,12 +2621,21 @@ public sealed partial class NavigationTools
         return (hit, null);
     }
 
-    private static string? ConversionDeclarationKey(SymbolHit hit) =>
-        hit.Kind == "operator" &&
-        (hit.Name.StartsWith("implicit operator ", StringComparison.Ordinal) ||
-         hit.Name.StartsWith("explicit operator ", StringComparison.Ordinal))
+    private static string? OperatorDeclarationKey(SymbolHit hit) =>
+        hit.Kind == "operator" && !string.IsNullOrEmpty(hit.DeclarationKey)
             ? hit.DeclarationKey
             : null;
+
+    private string OperatorReferencesRequireSemantic(string reason) => Json.Serialize(new
+    {
+        error = "semantic_required",
+        operation = "references",
+        kind = "operator",
+        partialReason = reason,
+        detail = "Operator idx handles require compiler-semantic references so the canonical declaration key remains pinned; indexed text candidates cannot distinguish overload identity.",
+        hint = "Retry without pathGlob/excludePath using mode='semantic' or mode='auto'.",
+        meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+    });
 
     /// <summary>t2b: expand the cluster_cold_load token with inline advice at the moment of
     /// confusion — the deadline died LOADING compilations (the first call after an index build

@@ -1,7 +1,9 @@
 using CodeNav.Core.Indexing;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.FindSymbols;
+using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.Text;
 
 namespace CodeNav.Core.Semantic;
@@ -44,9 +46,9 @@ public sealed record SemanticReferences(
     long? ClusterLoadMs = null,
     long? QueryMs = null,
     bool ProjectModelUnproven = false,
-    // Roslyn currently does not prove a complete set of user-defined conversion usages. Keep
-    // every reported census partial until PhoenixCodeNav-4rk supplies a compiler-backed
-    // enumeration path; directional count guarantees still depend on project-model authority.
+    // Compatibility field for the pre-v0.12.47 containment path. Production conversion scans now
+    // enumerate compiler-bound implicit, explicit, and checked conversion operations directly;
+    // the field remains so a deterministic legacy test seam can exercise partial-result shaping.
     bool ConversionUsageEnumerationIncomplete = false);
 
 /// <summary>One implementation / derived class / override, tagged for hierarchy ranking.
@@ -101,11 +103,28 @@ public sealed partial class SemanticService : IDisposable
     internal Action<int>? TestOnlyPerLocationCounted;
 
     /// <summary>TEST SEAM (hdb8): overrides user-defined-conversion classification so the
-    /// deadline-salvage path can be exercised with a symbol whose Roslyn reference finder returns
-    /// positive locations. Real conversion locations are not enumerated yet (PhoenixCodeNav-4rk).
-    /// The test asserts this classifier runs before any count can be cancelled. Never set in
-    /// production; instance-scoped so parallel tests cannot cross-trip it.</summary>
+    /// deadline-salvage path can be exercised with a non-conversion symbol whose Roslyn reference
+    /// finder returns positive locations. Production conversion symbols use the compiler-bound
+    /// conversion-operation scanner. Never set in production; instance-scoped so parallel tests
+    /// cannot cross-trip it.</summary>
     internal Func<ISymbol, string?, CancellationToken, bool>? TestOnlyUserDefinedConversionClassifier;
+
+    /// <summary>TEST SEAM (hdb8): invoked after each compiler-bound conversion site is
+    /// committed to the conversion scan. Lets a test throw OperationCanceledException after a
+    /// known positive prefix and verify the normal semantic_timeout lower-bound salvage path.
+    /// Never set in production; instance-scoped so parallel tests cannot cross-trip it.</summary>
+    internal Action<int>? TestOnlyConversionSiteDiscovered;
+
+    /// <summary>TEST SEAM (tami): observes the exact source span and usage kind of each
+    /// conversion site after identity matching and span deduplication. This lets regressions pin
+    /// each composite-conversion carrier independently instead of relying on one aggregate count.
+    /// Never set in production; instance-scoped so parallel tests cannot cross-trip it.</summary>
+    internal Action<Location, string>? TestOnlyConversionSiteAdded;
+
+    /// <summary>TEST SEAM (4qh1): observes candidate-operator identity-cache lookups during a
+    /// conversion scan. True means the candidate reused an earlier resolution in the same scan;
+    /// false means the candidate was resolved once and cached. Never set in production.</summary>
+    internal Action<bool>? TestOnlyConversionIdentityCacheLookup;
 
     /// <summary>TEST SEAM (t2b): invoked at ReferencesAsync's phase boundaries —
     /// "beforeScanSetLoad" / "afterScanSetLoad" — so a test can burn the deadline in a CHOSEN
@@ -199,6 +218,7 @@ public sealed partial class SemanticService : IDisposable
         public int UniqueSyntaxTrees { get; set; }
         public int UniqueSites { get; set; }
         public int SamplesRead { get; set; }
+        public string Path { get; set; } = "symbol_finder";
 
         internal object Shape(double queryMs)
         {
@@ -211,7 +231,7 @@ public sealed partial class SemanticService : IDisposable
                 (compilationPreparation?.TotalMs ?? 0) - (documentScope?.TotalMs ?? 0));
             return new
             {
-                path = "symbol_finder",
+                path = Path,
                 compilationPreparation = compilationPreparation is null ? null : new
                 {
                     totalMs = Math.Round(compilationPreparation.TotalMs, 1),
@@ -579,10 +599,12 @@ public sealed partial class SemanticService : IDisposable
             // sites do not contain Roslyn's op_Implicit/op_Explicit metadata name, so every resolved
             // conversion route (handle, path, or name+position) must scan the eligible dependent
             // closure rather than falling through to name-based candidate discovery.
-            bool conversionUsageEnumerationIncomplete =
+            bool sourceConversion = IsUserDefinedConversion(symbolA, cts.Token);
+            bool userDefinedConversion =
                 TestOnlyUserDefinedConversionClassifier?.Invoke(
-                    symbolA, declarationKeyHint, cts.Token) ??
-                IsUserDefinedConversion(symbolA, declarationKeyHint, cts.Token);
+                    symbolA, declarationKeyHint, cts.Token) ?? sourceConversion;
+            bool conversionUsageEnumerationIncomplete =
+                userDefinedConversion && !sourceConversion;
 
             // Implementer seeds for TYPE targets — parity with Implementations/TypeHierarchy
             // (field 0.7.2 regression report): references was the ONLY exact tool relying purely
@@ -622,7 +644,7 @@ public sealed partial class SemanticService : IDisposable
                     includeTests: includeTests,
                     planStatsBox: planning.ScanSet,
                     declarationKeyHint: declarationKeyHint,
-                    scanAllDependents: conversionUsageEnumerationIncomplete).ConfigureAwait(false);
+                    scanAllDependents: userDefinedConversion).ConfigureAwait(false);
             }
             var (scanLease, symbol, coverage, skipped, outOfGraph) = scanResult;
             deferredRetentionPending = false;
@@ -650,24 +672,44 @@ public sealed partial class SemanticService : IDisposable
             await Workspace.PrepareCompilationsAsync(scanLease, owningProject,
                 queryStages.CompilationPreparation, cts.Token, operationId).ConfigureAwait(false);
 
-            ReferenceDocumentScope documentScope;
-            using (SemanticPhaseEventSource.Log.Measure("documentScope", operationId))
+            ReferenceDocumentScope? documentScope = null;
+            if (!sourceConversion)
             {
-                documentScope = await PlanReferenceDocumentScopeAsync(
-                    symbol, solution, queryStages.DocumentScope, cts.Token).ConfigureAwait(false);
+                using (SemanticPhaseEventSource.Log.Measure("documentScope", operationId))
+                {
+                    documentScope = await PlanReferenceDocumentScopeAsync(
+                        symbol, solution, queryStages.DocumentScope, cts.Token)
+                        .ConfigureAwait(false);
+                }
             }
 
-            IEnumerable<ReferencedSymbol> found;
+            IEnumerable<SemanticReferenceSite> foundSites;
+            bool finderDeadlineExhausted = false;
             long findStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
                 using (SemanticPhaseEventSource.Log.Measure("findReferences", operationId))
                 {
-                    found = documentScope.Documents is null
-                        ? await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token)
-                            .ConfigureAwait(false)
-                        : await SymbolFinder.FindReferencesAsync(symbol, solution,
-                            documentScope.Documents, cts.Token).ConfigureAwait(false);
+                    if (sourceConversion)
+                    {
+                        queryStages.Path = "conversion_operations";
+                        ConversionReferenceSearch conversionSearch =
+                            await FindUserDefinedConversionReferencesAsync(
+                                (IMethodSymbol)symbol, solution,
+                                queryStages.DocumentScope, cts.Token).ConfigureAwait(false);
+                        foundSites = conversionSearch.Sites;
+                        finderDeadlineExhausted = conversionSearch.DeadlineExhausted;
+                        queryStages.ReferencedSymbols = 1;
+                    }
+                    else
+                    {
+                        IEnumerable<ReferencedSymbol> found = documentScope!.Documents is null
+                            ? await SymbolFinder.FindReferencesAsync(symbol, solution, cts.Token)
+                                .ConfigureAwait(false)
+                            : await SymbolFinder.FindReferencesAsync(symbol, solution,
+                                documentScope.Documents, cts.Token).ConfigureAwait(false);
+                        foundSites = FlattenReferenceSites(found, queryStages);
+                    }
                 }
             }
             finally
@@ -699,106 +741,114 @@ public sealed partial class SemanticService : IDisposable
             // Physical-site dedupe (field P1, 0.7.0): twin-declaration types can surface the SAME
             // usage site through more than one ReferencedSymbol entry — the canary returned
             // totalReferences 13 for 8 implementers with Interface.cs:11 twice INSIDE one group.
-            // One (project, path, line, kind) site counts once: the semantic mirror of 0ok's
-            // physical indexed totals. Keyed WITH the project so a file genuinely linked into two
-            // projects keeps its per-project attribution (the documented blast-radius property).
-            var seenSites = new HashSet<(string Project, string Path, int Line, string Kind)>();
-            bool deadlineExhausted = false;
+            // One (project, path, source span, kind) site counts once. Span granularity preserves
+            // distinct same-line operations while still collapsing a twin-declaration site that
+            // Roslyn returns through more than one ReferencedSymbol entry. Keyed WITH the project
+            // so a file genuinely linked into two projects keeps its per-project attribution (the
+            // documented blast-radius property).
+            var seenSites = new HashSet<(string Project, string Path, int SpanStart, string Kind)>();
+            bool deadlineExhausted = finderDeadlineExhausted;
             // Salvage wrapper (24n): if the deadline fires INSIDE the counting loop, keep what was
             // counted as a lower bound instead of discarding completed compiler work into a bare
             // "semantic_timeout". A deadline during resolve/FindReferences still falls through to
             // the outer catch — there is genuinely nothing to salvage there.
             try
             {
-                foreach (var referenced in found)
+                foreach (SemanticReferenceSite site in foundSites)
                 {
-                    queryStages.ReferencedSymbols++;
-                    foreach (var loc in referenced.Locations)
-                    {
-                        queryStages.RawLocations++;
-                        if (loc.Location.SourceTree is null) continue;
-                        queryStages.SourceLocations++;
-                        var doc = loc.Document;
-                        string project = doc.Project.Name;
-                        var lineSpan = loc.Location.GetLineSpan();
-                        int refLine = lineSpan.StartLinePosition.Line + 1;
-                        string relPath = ToRelPath(doc.FilePath ?? doc.Name);
-                        if (generatedPaths is not null && generatedPaths.Contains(relPath)) continue;
-                        // includeTests filters BEFORE counting (wu1) — same discipline as
-                        // includeGenerated/usageKinds, so TotalLocations, KindCounts, and the group
-                        // list all describe the same filtered set. Previously the tool dropped test
-                        // GROUPS after the fact while summary/kinds still counted their locations.
-                        bool isTest = testFlags.TryGetValue(project, out bool t) && t;
-                        if (!includeTests && isTest) continue;
-                        // publicConsumersOnly: API blast-radius view — drop usages from the DECLARING
-                        // project itself, before counting, so totals reflect external consumers only.
-                        if (publicConsumersOnly && string.Equals(project, declaringProject, StringComparison.OrdinalIgnoreCase)) continue;
+                    queryStages.RawLocations++;
+                    if (site.Location.SourceTree is null) continue;
+                    queryStages.SourceLocations++;
+                    Document doc = site.Document;
+                    string project = doc.Project.Name;
+                    var lineSpan = site.Location.GetLineSpan();
+                    int refLine = lineSpan.StartLinePosition.Line + 1;
+                    string relPath = ToRelPath(doc.FilePath ?? doc.Name);
+                    if (generatedPaths is not null && generatedPaths.Contains(relPath)) continue;
+                    // includeTests filters BEFORE counting (wu1) — same discipline as
+                    // includeGenerated/usageKinds, so TotalLocations, KindCounts, and the group
+                    // list all describe the same filtered set. Previously the tool dropped test
+                    // GROUPS after the fact while summary/kinds still counted their locations.
+                    bool isTest = testFlags.TryGetValue(project, out bool t) && t;
+                    if (!includeTests && isTest) continue;
+                    // publicConsumersOnly: API blast-radius view — drop usages from the DECLARING
+                    // project itself, before counting, so totals reflect external consumers only.
+                    if (publicConsumersOnly && string.Equals(project, declaringProject, StringComparison.OrdinalIgnoreCase)) continue;
 
-                        // Classify HOW the symbol is used (call vs xmldoc mention vs ...); filter before
-                        // counting so totals honor usageKinds (same discipline as includeGenerated).
-                        if (!rootCache.TryGetValue(loc.Location.SourceTree, out var rootNode))
+                    // Classify HOW the symbol is used (call vs xmldoc mention vs ...); filter before
+                    // counting so totals honor usageKinds (same discipline as includeGenerated).
+                    string kind;
+                    if (site.Kind is { } compilerKind)
+                    {
+                        kind = compilerKind;
+                    }
+                    else
+                    {
+                        if (!rootCache.TryGetValue(site.Location.SourceTree,
+                                out var rootNode))
                         {
                             long rootStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                             try
                             {
-                                rootNode = await loc.Location.SourceTree.GetRootAsync(cts.Token)
-                                    .ConfigureAwait(false);
+                                rootNode = await site.Location.SourceTree
+                                    .GetRootAsync(cts.Token).ConfigureAwait(false);
                             }
                             finally
                             {
-                                queryStages.SyntaxRootLoadMs += System.Diagnostics.Stopwatch
-                                    .GetElapsedTime(rootStarted).TotalMilliseconds;
+                                queryStages.SyntaxRootLoadMs +=
+                                    System.Diagnostics.Stopwatch
+                                        .GetElapsedTime(rootStarted).TotalMilliseconds;
                             }
-                            rootCache[loc.Location.SourceTree] = rootNode;
+                            rootCache[site.Location.SourceTree] = rootNode;
                         }
-                        string kind;
                         long classifyStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                         try
                         {
                             kind = SemanticReferenceKinds.Classify(rootNode,
-                                loc.Location.SourceSpan.Start, symbolIsType);
+                                site.Location.SourceSpan.Start, symbolIsType);
                         }
                         finally
                         {
                             queryStages.ClassificationMs += System.Diagnostics.Stopwatch
                                 .GetElapsedTime(classifyStarted).TotalMilliseconds;
                         }
-                        if (usageKinds is not null && !usageKinds.Contains(kind)) continue;
-                        if (!seenSites.Add((project, relPath, refLine, kind))) continue; // field P1: idempotent site counting
+                    }
+                    if (usageKinds is not null && !usageKinds.Contains(kind)) continue;
+                    if (!seenSites.Add((project, relPath,
+                            site.Location.SourceSpan.Start, kind))) continue;
 
-                        // ALL bookkeeping commits before the awaitable sample fetch (review, 24n): with
-                        // the group commit trailing GetTextAsync, a deadline OCE on that await salvaged
-                        // a response whose total/kinds included the location but whose groups did not —
-                        // worst case "at least 1 exact references across 0 projects". The with-copy
-                        // shares the Samples List instance, so samples added below still land in the
-                        // stored group; a sample lost to the OCE costs a sample line, never a count.
-                        total++;
-                        kindCounts[kind] = kindCounts.GetValueOrDefault(kind) + 1;
-                        if (!groups.TryGetValue(project, out var g))
+                    // ALL bookkeeping commits before the awaitable sample fetch (review, 24n): with
+                    // the group commit trailing GetTextAsync, a deadline OCE on that await salvaged
+                    // a response whose total/kinds included the location but whose groups did not —
+                    // worst case "at least 1 exact references across 0 projects". The with-copy
+                    // shares the Samples List instance, so samples added below still land in the
+                    // stored group; a sample lost to the OCE costs a sample line, never a count.
+                    total++;
+                    kindCounts[kind] = kindCounts.GetValueOrDefault(kind) + 1;
+                    if (!groups.TryGetValue(project, out var g))
+                    {
+                        g = new SemanticRefGroup(project, isTest, 0, new List<SemanticLocation>());
+                    }
+                    groups[project] = g with { Count = g.Count + 1 };
+                    // Placed AFTER the bookkeeping commit, matching where a real deadline OCE is
+                    // survivable (the awaitable sample fetch below) — counted state is consistent.
+                    TestOnlyPerLocationCounted?.Invoke(total);
+                    var samples = g.Samples;
+                    if (samples.Count < samplesPerGroup && !cts.IsCancellationRequested)
+                    {
+                        long sampleStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                        try
                         {
-                            g = new SemanticRefGroup(project, isTest, 0, new List<SemanticLocation>());
+                            string text = (await site.Location.SourceTree.GetTextAsync(cts.Token)
+                                    .ConfigureAwait(false))
+                                .Lines[lineSpan.StartLinePosition.Line].ToString().Trim();
+                            samples.Add(new SemanticLocation(relPath, refLine, Truncate(text), project, isTest, kind));
+                            queryStages.SamplesRead++;
                         }
-                        groups[project] = g with { Count = g.Count + 1 };
-                        // Placed AFTER the bookkeeping commit, matching where a real deadline OCE is
-                        // survivable (the awaitable sample fetch below) — counted state is consistent.
-                        TestOnlyPerLocationCounted?.Invoke(total);
-                        var samples = g.Samples;
-                        if (samples.Count < samplesPerGroup)
+                        finally
                         {
-                            long sampleStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-                            try
-                            {
-                                string text = (await loc.Location.SourceTree.GetTextAsync(cts.Token)
-                                        .ConfigureAwait(false))
-                                    .Lines[lineSpan.StartLinePosition.Line].ToString().Trim();
-                                samples.Add(new SemanticLocation(relPath, refLine, Truncate(text), project, isTest, kind));
-                                queryStages.SamplesRead++;
-                            }
-                            finally
-                            {
-                                queryStages.SampleTextMs += System.Diagnostics.Stopwatch
-                                    .GetElapsedTime(sampleStarted).TotalMilliseconds;
-                            }
+                            queryStages.SampleTextMs += System.Diagnostics.Stopwatch
+                                .GetElapsedTime(sampleStarted).TotalMilliseconds;
                         }
                     }
                 }
@@ -1313,18 +1363,513 @@ public sealed partial class SemanticService : IDisposable
                         .Equals(declarationKeyHint, StringComparison.Ordinal));
         }
 
+        if (node is OperatorDeclarationSyntax operatorDeclaration)
+        {
+            return SyntaxIndexer.OperatorName(operatorDeclaration)
+                       .Equals(nameHint, StringComparison.Ordinal) &&
+                   (declarationKeyHint is null ||
+                    SyntaxIndexer.OperatorDeclarationKey(operatorDeclaration)
+                        .Equals(declarationKeyHint, StringComparison.Ordinal));
+        }
+
         return declarationKeyHint is null &&
                symbol.Name.Equals(nameHint, StringComparison.Ordinal);
     }
 
-    private static bool IsUserDefinedConversion(ISymbol symbol, string? declarationKeyHint,
+    private sealed record SemanticReferenceSite(
+        Document Document, Location Location, string? Kind = null);
+
+    private sealed record ConversionReferenceSearch(
+        List<SemanticReferenceSite> Sites, bool DeadlineExhausted);
+
+    private static IEnumerable<SemanticReferenceSite> FlattenReferenceSites(
+        IEnumerable<ReferencedSymbol> referencedSymbols, ReferenceQueryStats stats)
+    {
+        foreach (ReferencedSymbol referenced in referencedSymbols)
+        {
+            stats.ReferencedSymbols++;
+            foreach (ReferenceLocation location in referenced.Locations)
+                yield return new SemanticReferenceSite(location.Document, location.Location);
+        }
+    }
+
+    /// <summary>
+    /// Enumerates compiler-bound source sites that select one exact user-defined conversion
+    /// operator. Roslyn's symbol reference finder sees explicit operator-name syntax but not
+    /// ordinary implicit conversions, so conversion targets walk each bound operation tree once.
+    /// Dedicated semantic APIs supplement the operation tree for conversions Roslyn stores on
+    /// compound operations, tuple element type pairs, foreach elements, and deconstruction trees.
+    /// </summary>
+    private async Task<ConversionReferenceSearch>
+        FindUserDefinedConversionReferencesAsync(
+            IMethodSymbol target, Solution solution,
+            ReferenceDocumentScopeStatsBox documentScopeStats,
+            CancellationToken cancellationToken)
+    {
+        long scopeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        var documents = new List<Document>();
+        int csharpProjects = 0;
+        foreach (Project project in solution.Projects)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (project.Language != LanguageNames.CSharp) continue;
+            csharpProjects++;
+            documents.AddRange(project.Documents);
+            documents.AddRange(await project.GetSourceGeneratedDocumentsAsync(cancellationToken)
+                .ConfigureAwait(false));
+        }
+        documentScopeStats.Stats = new ReferenceDocumentScopeStats(
+            Mode: "fullSolution",
+            Reason: "user_defined_conversion_operations",
+            CandidateSource: "compilerOperations",
+            TotalMs: System.Diagnostics.Stopwatch.GetElapsedTime(scopeStarted)
+                .TotalMilliseconds,
+            CacheHit: false,
+            SolutionDocuments: documents.Count,
+            CandidateDocuments: documents.Count,
+            ScopedDocuments: documents.Count,
+            ScopedProjects: csharpProjects,
+            DocumentsInScopedProjects: documents.Count,
+            AliasWidenedProjects: 0,
+            TransformedIncludedDocuments: 0);
+
+        var sites = new List<SemanticReferenceSite>();
+        var matchedOperators = new Dictionary<ISymbol, bool>(SymbolEqualityComparer.Default);
+        var seenSites = new HashSet<(DocumentId Document, int Start, int Length, string Kind)>();
+        bool deadlineExhausted = false;
+        try
+        {
+            foreach (Document document in documents)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                SyntaxNode? root = await document.GetSyntaxRootAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                SemanticModel? model = await document.GetSemanticModelAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                if (root is null || model is null) continue;
+
+                foreach (IOperation operationRoot in BoundOperationRoots(root, model,
+                             cancellationToken))
+                {
+                    var pending = new Queue<IOperation>();
+                    pending.Enqueue(operationRoot);
+                    while (pending.Count > 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        IOperation operation = pending.Dequeue();
+                        foreach (IOperation child in operation.ChildOperations)
+                            pending.Enqueue(child);
+
+                        switch (operation)
+                        {
+                            case IConversionOperation conversionOperation:
+                                if (conversionOperation.Conversion.MethodSymbol is
+                                    { } conversionMethod &&
+                                    IsConversionOperatorMethod(conversionMethod))
+                                {
+                                    await AddConversionSiteAsync(document,
+                                        operation.Syntax.GetLocation(),
+                                        CommonConversionUsageKind(
+                                            conversionOperation.Conversion,
+                                            conversionOperation.IsChecked),
+                                        conversionMethod, target, solution, matchedOperators,
+                                        seenSites, sites, cancellationToken).ConfigureAwait(false);
+                                }
+                                await AddTupleElementConversionSitesAsync(
+                                    conversionOperation.Operand.Type, conversionOperation.Type,
+                                    operation.Syntax, model, document, target, solution,
+                                    matchedOperators, seenSites, sites, cancellationToken)
+                                    .ConfigureAwait(false);
+                                break;
+                            case ICompoundAssignmentOperation compound:
+                                // CommonConversion intentionally erases C#-specific details. In
+                                // particular, its MethodSymbol can be null for the user-defined
+                                // result conversion of a compound assignment. The C# extensions
+                                // retain the complete operator identity for both directions.
+                                await AddCSharpConversionSiteAsync(compound.GetInConversion(),
+                                    document, operation.Syntax.GetLocation(),
+                                    target, solution, matchedOperators, seenSites, sites,
+                                    cancellationToken).ConfigureAwait(false);
+                                await AddCSharpConversionSiteAsync(compound.GetOutConversion(),
+                                    document, operation.Syntax.GetLocation(),
+                                    target, solution, matchedOperators, seenSites, sites,
+                                    cancellationToken).ConfigureAwait(false);
+                                break;
+                            case ICoalesceOperation coalesce:
+                                await AddCommonConversionSiteAsync(coalesce.ValueConversion,
+                                    isChecked: false, document, operation.Syntax.GetLocation(),
+                                    target, solution, matchedOperators, seenSites, sites,
+                                    cancellationToken).ConfigureAwait(false);
+                                break;
+                            case ISpreadOperation spread:
+                                await AddCSharpConversionSiteAsync(spread.GetElementConversion(),
+                                    document, operation.Syntax.GetLocation(),
+                                    target, solution, matchedOperators, seenSites, sites,
+                                    cancellationToken).ConfigureAwait(false);
+                                break;
+                            case IArgumentOperation argument:
+                                await AddCommonConversionSiteAsync(argument.InConversion,
+                                    isChecked: false, document, operation.Syntax.GetLocation(),
+                                    target, solution, matchedOperators, seenSites, sites,
+                                    cancellationToken).ConfigureAwait(false);
+                                await AddCommonConversionSiteAsync(argument.OutConversion,
+                                    isChecked: false, document, operation.Syntax.GetLocation(),
+                                    target, solution, matchedOperators, seenSites, sites,
+                                    cancellationToken).ConfigureAwait(false);
+                                break;
+                        }
+                    }
+                }
+
+                foreach (CommonForEachStatementSyntax forEach in root.DescendantNodes()
+                             .OfType<CommonForEachStatementSyntax>())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Conversion elementConversion = model.GetForEachStatementInfo(forEach)
+                        .ElementConversion;
+                    if (elementConversion is
+                        { IsUserDefined: true, MethodSymbol: { } elementMethod })
+                    {
+                        Location location = forEach is ForEachStatementSyntax simple
+                            ? simple.Identifier.GetLocation()
+                            : forEach.GetLocation();
+                        await AddConversionSiteAsync(document, location,
+                            ConversionUsageKind(elementConversion, elementMethod),
+                            elementMethod, target, solution, matchedOperators, seenSites, sites,
+                            cancellationToken).ConfigureAwait(false);
+                    }
+
+                    if (forEach is ForEachVariableStatementSyntax variableForEach)
+                    {
+                        DeconstructionInfo deconstruction = model.GetDeconstructionInfo(
+                            variableForEach);
+                        await AddDeconstructionSitesAsync(deconstruction,
+                            variableForEach.Variable, document, target, solution,
+                            matchedOperators, seenSites, sites, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                }
+
+                foreach (AssignmentExpressionSyntax assignment in root.DescendantNodes()
+                             .OfType<AssignmentExpressionSyntax>())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (assignment.Left is not TupleExpressionSyntax and
+                        not DeclarationExpressionSyntax)
+                    {
+                        continue;
+                    }
+                    DeconstructionInfo deconstruction = model.GetDeconstructionInfo(assignment);
+                    await AddDeconstructionSitesAsync(deconstruction, assignment.Left, document,
+                        target, solution, matchedOperators, seenSites, sites, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (sites.Count > 0)
+        {
+            deadlineExhausted = true;
+        }
+        return new ConversionReferenceSearch(sites, deadlineExhausted);
+    }
+
+    private static IEnumerable<IOperation> BoundOperationRoots(SyntaxNode root,
+        SemanticModel model, CancellationToken cancellationToken)
+    {
+        var seen = new HashSet<(int Start, int Length, OperationKind Kind)>();
+        foreach (SyntaxNode node in root.DescendantNodesAndSelf())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (node is not MemberDeclarationSyntax and
+                not GlobalStatementSyntax and
+                not AccessorDeclarationSyntax and
+                not ArrowExpressionClauseSyntax and
+                not EqualsValueClauseSyntax and
+                not PrimaryConstructorBaseTypeSyntax)
+            {
+                continue;
+            }
+
+            IOperation? operation = model.GetOperation(node, cancellationToken);
+            if (operation is null) continue;
+            while (operation.Parent is { } parent) operation = parent;
+            if (seen.Add((operation.Syntax.SpanStart, operation.Syntax.Span.Length,
+                    operation.Kind)))
+            {
+                yield return operation;
+            }
+        }
+    }
+
+    private async Task AddDeconstructionSitesAsync(DeconstructionInfo info,
+        SyntaxNode syntax, Document document, IMethodSymbol target, Solution solution,
+        Dictionary<ISymbol, bool> matchedOperators,
+        HashSet<(DocumentId Document, int Start, int Length, string Kind)> seenSites,
+        List<SemanticReferenceSite> sites, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (info.Conversion is
+            { IsUserDefined: true, MethodSymbol: { } operatorMethod } conversion)
+        {
+            await AddConversionSiteAsync(document, DeconstructionLocation(syntax),
+                ConversionUsageKind(conversion, operatorMethod), operatorMethod, target,
+                solution, matchedOperators, seenSites, sites, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (info.Nested.IsDefaultOrEmpty) return;
+        IReadOnlyList<SyntaxNode> children = DeconstructionChildren(syntax);
+        int count = Math.Min(info.Nested.Length, children.Count);
+        for (int i = 0; i < count; i++)
+        {
+            await AddDeconstructionSitesAsync(info.Nested[i], children[i], document,
+                target, solution, matchedOperators, seenSites, sites, cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private async Task AddCommonConversionSiteAsync(CommonConversion conversion,
+        bool isChecked, Document document, Location location, IMethodSymbol target,
+        Solution solution, Dictionary<ISymbol, bool> matchedOperators,
+        HashSet<(DocumentId Document, int Start, int Length, string Kind)> seenSites,
+        List<SemanticReferenceSite> sites, CancellationToken cancellationToken)
+    {
+        if (conversion.MethodSymbol is not { } operatorMethod ||
+            !IsConversionOperatorMethod(operatorMethod))
+        {
+            return;
+        }
+        await AddConversionSiteAsync(document, location,
+            CommonConversionUsageKind(conversion, isChecked), operatorMethod, target, solution,
+            matchedOperators, seenSites, sites, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task AddCSharpConversionSiteAsync(Conversion conversion,
+        Document document, Location location, IMethodSymbol target, Solution solution,
+        Dictionary<ISymbol, bool> matchedOperators,
+        HashSet<(DocumentId Document, int Start, int Length, string Kind)> seenSites,
+        List<SemanticReferenceSite> sites, CancellationToken cancellationToken)
+    {
+        if (conversion is not { IsUserDefined: true, MethodSymbol: { } operatorMethod })
+            return;
+        await AddConversionSiteAsync(document, location,
+            ConversionUsageKind(conversion, operatorMethod), operatorMethod, target, solution,
+            matchedOperators, seenSites, sites, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task AddTupleElementConversionSitesAsync(ITypeSymbol? source,
+        ITypeSymbol? destination, SyntaxNode syntax, SemanticModel model, Document document,
+        IMethodSymbol target, Solution solution, Dictionary<ISymbol, bool> matchedOperators,
+        HashSet<(DocumentId Document, int Start, int Length, string Kind)> seenSites,
+        List<SemanticReferenceSite> sites, CancellationToken cancellationToken)
+    {
+        source = UnwrapNullable(source);
+        destination = UnwrapNullable(destination);
+        if (source is not INamedTypeSymbol { IsTupleType: true } sourceTuple ||
+            destination is not INamedTypeSymbol { IsTupleType: true } destinationTuple)
+        {
+            return;
+        }
+
+        int count = Math.Min(sourceTuple.TupleElements.Length,
+            destinationTuple.TupleElements.Length);
+        IReadOnlyList<SyntaxNode> children = TupleConversionChildren(syntax);
+        for (int i = 0; i < count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ITypeSymbol sourceType = sourceTuple.TupleElements[i].Type;
+            ITypeSymbol destinationType = destinationTuple.TupleElements[i].Type;
+            SyntaxNode childSyntax = i < children.Count ? children[i] : syntax;
+            Conversion conversion = model.Compilation.ClassifyConversion(
+                sourceType, destinationType);
+            if (conversion is { IsUserDefined: true, MethodSymbol: { } operatorMethod })
+            {
+                await AddConversionSiteAsync(document, childSyntax.GetLocation(),
+                    ConversionUsageKind(conversion, operatorMethod), operatorMethod, target,
+                    solution, matchedOperators, seenSites, sites, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            await AddTupleElementConversionSitesAsync(sourceType, destinationType, childSyntax,
+                model, document, target, solution, matchedOperators, seenSites, sites,
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static ITypeSymbol? UnwrapNullable(ITypeSymbol? type) =>
+        type is INamedTypeSymbol
+        {
+            OriginalDefinition.SpecialType: SpecialType.System_Nullable_T,
+            TypeArguments.Length: 1,
+        } nullable
+            ? nullable.TypeArguments[0]
+            : type;
+
+    private async Task AddConversionSiteAsync(Document document, Location location,
+        string usageKind, IMethodSymbol candidate, IMethodSymbol target, Solution solution,
+        Dictionary<ISymbol, bool> matchedOperators,
+        HashSet<(DocumentId Document, int Start, int Length, string Kind)> seenSites,
+        List<SemanticReferenceSite> sites, CancellationToken cancellationToken)
+    {
+        ISymbol cacheKey = candidate.OriginalDefinition;
+        bool cacheHit = matchedOperators.TryGetValue(cacheKey, out bool matches);
+        TestOnlyConversionIdentityCacheLookup?.Invoke(cacheHit);
+        if (!cacheHit)
+        {
+            matches = await SameUserDefinedConversionAsync(candidate, target, solution,
+                cancellationToken).ConfigureAwait(false);
+            matchedOperators[cacheKey] = matches;
+        }
+        if (!matches || !location.IsInSource) return;
+
+        var key = (document.Id, location.SourceSpan.Start,
+            location.SourceSpan.Length, usageKind);
+        if (!seenSites.Add(key)) return;
+        sites.Add(new SemanticReferenceSite(document, location, usageKind));
+        TestOnlyConversionSiteAdded?.Invoke(location, usageKind);
+        TestOnlyConversionSiteDiscovered?.Invoke(sites.Count);
+    }
+
+    private static string ConversionUsageKind(Conversion conversion,
+        IMethodSymbol operatorMethod) => operatorMethod.Name is
+            "op_CheckedImplicit" or "op_CheckedExplicit"
+        ? SemanticReferenceKinds.CheckedConversion
+        : conversion.IsImplicit
+            ? SemanticReferenceKinds.ImplicitConversion
+            : SemanticReferenceKinds.ExplicitConversion;
+
+    private static string CommonConversionUsageKind(CommonConversion conversion,
+        bool isChecked) => isChecked || conversion.MethodSymbol?.Name is
+            "op_CheckedImplicit" or "op_CheckedExplicit"
+        ? SemanticReferenceKinds.CheckedConversion
+        : conversion.IsImplicit
+            ? SemanticReferenceKinds.ImplicitConversion
+            : SemanticReferenceKinds.ExplicitConversion;
+
+    private static bool IsConversionOperatorMethod(IMethodSymbol method) =>
+        method.MethodKind == MethodKind.Conversion || method.Name is
+            "op_Implicit" or "op_Explicit" or
+            "op_CheckedImplicit" or "op_CheckedExplicit";
+
+    private static IReadOnlyList<SyntaxNode> DeconstructionChildren(SyntaxNode syntax) =>
+        syntax switch
+        {
+            TupleExpressionSyntax tuple => tuple.Arguments
+                .Select(argument => (SyntaxNode)argument.Expression).ToArray(),
+            DeclarationExpressionSyntax declaration =>
+                DeconstructionChildren(declaration.Designation),
+            ParenthesizedVariableDesignationSyntax parenthesized => parenthesized.Variables
+                .Select(variable => (SyntaxNode)variable).ToArray(),
+            _ => Array.Empty<SyntaxNode>(),
+        };
+
+    private static IReadOnlyList<SyntaxNode> TupleConversionChildren(SyntaxNode syntax) =>
+        syntax switch
+        {
+            TupleExpressionSyntax tuple => tuple.Arguments
+                .Select(argument => (SyntaxNode)argument.Expression).ToArray(),
+            ParenthesizedExpressionSyntax parenthesized =>
+                TupleConversionChildren(parenthesized.Expression),
+            _ => Array.Empty<SyntaxNode>(),
+        };
+
+    private static Location DeconstructionLocation(SyntaxNode syntax) => syntax switch
+    {
+        DeclarationExpressionSyntax declaration =>
+            DeconstructionLocation(declaration.Designation),
+        SingleVariableDesignationSyntax single => single.Identifier.GetLocation(),
+        DiscardDesignationSyntax discard => discard.UnderscoreToken.GetLocation(),
+        _ => syntax.GetLocation(),
+    };
+
+    internal static async Task<bool> SameUserDefinedConversionAsync(
+        IMethodSymbol candidate, IMethodSymbol target, Solution solution,
         CancellationToken cancellationToken)
     {
-        // A declaration key is supplied only by an indexed conversion handle. Public path/name
-        // routes have no key, and Roslyn classifies explicit-interface conversions as
-        // ExplicitInterfaceImplementation rather than MethodKind.Conversion. Source syntax is the
-        // common identity proof across all three routes.
-        if (declarationKeyHint is not null) return true;
+        if (await SameMethodDefinitionAsync(candidate, target, solution, cancellationToken)
+                .ConfigureAwait(false))
+        {
+            return true;
+        }
+        foreach (IMethodSymbol interfaceMethod in target.OriginalDefinition
+                     .ExplicitInterfaceImplementations)
+        {
+            if (await SameMethodDefinitionAsync(candidate, interfaceMethod, solution,
+                    cancellationToken).ConfigureAwait(false))
+            {
+                return true;
+            }
+        }
+        INamedTypeSymbol? containingType = target.ContainingType;
+        if (containingType is not null)
+        {
+            foreach (INamedTypeSymbol interfaceType in containingType.AllInterfaces)
+            {
+                foreach (IMethodSymbol interfaceMethod in interfaceType.GetMembers()
+                             .OfType<IMethodSymbol>().Where(IsConversionOperatorMethod))
+                {
+                    if (containingType.FindImplementationForInterfaceMember(interfaceMethod)
+                            is not IMethodSymbol implementation ||
+                        !await SameMethodDefinitionAsync(implementation, target, solution,
+                                cancellationToken).ConfigureAwait(false))
+                    {
+                        continue;
+                    }
+                    if (await SameMethodDefinitionAsync(candidate, interfaceMethod, solution,
+                            cancellationToken).ConfigureAwait(false))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private static async Task<bool> SameMethodDefinitionAsync(IMethodSymbol candidate,
+        IMethodSymbol target, Solution solution, CancellationToken cancellationToken)
+    {
+        IMethodSymbol candidateDefinition = candidate.OriginalDefinition;
+        IMethodSymbol targetDefinition = target.OriginalDefinition;
+        if (SymbolEqualityComparer.Default.Equals(candidateDefinition, targetDefinition))
+            return true;
+
+        ISymbol? sourceDefinition = await SymbolFinder.FindSourceDefinitionAsync(
+            candidateDefinition, solution, cancellationToken).ConfigureAwait(false);
+        if (sourceDefinition is IMethodSymbol sourceMethod &&
+            SymbolEqualityComparer.Default.Equals(
+                sourceMethod.OriginalDefinition, targetDefinition))
+        {
+            return true;
+        }
+
+        // Symbols from a dependent compilation can be retargeted wrappers rather than the source
+        // symbol instance resolved in the declaring project. Compiler documentation ids preserve
+        // the complete operator signature (including checked metadata names and parameter types).
+        // Solution.GetProject maps a retargeted assembly back to its original source project, so
+        // same-name assemblies in distinct physical projects cannot be conflated by this fallback.
+        string? candidateId = candidateDefinition.GetDocumentationCommentId();
+        string? targetId = targetDefinition.GetDocumentationCommentId();
+        if (candidateId is null || targetId is null ||
+            !candidateId.Equals(targetId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+        Project? candidateProject = candidateDefinition.ContainingAssembly is { } candidateAssembly
+            ? solution.GetProject(candidateAssembly, cancellationToken)
+            : null;
+        Project? targetProject = targetDefinition.ContainingAssembly is { } targetAssembly
+            ? solution.GetProject(targetAssembly, cancellationToken)
+            : null;
+        return candidateProject is not null && targetProject is not null &&
+               candidateProject.Id == targetProject.Id;
+    }
+
+    private static bool IsUserDefinedConversion(ISymbol symbol,
+        CancellationToken cancellationToken)
+    {
+        // Roslyn classifies explicit-interface conversions as ExplicitInterfaceImplementation
+        // rather than MethodKind.Conversion. Source syntax is the common identity proof across
+        // ordinary, checked, and explicit-interface declarations and across every input route.
         return symbol.DeclaringSyntaxReferences.Any(reference =>
             reference.GetSyntax(cancellationToken) is ConversionOperatorDeclarationSyntax);
     }

@@ -382,6 +382,197 @@ public class Batch46SemanticBudgetTests
     }
 
     [Fact]
+    public void CompleteSemanticIdentityExceptionStartsOnlyAboveOrdinaryBoundary()
+    {
+        int emptyEnvelopeBytes = Json.Utf8Bytes(Json.Serialize(new { identity = "" }));
+        int identityBytesAtBoundary = Json.HardBudgetBytes - emptyEnvelopeBytes;
+        string completeIdentity = new('x', identityBytesAtBoundary);
+        string atBoundary = Json.Serialize(new { identity = completeIdentity });
+        Assert.Equal(Json.HardBudgetBytes, Json.Utf8Bytes(atBoundary));
+        Assert.Equal(atBoundary, Json.WithCompleteSemanticIdentity(atBoundary));
+
+        string overBoundaryIdentity = completeIdentity + "x";
+        string overBoundary = Json.Serialize(new { identity = overBoundaryIdentity });
+        Assert.Equal(Json.HardBudgetBytes + 1, Json.Utf8Bytes(overBoundary));
+        string wrapped = Json.WithCompleteSemanticIdentity(overBoundary);
+        using JsonDocument document = JsonDocument.Parse(wrapped);
+        JsonElement response = document.RootElement;
+        Assert.Equal(overBoundaryIdentity, response.GetProperty("identity").GetString());
+        JsonElement budget = response.GetProperty("responseBudget");
+        Assert.Equal(Json.Utf8Bytes(wrapped),
+            budget.GetProperty("serializedBytes").GetInt32());
+        Assert.Equal("indivisible_semantic_identity",
+            budget.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void OptionalSemanticDeclarationPathsCannotTriggerIdentityException()
+    {
+        var declarations = Enumerable.Range(0, 20)
+            .Select(index => new
+            {
+                path = $"Generated/{index:D2}/{new string('x', 4_000)}.cs",
+                startLine = index + 1,
+                endLine = index + 1,
+                project = "P",
+            })
+            .ToArray();
+        string oversized = Json.Serialize(new
+        {
+            symbol = new
+            {
+                display = "BudgetProbe",
+                documentationCommentId = "T:BudgetProbe",
+                kind = "NamedType",
+                declarations,
+                declarationsTotal = 22,
+                declarationsReturned = declarations.Length,
+                declarationsTruncated = "more than 20 declaration sites",
+                declarationsNoteId = NoteIds.SemanticDeclarationSitesBudget,
+            },
+            totalReferences = 0,
+        });
+        Assert.True(Json.Utf8Bytes(oversized) > Json.HardBudgetBytes);
+
+        string bounded = Json.WithCompleteSemanticIdentity(oversized);
+        Assert.True(Json.Utf8Bytes(bounded) <= Json.HardBudgetBytes,
+            $"optional declaration trimming returned {Json.Utf8Bytes(bounded)} bytes");
+        using JsonDocument document = JsonDocument.Parse(bounded);
+        JsonElement response = document.RootElement;
+        Assert.False(response.TryGetProperty("responseBudget", out _));
+        JsonElement symbol = response.GetProperty("symbol");
+        Assert.Equal("T:BudgetProbe",
+            symbol.GetProperty("documentationCommentId").GetString());
+        Assert.False(symbol.TryGetProperty("declarations", out _));
+        Assert.Equal(22, symbol.GetProperty("declarationsTotal").GetInt32());
+        Assert.Equal(0, symbol.GetProperty("declarationsReturned").GetInt32());
+        Assert.Equal(NoteIds.SemanticDeclarationSitesBudget,
+            symbol.GetProperty("declarationsNoteId").GetString());
+        Assert.Contains("ordinary response budget",
+            symbol.GetProperty("declarationsTruncated").GetString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SemanticSymbolCarriesExactDeclarationTotalPastSerializationCap()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-semantic-declaration-total").FullName;
+        try
+        {
+            string project = Path.Combine(root, "P");
+            Directory.CreateDirectory(project);
+            File.WriteAllText(Path.Combine(project, "P.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+                "<TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+            for (int index = 0; index < 22; index++)
+            {
+                File.WriteAllText(Path.Combine(project, $"Wide{index:D2}.cs"),
+                    $"namespace BudgetDeclarations; public partial class Wide {{ " +
+                    $"public void M{index}() {{ }} }}");
+            }
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000),
+                manager.Health().Error);
+            using var semantic = new SemanticService(manager);
+            if (!semantic.FrameworkRefsAvailable) return;
+            var tools = new NavigationTools(manager, semantic);
+
+            JsonElement response = SemanticRetry.ParseExactWithRetry(() =>
+                tools.References(name: "Wide", mode: "semantic", timeoutMs: 90_000));
+            JsonElement symbol = response.GetProperty("symbol");
+            Assert.Equal(20, symbol.GetProperty("declarations").GetArrayLength());
+            Assert.Equal(22, symbol.GetProperty("declarationsTotal").GetInt32());
+            Assert.Equal(20, symbol.GetProperty("declarationsReturned").GetInt32());
+            Assert.Equal(NoteIds.SemanticDeclarationSitesBudget,
+                symbol.GetProperty("declarationsNoteId").GetString());
+            Assert.Contains("more than 20 declaration sites",
+                symbol.GetProperty("declarationsTruncated").GetString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.ClearIndexPools(root);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void IndivisibleMultibyteSemanticIdentityStaysCompleteAboveOrdinaryBudget()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-semantic-indivisible-identity").FullName;
+        try
+        {
+            string project = Path.Combine(root, "P");
+            Directory.CreateDirectory(project);
+            File.WriteAllText(Path.Combine(project, "P.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+                "<TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
+            string identifier = "超" + new string('界', 24_000);
+            File.WriteAllText(Path.Combine(project, "Huge.cs"),
+                $"namespace OversizedIdentity;\npublic sealed class {identifier} {{ }}\n" +
+                $"public static class Use {{ public static {identifier} Value => new(); }}\n");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000),
+                manager.Health().Error);
+            using var semantic = new SemanticService(manager);
+            if (!semantic.FrameworkRefsAvailable) return;
+            var tools = new NavigationTools(manager, semantic);
+
+            AssertCompleteOversizedIdentity(
+                () => tools.Definition(path: "P/Huge.cs", line: 2,
+                    mode: "semantic", timeoutMs: 120_000),
+                "definition");
+            AssertCompleteOversizedIdentity(
+                () => tools.References(path: "P/Huge.cs", line: 2,
+                    mode: "semantic", timeoutMs: 120_000),
+                "references");
+
+            void AssertCompleteOversizedIdentity(Func<string> invoke, string operation)
+            {
+                string raw = "";
+                JsonElement response = SemanticRetry.ParseWithRetry(
+                    () => raw = invoke(),
+                    value => value.TryGetProperty("responseBudget", out _) &&
+                             value.TryGetProperty("meta", out JsonElement meta) &&
+                             meta.GetProperty("confidence").GetString() == "exact",
+                    $"{operation} with indivisible multibyte semantic identity");
+                int serializedBytes = Json.Utf8Bytes(raw);
+                Assert.True(serializedBytes > Json.HardBudgetBytes,
+                    $"{operation} unexpectedly fit in {serializedBytes} bytes");
+                JsonElement budget = response.GetProperty("responseBudget");
+                Assert.Equal(Json.HardBudgetBytes,
+                    budget.GetProperty("hardBytes").GetInt32());
+                Assert.Equal(serializedBytes,
+                    budget.GetProperty("serializedBytes").GetInt32());
+                Assert.True(budget.GetProperty("exceeded").GetBoolean());
+                Assert.True(budget.GetProperty("completeIdentity").GetBoolean());
+                Assert.Equal("indivisible_semantic_identity",
+                    budget.GetProperty("reason").GetString());
+                JsonElement symbol = response.GetProperty("symbol");
+                Assert.Equal($"T:OversizedIdentity.{identifier}",
+                    symbol.GetProperty("documentationCommentId").GetString());
+                Assert.EndsWith(identifier, symbol.GetProperty("display").GetString(),
+                    StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            TestWorkspaceCleanup.ClearIndexPools(root);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void LongSemanticScanDefersLocalFullRebuildUntilItsSnapshotReleases()
     {
         string root = Directory.CreateTempSubdirectory("codenav-semantic-rebuild-guard").FullName;
