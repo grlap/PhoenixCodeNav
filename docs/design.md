@@ -19,7 +19,7 @@ PhoenixCodeNav.sln
 ├── src/CodeNav.FSharp/        # isolated, pinned FCS syntax-outline adapter
 ├── src/CodeNav.Mcp/           # the server, published as PhoenixCodeNav.Mcp.exe
 │   ├── Program.cs             # host + stdio transport; starts indexing in the background
-│   ├── NavigationTools(.Expanded).cs   # the 23 MCP tools
+│   ├── NavigationTools*.cs             # 27 MCP tools across partial-class files
 │   └── Responses.cs          # JSON policy, response budgets, the Meta envelope
 ├── src/CodeNav.WorkspaceGen/  # deterministic synthetic 2k-project workspace generator (for tests/benchmarks)
 ├── src/CodeNav.Bench/         # cold-build + warm-query benchmarks vs the latency targets
@@ -83,6 +83,20 @@ for code identifiers.
    `semantic.declaration_sites_budget`, but one intrinsically larger identity remains
    complete and carries measured `responseBudget` exception metadata rather than being truncated
    or rejected.
+
+`open_operations_portal` is an explicit operational tool outside the navigation layers. It starts
+or reuses the separately packaged, loopback-only, read-only portal for the current workspace and
+returns its authenticated URL; the agent must show that URL verbatim and the tool never opens a
+browser. The companion speaks one bounded private JSON handshake over redirected pipes, so its
+output cannot enter the MCP stdout framing. A per-workspace runtime lock and descriptor allow
+independent MCP processes to converge on one live portal while stale owner state is recoverable;
+reuse requires `/healthz` to echo the descriptor's private session identity and PID. Coordination
+state lives below the current user's profile. Unix rejects unsafe writable ancestors and forces
+each Phoenix-owned directory to owner-only modes. Every platform rejects reparse-point ancestors;
+Windows otherwise relies on inherited current-user profile ACLs. These checks run before lock or
+descriptor access. The startup/reuse attempt is bounded to 30 seconds and cleanup
+terminates only that newly launched helper/owner attempt. Portal absence or failure has no effect
+on index or navigation correctness.
 
 Exact path identity is never fuzzy. When `outline` or `source_context` cannot resolve a path, or
 the first page of an exact-path `find_file` query is empty, the MCP layer asks `IndexQueries` for
@@ -809,7 +823,7 @@ caveats:
 ## Deployment
 
 Published as a self-contained `PhoenixCodeNav.Mcp.exe` plus adjacent `FSharp.Core.dll` reference
-sidecar (no installed runtime prerequisite), or a
+sidecar and a separate `portal/` companion directory (no installed runtime prerequisite), or a
 framework-dependent build (needs .NET 10). Attach over MCP (`.mcp.json` for Claude Code,
 `config.toml` for Codex). First run builds the index in the background; it lives in
 `<workspace>/.codenav/index.db`. See [`../README.md`](../README.md) for exact commands.

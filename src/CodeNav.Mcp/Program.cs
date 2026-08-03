@@ -63,7 +63,9 @@ builder.Services
             "start with repo_overview; use search_symbol/definition/references for code identifiers; " +
             "search_text for literals and config keys; ALWAYS outline a large file before reading it, " +
             "then fetch only needed spans with source_context. Results carry confidence 'indexed' " +
-            "(syntax/index-backed, not compiler-verified) and index freshness metadata.";
+            "(syntax/index-backed, not compiler-verified) and index freshness metadata. When the " +
+            "user explicitly asks to open the Operations Portal, call open_operations_portal and " +
+            "show its returned url field verbatim as a clickable link; never call it proactively.";
     })
     .WithStdioServerTransport()
     .WithTools<NavigationTools>();

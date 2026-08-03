@@ -51,3 +51,7 @@ Default flow:
 10. Keep limits small and tighten filters before paging. Fall back to shell `rg` only when
     the server reports `index_building`/`index_unavailable`, the path is outside the
     workspace, or you need true regex matching.
+11. Call `open_operations_portal` only when the user explicitly asks to open or show the Phoenix
+    Operations Portal. On success, show its returned `url` field verbatim as a clickable link.
+    The tool starts or reuses the read-only loopback portal; it intentionally does not open a
+    browser itself.

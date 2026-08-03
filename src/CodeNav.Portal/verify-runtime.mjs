@@ -26,25 +26,20 @@ await writeFile(
   "utf8"
 );
 
-const child = spawn("dotnet", [dll], {
-  cwd: dirname(dll),
-  env: {
-    ...process.env,
-    PHOENIX_PORTAL_WORKSPACES: workspace
-  },
-  stdio: ["ignore", "pipe", "pipe"],
-  windowsHide: true
-});
-
+let child;
 let output = "";
 let errorOutput = "";
-child.stdout.setEncoding("utf8");
-child.stderr.setEncoding("utf8");
-child.stdout.on("data", (chunk) => { output += chunk; });
-child.stderr.on("data", (chunk) => { errorOutput += chunk; });
+startOwner();
 
 try {
   const session = await waitForSession();
+  if (session.status !== "started")
+    throw new Error(`Initial launcher unexpectedly reported ${session.status}.`);
+  const reused = await runReuseHelper();
+  if (reused.status !== "reused"
+      || reused.url !== session.url
+      || reused.pid !== session.pid)
+    throw new Error("A second launcher did not reuse the live workspace portal exactly.");
   const unauthenticatedPaths = [
     "/api/v1/bootstrap",
     "/API/v1/bootstrap",
@@ -152,8 +147,17 @@ try {
   if (partial.telemetry.source !== "workspace_jsonl")
     throw new Error("Portal did not disclose its live telemetry source.");
 
+  await stopChild();
+  const priorSession = session;
+  startOwner();
+  const restarted = await waitForSession();
+  if (restarted.status !== "started"
+      || restarted.pid === priorSession.pid
+      || restarted.url === priorSession.url)
+    throw new Error("A stale launcher descriptor was not replaced by a fresh portal session.");
+
   console.log(
-    "Portal runtime verification passed: auth, live tailing, paging, normalization, and truncation honesty."
+    "Portal runtime verification passed: launcher start/reuse/restart, auth, live tailing, paging, normalization, and truncation honesty."
   );
 } finally {
   await stopChild();
@@ -224,11 +228,24 @@ function buildProgress(buildId, state, phase, filesDone, filesTotal) {
 }
 
 async function waitForSession() {
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    const match = output.match(/Open (http:\/\/[^/]+)\/#token=([^\s]+)/);
-    if (match)
-      return { origin: match[1], token: match[2] };
+    const newline = output.indexOf("\n");
+    if (newline >= 0) {
+      const handshake = JSON.parse(output.slice(0, newline));
+      const url = new URL(handshake.url);
+      if (handshake.protocolVersion !== 1
+          || handshake.status !== "started"
+          || handshake.readOnly !== true
+          || handshake.workspaceCount !== 1
+          || !url.hash.startsWith("#token="))
+        throw new Error(`Invalid launcher handshake: ${output.slice(0, newline)}`);
+      return {
+        ...handshake,
+        origin: url.origin,
+        token: url.hash.slice("#token=".length)
+      };
+    }
 
     if (child.exitCode != null)
       throw new Error(`Portal exited before startup (${child.exitCode}).\n${errorOutput}`);
@@ -237,6 +254,56 @@ async function waitForSession() {
   }
 
   throw new Error(`Timed out waiting for the portal session URL.\n${output}\n${errorOutput}`);
+}
+
+async function runReuseHelper() {
+  const helper = spawn(
+    "dotnet",
+    [dll, "--launcher", "--workspace-root", workspace],
+    {
+      cwd: dirname(dll),
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    }
+  );
+  let helperOutput = "";
+  let helperError = "";
+  helper.stdout.setEncoding("utf8");
+  helper.stderr.setEncoding("utf8");
+  helper.stdout.on("data", (chunk) => { helperOutput += chunk; });
+  helper.stderr.on("data", (chunk) => { helperError += chunk; });
+  const exitCode = await Promise.race([
+    new Promise((resolve) => helper.once("close", resolve)),
+    delay(10_000).then(() => "timeout")
+  ]);
+  if (exitCode === "timeout") {
+    helper.kill("SIGKILL");
+    throw new Error(`Reuse helper timed out.\n${helperOutput}\n${helperError}`);
+  }
+  if (exitCode !== 0)
+    throw new Error(`Reuse helper exited ${exitCode}.\n${helperOutput}\n${helperError}`);
+  const handshake = JSON.parse(helperOutput.trim());
+  if (handshake.protocolVersion !== 1 || handshake.readOnly !== true)
+    throw new Error(`Invalid reuse handshake: ${helperOutput}`);
+  return handshake;
+}
+
+function startOwner() {
+  output = "";
+  errorOutput = "";
+  child = spawn(
+    "dotnet",
+    [dll, "--launcher", "--workspace-root", workspace],
+    {
+      cwd: dirname(dll),
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    }
+  );
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  child.stderr.on("data", (chunk) => { errorOutput += chunk; });
 }
 
 async function waitForJson(url, headers, predicate) {

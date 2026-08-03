@@ -308,6 +308,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("portal-directory-entry-nul-decoding", ids);
         Assert.Contains("operations-portal-jsonl-readonly", ids);
         Assert.Contains("operations-portal-live-build-status", ids);
+        Assert.Contains("operations-portal-mcp-launcher", ids);
         Assert.Contains("refresh-recovery-self-heal", ids);
         Assert.Contains("git-awareness", ids);
         Assert.Contains("batch-outline-json-array-paths", ids);
@@ -340,6 +341,9 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(
             1,
             idList.Count(id => id == "operations-portal-live-build-status"));
+        Assert.Equal(
+            1,
+            idList.Count(id => id == "operations-portal-mcp-launcher"));
         string portalReadOnly = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -347,6 +351,19 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .GetProperty("summary")
             .GetString()!;
         Assert.Contains("without opening SQLite", portalReadOnly);
+        string portalLauncher = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "operations-portal-mcp-launcher")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.49", portalLauncher);
+        Assert.Contains("open_operations_portal", portalLauncher);
+        Assert.Contains("separately packaged", portalLauncher);
+        Assert.Contains("away from MCP stdout", portalLauncher);
+        Assert.Contains("without opening a browser", portalLauncher);
+        Assert.Contains("open_operations_portal",
+            json.GetProperty("tools").EnumerateArray().Select(tool => tool.GetString()));
         string refreshRecovery = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -738,6 +755,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("review.solution_files_changed", "review-solution-metadata-guidance"),
                       ("Linux ARM64 ABI", "linux-arm64-anchored-authority"),
                       ("first bounded NUL", "portal-directory-entry-nul-decoding"),
+                      ("away from MCP stdout", "operations-portal-mcp-launcher"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),
                       ("target-bearing names", "csharp-conversion-operator-indexing"),
                       ("implicitConversion", "csharp-conversion-usage-enumeration"),

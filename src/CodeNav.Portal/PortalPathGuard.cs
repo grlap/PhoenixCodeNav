@@ -63,6 +63,58 @@ internal static class PortalPathGuard
         out PortalRegularFile? directory) =>
         Open(workspaceRoot, relativePath, expectDirectory: true, out directory);
 
+    /// <summary>Gets the physical directory identity while deliberately following path aliases.
+    /// Coordination uses this only for an already selected workspace root, so symlink and
+    /// case aliases converge without turning the path into read authority.</summary>
+    internal static bool TryGetDirectoryIdentity(
+        string path,
+        out PortalFileIdentity identity)
+    {
+        identity = default;
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                using SafeFileHandle handle = CreateFileW(
+                    path,
+                    WindowsGenericRead,
+                    WindowsShareRead | WindowsShareWrite | WindowsShareDelete,
+                    IntPtr.Zero,
+                    WindowsOpenExisting,
+                    WindowsFileAttributeNormal | WindowsFileFlagBackupSemantics,
+                    IntPtr.Zero);
+                if (handle.IsInvalid
+                    || !TryReadWindowsMetadata(handle, out PortalFileMetadata metadata)
+                    || !metadata.IsDirectory)
+                {
+                    return false;
+                }
+                identity = metadata.Identity;
+                return true;
+            }
+
+            int flags = UnixReadOnly
+                | UnixCloseOnExec
+                | UnixNonBlocking
+                | UnixDirectoryFlag;
+            int descriptor = UnixOpen(path, flags);
+            if (descriptor < 0)
+                return false;
+            using var directory = new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
+            if (!TryReadUnixMetadata(directory, out PortalFileMetadata unixMetadata)
+                || !unixMetadata.IsDirectory)
+            {
+                return false;
+            }
+            identity = unixMetadata.Identity;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>Enumerates names from the already-opened directory authority. The caller controls
     /// the bound; the path is never reopened, so a replacement link cannot redirect discovery
     /// between validation and enumeration.</summary>

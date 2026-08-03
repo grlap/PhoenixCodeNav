@@ -1,6 +1,6 @@
 # Feature Spec: Phoenix Operations Portal
 
-Status: **Active implementation — local shell and bounded JSONL live MVP**
+Status: **Active implementation — explicit MCP launcher and bounded JSONL live MVP**
 
 Bead: `PhoenixCodeNav-x5ls`
 
@@ -36,6 +36,16 @@ cross-platform telemetry files instead of making local IPC a prerequisite:
   recently observed local Phoenix process;
 - multiple local MCP instances and up to eight explicitly configured workspace roots are
   discovered through the same per-process files and grouped by workspace;
+- `open_operations_portal`, called only after an explicit user request, launches the separately
+  packaged companion for the current workspace or reuses the live physical-workspace portal through a
+  runtime descriptor below the current user's profile. Unix forces Phoenix-owned directories to
+  owner-only modes and rejects unsafe writable ancestors; every platform rejects reparse-point
+  ancestors, while Windows otherwise relies on inherited user-profile ACLs. The authenticated URL
+  is returned in the MCP result for the agent to show verbatim, never inherited through MCP stdout,
+  and no browser is opened;
+- launcher startup/reuse is bounded to 30 seconds. A stale descriptor is reused only when
+  `/healthz` echoes its private session identity and PID, and is replaced after owner exit; timeout
+  cleanup terminates only the newly launched helper attempt;
 - a workspace with an observed index but no telemetry source remains live but explicitly partial;
   the fixture remains only when a configured workspace has no live index or telemetry source.
 
@@ -265,12 +275,23 @@ MCP instance C (workspace Y, writer)   --/                       |
                                                                       browser
 ```
 
-`PhoenixCodeNav.Portal` is a separate executable/process. The operator starts it explicitly, for
-example:
+`PhoenixCodeNav.Portal` is a separate executable/process. In the current shipped MVP, the operator
+asks the agent to open the portal; the agent calls:
 
 ```text
-PhoenixCodeNav.Portal --open
+open_operations_portal
 ```
+
+The tool returns the authenticated loopback URL and the agent displays it. It never opens a
+browser. Independently launched MCP processes for the same physical workspace converge on one
+live portal through a lock/descriptor pair below the current user's profile. Unix forces each
+Phoenix-owned directory to owner-only modes and rejects unsafe writable ancestors before a
+token-bearing descriptor is touched. Every platform rejects reparse-point ancestors; Windows
+otherwise relies on inherited current-user profile ACLs. Descriptor reuse additionally requires a
+live health response bound to its private portal session identity and PID. Manual development can still launch
+`PhoenixCodeNav.Portal` directly and read its human-facing console URL. The longer-term per-user,
+multi-workspace IPC broker described below remains a target rather than a claim about the JSONL
+MVP.
 
 MCP instances never bind HTTP ports. They opportunistically connect to a stable per-user local IPC
 endpoint when the portal is present. If the portal is absent, slow, incompatible, or crashes, the

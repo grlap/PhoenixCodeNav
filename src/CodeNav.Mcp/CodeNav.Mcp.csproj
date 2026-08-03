@@ -2,6 +2,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CodeNav.Core\CodeNav.Core.csproj" />
+    <ProjectReference Include="..\CodeNav.Portal\CodeNav.Portal.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false"
+                      PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
@@ -49,6 +53,41 @@
     </ItemGroup>
     <Error Condition="'@(_FSharpCoreSingleFileSidecar->Count())' != '1'"
            Text="A single-file Phoenix publish requires exactly one adjacent FSharp.Core.dll reference sidecar." />
+  </Target>
+
+  <!-- The portal deliberately remains a separate process. Stage its complete apphost and web
+       assets beside ordinary builds so the MCP tool never depends on a source checkout or
+       `dotnet run`. -->
+  <Target Name="StageOperationsPortalCompanion"
+          AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_OperationsPortalBuildFile
+          Include="$(MSBuildProjectDirectory)/../CodeNav.Portal/bin/$(Configuration)/$(TargetFramework)/**/*"
+          Exclude="$(MSBuildProjectDirectory)/../CodeNav.Portal/bin/$(Configuration)/$(TargetFramework)/publish/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_OperationsPortalBuildFile)"
+          DestinationFiles="@(_OperationsPortalBuildFile->'$(TargetDir)portal/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CleanOperationsPortalCompanion"
+          BeforeTargets="Clean"
+          Condition="'$(TargetDir)' != ''">
+    <RemoveDir Directories="$(TargetDir)portal" />
+  </Target>
+
+  <!-- Publishing the MCP is the install boundary. Publish the companion for the same target/RID
+       into a stable subdirectory; open_operations_portal launches only this packaged apphost. -->
+  <Target Name="PublishOperationsPortalCompanion"
+          AfterTargets="Publish"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <_OperationsPortalPublishDir>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(PublishDir)', 'portal'))/</_OperationsPortalPublishDir>
+    </PropertyGroup>
+    <MSBuild Projects="$(MSBuildProjectDirectory)/../CodeNav.Portal/CodeNav.Portal.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);PublishSingleFile=$(PublishSingleFile);EnableCompressionInSingleFile=$(EnableCompressionInSingleFile);IncludeNativeLibrariesForSelfExtract=$(IncludeNativeLibrariesForSelfExtract);PublishDir=$(_OperationsPortalPublishDir)" />
   </Target>
 
 </Project>

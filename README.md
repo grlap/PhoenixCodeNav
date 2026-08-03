@@ -134,9 +134,12 @@ dotnet publish src/CodeNav.Mcp -c Release -r win-x64 --self-contained \
   -p:IncludeNativeLibrariesForSelfExtract=true -o artifacts/win-x64
 ```
 
-Copy both `artifacts/win-x64/PhoenixCodeNav.Mcp.exe` and its adjacent `FSharp.Core.dll` to the
-same directory (e.g. `C:\tools\phoenix\`). The executable remains self-contained; the sidecar is
-the physical compiler reference asset used by bounded F# semantic navigation.
+Copy the complete `artifacts/win-x64` publish directory to the install location (for example,
+`C:\tools\phoenix\`). It contains `PhoenixCodeNav.Mcp.exe`, its adjacent `FSharp.Core.dll`, and
+the separately executable `portal/` companion with its static website. The MCP executable remains
+self-contained; the F# sidecar is the physical compiler reference asset used by bounded F#
+semantic navigation. Keep the `portal/` directory beside the MCP executable so
+`open_operations_portal` can launch it without a source checkout or `dotnet run`.
 (A framework-dependent build — `dotnet publish -c Release -o artifacts/portable` — is ~5 MB
 but requires the .NET 10 runtime.)
 
@@ -169,6 +172,23 @@ args = ["--workspace-root", "C:\\path\\to\\repo"]
 
 Then add the agent instructions from `docs/agent-instructions.md` to your repo's
 `CLAUDE.md` / `AGENTS.md` so agents prefer these tools over shell grep.
+
+### Operations Portal
+
+When you explicitly ask the agent to open the Phoenix Operations Portal, it calls
+`open_operations_portal`. The tool starts or reuses the workspace's loopback-only, read-only
+portal and returns an authenticated `http://127.0.0.1:.../#token=...` URL. The agent shows that
+URL as a clickable link in the conversation; the tool does not open a browser and the portal
+process never writes through the MCP stdout transport. A startup or reuse attempt is bounded to
+30 seconds and reports a structured error if the packaged companion is missing or cannot become
+ready. Cross-process coordination lives below the current user's profile. On Unix, Phoenix-owned
+directories are forced to owner-only modes and unsafe writable ancestors fail closed; on every
+platform, reparse-point ancestors fail closed before any authenticated descriptor is read or
+written. Windows relies on the current user profile's inherited ACLs for directory privacy. A
+reused descriptor is accepted only when `/healthz` proves the same private portal session and PID.
+
+For manual development, the portal can still be run from the workspace with
+`dotnet run --project src/CodeNav.Portal/CodeNav.Portal.csproj -c Release`.
 
 The first process to acquire the writer lease builds the index in the background (a 10M-LOC repo
 takes a few minutes; the server answers `index_building` hints meanwhile). On Windows, followers
@@ -246,7 +266,8 @@ bash scripts/smoke-mcp.sh C:/temp/acme-2k                        # stdio protoco
 after reporting phase time, total time, symbol count, and database size.
 
 Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.FSharp` (isolated FCS syntax
-and bounded semantic adapter), `CodeNav.Mcp` (server, ships as `PhoenixCodeNav.Mcp.exe`), `CodeNav.WorkspaceGen`
+and bounded semantic adapter), `CodeNav.Mcp` (server, ships as `PhoenixCodeNav.Mcp.exe`),
+`CodeNav.Portal` (separately packaged loopback operations website), `CodeNav.WorkspaceGen`
 (synthetic workspace generator),
 `CodeNav.Bench` (benchmarks vs the brief's latency targets), plus focused unit, index, Git,
 watcher, and lifecycle test projects under `tests/`.

@@ -9,8 +9,19 @@ Run it from the workspace you want to inspect:
 dotnet run --project src/CodeNav.Portal/CodeNav.Portal.csproj -c Release
 ```
 
-Open the one-time loopback URL printed to the console. The URL fragment contains the in-memory
+Open the one-time loopback URL printed to the console. The URL fragment contains the private
 portal session token; the browser removes it after bootstrap and keeps it in `sessionStorage`.
+Manual mode otherwise keeps the token in memory. Launcher mode also stores the token-bearing URL
+in the owner-private runtime descriptor for reuse, then removes that descriptor on graceful
+shutdown or stale-session recovery.
+
+In a published Phoenix installation, ask the attached agent to open the Operations Portal. It
+calls the MCP tool `open_operations_portal`, which starts or reuses the packaged `portal/`
+companion for that workspace and returns the authenticated URL for the agent to show in the
+conversation. The tool does not open a browser. Launcher mode emits exactly one private JSON
+handshake to its redirected parent and suppresses normal logging, so portal output cannot corrupt
+the MCP stdio transport. The launcher protocol is an implementation detail; use the MCP tool
+instead of invoking `--launcher` manually.
 
 The portal tails the existing bounded, privacy-safe
 `.codenav/telemetry/phoenix-*.jsonl` files through anchored no-follow regular-file handles and
@@ -33,7 +44,8 @@ Frontend verification is dependency-free:
 node src/CodeNav.Portal/verify.mjs
 ```
 
-After a Release build, verify authentication, live tailing, and truncation honesty:
+After a Release build, verify launcher start/reuse/stale recovery, authentication, live tailing,
+and truncation honesty:
 
 ```powershell
 node src/CodeNav.Portal/verify-runtime.mjs

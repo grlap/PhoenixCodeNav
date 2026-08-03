@@ -25,13 +25,23 @@ public sealed partial class NavigationTools
 
     private readonly IndexManager _manager;
     private readonly SemanticService _semantic;
+    private readonly IOperationsPortalLauncher _operationsPortalLauncher;
 
     internal string? TestOnlySemanticFailureReason { get; set; }
 
     public NavigationTools(IndexManager manager, SemanticService semantic)
+        : this(manager, semantic, new OperationsPortalLauncher())
+    {
+    }
+
+    internal NavigationTools(
+        IndexManager manager,
+        SemanticService semantic,
+        IOperationsPortalLauncher operationsPortalLauncher)
     {
         _manager = manager;
         _semantic = semantic;
+        _operationsPortalLauncher = operationsPortalLauncher;
     }
 
     private static readonly IReadOnlyList<string> TypeKinds =
@@ -157,6 +167,7 @@ public sealed partial class NavigationTools
                 new { id = "portal-directory-entry-nul-decoding", summary = "v0.12.42 Operations Portal directory traversal stops each bounded Unix directory-entry name at the first bounded NUL so record padding never becomes a file name" },
                 new { id = "operations-portal-jsonl-readonly", summary = "v0.12.26 the loopback Operations Portal tails bounded workspace JSONL and observes anchored index-file presence and size without opening SQLite; source gaps, retention, paging, and response budgets remain explicit" },
                 new { id = "operations-portal-live-build-status", summary = "v0.12.26 full builds emit bounded JSONL lifecycle progress plus one server identity/capability record per process so the local portal can show live phase, file, symbol, byte, version, schema, platform, and access-mode status" },
+                new { id = "operations-portal-mcp-launcher", summary = "v0.12.49 open_operations_portal explicitly starts or reuses the separately packaged loopback read-only portal, keeps child output away from MCP stdout, and returns the authenticated URL for the agent to show verbatim without opening a browser" },
                 new { id = "search-symbol-malformed-query", summary = "v0.12.10 search_symbol rejects ToolSearch-style select: routing prefixes with malformed_query instead of returning a clean empty result; valid C# qualification and generic punctuation remain searchable" },
                 new { id = "search-symbol-filtered-existence", summary = "v0.12.30 first-page empty search_symbol results report existsUnfiltered plus active appliedFilters; declarations hidden by those filters also disclose their unfilteredKinds, while genuine absence remains a clean symbols:[] result with existsUnfiltered:false" },
                 new { id = "search-symbol-type-relevance", summary = "v0.12.30 exact-name type declarations receive a soft relevance preference over same-named members without filtering or omitting either result class" },
@@ -251,7 +262,7 @@ public sealed partial class NavigationTools
                 "implementations", "callers", "callees", "type_hierarchy", "related_tests",
                 "dependency_path", "config_lookup", "batch_outline", "context_pack", "impact",
                 "project_graph", "projects_containing", "refresh_index",
-                "worktrees", "index_worktree", "review_pack",
+                "worktrees", "index_worktree", "review_pack", "open_operations_portal",
             },
             budgets = new
             {

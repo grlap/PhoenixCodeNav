@@ -13,7 +13,7 @@ namespace CodeNav.Portal;
 /// </summary>
 public sealed partial class PortalDataSource : BackgroundService
 {
-    internal const string PortalVersion = "0.3.0-preview";
+    internal const string PortalVersion = "0.4.0-preview";
     private const int MaxWorkspaceCount = 8;
     private const int MaxTelemetryFilesPerWorkspace = 32;
     private const int MaxTelemetryDirectoryEntries = 256;

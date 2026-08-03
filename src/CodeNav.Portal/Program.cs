@@ -7,22 +7,81 @@ namespace CodeNav.Portal;
 
 public static class Program
 {
-    public static async Task Main(string[] args)
+    public static async Task<int> Main(string[] args)
     {
+        if (!TryParseOptions(args, out PortalOptions options, out string? optionError))
+        {
+            Console.Error.WriteLine(optionError);
+            Console.Error.WriteLine(
+                "Usage: PhoenixCodeNav.Portal [--workspace-root <dir>] [--launcher]");
+            return 2;
+        }
+        if (options.Help)
+        {
+            Console.Error.WriteLine(
+                "Usage: PhoenixCodeNav.Portal [--workspace-root <dir>] [--launcher]");
+            return 0;
+        }
+
+        string? workspaceRoot = options.WorkspaceRoot is null
+            ? null
+            : Path.GetFullPath(options.WorkspaceRoot);
+        if (workspaceRoot is not null && !Directory.Exists(workspaceRoot))
+        {
+            Console.Error.WriteLine($"Workspace root not found: {workspaceRoot}");
+            return 2;
+        }
+
+        PortalLaunchCoordinator? launchCoordinator = null;
+        if (options.Launcher)
+        {
+            workspaceRoot ??= Directory.GetCurrentDirectory();
+            try
+            {
+                launchCoordinator = await PortalLaunchCoordinator.AcquireAsync(
+                    workspaceRoot,
+                    CancellationToken.None).ConfigureAwait(false);
+                if (!launchCoordinator.IsOwner)
+                {
+                    Console.Out.WriteLine(PortalLaunchCoordinator.Serialize(
+                        launchCoordinator.ReusedHandshake!));
+                    Console.Out.Flush();
+                    await launchCoordinator.DisposeAsync().ConfigureAwait(false);
+                    return 0;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Console.Error.WriteLine($"Portal launcher coordination failed: {ex.Message}");
+                return 1;
+            }
+        }
+
         WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
-            Args = args,
+            Args = [],
             ContentRootPath = AppContext.BaseDirectory,
             WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot")
         });
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        if (options.Launcher)
+            builder.Logging.ClearProviders();
+        else
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0));
-        builder.Services.AddSingleton<PortalDataSource>();
+        builder.Services.AddSingleton(services =>
+        {
+            ILogger<PortalDataSource> logger =
+                services.GetRequiredService<ILogger<PortalDataSource>>();
+            return workspaceRoot is null
+                ? new PortalDataSource(logger)
+                : new PortalDataSource([workspaceRoot], logger);
+        });
         builder.Services.AddHostedService(services =>
             services.GetRequiredService<PortalDataSource>());
 
-        string accessToken = CreateAccessToken();
-        WebApplication app = builder.Build();
+        string accessToken = CreateSessionSecret();
+        string launchSessionId = CreateSessionSecret();
+        await using WebApplication app = builder.Build();
 
         app.Use(async (context, next) =>
         {
@@ -86,12 +145,14 @@ public static class Program
             }
         });
 
-        app.MapGet("/healthz", static () => Results.Ok(new
-        {
-            status = "ok",
-            portalVersion = PortalDataSource.PortalVersion,
-            apiVersion = 1
-        }));
+        app.MapGet("/healthz", () => Results.Ok(new PortalHealthStatus(
+            "ok",
+            PortalDataSource.PortalVersion,
+            ApiVersion: 1,
+            PortalLaunchCoordinator.ProtocolVersion,
+            Environment.ProcessId,
+            launchSessionId,
+            ReadOnly: true)));
 
         app.MapGet("/api/v1/bootstrap", static (PortalDataSource source) =>
             Results.Ok(source.Bootstrap()));
@@ -111,22 +172,84 @@ public static class Program
             }));
         app.MapFallbackToFile("index.html");
 
-        app.Lifetime.ApplicationStarted.Register(() =>
+        try
         {
+            await app.StartAsync().ConfigureAwait(false);
             IServer server = app.Services.GetRequiredService<IServer>();
             PortalDataSource source =
                 app.Services.GetRequiredService<PortalDataSource>();
             string address = server.Features.Get<IServerAddressesFeature>()?.Addresses.FirstOrDefault()
                 ?? "http://127.0.0.1";
-            Console.WriteLine();
-            Console.WriteLine("Phoenix Operations Portal");
-            Console.WriteLine($"Open {address}/#token={accessToken}");
-            Console.WriteLine(
-                $"Read-only telemetry view configured for {source.WorkspaceCount} workspace(s)");
-            Console.WriteLine();
-        });
+            string url = $"{address.TrimEnd('/')}/#token={accessToken}";
+            if (launchCoordinator is not null)
+            {
+                PortalLaunchHandshake handshake =
+                    await launchCoordinator.PublishStartedAsync(
+                        url,
+                        source.WorkspaceCount,
+                        launchSessionId,
+                        CancellationToken.None).ConfigureAwait(false);
+                Console.Out.WriteLine(PortalLaunchCoordinator.Serialize(handshake));
+                Console.Out.Flush();
+            }
+            else
+            {
+                Console.WriteLine();
+                Console.WriteLine("Phoenix Operations Portal");
+                Console.WriteLine($"Open {url}");
+                Console.WriteLine(
+                    $"Read-only telemetry view configured for {source.WorkspaceCount} workspace(s)");
+                Console.WriteLine();
+            }
 
-        await app.RunAsync();
+            await app.WaitForShutdownAsync().ConfigureAwait(false);
+            return 0;
+        }
+        finally
+        {
+            if (launchCoordinator is not null)
+                await launchCoordinator.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private static bool TryParseOptions(
+        string[] args,
+        out PortalOptions options,
+        out string? error)
+    {
+        string? workspaceRoot = null;
+        bool launcher = false;
+        bool help = false;
+        error = null;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--launcher":
+                    launcher = true;
+                    break;
+                case "--workspace-root" or "-w":
+                    if (++i >= args.Length || string.IsNullOrWhiteSpace(args[i]))
+                    {
+                        options = default;
+                        error = "--workspace-root requires a directory.";
+                        return false;
+                    }
+                    workspaceRoot = args[i];
+                    break;
+                case "--help" or "-h":
+                    help = true;
+                    break;
+                default:
+                    options = default;
+                    error = $"Unknown argument: {args[i]}";
+                    return false;
+            }
+        }
+
+        options = new PortalOptions(workspaceRoot, launcher, help);
+        return true;
     }
 
     private static IResult Operations(HttpRequest request, PortalDataSource source)
@@ -189,7 +312,7 @@ public static class Program
             }
         });
 
-    private static string CreateAccessToken()
+    private static string CreateSessionSecret()
     {
         return Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .TrimEnd('=')
@@ -245,4 +368,9 @@ public static class Program
         response.Headers.XFrameOptions = "DENY";
         response.Headers.CacheControl = "no-store";
     }
+
+    private readonly record struct PortalOptions(
+        string? WorkspaceRoot,
+        bool Launcher,
+        bool Help);
 }

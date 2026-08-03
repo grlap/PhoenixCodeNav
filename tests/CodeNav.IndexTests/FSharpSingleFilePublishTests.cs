@@ -15,6 +15,55 @@ public sealed class FSharpSingleFilePublishCollection
 public sealed class FSharpSingleFilePublishTests
 {
     [Fact]
+    public async Task DefaultPublishDirectoryContainsPortalCompanion()
+    {
+        string repository = FindRepositoryRoot();
+        string projectDirectory = Path.Combine(repository, "src", "CodeNav.Mcp");
+        string project = Path.Combine(projectDirectory, "CodeNav.Mcp.csproj");
+        string publish = Path.Combine(
+            projectDirectory,
+            "bin",
+            "Release",
+            "net10.0",
+            "publish");
+        try
+        {
+            if (Directory.Exists(publish))
+                Directory.Delete(publish, recursive: true);
+
+            ProcessResult result = await RunAsync("dotnet",
+            [
+                "publish", project, "-c", "Release", "--no-restore",
+                "-p:UseSharedCompilation=false",
+            ], repository, TimeSpan.FromMinutes(3));
+            Assert.True(result.ExitCode == 0,
+                $"default publish failed ({result.ExitCode})\n{result.Output}\n{result.Error}");
+
+            Assert.True(File.Exists(Path.Combine(
+                publish,
+                OperatingSystem.IsWindows()
+                    ? "PhoenixCodeNav.Mcp.exe"
+                    : "PhoenixCodeNav.Mcp")));
+            Assert.True(File.Exists(Path.Combine(
+                publish,
+                "portal",
+                OperatingSystem.IsWindows()
+                    ? "PhoenixCodeNav.Portal.exe"
+                    : "PhoenixCodeNav.Portal")));
+            Assert.True(File.Exists(Path.Combine(
+                publish,
+                "portal",
+                "wwwroot",
+                "index.html")));
+        }
+        finally
+        {
+            if (Directory.Exists(publish))
+                Directory.Delete(publish, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ProcessRunnerBoundsPipeDrainAfterParentExit()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -35,6 +84,7 @@ public sealed class FSharpSingleFilePublishTests
         string root = Directory.CreateTempSubdirectory("Phoenix FSharp publish ").FullName;
         string publish = Path.Combine(root, "published pair with spaces");
         string workspace = Path.Combine(root, "FSharp workspace with spaces");
+        int? portalPid = null;
         Directory.CreateDirectory(publish);
         Directory.CreateDirectory(workspace);
         try
@@ -47,6 +97,7 @@ public sealed class FSharpSingleFilePublishTests
                 "publish", project, "-c", "Release", "-r", "win-x64",
                 "--no-restore",
                 "--self-contained", "-p:PublishSingleFile=true",
+                "-p:UseSharedCompilation=false",
                 "-p:EnableCompressionInSingleFile=true",
                 "-p:IncludeNativeLibrariesForSelfExtract=true", "-o", publish,
             ], repository, TimeSpan.FromMinutes(3));
@@ -55,10 +106,16 @@ public sealed class FSharpSingleFilePublishTests
 
             string executable = Path.Combine(publish, "PhoenixCodeNav.Mcp.exe");
             string sidecar = Path.Combine(publish, "FSharp.Core.dll");
+            string portalExecutable = Path.Combine(
+                publish,
+                "portal",
+                "PhoenixCodeNav.Portal.exe");
             string emptyPackageCache = Path.Combine(root, "empty NuGet cache");
             Directory.CreateDirectory(emptyPackageCache);
             Assert.True(File.Exists(executable));
             Assert.True(File.Exists(sidecar));
+            Assert.True(File.Exists(portalExecutable));
+            Assert.True(File.Exists(Path.Combine(publish, "portal", "wwwroot", "index.html")));
             Assert.Single(Directory.EnumerateFiles(publish, "FSharp.Core.dll",
                 SearchOption.TopDirectoryOnly));
 
@@ -90,7 +147,7 @@ public sealed class FSharpSingleFilePublishTests
                 cancellationToken: mcpTimeout.Token);
             JsonElement capabilities = await WaitForReadyAsync(client, TimeSpan.FromSeconds(60),
                 mcpTimeout.Token);
-            Assert.Equal("0.12.48", capabilities.GetProperty("version").GetString());
+            Assert.Equal("0.12.49", capabilities.GetProperty("version").GetString());
             JsonElement semantic = await CallJsonAsync(client, "symbol_at",
                 new Dictionary<string, object?>
                 {
@@ -109,9 +166,53 @@ public sealed class FSharpSingleFilePublishTests
                 semantic.TryGetProperty("error", out JsonElement error)
                     ? error.GetString()
                     : null);
+
+            JsonElement started = await CallJsonAsync(
+                client,
+                "open_operations_portal",
+                cancellationToken: mcpTimeout.Token);
+            portalPid = started.GetProperty("pid").GetInt32();
+            Assert.True(started.GetProperty("ready").GetBoolean(), started.ToString());
+            Assert.Equal("started", started.GetProperty("status").GetString());
+            Assert.False(started.GetProperty("browserOpened").GetBoolean());
+            string portalUrl = started.GetProperty("url").GetString()!;
+            Assert.StartsWith("http://127.0.0.1:", portalUrl, StringComparison.Ordinal);
+            Assert.Contains("/#token=", portalUrl, StringComparison.Ordinal);
+
+            JsonElement reused = await CallJsonAsync(
+                client,
+                "open_operations_portal",
+                cancellationToken: mcpTimeout.Token);
+            Assert.Equal("reused", reused.GetProperty("status").GetString());
+            Assert.Equal(portalUrl, reused.GetProperty("url").GetString());
+            Assert.Equal(portalPid, reused.GetProperty("pid").GetInt32());
+
+            using var http = new HttpClient(new HttpClientHandler { UseProxy = false });
+            Uri portalUri = new(portalUrl);
+            using HttpResponseMessage health = await http.GetAsync(
+                new Uri(portalUri.GetLeftPart(UriPartial.Authority) + "/healthz"),
+                mcpTimeout.Token);
+            Assert.True(health.IsSuccessStatusCode);
         }
         finally
         {
+            if (portalPid is int pid)
+            {
+                try
+                {
+                    using Process portal = Process.GetProcessById(pid);
+                    if (!portal.HasExited)
+                        portal.Kill(entireProcessTree: true);
+                    await portal.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                }
+                catch (ArgumentException)
+                {
+                }
+                catch (TimeoutException)
+                {
+                }
+            }
+            PortalTestRuntimeCleanup.DeleteCoordinationFiles(workspace);
             TestWorkspaceCleanup.ClearIndexPools(workspace);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
@@ -169,6 +270,8 @@ public sealed class FSharpSingleFilePublishTests
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
+        start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        start.Environment["DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER"] = "1";
         foreach (string argument in arguments) start.ArgumentList.Add(argument);
         using Process process = Process.Start(start) ??
                                 throw new InvalidOperationException($"Could not start {fileName}.");

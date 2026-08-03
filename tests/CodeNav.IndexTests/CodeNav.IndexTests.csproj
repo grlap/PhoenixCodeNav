@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\CodeNav.Core\CodeNav.Core.csproj" />
     <ProjectReference Include="..\..\src\CodeNav.Mcp\CodeNav.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\CodeNav.Portal\CodeNav.Portal.csproj" />
     <ProjectReference Include="..\..\src\CodeNav.WorkspaceGen\CodeNav.WorkspaceGen.csproj" />
   </ItemGroup>
 
