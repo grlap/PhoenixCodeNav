@@ -2,7 +2,8 @@ import {
   countTransitionValue,
   createBuildViewModel,
   createCountTransition,
-  formatNumber
+  formatNumber,
+  summarizeSemanticState
 } from "./portal-model.js";
 
 document.documentElement.classList.add("js");
@@ -594,16 +595,6 @@ function animateNumber(target, value) {
       window.requestAnimationFrame(update);
   };
   window.requestAnimationFrame(update);
-}
-
-function summarizeSemanticState(instances) {
-  if (!instances.length)
-    return "unknown";
-  if (instances.every((item) => item.semanticState === "warm"))
-    return "warm";
-  if (instances.some((item) => item.semanticState === "warm"))
-    return "mixed";
-  return instances[0].semanticState;
 }
 
 function abbreviateTool(tool) {

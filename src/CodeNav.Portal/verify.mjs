@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 import {
   countTransitionValue,
   createBuildViewModel,
-  createCountTransition
+  createCountTransition,
+  summarizeSemanticState
 } from "./wwwroot/assets/portal-model.js";
 
 const root = dirname(fileURLToPath(import.meta.url));
@@ -129,6 +130,32 @@ if (!increasedCount.changed
     || countTransitionValue(increasedCount, 0) !== 12
     || countTransitionValue(increasedCount, 1) !== 15)
   failures.push("An increased operation count must animate from its prior value");
+const semanticStates = ["warm", "warming", "cold", "unknown"];
+if (summarizeSemanticState([]) !== "unknown")
+  failures.push("No semantic instances must aggregate to unknown");
+for (const state of semanticStates) {
+  const unanimous = [{ semanticState: state }, { semanticState: state }];
+  if (summarizeSemanticState(unanimous) !== state)
+    failures.push(`Unanimous ${state} semantic evidence must remain ${state}`);
+}
+for (const left of semanticStates) {
+  for (const right of semanticStates) {
+    if (left === right)
+      continue;
+    const forward = summarizeSemanticState([
+      { semanticState: left },
+      { semanticState: right }
+    ]);
+    const reverse = summarizeSemanticState([
+      { semanticState: right },
+      { semanticState: left }
+    ]);
+    if (forward !== "mixed" || reverse !== "mixed")
+      failures.push(`Mixed ${left}/${right} semantic evidence must be order-independent`);
+  }
+}
+if (summarizeSemanticState([{}, { semanticState: "future-state" }]) !== "unknown")
+  failures.push("Missing or unrecognized semantic evidence must remain unknown");
 for (const [name, value] of [
   ["throughput", unknownBuild.rateLabel],
   ["ETA", unknownBuild.etaLabel],

@@ -1,4 +1,5 @@
 const UNKNOWN = "—";
+const SEMANTIC_STATES = new Set(["warm", "warming", "cold", "unknown"]);
 
 export function createBuildViewModel(build) {
   if (!build) {
@@ -61,6 +62,14 @@ export function countTransitionValue(transition, progress) {
   return Math.round(transition.start + (transition.end - transition.start) * eased);
 }
 
+export function summarizeSemanticState(instances) {
+  if (!Array.isArray(instances) || instances.length === 0)
+    return "unknown";
+
+  const states = new Set(instances.map((item) => normalizeSemanticState(item?.semanticState)));
+  return states.size === 1 ? states.values().next().value : "mixed";
+}
+
 function formatFileProgress(filesProcessed, filesTotal) {
   if (filesProcessed != null && filesTotal != null)
     return `${formatNumber(filesProcessed)} / ${formatNumber(filesTotal)} files`;
@@ -92,4 +101,8 @@ function nonNegativeInteger(value) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : null;
+}
+
+function normalizeSemanticState(value) {
+  return SEMANTIC_STATES.has(value) ? value : "unknown";
 }

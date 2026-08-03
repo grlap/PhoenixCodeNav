@@ -310,6 +310,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("operations-portal-live-build-status", ids);
         Assert.Contains("operations-portal-mcp-launcher", ids);
         Assert.Contains("operations-portal-queryable-evidence", ids);
+        Assert.Contains("operations-portal-deterministic-semantic-summary", ids);
         Assert.Contains("mcp-structured-argument-errors", ids);
         Assert.Contains("implementations-semantic-retry-guidance", ids);
         Assert.Contains("refresh-recovery-self-heal", ids);
@@ -352,6 +353,9 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             idList.Count(id => id == "operations-portal-queryable-evidence"));
         Assert.Equal(
             1,
+            idList.Count(id => id == "operations-portal-deterministic-semantic-summary"));
+        Assert.Equal(
+            1,
             idList.Count(id => id == "mcp-structured-argument-errors"));
         Assert.Equal(
             1,
@@ -387,6 +391,16 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("invalidates old query evidence", portalQueryable);
         Assert.Contains("freshness remains unknown", portalQueryable);
         Assert.Contains("count stays stable", portalQueryable);
+        string portalSemanticSummary = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "operations-portal-deterministic-semantic-summary")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.51", portalSemanticSummary);
+        Assert.Contains("independently of instance ordering", portalSemanticSummary);
+        Assert.Contains("unanimous", portalSemanticSummary);
+        Assert.Contains("differing states report mixed", portalSemanticSummary);
         string argumentErrors = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
