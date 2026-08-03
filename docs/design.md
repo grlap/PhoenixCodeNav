@@ -569,18 +569,25 @@ stack rather than recursive calls, so machine-generated nesting remains fully in
 parallel workers without changing symbol order or parent links. Since v0.12.46 / schema v21, that
 syntax index also persists implicit and explicit C# conversions as `operator` rows with
 target-bearing display names, canonical target/parameter declaration identity, modifiers, source
-order, and parent links. Since schema v22, a persisted context key is the full SHA-256 digest of
+order, and parent links. From schema v22 through v23, a persisted context key was the full SHA-256 digest of
 the parent context digest plus each local declaration key, so a rebuilt `idx:` row cannot validate
 against an identical-looking declaration from another namespace or containing type. The fixed-size
 digest retains complete chained identity without quadratic deep-nesting storage. Since schema v23,
 explicit-interface regular operator rows persist private accessibility, matching
-Roslyn and preventing syntax/search/review evidence from overstating public API. F# semantic
+Roslyn and preventing syntax/search/review evidence from overstating public API. Schema v24 removes
+the per-symbol context digest: v3 handle fingerprints instead bind the existing per-file content
+hash to the declaration's deterministic syntax ordinal among declarations on its source line. That
+ordinal is projected with the symbol row from existing indexed order, distinguishing same-file twins
+without follow-up queries and conservatively invalidating every handle when that file changes without
+adding hashing, allocation, or storage to the cold symbol-index path. F# semantic
 resolution currently captures and type-checks one selected physical project behind its own
 single-slot gate; cross-project F# loading or parallel FCS requests require a separate design and
 must not be implied by this change.
 
-Cold-cluster latency and working set still scale with the selected project budget; use
-`CodeNav.Bench` against the target repository for deployment sizing. Warm clusters avoid
+Cold-cluster latency and working set still scale with the selected project budget. Use
+`CodeNav.Bench --db <scratch.db> --rebuild --build-only` as the non-destructive cold-index
+regression gate against the target repository, and the ordinary query/`--semantic` modes for
+deployment sizing. Warm clusters avoid
 reloading unchanged projects.
 
 ## Freshness — and how git operations are handled

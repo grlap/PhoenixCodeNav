@@ -265,7 +265,6 @@ public sealed class SyntaxIndexerStructuralTests
             $"{row.DeclarationKey}|{row.Container}").ToArray());
 
         Assert.Equal(4, conversions.Select(row => row.DeclarationKey).Distinct().Count());
-        Assert.Equal(4, conversions.Select(row => row.ContextKey).Distinct().Count());
         IReadOnlyDictionary<string, List<(int Start, int End)>> identifierOffsets =
             SyntaxIndexer.DeclarationIdentifierOffsetMap(parsed.Content);
         Assert.All(conversions, row =>
@@ -290,7 +289,6 @@ public sealed class SyntaxIndexerStructuralTests
             }
             """).Symbols.Single(row => row.Kind == "operator");
         Assert.Equal(conversions[0].DeclarationKey, renamedTypeParameter.DeclarationKey);
-        Assert.Equal(conversions[0].ContextKey, renamedTypeParameter.ContextKey);
         Assert.NotEqual(conversions[0].Name, renamedTypeParameter.Name);
     }
 

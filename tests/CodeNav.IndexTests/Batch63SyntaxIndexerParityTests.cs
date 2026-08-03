@@ -43,16 +43,14 @@ public sealed class Batch63SyntaxIndexerParityTests
                 Assert.Equal(0, refreshed.DeletedFiles);
             }
             string[] deltaRows = DumpRows(deltaDb, "P/Conversions.cs");
-            string[] deltaContextKeys = DumpContextKeys(deltaDb, "P/Conversions.cs");
 
             string fullDb = Path.Combine(root, ".codenav", "conversion-full-rebuild.db");
             IndexBuilder.Build(root, fullDb);
             string[] fullRows = DumpRows(fullDb, "P/Conversions.cs");
-            string[] fullContextKeys = DumpContextKeys(fullDb, "P/Conversions.cs");
 
             Assert.Equal(fullRows, deltaRows);
-            Assert.Equal(fullContextKeys, deltaContextKeys);
-            Assert.All(deltaContextKeys, AssertFullSha256);
+            Assert.DoesNotContain("context_key", SymbolTableColumns(deltaDb));
+            Assert.DoesNotContain("context_key", SymbolTableColumns(fullDb));
             Assert.Equal(
             [
                 StoredConversion(
@@ -672,7 +670,7 @@ public sealed class Batch63SyntaxIndexerParityTests
     }
 
     [Fact]
-    public void ConversionHandleFingerprintRejectsSameLineOverloadAfterFullRebuildReorder()
+    public void ConversionHandleFingerprintRejectsReusedRowAfterFileEpochChanges()
     {
         string root = Directory.CreateTempSubdirectory(
             "codenav-63-conversion-stale-handle").FullName;
@@ -690,9 +688,10 @@ public sealed class Batch63SyntaxIndexerParityTests
                 "public static implicit operator Scalar(int value) => new();";
             const string longConversion =
                 "public static implicit operator Scalar(long value) => new();";
-            // These Marker rows collide under every old/fallback fingerprint input: same file,
-            // line, namespace, container display name, declaration key, signature, and local arity.
-            // Only the complete ancestor identity distinguishes Outer from Outer<T>.
+            // These Marker rows share every declaration-local fingerprint input: same file, line,
+            // namespace, container display name, declaration key, signature, and local arity. The
+            // file hash changes when the containing declarations are reordered, conservatively
+            // invalidating every handle from the previous file epoch.
             const string plainMarker =
                 "namespace ContextStale { public class Outer { public class Marker {} } }";
             const string genericMarker =
@@ -745,9 +744,8 @@ public sealed class Batch63SyntaxIndexerParityTests
                 Assert.Equal(plain.StartLine, generic.StartLine);
                 Assert.Equal(plain.FilePath, generic.FilePath);
                 Assert.Equal(plain.DeclarationKey, generic.DeclarationKey);
-                Assert.NotEqual(plain.ContextKey, generic.ContextKey);
-                AssertFullSha256(plain.ContextKey!);
-                AssertFullSha256(generic.ContextKey!);
+                Assert.NotEqual(0, plain.FileHash);
+                Assert.Equal(plain.FileHash, generic.FileHash);
             }
 
             using var fullRebuildCompleted = new ManualResetEventSlim();
@@ -788,6 +786,100 @@ public sealed class Batch63SyntaxIndexerParityTests
             Assert.Equal("stale_handle", ParseJson(tools.Definition(
                     symbolId: stalePlainMarkerHandle, mode: "indexed"))
                 .GetProperty("error").GetString());
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void ConversionHandleFingerprintRejectsReusedRowWhenTwinFileIsUnchanged()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-63-conversion-stale-unchanged-file").FullName;
+        try
+        {
+            string project = Path.Combine(root, "Lib");
+            Directory.CreateDirectory(project);
+            File.WriteAllText(Path.Combine(project, "Lib.csproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                </Project>
+                """);
+            string precedingPath = Path.Combine(project, "A.cs");
+            string precedingSource =
+                "public class ShiftOne {} public class ShiftTwo {} public class ShiftThree {} " +
+                new string(' ', 256);
+            File.WriteAllText(precedingPath, precedingSource);
+            string twinsPath = Path.Combine(project, "Z.cs");
+            File.WriteAllText(twinsPath,
+                "namespace ContextStale { public class Outer { public class Marker {} } } " +
+                "namespace ContextStale { public class Outer<T> { public class Marker {} } }");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            var buildHooks = new BuildCaptureTestHooks(
+                (workspaceRoot, gitPath, maxBytes) =>
+                    GitInfo.ReadBoundedWorkspaceFileResult(workspaceRoot, gitPath, maxBytes),
+                CSharpProducerMaxDegreeOfParallelism: 1);
+            IndexBuilder.BuildWithSourceBatchSizeForTest(
+                root, sourceWriteBatchSize: 1, buildCaptureTestHooks: buildHooks);
+
+            string stalePlainHandle;
+            string stalePlainRow;
+            long originalFileHash;
+            long plainOrdinal;
+            long genericOrdinal;
+            using (var manager = new IndexManager(root, dbPath))
+            using (var semantic = new SemanticService(manager))
+            {
+                manager.Start();
+                Assert.True(SpinWait.SpinUntil(() => manager.IsQueryable, 20_000));
+                var tools = new NavigationTools(manager, semantic);
+                JsonElement plain = MarkerHitByParentArity(tools, manager, parentArity: 0);
+                JsonElement generic = MarkerHitByParentArity(tools, manager, parentArity: 1);
+                stalePlainHandle = plain.GetProperty("symbolId").GetString()!;
+                stalePlainRow = stalePlainHandle[..stalePlainHandle.IndexOf('~')];
+                using var queries = manager.OpenQueries();
+                SymbolHit plainHit = queries.SymbolById(IndexedRowId(plain))!;
+                SymbolHit genericHit = queries.SymbolById(IndexedRowId(generic))!;
+                originalFileHash = plainHit.FileHash;
+                plainOrdinal = plainHit.OrdinalOnLine;
+                genericOrdinal = genericHit.OrdinalOnLine;
+                Assert.Equal(3, genericOrdinal - plainOrdinal);
+            }
+
+            // Remove exactly three symbols from an earlier file. The full rebuild shifts Z.cs row
+            // ids by three while Z.cs itself remains byte-identical; the old plain Marker row id
+            // now lands on the generic twin.
+            File.WriteAllText(precedingPath,
+                "// no declarations remain".PadRight(precedingSource.Length));
+            IndexBuilder.BuildWithSourceBatchSizeForTest(
+                root, sourceWriteBatchSize: 1, buildCaptureTestHooks: buildHooks);
+
+            using (var manager = new IndexManager(root, dbPath))
+            using (var semantic = new SemanticService(manager))
+            {
+                manager.Start();
+                Assert.True(SpinWait.SpinUntil(() => manager.IsQueryable, 20_000));
+                var tools = new NavigationTools(manager, semantic);
+                JsonElement currentGeneric = MarkerHitByParentArity(
+                    tools, manager, parentArity: 1);
+                string currentGenericHandle = currentGeneric.GetProperty("symbolId").GetString()!;
+                Assert.Equal(stalePlainRow,
+                    currentGenericHandle[..currentGenericHandle.IndexOf('~')]);
+                using (var queries = manager.OpenQueries())
+                {
+                    SymbolHit current = queries.SymbolById(IndexedRowId(currentGeneric))!;
+                    Assert.Equal(originalFileHash, current.FileHash);
+                    Assert.Equal(genericOrdinal, current.OrdinalOnLine);
+                    Assert.NotEqual(plainOrdinal, current.OrdinalOnLine);
+                }
+                Assert.Equal("stale_handle", ParseJson(tools.Definition(
+                        symbolId: stalePlainHandle, mode: "indexed"))
+                    .GetProperty("error").GetString());
+            }
         }
         finally
         {
@@ -887,16 +979,12 @@ public sealed class Batch63SyntaxIndexerParityTests
                 Assert.Equal(0, refreshed.DeletedFiles);
             }
             string[] deltaRows = DumpRows(deltaDb, "P/Deep.cs");
-            string[] deltaContextKeys = DumpContextKeys(deltaDb, "P/Deep.cs");
 
             string fullDb = Path.Combine(root, ".codenav", "full-rebuild.db");
             IndexBuilder.Build(root, fullDb);
             string[] fullRows = DumpRows(fullDb, "P/Deep.cs");
-            string[] fullContextKeys = DumpContextKeys(fullDb, "P/Deep.cs");
 
             Assert.Equal(fullRows, deltaRows);
-            Assert.Equal(fullContextKeys, deltaContextKeys);
-            Assert.All(deltaContextKeys, AssertFullSha256);
             Assert.Contains(deltaRows, row => row.Contains("method\u001fInsertedMidChain\u001f",
                 StringComparison.Ordinal));
         }
@@ -1221,29 +1309,18 @@ public sealed class Batch63SyntaxIndexerParityTests
         return rows.ToArray();
     }
 
-    private static string[] DumpContextKeys(string dbPath, string filePath)
+    private static string[] SymbolTableColumns(string dbPath)
     {
         IndexQueries.ClearPoolsFor(dbPath);
         using var connection = new SqliteConnection(
             IndexQueries.ReadConnectionString(dbPath, pinReadSnapshot: false, pooling: false));
         connection.Open();
         using SqliteCommand command = connection.CreateCommand();
-        command.CommandText =
-            "SELECT s.context_key FROM symbols s JOIN files f ON f.id = s.file_id " +
-            "WHERE f.path = $path ORDER BY s.id";
-        command.Parameters.AddWithValue("$path", filePath);
+        command.CommandText = "PRAGMA table_info(symbols)";
 
-        var keys = new List<string>();
+        var columns = new List<string>();
         using SqliteDataReader reader = command.ExecuteReader();
-        while (reader.Read()) keys.Add(reader.GetString(0));
-        return keys.ToArray();
-    }
-
-    private static void AssertFullSha256(string contextKey)
-    {
-        Assert.Equal(64, contextKey.Length);
-        Assert.All(contextKey, character => Assert.True(
-            character is >= '0' and <= '9' or >= 'a' and <= 'f',
-            $"context key contains non-lowercase-hex character '{character}'"));
+        while (reader.Read()) columns.Add(reader.GetString(1));
+        return columns.ToArray();
     }
 }

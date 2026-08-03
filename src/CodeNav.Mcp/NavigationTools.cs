@@ -200,7 +200,7 @@ public sealed partial class NavigationTools
                 new { id = "review-snapshot-consistency", summary = "Repeated bounded Git captures compare exact raw patch bytes with typed staged/unstaged/unmerged/untracked manifests; symlink payloads, gitlinks, modes, and tracked bytes must match; snapshot_changed becomes git_worktree_changed with no partial result from different worktree epochs" },
                 new { id = "review-live-evidence-revalidation", summary = "v0.12.45 review_pack revalidates every bounded live file digest and safe existence classification after aggregation, latches contradictory repeated observations, and recaptures only bounded untracked move-candidate bytes actually consumed; any mismatch fails closed without a partial result" },
                 new { id = "csharp-conversion-operator-indexing", summary = "v0.12.46 schema v21 indexes implicit and explicit C# conversion declarations as operator rows with target-bearing names, canonical declaration keys, modifiers, source order, and parent links" },
-                new { id = "csharp-conversion-semantic-handles", summary = "v0.12.46 schema v22 conversion idx handles pin semantic definitions and references with uncapped canonical declaration keys; fingerprints bind a full SHA-256 digest of complete ancestor context without quadratic nesting storage and reject legacy identities that cannot prove it" },
+                new { id = "csharp-conversion-semantic-handles", summary = "v0.12.48 schema v24 conversion idx handles pin semantic definitions and references with uncapped canonical declaration keys; fingerprints bind the existing per-file content hash to a deterministic syntax ordinal among declarations on the same source line, distinguishing same-file twins without follow-up queries, invalidating the file epoch conservatively without a per-symbol context digest, and rejecting older identities that cannot prove the current row" },
                 new { id = "references-candidate-file-cap-disclosure", summary = "v0.12.46 indexed references disclose the existing caller-selected maxFiles candidate-file bound through coverage, candidate_file_cap, references.candidate_file_cap, and lower-bound totals instead of presenting a scanned subset as complete" },
                 new { id = "csharp-conversion-usage-enumeration", summary = "v0.12.47 semantic references enumerate compiler-bound implicitConversion, explicitConversion, and checkedConversion sites across the selected dependent closure, including stacked, nullable-tuple, full C# compound-assignment, primary-constructor, foreach, deconstruction, and interface-dispatch carriers, so exact zero means no matching conversion was found in complete loaded coverage" },
                 new { id = "csharp-operator-semantic-handles", summary = "v0.12.47 regular and conversion operator idx handles pin definition/references with canonical syntax declaration keys, including checked and explicit-interface forms; indexed definition retains the resolved row, indexed/failed-auto references fail closed, and implementations/type_hierarchy reject operator handles instead of retargeting" },
@@ -2667,31 +2667,33 @@ public sealed partial class NavigationTools
     private static bool? GroupOrphaned(string project) =>
         project == IndexQueries.NoProjectGroup ? true : null;
 
-    /// <summary>Stable, cross-process identity hash of a symbol row. v2 includes the complete
-    /// ancestor/declaration context emitted by schema v22. The namespace/container fallback keeps
-    /// manually constructed keyless rows stronger than the legacy presentation-only identity.</summary>
+    /// <summary>Stable, cross-process identity hash of a symbol row. v3 binds the declaration to
+    /// the file's existing content hash and deterministic syntax ordinal among declarations that
+    /// share a source line, so declarations with identical local display identity remain distinct
+    /// while any file edit invalidates its handles conservatively. The ordinal is projected in the
+    /// same read query as the symbol; this adds no column, binding, crypto, or allocation to every
+    /// symbol during indexing and keeps response shaping free of follow-up queries.</summary>
     private static string Fingerprint(SymbolHit s)
     {
-        string localIdentity = !string.IsNullOrEmpty(s.ContextKey)
-            ? s.ContextKey
-            : string.Join('\u001e', s.Ns ?? "", s.Container ?? "",
-                !string.IsNullOrEmpty(s.DeclarationKey) ? s.DeclarationKey : s.Signature);
+        string localIdentity = string.Join('\u001e', s.Ns ?? "", s.Container ?? "",
+            !string.IsNullOrEmpty(s.DeclarationKey) ? s.DeclarationKey : s.Signature);
         string identity = string.Join('\u001f', s.Name, s.Kind,
             s.Arity.ToString(System.Globalization.CultureInfo.InvariantCulture),
             s.StartLine.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            s.FilePath, localIdentity);
-        return "v2-" + Convert.ToHexString(
+            s.FilePath, s.FileHash.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            s.OrdinalOnLine.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            localIdentity);
+        return "v3-" + Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
     }
 
     private static bool FingerprintMatches(SymbolHit s, string fingerprint)
     {
-        if (fingerprint.StartsWith("v2-", StringComparison.Ordinal))
+        if (fingerprint.StartsWith("v3-", StringComparison.Ordinal))
             return string.Equals(fingerprint, Fingerprint(s), StringComparison.Ordinal);
 
-        // Pre-v0.12.46 fingerprints omitted namespace and complete ancestor identity. They cannot
-        // prove that a reused row id still names the same declaration, even for ordinary symbols,
-        // so schema-v21 handles fail closed instead of silently retargeting.
+        // Older fingerprints cannot prove the current file epoch. Fail closed instead of silently
+        // accepting a row id that may have been reassigned by a rebuild or delta refresh.
         return false;
     }
 

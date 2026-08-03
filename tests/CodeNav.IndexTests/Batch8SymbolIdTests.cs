@@ -142,17 +142,20 @@ public class Batch8SymbolIdTests
         var (id, path, startLine) = GuardHandle(tools);
         int tilde = id.IndexOf('~');
         Assert.True(tilde > 0, "emitted idx handle should carry a ~fingerprint");
-        Assert.StartsWith("v2-", id[(tilde + 1)..]);
+        Assert.StartsWith("v3-", id[(tilde + 1)..]);
 
         // A fingerprint that no longer matches the row (as if the rowid were reused) is refused.
         Assert.Equal("stale_handle",
             Parse(tools.Definition(symbolId: id[..tilde] + "~deadbeef")).GetProperty("error").GetString());
 
-        // Legacy fingerprints fail closed: they omitted namespace and complete ancestor identity,
-        // so a reused row id could otherwise silently retarget even an ordinary symbol.
+        // Legacy fingerprints fail closed: they cannot prove the current file content epoch, so a
+        // reused row id could otherwise silently retarget even an ordinary symbol.
         string legacy = LegacyFingerprint("Guard", "class", 0, startLine, path);
         Assert.Equal("stale_handle", Parse(tools.Definition(
                 symbolId: id[..tilde] + "~" + legacy, mode: "indexed"))
+            .GetProperty("error").GetString());
+        Assert.Equal("stale_handle", Parse(tools.Definition(
+                symbolId: id[..tilde] + "~v2-" + new string('a', 64), mode: "indexed"))
             .GetProperty("error").GetString());
 
         // A bare idx:N (no fingerprint — e.g. hand-typed) still resolves best-effort.

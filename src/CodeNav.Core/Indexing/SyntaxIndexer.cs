@@ -2,8 +2,6 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
-using System.Security.Cryptography;
-using System.Text;
 
 namespace CodeNav.Core.Indexing;
 
@@ -30,8 +28,7 @@ public sealed record SymbolRow(
                                 // differs from the member's own (hu7, field twice-asked: the private
                                 // on a setter was invisible); null when uniform or accessor-less
     string? DeclarationKey = null,
-    IReadOnlyList<BaseTypeIdentity>? BaseTypes = null, // v18: direct syntax heads before signature truncation
-    string? ContextKey = null); // v22: full SHA-256 ancestor/declaration identity for stale-handle validation
+    IReadOnlyList<BaseTypeIdentity>? BaseTypes = null); // v18: direct syntax heads before signature truncation
 
 public sealed record ParsedCsFile(
     string RelPath,
@@ -442,33 +439,14 @@ public static class SyntaxIndexer
         string? mods = node is MemberDeclarationSyntax md ? Mods(md.Modifiers) : null;
         string? accessors = AccessorSplit(node, accessibility);
         string declarationKey = DeclarationKey(node, kind, name, arity);
-        string? parentContextKey = parentOrdinal >= 0
-            ? symbols[parentOrdinal].ContextKey
-            : null;
-        string contextKey = ContextDigest(parentContextKey, declarationKey);
         symbols.Add(new SymbolRow(
             ordinal, parentOrdinal, kind, name, ns, container,
             signature.Length > 400 ? signature[..400] : signature,
             accessibility,
             span.Start.Line + 1, span.End.Line + 1,
             isPartial, arity, attrs, mods, accessors,
-            declarationKey, baseTypes, contextKey));
+            declarationKey, baseTypes));
         return ordinal;
-    }
-
-    /// <summary>
-    /// Carries complete ancestor identity in constant space. Chaining the full ancestor text into
-    /// every descendant made one deeply nested file retain and persist O(depth²) characters. A
-    /// full SHA-256 digest of the parent digest plus the local declaration key preserves every
-    /// ancestor distinction without truncating the identity or growing with nesting depth.
-    /// </summary>
-    private static string ContextDigest(string? parentContextKey, string declarationKey)
-    {
-        string identity = parentContextKey is null
-            ? "root\u001f" + declarationKey
-            : "child\u001f" + parentContextKey + '\u001f' + declarationKey;
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))
-            .ToLowerInvariant();
     }
 
     /// <summary>Per-accessor accessibility split, e.g. <c>get=public;set=private</c> — emitted

@@ -4,8 +4,10 @@ using CodeNav.Core.Semantic;
 using Microsoft.Data.Sqlite;
 
 string? workspace = null;
+string? database = null;
 bool rebuild = false;
 bool semantic = false;
+bool buildOnly = false;
 int iters = 25;
 
 for (int i = 0; i < args.Length; i++)
@@ -13,8 +15,10 @@ for (int i = 0; i < args.Length; i++)
     switch (args[i])
     {
         case "--workspace": workspace = args[++i]; break;
+        case "--db": database = args[++i]; break;
         case "--rebuild": rebuild = true; break;
         case "--semantic": semantic = true; break;
+        case "--build-only": buildOnly = true; break;
         case "--iters": iters = int.Parse(args[++i]); break;
         default:
             Console.Error.WriteLine($"Unknown argument: {args[i]}");
@@ -24,11 +28,12 @@ for (int i = 0; i < args.Length; i++)
 
 if (workspace is null)
 {
-    Console.Error.WriteLine("Usage: bench --workspace <dir> [--rebuild] [--semantic] [--iters 25]");
+    Console.Error.WriteLine(
+        "Usage: bench --workspace <dir> [--db <path>] [--rebuild] [--build-only] [--semantic] [--iters 25]");
     return 2;
 }
 
-string dbPath = IndexBuilder.DefaultDbPath(workspace);
+string dbPath = database is null ? IndexBuilder.DefaultDbPath(workspace) : Path.GetFullPath(database);
 
 // ---------------------------------------------------------------- semantic scenario
 if (semantic)
@@ -138,7 +143,10 @@ static async Task<int> RunSemanticScenario(string workspace, string dbPath)
 }
 
 // ---------------------------------------------------------------- build
-if (rebuild || !File.Exists(dbPath))
+// --build-only is a measurement request, not merely an early-exit request. Always perform the
+// build even when the explicit scratch database already exists, so a repeated benchmark cannot
+// return success without producing fresh metrics.
+if (rebuild || buildOnly || !File.Exists(dbPath))
 {
     Console.WriteLine($"=== Cold index build: {workspace}");
     var result = IndexBuilder.Build(workspace, dbPath, msg => Console.WriteLine($"  {msg}"));
@@ -156,6 +164,8 @@ if (rebuild || !File.Exists(dbPath))
     Console.WriteLine($"  index size        : {result.DbBytes / (1024.0 * 1024.0):F0} MB");
     Console.WriteLine();
 }
+
+if (buildOnly) return 0;
 
 // ---------------------------------------------------------------- sample targets from the index
 using var sampler = new SqliteConnection(new SqliteConnectionStringBuilder

@@ -12,7 +12,8 @@ public sealed record SymbolHit(
     string? Modifiers = null,    // "static sealed abstract virtual override new readonly const" subset (bt7)
     string? Accessors = null,    // "get=public;set=private" only when an accessor differs (hu7)
     string? DeclarationKey = null,
-    string? ContextKey = null);  // full SHA-256 ancestor/declaration identity (v22 handle validation)
+    long FileHash = 0,           // existing per-file content hash; v24 handle epoch identity
+    long OrdinalOnLine = 0);     // deterministic syntax order among declarations sharing StartLine
 
 /// <summary>Canonical syntax-index kinds that represent type declarations.</summary>
 public static class IndexedSymbolKinds
@@ -728,7 +729,9 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
             FROM symbols s JOIN files f ON f.id = s.file_id
             {where}
             ORDER BY
@@ -799,7 +802,9 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p AND s.start_line = $l
             ORDER BY s.id
@@ -813,7 +818,9 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p
             ORDER BY s.start_line, s.end_line DESC
@@ -845,7 +852,9 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p AND ({string.Join(" OR ", predicates)})
             ORDER BY s.start_line, s.end_line DESC
@@ -867,7 +876,9 @@ public sealed partial class IndexQueries : IDisposable
             var next = Query(
                 """
                 SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                       (SELECT COUNT(*) - 1 FROM symbols preceding
+                        WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
                 FROM symbols s JOIN files f ON f.id = s.file_id
                 WHERE s.id = $id
                 """,
@@ -887,7 +898,9 @@ public sealed partial class IndexQueries : IDisposable
         var hits = Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.id = $id
             """,
@@ -902,7 +915,9 @@ public sealed partial class IndexQueries : IDisposable
         var hits = Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE f.path = $p AND s.start_line <= $l AND s.end_line >= $l
             ORDER BY (s.end_line - s.start_line), s.start_line DESC
@@ -936,7 +951,9 @@ public sealed partial class IndexQueries : IDisposable
             var rows = Query(
                 $"""
                 SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                       (SELECT COUNT(*) - 1 FROM symbols preceding
+                        WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
                 FROM symbols s JOIN files f ON f.id = s.file_id
                 WHERE {string.Join(" OR ", clauses)}
                 """,
@@ -1306,7 +1323,9 @@ public sealed partial class IndexQueries : IDisposable
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
                    s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path,
-                   f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+                   f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.kind = $kind COLLATE BINARY AND s.name = $name COLLATE BINARY
               AND ((s.ns IS NULL AND $ns IS NULL) OR s.ns = $ns COLLATE BINARY)
@@ -1563,7 +1582,9 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             $"""
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
             FROM symbols s JOIN files f ON f.id = s.file_id
             WHERE s.name = $m COLLATE NOCASE AND ({string.Join(" OR ", clauses)})
             ORDER BY f.is_generated, f.path
@@ -1583,7 +1604,9 @@ public sealed partial class IndexQueries : IDisposable
             return Query(
                 """
                 SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                       (SELECT COUNT(*) - 1 FROM symbols preceding
+                        WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
                 FROM type_base_edges e
                 JOIN symbols s ON s.id = e.derived_symbol_id
                 JOIN files f ON f.id = s.file_id
@@ -1601,7 +1624,9 @@ public sealed partial class IndexQueries : IDisposable
         return Query(
             """
             SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
             FROM (
                 SELECT DISTINCT derived_symbol_id
                 FROM type_base_edges
@@ -1704,7 +1729,9 @@ public sealed partial class IndexQueries : IDisposable
 
     internal const string BaseListMentionsExactSql = """
         SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-               s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+               s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+               (SELECT COUNT(*) - 1 FROM symbols preceding
+                WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
         FROM type_base_edges e
         JOIN symbols s ON s.id = e.derived_symbol_id
         JOIN files f ON f.id = s.file_id
@@ -1717,7 +1744,9 @@ public sealed partial class IndexQueries : IDisposable
 
     private const string BaseListMentionsAnyAritySql = """
         SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
-               s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, s.context_key
+               s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+               (SELECT COUNT(*) - 1 FROM symbols preceding
+                WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
         FROM (
             SELECT DISTINCT derived_symbol_id
             FROM type_base_edges
@@ -2882,7 +2911,8 @@ public sealed partial class IndexQueries : IDisposable
         Modifiers: r.FieldCount > 15 && !r.IsDBNull(15) ? r.GetString(15) : null,
         Accessors: r.FieldCount > 16 && !r.IsDBNull(16) ? r.GetString(16) : null,
         DeclarationKey: r.FieldCount > 17 && !r.IsDBNull(17) ? r.GetString(17) : null,
-        ContextKey: r.FieldCount > 18 && !r.IsDBNull(18) ? r.GetString(18) : null);
+        FileHash: r.FieldCount > 18 && !r.IsDBNull(18) ? r.GetInt64(18) : 0,
+        OrdinalOnLine: r.FieldCount > 19 && !r.IsDBNull(19) ? r.GetInt64(19) : 0);
 
     private static ProjectRow ReadProject(SqliteDataReader r) => new(
         r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3),

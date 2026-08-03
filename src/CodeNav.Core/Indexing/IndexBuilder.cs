@@ -32,7 +32,8 @@ internal sealed record BuildCaptureTestHooks(
     Func<string, string, int, GitInfo.WorkspaceFileReadResult> Reader,
     Action<string>? FirstCaptureFailureRetained = null,
     int? CSharpQueueCapacity = null,
-    Action? CSharpQueueSaturated = null);
+    Action? CSharpQueueSaturated = null,
+    int? CSharpProducerMaxDegreeOfParallelism = null);
 
 internal sealed class IndexWorkspaceMismatchException : IOException
 {
@@ -117,8 +118,11 @@ public static class IndexBuilder
     /// v22: every symbol persists its complete ancestor/declaration context for fail-closed
     /// stale-handle validation.
     /// v23: explicit-interface regular operator rows persist compiler-accurate private
-    /// accessibility rather than the ordinary operator public default.</summary>
-    public const string SchemaVersion = "23";
+    /// accessibility rather than the ordinary operator public default.
+    /// v24: symbol handles bind the existing file content hash to the deterministic syntax ordinal
+    /// among declarations on the same source line, projected with each symbol row instead of
+    /// computing and persisting a separate SHA-256 context digest for every symbol.</summary>
+    public const string SchemaVersion = "24";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }
@@ -616,6 +620,8 @@ public static class IndexBuilder
                     new ParallelOptions
                     {
                         CancellationToken = csharpProducerCancellation.Token,
+                        MaxDegreeOfParallelism =
+                            buildCaptureTestHooks?.CSharpProducerMaxDegreeOfParallelism ?? -1,
                     },
                     (scanned, loop) =>
                 {

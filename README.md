@@ -236,9 +236,14 @@ pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1              # external Rosl
 dotnet run --project src/CodeNav.WorkspaceGen -- --out C:/temp/acme-2k \
     --projects 2000 --density 6 --clean                          # synthetic enterprise repo
 dotnet run --project src/CodeNav.Bench -c Release -- --workspace C:/temp/acme-2k --rebuild
+dotnet run --project src/CodeNav.Bench -c Release -- --workspace C:/src/runtime \
+    --db C:/temp/runtime-index.db --rebuild --build-only         # non-destructive cold-build gate
 dotnet run --project src/CodeNav.Bench -c Release -- --workspace C:/temp/acme-2k --semantic
 bash scripts/smoke-mcp.sh C:/temp/acme-2k                        # stdio protocol smoke test
 ```
+
+`--db` plus `--build-only` indexes the real workspace into an explicit scratch database and exits
+after reporting phase time, total time, symbol count, and database size.
 
 Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.FSharp` (isolated FCS syntax
 and bounded semantic adapter), `CodeNav.Mcp` (server, ships as `PhoenixCodeNav.Mcp.exe`), `CodeNav.WorkspaceGen`
@@ -270,9 +275,10 @@ watcher, and lifecycle test projects under `tests/`.
   is reached, the response reports candidate-file coverage, `totalIsLowerBound:true`, and
   `noteId:"references.candidate_file_cap"` instead of presenting the scanned subset as complete.
 - C# operator handles pin semantic definitions and references with their uncapped declaration key;
-  v2 handle fingerprints also bind a full SHA-256 digest of the complete namespace/type ancestor
-  context and reject legacy fingerprints that cannot prove that identity after a rebuild. The
-  fixed-size digest preserves complete chained identity without quadratic deep-nesting storage.
+  v3 handle fingerprints bind the file's existing content hash to the declaration's deterministic
+  syntax ordinal among declarations on its source line. This distinguishes same-file declarations with identical display
+  identity, while a file edit conservatively invalidates every handle from the previous file epoch,
+  without computing or persisting a separate digest for every symbol. Older fingerprints fail closed.
   Conversion `references` walk compiler-bound operation trees across the selected dependent
   closure and supplement them with compound-operation, tuple-element, primary-constructor,
   `foreach` element, and deconstruction conversion APIs. Implicit contextual conversions,

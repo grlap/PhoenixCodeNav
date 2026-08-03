@@ -317,8 +317,7 @@ public sealed class IndexStore : IDisposable
               attr_markers TEXT,
               modifiers TEXT,  -- v4 (bt7): space-joined static/sealed/abstract/virtual/override/new/readonly/const
               accessors TEXT,  -- v9 (hu7): "get=public;set=private", only when an accessor differs
-              declaration_key TEXT NOT NULL, -- v11: overload/interface identity separate from display signature
-              context_key TEXT NOT NULL DEFAULT '' -- v22: complete ancestor + declaration identity for handle validation
+              declaration_key TEXT NOT NULL -- v11: overload/interface identity separate from display signature
             );
 
             CREATE TABLE type_base_edges(
@@ -701,7 +700,7 @@ public sealed class IndexStore : IDisposable
     // the single-row path entirely. 32 chunks the fat generated files AND keeps the band
     // eligible; a size cascade could recover a little more, parked until numbers demand it.
     private const int SymbolChunkRows = 32;
-    private const int SymbolColumns = 18;
+    private const int SymbolColumns = 17;
     private long _nextSymbolId = -1;
     private readonly sqlite3_stmt?[] _symbolInsertStatements =
         new sqlite3_stmt?[SymbolChunkRows + 1];
@@ -738,7 +737,7 @@ public sealed class IndexStore : IDisposable
     {
         var sb = new System.Text.StringBuilder(
             "INSERT INTO symbols(id, file_id, parent_id, kind, name, ns, container, signature, " +
-            "accessibility, start_line, end_line, is_partial, arity, attr_markers, modifiers, accessors, declaration_key, context_key) VALUES ");
+            "accessibility, start_line, end_line, is_partial, arity, attr_markers, modifiers, accessors, declaration_key) VALUES ");
         for (int r = 0; r < rowsPerStatement; r++)
         {
             sb.Append(r > 0 ? ",(" : "(");
@@ -819,8 +818,7 @@ public sealed class IndexStore : IDisposable
         BindRawText(statement, parameter++, row.AttrMarkers);
         BindRawText(statement, parameter++, row.Modifiers);
         BindRawText(statement, parameter++, row.Accessors);
-        BindRawText(statement, parameter++, row.DeclarationKey ?? "");
-        BindRawText(statement, parameter, row.ContextKey ?? "");
+        BindRawText(statement, parameter, row.DeclarationKey ?? "");
     }
 
     private void ExecuteRawInsert(sqlite3_stmt statement, string rowKind)

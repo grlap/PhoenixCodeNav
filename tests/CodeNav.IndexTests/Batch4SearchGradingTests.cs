@@ -514,13 +514,16 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("modifiers, source order, and parent links", conversionOperators);
 
         string conversionHandles = Summary("csharp-conversion-semantic-handles");
-        Assert.Contains("v0.12.46", conversionHandles);
-        Assert.Contains("schema v22", conversionHandles);
+        Assert.Contains("v0.12.48", conversionHandles);
+        Assert.Contains("schema v24", conversionHandles);
         Assert.Contains("uncapped canonical declaration keys", conversionHandles);
-        Assert.Contains("full SHA-256 digest", conversionHandles);
-        Assert.Contains("complete ancestor context", conversionHandles);
-        Assert.Contains("without quadratic nesting storage", conversionHandles);
-        Assert.Contains("reject legacy identities", conversionHandles);
+        Assert.Contains("existing per-file content hash", conversionHandles);
+        Assert.Contains("deterministic syntax ordinal among declarations on the same source line", conversionHandles);
+        Assert.Contains("distinguishing same-file twins", conversionHandles);
+        Assert.Contains("without follow-up queries", conversionHandles);
+        Assert.Contains("invalidating the file epoch conservatively", conversionHandles);
+        Assert.Contains("without a per-symbol context digest", conversionHandles);
+        Assert.Contains("rejecting older identities", conversionHandles);
 
         string conversionUsages = Summary("csharp-conversion-usage-enumeration");
         Assert.Contains("v0.12.47", conversionUsages);
