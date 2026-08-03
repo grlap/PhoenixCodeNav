@@ -29,9 +29,7 @@ public class PortalDataSourceTests
             CreateIndex(database);
             File.SetAttributes(database, File.GetAttributes(database) | FileAttributes.ReadOnly);
 
-            string telemetry = Path.Combine(
-                telemetryDirectory,
-                $"phoenix-{Environment.ProcessId}-20260724080000-1.jsonl");
+            string telemetry = CurrentProcessTelemetryPath(telemetryDirectory);
             using var telemetryStream = new FileStream(
                 telemetry,
                 FileMode.CreateNew,
@@ -53,8 +51,14 @@ public class PortalDataSourceTests
                 Assert.Equal("live", live.GetProperty("dataSource").GetString());
                 Assert.True(live.GetProperty("dataComplete").GetBoolean());
                 Assert.Equal(1, live.GetProperty("summary").GetProperty("workspaceCount").GetInt32());
+                JsonElement workspace = live.GetProperty("workspaces")[0];
+                Assert.Equal("queryable", workspace.GetProperty("state").GetString());
+                Assert.Equal(1, workspace.GetProperty("recentOperationCount").GetInt32());
+                Assert.False(
+                    workspace.GetProperty("recentOperationCountIsLowerBound").GetBoolean());
                 JsonElement index = live.GetProperty("indexes")[0];
-                Assert.Equal("unknown", index.GetProperty("state").GetString());
+                Assert.Equal("queryable", index.GetProperty("state").GetString());
+                Assert.Equal("unknown", index.GetProperty("freshness").GetString());
                 Assert.Equal(JsonValueKind.Null, index.GetProperty("schemaVersion").ValueKind);
                 Assert.True(index.GetProperty("databaseSizeBytes").GetInt64() > 0);
                 Assert.Equal(
@@ -113,6 +117,11 @@ public class PortalDataSourceTests
                 Assert.Equal(3, evidence.GetProperty("droppedRecords").GetInt64());
                 Assert.Equal(1, evidence.GetProperty("truncatedFiles").GetInt32());
                 Assert.Equal(1, evidence.GetProperty("invalidRecords").GetInt32());
+                JsonElement workspace = live.GetProperty("workspaces")[0];
+                Assert.Equal("queryable", workspace.GetProperty("state").GetString());
+                Assert.Equal(2, workspace.GetProperty("recentOperationCount").GetInt32());
+                Assert.True(
+                    workspace.GetProperty("recentOperationCountIsLowerBound").GetBoolean());
                 Assert.Equal(
                     JsonValueKind.Null,
                     live.GetProperty("indexes")[0].GetProperty("currentBuild").ValueKind);
@@ -147,6 +156,14 @@ public class PortalDataSourceTests
                 Assert.Equal("live", live.GetProperty("dataSource").GetString());
                 Assert.False(live.GetProperty("dataComplete").GetBoolean());
                 Assert.Equal(
+                    "unknown",
+                    live.GetProperty("indexes")[0].GetProperty("state").GetString());
+                Assert.Equal(
+                    0,
+                    live.GetProperty("workspaces")[0]
+                        .GetProperty("recentOperationCount")
+                        .GetInt32());
+                Assert.Equal(
                     0,
                     live.GetProperty("telemetry").GetProperty("sourceFiles").GetInt32());
             }
@@ -154,6 +171,147 @@ public class PortalDataSourceTests
             Assert.Equal(0, operations.RootElement.GetProperty("total").GetInt32());
             Assert.True(operations.RootElement.GetProperty("totalIsLowerBound").GetBoolean());
             Assert.False(operations.RootElement.GetProperty("dataComplete").GetBoolean());
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void FailedOperationDoesNotPromoteAnObservedIndexToQueryable()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-portal-failed-query").FullName;
+        try
+        {
+            string telemetryDirectory = Path.Combine(root, ".codenav", "telemetry");
+            Directory.CreateDirectory(telemetryDirectory);
+            CreateIndex(Path.Combine(root, ".codenav", "index.db"));
+            File.WriteAllText(
+                CurrentProcessTelemetryPath(telemetryDirectory),
+                ServerInfo()
+                + SemanticOperation(
+                    "portal-failed",
+                    "references",
+                    41,
+                    result: "unresolved",
+                    reason: "symbol_not_found"));
+
+            var source = new PortalDataSource([root]);
+            source.RefreshForTest();
+
+            using JsonDocument bootstrap = Serialize(source.Bootstrap());
+            JsonElement live = bootstrap.RootElement;
+            Assert.Equal(
+                "unknown",
+                live.GetProperty("indexes")[0].GetProperty("state").GetString());
+            Assert.Equal(
+                1,
+                live.GetProperty("workspaces")[0]
+                    .GetProperty("recentOperationCount")
+                    .GetInt32());
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void IndexGenerationChangeInvalidatesRetainedQueryEvidence()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-portal-index-generation").FullName;
+        try
+        {
+            string telemetryDirectory = Path.Combine(root, ".codenav", "telemetry");
+            Directory.CreateDirectory(telemetryDirectory);
+            string database = Path.Combine(root, ".codenav", "index.db");
+            CreateIndex(database);
+            string telemetry = CurrentProcessTelemetryPath(telemetryDirectory);
+            File.WriteAllText(
+                telemetry,
+                ServerInfo()
+                + SemanticOperation("before-replacement", "references", 41));
+
+            var source = new PortalDataSource([root]);
+            source.RefreshForTest();
+            using (JsonDocument before = Serialize(source.Bootstrap()))
+            {
+                Assert.Equal(
+                    "queryable",
+                    before.RootElement.GetProperty("indexes")[0]
+                        .GetProperty("state")
+                        .GetString());
+            }
+
+            string replacement = Path.Combine(root, ".codenav", "replacement.db");
+            File.WriteAllText(replacement, "replacement-generation");
+            File.Move(replacement, database, overwrite: true);
+            source.RefreshForTest(forceIndexProbe: true);
+            using (JsonDocument replaced = Serialize(source.Bootstrap()))
+            {
+                JsonElement live = replaced.RootElement;
+                Assert.Equal(
+                    "unknown",
+                    live.GetProperty("indexes")[0].GetProperty("state").GetString());
+                Assert.Equal(
+                    1,
+                    live.GetProperty("workspaces")[0]
+                        .GetProperty("recentOperationCount")
+                        .GetInt32());
+            }
+
+            File.AppendAllText(
+                telemetry,
+                SemanticOperation("after-replacement", "implementations", 73));
+            source.RefreshForTest();
+            using JsonDocument after = Serialize(source.Bootstrap());
+            Assert.Equal(
+                "queryable",
+                after.RootElement.GetProperty("indexes")[0]
+                    .GetProperty("state")
+                    .GetString());
+            Assert.Equal(
+                2,
+                after.RootElement.GetProperty("workspaces")[0]
+                    .GetProperty("recentOperationCount")
+                    .GetInt32());
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void CompletedOperationFromAStaleInstanceDoesNotPromoteTheIndex()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-portal-stale-query").FullName;
+        try
+        {
+            string telemetryDirectory = Path.Combine(root, ".codenav", "telemetry");
+            Directory.CreateDirectory(telemetryDirectory);
+            CreateIndex(Path.Combine(root, ".codenav", "index.db"));
+            File.WriteAllText(
+                Path.Combine(
+                    telemetryDirectory,
+                    $"phoenix-{Environment.ProcessId}-20260724080000-1.jsonl"),
+                ServerInfo()
+                + SemanticOperation("stale-completed", "references", 41));
+
+            var source = new PortalDataSource([root]);
+            source.RefreshForTest();
+
+            using JsonDocument bootstrap = Serialize(source.Bootstrap());
+            JsonElement live = bootstrap.RootElement;
+            Assert.Equal(
+                "stale",
+                live.GetProperty("instances")[0]
+                    .GetProperty("connectionState")
+                    .GetString());
+            Assert.Equal(
+                "unknown",
+                live.GetProperty("indexes")[0].GetProperty("state").GetString());
         }
         finally
         {
@@ -1086,6 +1244,17 @@ public class PortalDataSourceTests
         JsonDocument.Parse(JsonSerializer.Serialize(
             value,
             new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+    private static string CurrentProcessTelemetryPath(string telemetryDirectory)
+    {
+        using Process process = Process.GetCurrentProcess();
+        string started = process.StartTime
+            .ToUniversalTime()
+            .ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+        return Path.Combine(
+            telemetryDirectory,
+            $"phoenix-{Environment.ProcessId}-{started}-1.jsonl");
+    }
 
     private static string SemanticOperation(
         string correlationId,

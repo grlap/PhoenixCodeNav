@@ -45,6 +45,22 @@ export function formatNumber(value, maximumFractionDigits = 0) {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits }).format(value);
 }
 
+export function createCountTransition(previousValue, nextValue) {
+  const end = nonNegativeInteger(nextValue) ?? 0;
+  const start = nonNegativeInteger(previousValue) ?? end;
+  return {
+    start,
+    end,
+    changed: start !== end
+  };
+}
+
+export function countTransitionValue(transition, progress) {
+  const boundedProgress = Math.min(1, Math.max(0, finiteNumber(progress) ?? 0));
+  const eased = 1 - Math.pow(1 - boundedProgress, 4);
+  return Math.round(transition.start + (transition.end - transition.start) * eased);
+}
+
 function formatFileProgress(filesProcessed, filesTotal) {
   if (filesProcessed != null && filesTotal != null)
     return `${formatNumber(filesProcessed)} / ${formatNumber(filesTotal)} files`;
@@ -68,6 +84,12 @@ function finiteNumber(value) {
 
 function finiteRatio(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1
+    ? value
+    : null;
+}
+
+function nonNegativeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : null;
 }

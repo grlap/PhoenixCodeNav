@@ -29,6 +29,8 @@ Default flow:
    implicit authority is disclosed as partial. The nearest indexed ancestor `Directory.Build.props`
    and `.targets` are evaluated only for bounded properties, conditions, and metadata-free Reference
    Include/Remove lists; custom SDKs and target/task-driven semantic mutations fail closed.
+   If `implementations` returns `retryRecommended:true` with a cold-load or semantic-timeout
+   reason, retry it once with the same arguments; non-partial exact responses omit that signal.
 3. Use `search_text` only for literals: config keys, route strings, error messages, log
    fragments, comments. Use `config_lookup` for configuration keys specifically.
 4. Starting from a **stack trace, build error, or diff hunk**: call

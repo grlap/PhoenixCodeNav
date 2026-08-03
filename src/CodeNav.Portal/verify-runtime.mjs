@@ -18,6 +18,7 @@ const telemetryFile = join(
 
 await access(dll);
 await mkdir(telemetryDirectory, { recursive: true });
+await writeFile(join(workspace, ".codenav", "index.db"), "portal-runtime-index", "utf8");
 await writeFile(
   telemetryFile,
   serverInfo()
@@ -71,6 +72,10 @@ try {
   if (bootstrap.indexes?.[0]?.currentBuild?.buildId !== "runtime-build"
       || bootstrap.indexes?.[0]?.currentBuild?.symbolsWritten !== 321)
     throw new Error("buildProgress did not reach the live build model.");
+  if (bootstrap.indexes?.[0]?.state !== "queryable"
+      || bootstrap.indexes?.[0]?.freshness !== "unknown"
+      || bootstrap.workspaces?.[0]?.recentOperationCount !== 1)
+    throw new Error("Successful live queries did not produce honest queryable index evidence.");
 
   const first = await waitForJson(
     `${session.origin}/api/v1/operations`,
@@ -96,12 +101,15 @@ try {
     headers,
     (body) => body.items?.some((item) => item.correlationId === "runtime-b")
   );
-  await waitForJson(
+  const completedBootstrap = await waitForJson(
     `${session.origin}/api/v1/bootstrap`,
     headers,
     (body) => body.dataSource === "live"
       && body.indexes?.[0]?.currentBuild == null
+      && body.workspaces?.[0]?.recentOperationCount === 2
   );
+  if (completedBootstrap.indexes?.[0]?.state !== "queryable")
+    throw new Error("Queryable state was not stable after the operation count advanced.");
   const filtered = await getJson(
     `${session.origin}/api/v1/operations?outcome=completed&limit=1`,
     headers

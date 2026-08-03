@@ -123,6 +123,31 @@ public class Batch37Tests
         Assert.Null(NavigationTools.ExpandReason(null));
     }
 
+    [Theory]
+    [InlineData("cluster_cold_load")]
+    [InlineData("cluster_cold_load — deadline expired during compilation load")]
+    [InlineData("semantic_timeout")]
+    [InlineData("semantic_timeout: deadline exhausted after 15000ms")]
+    public void ImplementationsTransientSemanticFailuresRecommendOneExplicitRetry(
+        string reason)
+    {
+        Assert.True(NavigationTools.SemanticRetryRecommended(reason));
+        string hint = Assert.IsType<string>(NavigationTools.SemanticRetryHint(reason));
+        Assert.Contains("Retry implementations once", hint, StringComparison.Ordinal);
+        Assert.DoesNotContain("automatically", hint, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("no_semantic_implementers")]
+    [InlineData("candidate_cluster_bounded")]
+    [InlineData("project_load_failed")]
+    public void ImplementationsDeterministicFallbacksDoNotRecommendRetry(string? reason)
+    {
+        Assert.False(NavigationTools.SemanticRetryRecommended(reason));
+        Assert.Null(NavigationTools.SemanticRetryHint(reason));
+    }
+
     [Fact]
     public void WarmSemanticCallsReportTheBudgetSplit()
     {
@@ -194,6 +219,29 @@ public class Batch37Tests
             string coldReason = cold.GetProperty("partialReason").GetString()!;
             Assert.StartsWith("cluster_cold_load", coldReason);
             Assert.Contains("retry", coldReason, StringComparison.OrdinalIgnoreCase);
+            var coldImplementations = SemanticRetry.ParseWithRetry(
+                () => tools.Implementations(name: "IZetaLike", timeoutMs: 5000),
+                json => json.TryGetProperty("partialReason", out var partialReason) &&
+                        (partialReason.GetString() ?? "").StartsWith(
+                            "cluster_cold_load", StringComparison.Ordinal),
+                "implementations cold-load fallback with retry guidance");
+            Assert.Equal("heuristic",
+                coldImplementations.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.True(coldImplementations.GetProperty("retryRecommended").GetBoolean());
+            Assert.Contains("same arguments",
+                coldImplementations.GetProperty("retryHint").GetString(),
+                StringComparison.Ordinal);
+            var coldMemberImplementations = SemanticRetry.ParseWithRetry(
+                () => tools.Implementations(name: "Run", timeoutMs: 5000),
+                json => json.TryGetProperty("partialReason", out var partialReason) &&
+                        partialReason.GetString() == "member_scoped_syntactic" &&
+                        json.TryGetProperty("semanticReason", out var semanticReason) &&
+                        (semanticReason.GetString() ?? "").StartsWith(
+                            "cluster_cold_load", StringComparison.Ordinal),
+                "member fallback preserving its transient semantic cause");
+            Assert.Equal("heuristic",
+                coldMemberImplementations.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.True(coldMemberImplementations.GetProperty("retryRecommended").GetBoolean());
             string coldTelemetryLine = m.Telemetry.Snapshot().Last(line =>
                 line.Contains("\"tool\":\"references\"") &&
                 line.Contains("\"reason\":\"cluster_cold_load\""));
@@ -213,6 +261,17 @@ public class Batch37Tests
                 () => tools.References(name: "IZetaLike", mode: "semantic", timeoutMs: 5000),
                 j => j.TryGetProperty("partialReason", out var pv) && (pv.GetString() ?? "").Contains("semantic_timeout"), "partialReason==semantic_timeout");
             Assert.Equal("semantic_timeout", timeout.GetProperty("partialReason").GetString());
+            var timeoutImplementations = SemanticRetry.ParseWithRetry(
+                () => tools.Implementations(name: "IZetaLike", timeoutMs: 5000),
+                json => json.TryGetProperty("partialReason", out var partialReason) &&
+                        partialReason.GetString() == "semantic_timeout",
+                "implementations post-load timeout fallback with retry guidance");
+            Assert.Equal("heuristic",
+                timeoutImplementations.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.True(timeoutImplementations.GetProperty("retryRecommended").GetBoolean());
+            Assert.Contains("same arguments",
+                timeoutImplementations.GetProperty("retryHint").GetString(),
+                StringComparison.Ordinal);
             string timeoutTelemetryLine = m.Telemetry.Snapshot().Last(line =>
                 line.Contains("\"tool\":\"references\"") &&
                 line.Contains("\"reason\":\"semantic_timeout\""));
@@ -228,6 +287,10 @@ public class Batch37Tests
             var warm = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
                 () => tools.References(name: "IZetaLike", timeoutMs: 90000));
             Assert.Equal("exact", warm.GetProperty("meta").GetProperty("confidence").GetString());
+            var warmImplementations = SemanticRetry.ParseExactWithRetry(
+                () => tools.Implementations(name: "IZetaLike", timeoutMs: 90000));
+            Assert.False(warmImplementations.TryGetProperty("retryRecommended", out _));
+            Assert.False(warmImplementations.TryGetProperty("retryHint", out _));
         }
         finally { Cleanup(root); }
     }

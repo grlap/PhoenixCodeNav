@@ -96,7 +96,13 @@ each Phoenix-owned directory to owner-only modes. Every platform rejects reparse
 Windows otherwise relies on inherited current-user profile ACLs. These checks run before lock or
 descriptor access. The startup/reuse attempt is bounded to 30 seconds and cleanup
 terminates only that newly launched helper/owner attempt. Portal absence or failure has no effect
-on index or navigation correctness.
+on index or navigation correctness. The portal does not infer `ready` or freshness from file
+presence. It derives the narrower `queryable` presentation only when the current anchored
+index-file generation, a connected Phoenix process, and a successful retained operation from that
+same process agree. Any observed index stamp change invalidates earlier query evidence; failed
+operations, stale processes, and index-only observations remain `unknown`. Workspace
+bootstrap data carries the retained operation count independently of the default operation page,
+so unchanged polling neither changes the value nor restarts its animation.
 
 Exact path identity is never fuzzy. When `outline` or `source_context` cannot resolve a path, or
 the first page of an exact-path `find_file` query is empty, the MCP layer asks `IndexQueries` for
@@ -160,6 +166,19 @@ Every response carries a `confidence`:
   (`implementations` fallback, `related_tests`) — leads, not facts.
 - degradation flags: `partial` (a deadline/coverage limit was hit), `stale` (index older
   than the working tree), plus `coverage` counts.
+
+The MCP registration boundary wraps every attributed navigation tool without changing its
+generated required-field schema. Missing or mistyped arguments are rejected before SDK method
+binding as structured `bad_request` tool results naming the tool and field. This avoids the SDK's
+generic non-`McpException` failure while keeping required parameters required.
+Because this rejection occurs before the navigation-tool instance and workspace health exist, its
+minimal documented envelope intentionally omits the ordinary `meta` object.
+
+Transient `implementations` fallback is similarly actionable without changing resource policy:
+`cluster_cold_load` and `semantic_timeout` remain machine-readable as `partialReason`, or as
+`semanticReason` when a member fallback needs its established policy-specific `partialReason`.
+Heuristic confidence is preserved and `retryRecommended`/`retryHint` are added. No automatic
+second call or deadline increase is hidden behind those fields.
 
 ## The index substrate
 

@@ -68,7 +68,7 @@ builder.Services
             "show its returned url field verbatim as a clickable link; never call it proactively.";
     })
     .WithStdioServerTransport()
-    .WithTools<NavigationTools>();
+    .WithTools(ValidatedMcpToolRegistration.CreateNavigationTools());
 
 var host = builder.Build();
 

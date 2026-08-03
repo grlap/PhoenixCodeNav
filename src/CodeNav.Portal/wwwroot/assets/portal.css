@@ -451,7 +451,8 @@ main {
   -webkit-text-fill-color: transparent;
 }
 
-body[data-workspace-state="ready"] .hero h1 {
+body[data-workspace-state="ready"] .hero h1,
+body[data-workspace-state="queryable"] .hero h1 {
   background-image: linear-gradient(110deg, var(--white), var(--lime));
 }
 
@@ -487,12 +488,14 @@ body[data-workspace-state="degraded"] .hero h1 {
   animation: beacon-ring 2s ease-out infinite;
 }
 
-body[data-workspace-state="ready"] .state-beacon i {
+body[data-workspace-state="ready"] .state-beacon i,
+body[data-workspace-state="queryable"] .state-beacon i {
   background: var(--lime);
   box-shadow: 0 0 18px var(--lime);
 }
 
-body[data-workspace-state="ready"] .state-beacon b { border-color: var(--lime); }
+body[data-workspace-state="ready"] .state-beacon b,
+body[data-workspace-state="queryable"] .state-beacon b { border-color: var(--lime); }
 
 .hero__summary {
   max-width: 700px;

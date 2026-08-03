@@ -1043,6 +1043,7 @@ public sealed partial class SemanticService : IDisposable
             planning.SeedProjects = implementerSeeds.Count;
 
             clusterLoadInProgress = true;
+            TestOnlyPhaseHook?.Invoke("beforeScanSetLoad");
             var (scanLease, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
@@ -1052,6 +1053,7 @@ public sealed partial class SemanticService : IDisposable
             Solution solution = scanLease.Solution;
             clusterLoadInProgress = false;
             clusterLoadMs = swPhase.ElapsedMilliseconds; // load+resolve budget; the rest is find
+            TestOnlyPhaseHook?.Invoke("afterScanSetLoad");
             if (symbol is null)
             {
                 string reason = SemanticCoverageReasons.FailedProjects(coverage)

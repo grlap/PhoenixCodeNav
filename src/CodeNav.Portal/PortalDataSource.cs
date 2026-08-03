@@ -98,7 +98,15 @@ public sealed partial class PortalDataSource : BackgroundService
                 view.CursorGeneration);
     }
 
-    internal void RefreshForTest() => Refresh();
+    internal void RefreshForTest(bool forceIndexProbe = false)
+    {
+        if (forceIndexProbe)
+        {
+            foreach (WorkspaceSource source in _sources)
+                source.ForceIndexProbeForTest();
+        }
+        Refresh();
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -219,48 +227,65 @@ public sealed partial class PortalDataSource : BackgroundService
             .ToArray();
         long? lagMs = lags.Length == 0 ? null : lags.Max();
 
-        object[] workspaces = snapshots.Select(snapshot => new
+        var indexPresentations = snapshots.ToDictionary(
+            snapshot => snapshot.WorkspaceId,
+            ResolveIndexPresentation,
+            StringComparer.Ordinal);
+
+        object[] workspaces = snapshots.Select(snapshot =>
         {
-            workspaceId = snapshot.WorkspaceId,
-            name = TrimUtf8(snapshot.Name, MaxStringBytes),
-            shortName = ShortName(snapshot.Name),
-            state = snapshot.Index.State,
-            stateLabel = snapshot.Index.StateLabel,
-            indexId = snapshot.Index.IndexId,
-            instanceIds = snapshot.Instances.Select(instance => instance.InstanceId).ToArray(),
-            description = snapshot.Index.Description
+            IndexPresentation presentation = indexPresentations[snapshot.WorkspaceId];
+            return (object)new
+            {
+                workspaceId = snapshot.WorkspaceId,
+                name = TrimUtf8(snapshot.Name, MaxStringBytes),
+                shortName = ShortName(snapshot.Name),
+                state = presentation.State,
+                stateLabel = presentation.StateLabel,
+                indexId = snapshot.Index.IndexId,
+                instanceIds = snapshot.Instances
+                    .Select(instance => instance.InstanceId)
+                    .ToArray(),
+                recentOperationCount = snapshot.Operations.Length,
+                recentOperationCountIsLowerBound = !snapshot.DataComplete,
+                description = presentation.Description
+            };
         }).Cast<object>().ToArray();
 
-        object[] indexes = snapshots.Select(snapshot => new
+        object[] indexes = snapshots.Select(snapshot =>
         {
-            indexId = snapshot.Index.IndexId,
-            workspaceId = snapshot.WorkspaceId,
-            state = snapshot.Index.State,
-            stateLabel = snapshot.Index.StateLabel,
-            freshness = snapshot.Index.Freshness,
-            epoch = (long?)null,
-            databaseSizeBytes = snapshot.Index.DatabaseSizeBytes,
-            indexVersion = snapshot.Index.IndexVersion,
-            schemaVersion = snapshot.Index.SchemaVersion,
-            indexedCommit = snapshot.Index.IndexedCommit,
-            indexedBranch = snapshot.Index.IndexedBranch,
-            indexedAtUtc = snapshot.Index.IndexedAtUtc,
-            currentBuild = BuildView(snapshot.CurrentBuild),
-            refresh = new
+            IndexPresentation presentation = indexPresentations[snapshot.WorkspaceId];
+            return (object)new
             {
-                state = snapshot.Index.RefreshState,
-                queueDepth = (int?)null,
-                changesProcessed = (int?)null,
-                lastRefreshDurationMs = (long?)null,
-                lastRefreshUtc = snapshot.Index.LastRefreshUtc,
-                incompleteReason = snapshot.Index.RefreshIncompleteReason
-            },
-            counts = new
-            {
-                files = snapshot.Index.FileCount,
-                projects = snapshot.Index.ProjectCount,
-                symbols = snapshot.Index.SymbolCount
-            }
+                indexId = snapshot.Index.IndexId,
+                workspaceId = snapshot.WorkspaceId,
+                state = presentation.State,
+                stateLabel = presentation.StateLabel,
+                freshness = snapshot.Index.Freshness,
+                epoch = (long?)null,
+                databaseSizeBytes = snapshot.Index.DatabaseSizeBytes,
+                indexVersion = snapshot.Index.IndexVersion,
+                schemaVersion = snapshot.Index.SchemaVersion,
+                indexedCommit = snapshot.Index.IndexedCommit,
+                indexedBranch = snapshot.Index.IndexedBranch,
+                indexedAtUtc = snapshot.Index.IndexedAtUtc,
+                currentBuild = BuildView(snapshot.CurrentBuild),
+                refresh = new
+                {
+                    state = snapshot.Index.RefreshState,
+                    queueDepth = (int?)null,
+                    changesProcessed = (int?)null,
+                    lastRefreshDurationMs = (long?)null,
+                    lastRefreshUtc = snapshot.Index.LastRefreshUtc,
+                    incompleteReason = snapshot.Index.RefreshIncompleteReason
+                },
+                counts = new
+                {
+                    files = snapshot.Index.FileCount,
+                    projects = snapshot.Index.ProjectCount,
+                    symbols = snapshot.Index.SymbolCount
+                }
+            };
         }).Cast<object>().ToArray();
 
         object bootstrap = new
@@ -336,6 +361,35 @@ public sealed partial class PortalDataSource : BackgroundService
             dataComplete,
             totalIsLowerBound,
             cursorGeneration);
+    }
+
+    private static IndexPresentation ResolveIndexPresentation(
+        WorkspaceSnapshot snapshot)
+    {
+        if (!snapshot.Index.Exists || snapshot.Index.State != "unknown")
+        {
+            return new IndexPresentation(
+                snapshot.Index.State,
+                snapshot.Index.StateLabel,
+                snapshot.Index.Description);
+        }
+
+        var connectedInstanceIds = new HashSet<string>(
+            snapshot.Instances
+                .Where(instance => instance.ConnectionState == "connected")
+                .Select(instance => instance.InstanceId),
+            StringComparer.Ordinal);
+        bool successfulQueryObserved = snapshot.QueryableInstanceIds.Any(
+            connectedInstanceIds.Contains);
+        return successfulQueryObserved
+            ? new IndexPresentation(
+                "queryable",
+                "Index queryable",
+                "Index file present · successful recent queries observed from a connected Phoenix instance · freshness unknown")
+            : new IndexPresentation(
+                snapshot.Index.State,
+                snapshot.Index.StateLabel,
+                snapshot.Index.Description);
     }
 
     private static object? BuildView(PortalBuild? build)
@@ -500,8 +554,11 @@ public sealed partial class PortalDataSource : BackgroundService
             new(StringComparer.Ordinal);
         private readonly Dictionary<string, MutableInstance> _instances =
             new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _queryEvidenceByInstance =
+            new(StringComparer.Ordinal);
         private IndexSnapshot _index;
         private IndexFileStamp? _lastIndexStamp;
+        private DateTimeOffset _queryEvidenceNotBeforeUtc = DateTimeOffset.MaxValue;
         private DateTimeOffset _nextIndexProbeUtc;
         private bool _telemetryDirectoryPresent;
         private int _omittedSourceFiles;
@@ -524,10 +581,13 @@ public sealed partial class PortalDataSource : BackgroundService
 
         internal void Refresh(DateTimeOffset now, Action? beforeTelemetryEnumeration)
         {
-            RefreshTelemetry(now, beforeTelemetryEnumeration);
             RefreshIndex(now);
+            RefreshTelemetry(now, beforeTelemetryEnumeration);
             Prune(now);
         }
+
+        internal void ForceIndexProbeForTest() =>
+            _nextIndexProbeUtc = DateTimeOffset.MinValue;
 
         internal WorkspaceSnapshot Snapshot(DateTimeOffset now)
         {
@@ -540,6 +600,13 @@ public sealed partial class PortalDataSource : BackgroundService
                 .Where(instance => instance.IsProcessAlive()
                     || now - instance.LastSeenUtc <= InstanceRetention)
                 .Select(instance => instance.ToSnapshot())
+                .ToArray();
+            string[] queryableInstanceIds = _queryEvidenceByInstance
+                .Where(pair => _operations.TryGetValue(
+                    pair.Value,
+                    out PortalOperation? operation)
+                    && operation.Outcome == "completed")
+                .Select(pair => pair.Key)
                 .ToArray();
             DateTimeOffset? retainedFromUtc = cursors
                 .Where(cursor => cursor.RetainedFromUtc is not null)
@@ -564,6 +631,7 @@ public sealed partial class PortalDataSource : BackgroundService
                     || _sourceLossEvictions > 0,
                 instances,
                 _operations.Values.ToArray(),
+                queryableInstanceIds,
                 _events.Values.ToArray(),
                 _telemetryDirectoryPresent
                     && cursors.Length > 0
@@ -611,11 +679,26 @@ public sealed partial class PortalDataSource : BackgroundService
             _nextIndexProbeUtc = now.AddSeconds(2);
 
             IndexFileStamp stamp = IndexFileStamp.Read(_root);
-            if (_lastIndexStamp == stamp && _index.ObservationComplete)
+            bool stampChanged = _lastIndexStamp != stamp;
+            if (!stampChanged && _index.ObservationComplete)
                 return;
+
+            bool firstObservation = _lastIndexStamp is null;
+            if (stampChanged)
+            {
+                _queryEvidenceByInstance.Clear();
+                _queryEvidenceNotBeforeUtc = firstObservation
+                    && stamp.State == PortalPathGuard.EntryState.Safe
+                    ? ToTelemetryTimestampPrecision(stamp.DatabaseWriteUtc)
+                    : ToTelemetryTimestampPrecision(now);
+            }
             _lastIndexStamp = stamp;
             _index = ReadIndexSnapshot(_root, _indexId);
         }
+
+        private static DateTimeOffset ToTelemetryTimestampPrecision(
+            DateTimeOffset value) =>
+            DateTimeOffset.FromUnixTimeMilliseconds(value.ToUnixTimeMilliseconds());
 
         private void RefreshTelemetry(
             DateTimeOffset now,
@@ -690,6 +773,7 @@ public sealed partial class PortalDataSource : BackgroundService
                         _events.Remove(key);
                     }
                     _instances.Remove(cursor.InstanceId);
+                    _queryEvidenceByInstance.Remove(cursor.InstanceId);
                     _files.Remove(stale);
                     RecordSourceLoss(now);
                 }
@@ -727,6 +811,7 @@ public sealed partial class PortalDataSource : BackgroundService
             _operations.Clear();
             _events.Clear();
             _instances.Clear();
+            _queryEvidenceByInstance.Clear();
             _currentBuild = null;
             _telemetryDirectoryPresent = false;
             _omittedSourceFiles = 0;
@@ -760,6 +845,7 @@ public sealed partial class PortalDataSource : BackgroundService
                 _events.Remove(key);
             }
             _instances.Remove(instanceId);
+            _queryEvidenceByInstance.Remove(instanceId);
             if (_currentBuild?.InstanceId == instanceId)
                 _currentBuild = null;
         }
@@ -803,11 +889,23 @@ public sealed partial class PortalDataSource : BackgroundService
                     }
                     AddOperation(operation);
                     MutableInstance instance = GetInstance(cursor);
-                    instance.LastSeenUtc =
+                    DateTimeOffset completedAtUtc =
                         operation.StartedAtUtc.AddMilliseconds(operation.DurationMs ?? 0);
+                    instance.LastSeenUtc = completedAtUtc;
                     instance.Role = String(root, "accessMode") ?? instance.Role;
                     if (Bool(root, "cold") == true)
                         instance.SemanticState = "warming";
+                    if (operation.Outcome == "completed"
+                        && _index.ObservationComplete
+                        && _lastIndexStamp is
+                        {
+                            State: PortalPathGuard.EntryState.Safe
+                        }
+                        && completedAtUtc >= _queryEvidenceNotBeforeUtc)
+                    {
+                        _queryEvidenceByInstance[cursor.InstanceId] =
+                            operation.OperationId;
+                    }
                     return;
                 }
 
@@ -1798,6 +1896,7 @@ public sealed partial class PortalDataSource : BackgroundService
         bool HasLiveData,
         PortalInstance[] Instances,
         PortalOperation[] Operations,
+        string[] QueryableInstanceIds,
         PortalEvent[] Events,
         bool DataComplete,
         long DroppedRecords,
@@ -1814,6 +1913,11 @@ public sealed partial class PortalDataSource : BackgroundService
         long RetentionGeneration,
         DateTimeOffset? RetainedFromUtc,
         PortalBuild? CurrentBuild);
+
+    private sealed record IndexPresentation(
+        string State,
+        string StateLabel,
+        string Description);
 
     private sealed record IndexSnapshot(
         string IndexId,

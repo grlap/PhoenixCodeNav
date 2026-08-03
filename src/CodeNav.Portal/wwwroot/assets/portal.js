@@ -1,4 +1,9 @@
-import { createBuildViewModel, formatNumber } from "./portal-model.js";
+import {
+  countTransitionValue,
+  createBuildViewModel,
+  createCountTransition,
+  formatNumber
+} from "./portal-model.js";
 
 document.documentElement.classList.add("js");
 
@@ -190,6 +195,8 @@ function renderSelectedWorkspace() {
       : `${workspace.name} last reported ${formatToken(build.phase)}, but its build process is no longer running. Progress is stalled until fresh telemetry arrives.`
     : index?.state === "ready"
       ? `${workspace.name} has a committed index ready for queries. ${instances.length} recent Phoenix instance${instances.length === 1 ? "" : "s"} are visible.`
+      : index?.state === "queryable"
+        ? `${workspace.name} is answering queries through a connected Phoenix instance. Index freshness is not independently verified by the portal.`
       : `${workspace.name} reports ${formatToken(index?.state ?? "unknown")}. Waiting for bounded build or server telemetry.`;
   elements.instanceCount.textContent = String(instances.length);
   elements.semanticState.textContent = summarizeSemanticState(instances);
@@ -199,7 +206,12 @@ function renderSelectedWorkspace() {
     : indexState === "ready" ? "ready" : formatToken(indexState);
 
   renderBuild(index, build);
-  renderSignals(index, instances, operations, dataComplete);
+  renderSignals(
+    index,
+    instances,
+    operations,
+    dataComplete,
+    workspace.recentOperationCount ?? operations.length);
   renderActivity(operations);
   renderInstances(index, instances);
   renderStatus(instances);
@@ -209,6 +221,8 @@ function renderBuild(index, build) {
   const phaseIds = ["scanning", "parsing_projects", "indexing_files", "finalizing"];
   const activeIndex = build ? phaseIds.indexOf(build.phase) : phaseIds.length;
   const indexIsReady = index?.state === "ready";
+  const indexIsQueryable = index?.state === "queryable";
+  const indexIsAvailable = indexIsReady || indexIsQueryable;
   const buildIsLive = build?.live === true;
   const phases = build?.phases ?? phaseIds.map((id, index) => ({
     id,
@@ -216,13 +230,13 @@ function renderBuild(index, build) {
       ? "Projects"
       : id === "indexing_files" ? "Symbols" : id === "finalizing" ? "Publish" : "Scan",
     state: !build
-      ? indexIsReady ? "complete" : "pending"
+      ? indexIsAvailable ? "complete" : "pending"
       : index < activeIndex
         ? "complete"
       : index === activeIndex ? "active" : "pending",
     durationMs: index === activeIndex ? build?.phaseElapsedMs ?? null : null
   }));
-  const view = build || indexIsReady
+  const view = build || indexIsAvailable
     ? createBuildViewModel(build)
     : createBuildViewModel({
         progress: null,
@@ -238,10 +252,12 @@ function renderBuild(index, build) {
     ? buildIsLive
       ? build.phaseLabel
       : `Stalled · ${build.phaseLabel}`
-    : indexIsReady ? "Index ready" : "Index state unknown";
+    : indexIsReady
+      ? "Index ready"
+      : indexIsQueryable ? "Index queryable" : "Index state unknown";
   elements.buildPanel.querySelector(".build-panel__live span").textContent = build
     ? buildIsLive ? "LIVE" : "STALLED"
-    : indexIsReady ? "READY" : "UNKNOWN";
+    : indexIsReady ? "READY" : indexIsQueryable ? "QUERYABLE" : "UNKNOWN";
   elements.phaseRail.replaceChildren(...phases.map(createPhase));
   elements.progressFiles.textContent = view.filesLabel;
   elements.progressPercent.textContent = view.progressLabel;
@@ -267,7 +283,7 @@ function renderBuild(index, build) {
     : formatNumber(build.symbolsWritten);
   elements.buildBytes.textContent = formatBytes(build?.bytesRead);
 
-  if (!build) {
+  if (!build && indexIsAvailable) {
     elements.progressGlow.style.left = "calc(100% - 10px)";
     elements.buildPanel.classList.add("is-ready");
   } else {
@@ -288,7 +304,7 @@ function renderBuild(index, build) {
   }
 }
 
-function renderSignals(index, instances, operations, dataComplete) {
+function renderSignals(index, instances, operations, dataComplete, recentOperationCount) {
   const completed = operations.filter((item) => item.state === "complete");
   const semanticCompleted = completed.filter((item) => item.category === "semantic");
   const exact = semanticCompleted.filter((item) => item.confidence === "exact");
@@ -302,7 +318,7 @@ function renderSignals(index, instances, operations, dataComplete) {
   const allConnected = instances.length > 0
     && instances.every((item) => item.connectionState === "connected");
 
-  animateNumber(elements.queryCount, operations.length);
+  animateNumber(elements.queryCount, recentOperationCount);
   elements.queryP95.textContent = p95 == null ? "—" : formatDuration(p95);
   elements.semanticScore.textContent = semanticCompleted.length ? `${exact.length}/${semanticCompleted.length}` : "—";
   elements.semanticLabel.textContent = formatToken(semanticState);
@@ -554,17 +570,26 @@ function revealVisibleElements() {
 }
 
 function animateNumber(target, value) {
+  const previousValue = Number(target.dataset.count);
+  const transition = createCountTransition(previousValue, value);
+  if (!transition.changed)
+    return;
+
+  target.dataset.count = String(transition.end);
+  const animationId = String(Number(target.dataset.animationId ?? "0") + 1);
+  target.dataset.animationId = animationId;
   if (state.reducedMotion) {
-    target.textContent = formatNumber(value);
+    target.textContent = formatNumber(transition.end);
     return;
   }
 
   const started = performance.now();
   const duration = 700;
   const update = (now) => {
+    if (target.dataset.animationId !== animationId)
+      return;
     const progress = Math.min(1, (now - started) / duration);
-    const eased = 1 - Math.pow(1 - progress, 4);
-    target.textContent = formatNumber(Math.round(value * eased));
+    target.textContent = formatNumber(countTransitionValue(transition, progress));
     if (progress < 1)
       window.requestAnimationFrame(update);
   };

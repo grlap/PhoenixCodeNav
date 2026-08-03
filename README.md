@@ -93,6 +93,12 @@ untracked move-candidate bytes it actually hashed. A mid-call mismatch fails wit
 untracked candidates remain conservatively uncorrelated instead of failing an otherwise stable
 review.
 
+Every registered MCP tool retains its required JSON schema and validates arguments before SDK
+binding. A missing or mistyped field returns an error result with `error:"bad_request"`, plus the
+tool, field, reason, expected type, and `retryable:true`; clients do not have to recover from an
+opaque host invocation error. This rejection happens before workspace health is constructed, so
+its deliberately minimal envelope does not include the ordinary `meta` object.
+
 **A full rebuild keeps the prior index available during private construction.** On Windows and
 Linux workspace-local destinations, Phoenix builds and finalizes a private database while the
 previous index stays queryable. During the final bounded reader drain and atomic install, new
@@ -186,6 +192,11 @@ directories are forced to owner-only modes and unsafe writable ancestors fail cl
 platform, reparse-point ancestors fail closed before any authenticated descriptor is read or
 written. Windows relies on the current user profile's inherited ACLs for directory privacy. A
 reused descriptor is accepted only when `/healthz` proves the same private portal session and PID.
+Because the portal never opens SQLite, it reports an index as `queryable` only when the current
+anchored index-file generation, a connected Phoenix process, and a successful retained query from
+that process agree. Replacing or changing the observed index file invalidates older query evidence;
+freshness remains explicitly unknown. The recent-operation metric comes from the workspace's
+retained telemetry count and does not restart its animation on unchanged refreshes.
 
 For manual development, the portal can still be run from the workspace with
 `dotnet run --project src/CodeNav.Portal/CodeNav.Portal.csproj -c Release`.
@@ -321,6 +332,11 @@ watcher, and lifecycle test projects under `tests/`.
 - Semantic scans load all matching candidate projects by default (`maxProjects:0`). A positive
   `maxProjects` value is an explicit latency/memory tradeoff; bounded responses report the total
   skipped count and a size-bounded sample.
+- When `implementations` falls back to indexed heuristics because the compiler path reports
+  `cluster_cold_load` or `semantic_timeout`, it preserves that `partialReason` and heuristic
+  confidence while returning `retryRecommended:true` plus a one-retry `retryHint`. Phoenix does
+  not retry automatically or silently raise the requested deadline; non-partial exact responses
+  omit the retry fields.
 - Multi-TFM projects index a single symbol row per declaration (net472-first design).
 - Git awareness covers freshness (indexed vs HEAD commit/branch), not navigation — a
   `recent_changes` tool, `xml_doc`, and `diagnostics` from the brief are not yet implemented.

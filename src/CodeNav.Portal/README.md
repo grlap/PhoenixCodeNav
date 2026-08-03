@@ -35,6 +35,12 @@ visible for UI preview. An observed index without telemetry stays explicitly par
 telemetry strings and unsafe numeric/timestamp ranges are rejected per record without stopping the
 tailer.
 
+The portal reports `queryable` only when the current anchored index-file generation, a connected
+Phoenix process, and a successful retained query from that process agree. A changed index stamp
+invalidates older query evidence. That is deliberately narrower than `ready`: the portal still
+reports freshness as unknown because it never opens SQLite. Recent-operation counts come from the
+workspace snapshot and remain visually stable when polling finds no change.
+
 To inspect more than one workspace, set `PHOENIX_PORTAL_WORKSPACES` to a platform path-separated
 list before launching the portal.
 

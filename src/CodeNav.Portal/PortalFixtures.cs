@@ -37,6 +37,8 @@ internal static class PortalFixtures
                     stateLabel = "Indexing",
                     indexId = "idx-phoenix",
                     instanceIds = new[] { "instance-writer", "instance-follower" },
+                    recentOperationCount = 3,
+                    recentOperationCountIsLowerBound = false,
                     description = "Main workspace · writer + follower"
                 },
                 new
@@ -48,6 +50,8 @@ internal static class PortalFixtures
                     stateLabel = "Ready",
                     indexId = "idx-ravendb",
                     instanceIds = new[] { "instance-ravendb" },
+                    recentOperationCount = 2,
+                    recentOperationCountIsLowerBound = false,
                     description = "Benchmark workspace · ready"
                 }
             },

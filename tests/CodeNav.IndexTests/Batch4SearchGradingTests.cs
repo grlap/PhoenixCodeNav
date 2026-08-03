@@ -309,6 +309,9 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("operations-portal-jsonl-readonly", ids);
         Assert.Contains("operations-portal-live-build-status", ids);
         Assert.Contains("operations-portal-mcp-launcher", ids);
+        Assert.Contains("operations-portal-queryable-evidence", ids);
+        Assert.Contains("mcp-structured-argument-errors", ids);
+        Assert.Contains("implementations-semantic-retry-guidance", ids);
         Assert.Contains("refresh-recovery-self-heal", ids);
         Assert.Contains("git-awareness", ids);
         Assert.Contains("batch-outline-json-array-paths", ids);
@@ -344,6 +347,15 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(
             1,
             idList.Count(id => id == "operations-portal-mcp-launcher"));
+        Assert.Equal(
+            1,
+            idList.Count(id => id == "operations-portal-queryable-evidence"));
+        Assert.Equal(
+            1,
+            idList.Count(id => id == "mcp-structured-argument-errors"));
+        Assert.Equal(
+            1,
+            idList.Count(id => id == "implementations-semantic-retry-guidance"));
         string portalReadOnly = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -362,6 +374,38 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("separately packaged", portalLauncher);
         Assert.Contains("away from MCP stdout", portalLauncher);
         Assert.Contains("without opening a browser", portalLauncher);
+        string portalQueryable = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "operations-portal-queryable-evidence")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.50", portalQueryable);
+        Assert.Contains("current observed index-file generation", portalQueryable);
+        Assert.Contains("connected Phoenix process", portalQueryable);
+        Assert.Contains("successful retained query", portalQueryable);
+        Assert.Contains("invalidates old query evidence", portalQueryable);
+        Assert.Contains("freshness remains unknown", portalQueryable);
+        Assert.Contains("count stays stable", portalQueryable);
+        string argumentErrors = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "mcp-structured-argument-errors")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.50", argumentErrors);
+        Assert.Contains("structured bad_request", argumentErrors);
+        Assert.Contains("expected type", argumentErrors);
+        string retryGuidance = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "implementations-semantic-retry-guidance")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.50", retryGuidance);
+        Assert.Contains("machine-readable semantic cause", retryGuidance);
+        Assert.Contains("retryRecommended", retryGuidance);
+        Assert.Contains("does not retry automatically", retryGuidance);
         Assert.Contains("open_operations_portal",
             json.GetProperty("tools").EnumerateArray().Select(tool => tool.GetString()));
         string refreshRecovery = Assert.Single(
@@ -756,6 +800,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("Linux ARM64 ABI", "linux-arm64-anchored-authority"),
                       ("first bounded NUL", "portal-directory-entry-nul-decoding"),
                       ("away from MCP stdout", "operations-portal-mcp-launcher"),
+                      ("structured bad_request", "mcp-structured-argument-errors"),
+                      ("retryRecommended", "implementations-semantic-retry-guidance"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),
                       ("target-bearing names", "csharp-conversion-operator-indexing"),
                       ("implicitConversion", "csharp-conversion-usage-enumeration"),

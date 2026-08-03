@@ -168,6 +168,9 @@ public sealed partial class NavigationTools
                 new { id = "operations-portal-jsonl-readonly", summary = "v0.12.26 the loopback Operations Portal tails bounded workspace JSONL and observes anchored index-file presence and size without opening SQLite; source gaps, retention, paging, and response budgets remain explicit" },
                 new { id = "operations-portal-live-build-status", summary = "v0.12.26 full builds emit bounded JSONL lifecycle progress plus one server identity/capability record per process so the local portal can show live phase, file, symbol, byte, version, schema, platform, and access-mode status" },
                 new { id = "operations-portal-mcp-launcher", summary = "v0.12.49 open_operations_portal explicitly starts or reuses the separately packaged loopback read-only portal, keeps child output away from MCP stdout, and returns the authenticated URL for the agent to show verbatim without opening a browser" },
+                new { id = "operations-portal-queryable-evidence", summary = "v0.12.50 the Operations Portal reports queryable only when the current observed index-file generation, a connected Phoenix process, and that process's successful retained query agree; changing the observed generation invalidates old query evidence, freshness remains unknown, and the workspace's retained operation count stays stable across unchanged refreshes" },
+                new { id = "mcp-structured-argument-errors", summary = "v0.12.50 every registered MCP tool preserves its required JSON schema while missing or mistyped fields return a structured bad_request naming the tool, field, reason, and expected type so agents can self-correct" },
+                new { id = "implementations-semantic-retry-guidance", summary = "v0.12.50 transient implementations fallbacks caused by cluster_cold_load or semantic_timeout retain honest heuristic confidence and a machine-readable semantic cause while adding retryRecommended and retryHint; Phoenix does not retry automatically or raise the requested deadline" },
                 new { id = "search-symbol-malformed-query", summary = "v0.12.10 search_symbol rejects ToolSearch-style select: routing prefixes with malformed_query instead of returning a clean empty result; valid C# qualification and generic punctuation remain searchable" },
                 new { id = "search-symbol-filtered-existence", summary = "v0.12.30 first-page empty search_symbol results report existsUnfiltered plus active appliedFilters; declarations hidden by those filters also disclose their unfilteredKinds, while genuine absence remains a clean symbols:[] result with existsUnfiltered:false" },
                 new { id = "search-symbol-type-relevance", summary = "v0.12.30 exact-name type declarations receive a soft relevance preference over same-named members without filtering or omitting either result class" },
@@ -1628,7 +1631,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "implementations")]
-    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). Generic declarations may be selected by arity or symbolId; a bare name spanning multiple arities returns symbol_ambiguous. Operator symbolId handles are rejected as unsupported; use definition or references for them. A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to arity-aware base-list syntax matching (confidence 'heuristic', unranked). For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead.")]
+    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). Generic declarations may be selected by arity or symbolId; a bare name spanning multiple arities returns symbol_ambiguous. Operator symbolId handles are rejected as unsupported; use definition or references for them. A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to arity-aware base-list syntax matching (confidence 'heuristic', unranked). A transient cold-load or semantic timeout fallback exposes retryRecommended and retryHint without changing the requested deadline. For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead.")]
     public string Implementations(
         [Description("Interface/type/member name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration or a usage (position mode).")] string? path = null,
@@ -1717,6 +1720,10 @@ public sealed partial class NavigationTools
                         skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
                         partial = partial ? true : (bool?)null,
                         partialReason = partialCause,
+                        retryRecommended = SemanticRetryRecommended(partialCause)
+                            ? true
+                            : (bool?)null,
+                        retryHint = SemanticRetryHint(partialCause),
                         // t2b: where the budget went — cluster load+resolve vs the finder passes.
                         timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
                         truncated,
@@ -1762,6 +1769,8 @@ public sealed partial class NavigationTools
             {
                 error = "symbol_not_resolved",
                 partialReason = failReason,
+                retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+                retryHint = SemanticRetryHint(failReason),
                 meta = Meta.From(_manager.Health(), "heuristic", "syntax"),
             });
         }
@@ -1810,6 +1819,9 @@ public sealed partial class NavigationTools
                     omittedImplementers = omitted > 0 ? omitted : (int?)null,
                     implementations = items.Select(SymbolJson),
                     partialReason = "member_scoped_syntactic",
+                    semanticReason = failReason,
+                    retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+                    retryHint = SemanticRetryHint(failReason),
                     note = $"Same-named members of the syntactic implementers of {targetSym!.Container} (confidence heuristic — compiler-exact override resolution found none, likely a type-twin identity mismatch)."
                         + (omitted > 0 ? $" {omitted} of {implementerCount} implementer(s) declare no such member and were omitted." : "")
                         + " Verify with source_context.",
@@ -1827,6 +1839,8 @@ public sealed partial class NavigationTools
                 implementations = Array.Empty<object>(),
                 partialReason = "member_fallback_type_scoped",
                 semanticReason = failReason, // why the exact path returned nothing (context, not actionable)
+                retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+                retryHint = SemanticRetryHint(failReason),
                 note = "No compiler-exact member implementations in the loaded cluster (possibly a type-twin identity mismatch), and no same-named member found in the declaring type's implementers. Run implementations on the declaring interface/type, then read this member in each implementer.",
                 meta,
             });
@@ -1847,6 +1861,8 @@ public sealed partial class NavigationTools
             implementationsConfidence = resolvedSymbol is not null ? "heuristic" : null,
             implementations = items.Select(SymbolJson),
             partialReason = failReason ?? "semantic_unavailable",
+            retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+            retryHint = SemanticRetryHint(failReason),
             note = items.Count > 0 && failReason is "no_semantic_implementers" or "candidate_cluster_bounded"
                 // Field (lhg): the old "declared in more than one assembly / generated twin" wording
                 // went stale once compiled-awareness + assembly-ref edges landed — say what we now
@@ -2658,6 +2674,22 @@ public sealed partial class NavigationTools
         reason == "cluster_cold_load"
             ? "cluster_cold_load — the deadline expired while loading compilations (first call after an index build or cluster reload); an immediate retry usually returns exact"
             : reason;
+
+    /// <summary>Transient semantic failures keep their established partialReason token while
+    /// carrying a separate machine-readable retry signal. A retry is advice, not an automatic
+    /// second invocation or a hidden deadline increase.</summary>
+    internal static bool SemanticRetryRecommended(string? reason) =>
+        reason is not null &&
+        (reason.StartsWith("cluster_cold_load", StringComparison.Ordinal) ||
+         reason.StartsWith("semantic_timeout", StringComparison.Ordinal));
+
+    internal static string? SemanticRetryHint(string? reason)
+    {
+        if (!SemanticRetryRecommended(reason)) return null;
+        return reason!.StartsWith("cluster_cold_load", StringComparison.Ordinal)
+            ? "Retry implementations once with the same arguments; the semantic cluster may now be warm and return exact results."
+            : "Retry implementations once with the same arguments; if it remains partial, narrow the target or explicitly choose a larger timeoutMs.";
+    }
 
     /// <summary>Wire vocabulary for edge provenance (bxw): the stored kind ('project'/'assembly')
     /// maps to 'projectReference'/'hintPathReference' — 'projectReference' predates provenance on

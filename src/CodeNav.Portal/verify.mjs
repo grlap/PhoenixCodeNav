@@ -1,7 +1,11 @@
 import { readFile, access } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createBuildViewModel } from "./wwwroot/assets/portal-model.js";
+import {
+  countTransitionValue,
+  createBuildViewModel,
+  createCountTransition
+} from "./wwwroot/assets/portal-model.js";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const web = join(root, "wwwroot");
@@ -45,6 +49,9 @@ requireText(script, "formatToken(semanticState)", "Semantic summary must preserv
 requireText(script, 'build?.live === true', "Build presentation must honor producer liveness");
 requireText(script, '"STALLED"', "Dead builds must render as stalled rather than live");
 requireText(script, 'index?.state === "ready"', "Ready presentation must require explicit index evidence");
+requireText(script, 'index?.state === "queryable"', "Queryable presentation must require explicit query evidence");
+requireText(script, "workspace.recentOperationCount", "Recent operation totals must come from the workspace snapshot");
+requireText(script, "target.dataset.count", "Stable counters must retain their prior target across refreshes");
 requireText(model, "total unknown", "Unknown build totals must remain visibly unknown");
 requireText(program, "IPAddress.Loopback", "Portal must bind to loopback explicitly");
 requireText(program, "FixedTimeEquals", "Bearer token comparison must be constant-time");
@@ -112,6 +119,16 @@ if (unavailableIndex.determinate
     || unavailableIndex.progress != null
     || unavailableIndex.progressLabel.toLowerCase().includes("100"))
   failures.push("An unavailable index must not fabricate a completed build");
+const unchangedCount = createCountTransition(12, 12);
+const increasedCount = createCountTransition(12, 15);
+if (unchangedCount.changed
+    || countTransitionValue(unchangedCount, 0) !== 12
+    || countTransitionValue(unchangedCount, 1) !== 12)
+  failures.push("An unchanged operation count must remain visually stable");
+if (!increasedCount.changed
+    || countTransitionValue(increasedCount, 0) !== 12
+    || countTransitionValue(increasedCount, 1) !== 15)
+  failures.push("An increased operation count must animate from its prior value");
 for (const [name, value] of [
   ["throughput", unknownBuild.rateLabel],
   ["ETA", unknownBuild.etaLabel],
