@@ -191,13 +191,20 @@ public class Batch40Tests
             // complete without relying on pendingProcessed to move.
             Assert.True(m.RequestRefreshForTest(Array.Empty<string>(), out Task startupBarrier));
             await startupBarrier.WaitAsync(TimeSpan.FromSeconds(20));
+            long processedBeforeWatcher = m.Health().PendingProcessed;
             File.AppendAllText(Path.Combine(root, "Lab", "Alpha.cs"),
                 "\nnamespace Lab { public class WatcherWon40 { } }");
             Assert.True(WaitUntil(() =>
             {
+                // The committed rows become query-visible just before the pump publishes its
+                // applied-delta counter and ready state. Require that complete publication so
+                // processedAfterWatcher cannot sample the narrow commit-to-counter window.
+                if (m.State != "ready" ||
+                    m.Health().PendingProcessed <= processedBeforeWatcher)
+                    return false;
                 using var q = m.OpenQueries();
                 return q.SearchSymbols("WatcherWon40", "exact", null, 2).Count > 0;
-            }, 20000), "watcher did not index the edit before the explicit request");
+            }, 20000), "watcher did not finish publishing the edit before the explicit request");
 
             long processedAfterWatcher = m.Health().PendingProcessed;
             IndexManagerTestSupport.RefreshAndWait(m, new[] { "Lab/Alpha.cs" },

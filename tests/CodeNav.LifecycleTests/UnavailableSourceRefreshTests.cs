@@ -487,11 +487,18 @@ public sealed class UnavailableSourceRefreshTests
             manager.NotifyGitHeadChangedForTest();
             releaseRecovery.Set();
 
-            Assert.True(SpinWait.SpinUntil(
-                    () => string.Equals(manager.Health().IndexedCommit,
-                        recoveredHeadCommit, StringComparison.Ordinal),
+            Assert.True(SpinWait.SpinUntil(() =>
+                {
+                    IndexHealth health = manager.Health();
+                    return health.State == "ready" &&
+                           string.Equals(health.IndexedCommit, recoveredHeadCommit,
+                               StringComparison.Ordinal) &&
+                           string.Equals(health.IndexedBranch, "recovered-branch",
+                               StringComparison.Ordinal) &&
+                           health.RefreshIncompleteReason is null;
+                },
                     TimeSpan.FromSeconds(10)),
-                "ordered timer recovery did not publish after the earlier Git observation");
+                "ordered timer recovery did not finish publishing after the earlier Git observation");
 
             Assert.Equal(2, Volatile.Read(ref headSnapshots));
             Assert.Equal(1, Volatile.Read(ref recoverySchedules));

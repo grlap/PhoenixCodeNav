@@ -1253,7 +1253,7 @@ public class Batch43GitReviewSafetyTests
     [Fact]
     public void ReviewDiffReusesOneFilterSafetyPreflightAcrossSnapshotSandwich()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsMacOS()) return; // review/worktree safety surface is not exposed here
         string? realGit = FindRealGitExe();
         if (realGit is null) return;
         string root = Directory.CreateTempSubdirectory("codenav-y8e-one-preflight").FullName;
@@ -1262,18 +1262,14 @@ public class Batch43GitReviewSafetyTests
             string head = CreateRepo(root, realGit);
             Git(root, realGit, "config filter.media/lfs.clean command-that-must-not-run");
             EditSource(root);
-            string wrapper = Path.Combine(root, "git-count.cmd");
-            string log = Path.Combine(root, "git-args.txt");
-            File.AppendAllText(Path.Combine(root, ".git", "info", "exclude"),
-                "git-count.cmd\ngit-args.txt\n");
-            File.WriteAllText(wrapper,
-                $"@echo off\r\n>>\"{log}\" echo(%*\r\n\"{realGit}\" %*\r\n");
+            var invocations = new List<string>();
 
-            var review = GitInfo.ReviewDiff(root, head, wrapper);
+            GitInfo.ReviewDiffResult review;
+            using (GitInfo.ObserveProcessInvocationsForTest(invocations.Add))
+                review = GitInfo.ReviewDiff(root, head, realGit);
 
             Assert.Equal("ok", review.Diff.Status);
             Assert.NotNull(review.Dirty);
-            string[] invocations = File.ReadAllLines(log);
             Assert.Single(invocations, line => line.Contains(
                 "config --includes --null --get-regexp filter[.]",
                 StringComparison.Ordinal));

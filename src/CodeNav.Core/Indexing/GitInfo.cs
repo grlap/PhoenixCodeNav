@@ -15,6 +15,27 @@ namespace CodeNav.Core.Indexing;
 /// </summary>
 public static class GitInfo
 {
+    private static readonly AsyncLocal<Action<string>?> ProcessInvocationObserverSlot = new();
+
+    internal static IDisposable ObserveProcessInvocationsForTest(Action<string> observer)
+    {
+        ArgumentNullException.ThrowIfNull(observer);
+        Action<string>? previous = ProcessInvocationObserverSlot.Value;
+        ProcessInvocationObserverSlot.Value = observer;
+        return new ProcessInvocationObservation(previous);
+    }
+
+    private sealed class ProcessInvocationObservation(Action<string>? previous) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                ProcessInvocationObserverSlot.Value = previous;
+        }
+    }
+
     internal readonly record struct HeadSnapshot(
         string? Commit,
         string? Branch,
@@ -3043,15 +3064,17 @@ public static class GitInfo
             var environment = StableGitEnvironment(neutralEnvironment);
             if (executableDrivers.Count > 0)
             {
-                var (attrExe, attrArgs) = Invocation(gitExe,
-                    GitArgs("check-attr -z --stdin filter"));
+                string attrInvocation = GitArgs("check-attr -z --stdin filter");
+                ProcessInvocationObserverSlot.Value?.Invoke(attrInvocation);
+                var (attrExe, attrArgs) = Invocation(gitExe, attrInvocation);
                 attributes = Process.Start(CreateProcessStartInfo(
                     attrExe, workspaceRoot, attrArgs, environment));
                 if (attributes is null) return null;
             }
 
-            var (indexExe, indexArgs) = Invocation(gitExe,
-                GitArgs("ls-files -z --cached --stage"));
+            string indexInvocation = GitArgs("ls-files -z --cached --stage");
+            ProcessInvocationObserverSlot.Value?.Invoke(indexInvocation);
+            var (indexExe, indexArgs) = Invocation(gitExe, indexInvocation);
             index = Process.Start(CreateProcessStartInfo(
                 indexExe, workspaceRoot, indexArgs, environment));
             if (index is null)
@@ -3478,7 +3501,9 @@ public static class GitInfo
         var environment = StableGitEnvironment(environmentOverrides);
         string exe;
         string wrapped;
-        try { (exe, wrapped) = Invocation(gitExe, GitArgs(args)); }
+        string invocation = GitArgs(args);
+        ProcessInvocationObserverSlot.Value?.Invoke(invocation);
+        try { (exe, wrapped) = Invocation(gitExe, invocation); }
         catch { return new ProcessResult(null, "spawn_failed", false); }
         return RunProcessEx(exe, cwd, wrapped, standardInput: standardInput,
             environmentOverrides: environment, captureBytes: captureBytes,

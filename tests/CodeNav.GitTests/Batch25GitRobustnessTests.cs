@@ -190,9 +190,10 @@ public class Batch25GitRobustnessTests
             // The FIRST commit creates .git/logs — the wll re-attach turns it into a signal.
             Git(root, "add -A");
             Git(root, "commit -q -m first");
+            string firstCommit = Assert.IsType<string>(GitInfo.HeadCommit(root));
 
             bool firstCommitRecorded = WaitUntil(() => string.Equals(
-                    m.Health().IndexedCommit, GitInfo.HeadCommit(root), StringComparison.OrdinalIgnoreCase)
+                    m.Health().IndexedCommit, firstCommit, StringComparison.OrdinalIgnoreCase)
                     && m.Health().IndexedCommit is not null, 60000); // n7ly: 20s starved under suite load
             if (!firstCommitRecorded)
             {

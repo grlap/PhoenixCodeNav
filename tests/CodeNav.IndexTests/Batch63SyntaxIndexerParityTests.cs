@@ -595,7 +595,10 @@ public sealed class Batch63SyntaxIndexerParityTests
             using var manager = new IndexManager(root, dbPath);
             using var semantic = new SemanticService(manager);
             manager.Start();
-            Assert.True(SpinWait.SpinUntil(() => manager.IsQueryable, 30_000),
+            // A freshly opened index is queryable while its mandatory startup sweep is still
+            // converging. Exact semantic handles intentionally refuse that stale window, so wait
+            // for the lifecycle state the assertions below actually require.
+            Assert.True(SpinWait.SpinUntil(() => manager.State == "ready", 30_000),
                 manager.Health().Error);
             var tools = new NavigationTools(manager, semantic);
 
