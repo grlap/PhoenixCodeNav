@@ -121,8 +121,11 @@ public static class IndexBuilder
     /// accessibility rather than the ordinary operator public default.
     /// v24: symbol handles bind the existing file content hash to the deterministic syntax ordinal
     /// among declarations on the same source line, projected with each symbol row instead of
-    /// computing and persisting a separate SHA-256 context digest for every symbol.</summary>
-    public const string SchemaVersion = "24";
+    /// computing and persisting a separate SHA-256 context digest for every symbol.
+    /// v26: FCS syntax declarations from .fs/.fsi files persist in the shared symbols table for
+    /// indexed F# symbol-name search; project/TFM parse contexts are unioned deterministically and
+    /// delta refresh reindexes declarations after source or project-option changes.</summary>
+    public const string SchemaVersion = "26";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }
@@ -779,14 +782,52 @@ public static class IndexBuilder
         if (csharpCaptureFailure is not null)
             ExceptionDispatchInfo.Capture(csharpCaptureFailure).Throw();
 
-        // ---- persist F# source text (no compiler/syntax service in tier-a) ----
-        // Parallel reads are grouped by a conservative byte budget covering both the raw byte[]
-        // and decoded UTF-16 text. Every group
+        // ---- parse + persist F# source and syntax declarations ----
+        // Parallel reads are grouped by a conservative byte budget covering the raw byte[],
+        // decoded UTF-16 text, and retained normalized F# symbol rows. Every group
         // joins before its single-writer phase begins, so a SQLite failure cannot leave channel
         // producers blocked without a consumer. A source larger than the aggregate budget forms
         // a one-item group: it is still accepted under the per-file cap, but never overlaps
         // another retained F# document.
-        progress?.Invoke($"Indexing {scan.FsFiles.Count} F# files on {Environment.ProcessorCount} cores ...");
+        progress?.Invoke($"Parsing {scan.FsFiles.Count} F# files on {Environment.ProcessorCount} cores ...");
+        Dictionary<string, List<ParsedProject>> compileOwnersByPath =
+            CompileItemResolver.ResolveOwners(parsedProjects,
+                scan.FsFiles.Select(file => file.RelPath));
+        var fsharpContextsByProject = new Dictionary<string, FSharpParsingContextSelection>(
+            WorkspacePaths.FileSystemPathComparer);
+        foreach (ParsedProject project in parsedProjects.Where(project =>
+                     project.Language.Equals("fs", StringComparison.Ordinal)))
+        {
+            if (!fileIds.TryGetValue(project.RelPath, out long projectFileId)) continue;
+            string? projectXml = store.GetContentForWrite(projectFileId);
+            if (projectXml is null) continue;
+            fsharpContextsByProject[project.RelPath] =
+                FSharpSyntaxIndexer.ParsingContextsForProject(
+                    project.RelPath, project.TargetFrameworks, projectXml);
+        }
+
+        FSharpParsingContextSelection ParsingContextsFor(string path)
+        {
+            var selections = new List<FSharpParsingContextSelection>();
+            if (compileOwnersByPath.TryGetValue(path, out List<ParsedProject>? owners))
+            {
+                selections.AddRange(owners.Select(owner =>
+                    fsharpContextsByProject.TryGetValue(owner.RelPath, out var selection)
+                        ? selection
+                        : new FSharpParsingContextSelection([], 1, 1, 0,
+                            ["fsharp_project_options_unavailable"])));
+            }
+            // A project whose XML/options cannot be read may contain linked Compile items
+            // anywhere in the workspace. Its authority gap therefore applies to every F#
+            // declaration scope; limiting it to the project directory would make linked-file
+            // misses look complete.
+            selections.AddRange(fsharpContextsByProject.Values.Where(selection =>
+                selection.FailedProjects > 0));
+            return selections.Count == 0
+                ? FSharpParsingContextSelection.Unowned
+                : FSharpSyntaxIndexer.CombineParsingContexts(selections.Distinct());
+        }
+
         long fsBatchMemoryBudget = Math.Max(1,
             fSharpPipelineTestHooks?.BatchMemoryBudgetBytes ?? FSharpBatchMemoryBudgetBytes);
         int fsReadersInFlight = 0;
@@ -827,10 +868,11 @@ public static class IndexBuilder
                                 }
 
                                 string content = DecodeUtf8(bytes);
-                                prepared[i] = new PreparedFSharpSource(scanned, content,
-                                    XxHash64.HashToUInt64(bytes), bytes.Length,
-                                    CountNewlines(content) + 1,
-                                    FileClassifier.LooksGenerated(scanned.RelPath, content));
+                                ParsedFSharpFile parsed = FSharpSyntaxIndexer.Parse(
+                                    scanned.RelPath, content,
+                                    ParsingContextsFor(scanned.RelPath));
+                                prepared[i] = new PreparedFSharpSource(scanned, parsed,
+                                    XxHash64.HashToUInt64(bytes), bytes.Length);
                             }
                             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                             {
@@ -857,7 +899,7 @@ public static class IndexBuilder
 
                     long batchMemoryBytes = prepared.Where(item => item is not null)
                         .Sum(item => ActualFSharpBatchMemoryBytes(
-                            item!.ByteCount, item.Content.Length));
+                            item!.ByteCount, item.Parsed));
                     int preparedCount = prepared.Count(item => item is not null);
                     fSharpPipelineTestHooks?.ReadBatchPrepared?.Invoke(
                         batchMemoryBytes, preparedCount);
@@ -869,13 +911,17 @@ public static class IndexBuilder
                         fSharpPipelineTestHooks?.BeforePersist?.Invoke(
                             fsCount, Volatile.Read(ref fsReadersInFlight));
                         long id = store.InsertFile(tx, item.File.RelPath, item.ByteCount,
-                            item.File.MtimeTicks, item.Hash, "fs", item.LineCount,
-                            item.IsGenerated, hasTestAttrs: false);
-                        store.InsertContent(tx, id, item.Content);
+                            item.File.MtimeTicks, item.Hash, "fs", item.Parsed.LineCount,
+                            item.Parsed.LooksGenerated, hasTestAttrs: false);
+                        store.InsertContent(tx, id, item.Parsed.Content);
+                        store.InsertSymbols(tx, id, item.Parsed.Symbols);
+                        store.ReplaceFSharpParseCoverage(tx, id, item.Parsed);
                         fileIds[item.File.RelPath] = id;
                         fsCount++;
-                        lineCount += item.LineCount;
-                        liveProgress?.AddFileIndexed(item.ByteCount, symbolsWritten: 0);
+                        symbolCount += item.Parsed.Symbols.Count;
+                        lineCount += item.Parsed.LineCount;
+                        liveProgress?.AddFileIndexed(item.ByteCount,
+                            item.Parsed.Symbols.Count);
                         prepared[i] = null; // release large strings as soon as the writer is done
                         if (++inTx >= sourceWriteBatchSize)
                         {
@@ -1050,11 +1096,9 @@ public static class IndexBuilder
 
     private sealed record PreparedFSharpSource(
         ScannedFile File,
-        string Content,
+        ParsedFSharpFile Parsed,
         ulong Hash,
-        int ByteCount,
-        int LineCount,
-        bool IsGenerated);
+        int ByteCount);
 
     private static IEnumerable<List<ScannedFile>> FSharpReadBatches(
         IReadOnlyList<ScannedFile> files, long batchMemoryBudgetBytes)
@@ -1090,17 +1134,23 @@ public static class IndexBuilder
     private static long EstimatedFSharpBatchMemoryBytes(long rawByteCount)
     {
         long bounded = Math.Max(0, rawByteCount);
-        // The raw byte[] and decoded UTF-16 string can coexist until a read iteration
-        // completes, so charge both representations rather than only queued text.
-        return bounded > (long.MaxValue - FSharpPreparedItemOverheadBytes) / 3
+        // The raw byte[], decoded UTF-16 string, and normalized symbol strings can coexist
+        // until the writer drains a prepared item. The additional raw-sized charge is a
+        // conservative pre-parse reservation. Normalized rows repeat names, signatures, and
+        // ancestor declaration keys, so reserve substantially more than the source text alone;
+        // the prepared-batch hook reports exact retained symbol-string charges from actual rows.
+        const int preparedExpansionReservation = 16;
+        return bounded > (long.MaxValue - FSharpPreparedItemOverheadBytes) /
+            preparedExpansionReservation
             ? long.MaxValue
-            : bounded * 3 + FSharpPreparedItemOverheadBytes;
+            : bounded * preparedExpansionReservation + FSharpPreparedItemOverheadBytes;
     }
 
-    private static long ActualFSharpBatchMemoryBytes(int byteCount, int characterCount) =>
+    private static long ActualFSharpBatchMemoryBytes(int byteCount, ParsedFSharpFile parsed) =>
         Math.Max(0L, byteCount) +
-        (long)Math.Max(0, characterCount) * sizeof(char) +
-        FSharpPreparedItemOverheadBytes;
+        (long)Math.Max(0, parsed.Content.Length) * sizeof(char) +
+        FSharpPreparedItemOverheadBytes +
+        FSharpSyntaxIndexer.EstimatedRetainedSymbolBytes(parsed.Symbols);
 
     private static string DecodeUtf8(byte[] bytes)
     {

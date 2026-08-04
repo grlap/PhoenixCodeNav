@@ -1257,7 +1257,7 @@ public sealed partial class SemanticService : IDisposable
         if (string.IsNullOrWhiteSpace(nameHint)) return [];
         const int proofLimit = 16;
         List<SymbolHit> hits = queries.SearchSymbols(nameHint, "exact", kinds: null,
-            limit: proofLimit + 1, arity: arityHint);
+            limit: proofLimit + 1, arity: arityHint, language: "cs");
         if (hits.Count == 0 || hits.Count > proofLimit) return [];
 
         string[] projects = hits

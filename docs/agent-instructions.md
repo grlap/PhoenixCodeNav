@@ -19,9 +19,15 @@ Default flow:
    `index_writer_required`.
    `unavailable` means this process has not attached to an index role.
 2. For anything that is a **code identifier** (type, method, property), use the symbol tools:
-   `search_symbol`, `definition`, `references`, `implementations` — not text search. F# semantic
-   Stage 2A is narrower: use position-based `symbol_at` / `definition`; name search, references,
-   implementations, callers/callees, and hierarchy are not available yet. Stage 2A evaluates a
+   `search_symbol`, `definition`, `references`, `implementations` — not text search. Indexed
+   `search_symbol` supports F# `.fs/.fsi` declarations too; `.fsx` remains text-only. Treat
+   `fsharp_parse_failed` and any project-option cause in `partialReasons` as incomplete indexed F#
+   declaration evidence rather than authoritative absence; inspect the parse/project-option
+   coverage objects too. `fsharp_project_options_imported` alone is advisory structured coverage,
+   not a blanket partial result.
+   F# semantic Stage 2A is narrower: use
+   position-based `symbol_at` / `definition`; references, implementations, callers/callees, and
+   hierarchy are not available yet. Stage 2A evaluates a
    bounded subset of simple project properties/conditions/`Choose` and local `.props`; an explicit
    `fsharp_semantic_*_unsupported` cause means the project crossed that boundary, not that the symbol
    is absent. An unresolved condition-property cause means the result depends on an ambient/global

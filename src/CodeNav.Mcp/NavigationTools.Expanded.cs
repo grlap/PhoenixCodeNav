@@ -267,7 +267,8 @@ public sealed partial class NavigationTools
                 }
             }
             targetKind ??= lookupName.Length > 0
-                ? q0.SearchSymbols(lookupName, "exact", null, 1, arity: arity).FirstOrDefault()?.Kind
+                ? q0.SearchSymbols(lookupName, "exact", null, 1, arity: arity,
+                    language: "cs").FirstOrDefault()?.Kind
                 : null;
             // Only a TYPE has a meaningful base-list implementer set — guard the member-position edge
             // so we don't sweep in every type whose base list contains a member name.
@@ -343,7 +344,8 @@ public sealed partial class NavigationTools
         using var q = _manager.OpenQueries();
         if (owningProject is null)
         {
-            var decl = q.SearchSymbols(name, "exact", null, 1, includeGenerated: false).FirstOrDefault();
+            var decl = q.SearchSymbols(name, "exact", null, 1,
+                includeGenerated: false, language: "cs").FirstOrDefault();
             if (decl is not null)
             {
                 owningProject = q.ProjectsContaining(decl.FilePath).FirstOrDefault(p => !p.IsTest)?.Name;
@@ -526,7 +528,8 @@ public sealed partial class NavigationTools
                 .DefinitionAsync(t.Path, t.Line, t.Column, name, timeoutMs)
                 .GetAwaiter().GetResult();
         }
-        var indexedDecls = q.SearchSymbols(name, "exact", null, 5, includeGenerated: false);
+        var indexedDecls = q.SearchSymbols(name, "exact", null, 5,
+            includeGenerated: false, language: "cs");
         if (container is { } c)
         {
             indexedDecls = indexedDecls.Where(h =>
@@ -662,7 +665,8 @@ public sealed partial class NavigationTools
 
         var decls = pinned is not null
             ? new List<SymbolHit> { pinned }
-            : q.SearchSymbols(name, "exact", null, 10, includeGenerated: true);
+            : q.SearchSymbols(name, "exact", null, 10, includeGenerated: true,
+                language: "cs");
         if (pinned is null && container is { } c) // a handle outranks container, like references
         {
             decls = decls.Where(h =>

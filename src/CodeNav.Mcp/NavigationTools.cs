@@ -134,6 +134,7 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-outline", summary = "v0.12.1 owned .fs/.fsi FCS outline" },
                 new { id = "fsharp-outline-parse-context-selection", summary = "v0.12.4 base/.Net project+TFM parse-context selection affects only F# parser options and #if symbols" },
                 new { id = "fsharp-outline-parse-context-budget", summary = "v0.12.4 max 64 project/TFM parse contexts with total/returned/truncated coverage; 64 KiB hard envelope" },
+                new { id = "fsharp-indexed-symbol-name-search", summary = "v0.12.52 schema v26 persists deterministic FCS syntax declarations plus parse and project-option coverage from .fs/.fsi files across all available indexed owner/TFM parse contexts; search_symbol supports F# kinds, namespace/path/generated filters, generic arity, orphan disclosure, paired signature/implementation rows, linked multi-owner files, and source/project-option delta convergence; actionably incomplete contexts are partial while ordinary SDK/import limits remain advisory coverage, .fsx-only scopes fail closed, and mixed script scopes disclose skipped text-only files" },
                 new { id = "fsharp-symbol-at-semantic", summary = "v0.12.5 FCS position resolution for one explicit physical .fsproj + TFM type-check context" },
                 new { id = "fsharp-definition-same-project", summary = "v0.12.5 FCS signature/implementation declarations within the selected physical F# project" },
                 new { id = "fsharp-type-check-context-selection", summary = "v0.12.5 ambiguous owner/TFM sets fail closed and expose bounded selected/available F# type-check contexts" },
@@ -185,7 +186,7 @@ public sealed partial class NavigationTools
                 new { id = "refresh-incomplete-freshness", summary = "v0.12.7 exhausted source capture keeps index state stale, preserves the Git baseline, exposes a stable refreshIncompleteReason plus bounded paths, and widens the next request to a recovery sweep" },
                 new { id = "refresh-recovery-self-heal", summary = "v0.12.27 an index left stale by unavailable workspace input autonomously retries complete convergence sweeps with 5/10/30/60-second capped backoff; timer-initiated recovery sweeps make one capture attempt each, re-resolve pending Git baselines, and remain honestly stale until success" },
                 new { id = "oversized-source-coverage", summary = "v0.12.7 oversized regular sources are a distinct persistent outcome with explicit bounded coverage; they are not rapidly retried, cannot publish ready/current/exact evidence, and prevent strict worktree index installation" },
-                new { id = "fsharp-unsupported-language-boundary", summary = "F# name search, references, callers/callees, implementations, hierarchy, and dependency closure remain unsupported; mixed scopes disclose skips" },
+                new { id = "fsharp-unsupported-language-boundary", summary = "F# references, callers/callees, implementations, hierarchy, and semantic dependency closure remain unsupported; indexed F# symbol-name search is supported" },
                 new { id = "review-fsharp-file-coverage", summary = "review_pack: F# changes in unsupportedLanguageFiles" },
                 new { id = "compiled-awareness", summary = "search_symbol orphaned; repo_overview.orphanedFiles; compiled ownership guides semantic resolution, impact, and context_pack" },
                 new { id = "git-awareness", summary = "v0.12.28 index tracks the workspace's indexed commit and branch; serialized HEAD snapshot acquisition, ordered recovery publication, rebuild-generation retirement, and execution-time diffs make same-commit attachment changes and rapid inverse transitions preserve final rows and attachment state, detached HEAD clears the indexed branch, unavailable recovery snapshots force older queued Git tuples to revalidate with only a resolved generation at or after the latest unavailable sample allowed to publish ready, and full rebuilds reject ordered recovery publications sampled for the replaced database. repo_overview.git reports indexed vs HEAD state and whether commits match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is logged, never silent" },
@@ -289,7 +290,9 @@ public sealed partial class NavigationTools
                 exactToolsLanguage = "cs",
                 csharpExactTools = new[] { "definition", "references", "implementations" },
                 fsharpIndexedTools = new[] { "symbol_at", "definition" },
+                fsharpSyntaxIndexedTools = new[] { "search_symbol" },
                 note = "C# exact results are scoped to loaded candidate clusters. F# Stage 2A is compiler-checked but indexed/partial and limited to one proven physical project/TFM; coverage and partial fields report anything skipped.",
+                fsharpSyntaxNote = "F# search_symbol is syntax-indexed across the available owner/TFM parse contexts, including orphaned .fs/.fsi files; it is not compiler-checked, reports actionable incomplete context coverage as partial, and keeps ordinary SDK/import limits advisory.",
             },
             index = new
             {
@@ -1126,10 +1129,10 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- symbols
 
     [McpServerTool(Name = "search_symbol")]
-    [Description("Find C# declared symbols by name across the workspace (types, methods, properties...). Exact-name type declarations receive a soft relevance preference over same-named members. A first-page empty result remains successful and reports existsUnfiltered plus appliedFilters; when filters hid declarations, unfilteredKinds says what exists. With no pathGlob the indexed search is language-neutral and returns all available symbol rows. An explicit F#-only pathGlob returns unsupported_language; a mixed C#/F# scope returns its C# symbols with partialReason='unsupported_language_files_skipped'. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored source). Hits carry an 'orphaned' flag (present only when true) for files in NO project's compile set — dead code the compiler never builds (Compile Include globs expanded, Compile Remove honored).")]
+    [Description("Find C# and F# declared symbols by name across the workspace (types, methods, properties, modules, functions, values, union cases...). Exact-name type declarations receive a soft relevance preference over same-named members. A first-page empty result remains successful and reports existsUnfiltered plus appliedFilters; when filters hid declarations, unfilteredKinds says what exists. C# plus F# .fs/.fsi path scopes are indexed; .fsx and other text-only languages are refused when exclusive and disclosed when mixed. Failed FCS parse contexts or unavailable/unevaluated F# project options make results explicitly partial and expose fsharpParseCoverage or fsharpProjectOptionCoverage; ordinary SDK/import limitations remain advisory structured coverage rather than making every search partial. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored source). Hits carry an 'orphaned' flag (present only when true) for files in NO project's compile set — dead code the compiler never builds (Compile Include globs expanded, Compile Remove honored).")]
     public string SearchSymbol(
         [Description("Symbol name. Match behavior set by 'match'. Empty (or '*') with a 'namespace' or 'pathGlob' ENUMERATES that scope's symbols instead — kind-filterable, paged.")] string query = "",
-        [Description("Comma-separated kind filter: class,interface,struct,record,record_struct,enum,delegate,method,constructor,property,field,event,enum_member. Empty = all.")] string? kinds = null,
+        [Description("Comma-separated kind filter. C#: class,interface,struct,record,record_struct,enum,delegate,method,constructor,property,field,event,enum_member. F#: namespace,module,class,interface,struct,record,union,type,exception,delegate,function,value,method,constructor,property,field,union_case,enum_member. Empty = all.")] string? kinds = null,
         [Description("'auto' (exact, then prefix, then substring), 'exact', 'prefix', or 'substring'.")] string match = "auto",
         [Description("Include symbols in generated files (default false).")] bool includeGenerated = false,
         [Description("Restrict to file paths matching this glob (e.g. 'SOAPAPI/**'); a bare name matches at any depth.")] string? pathGlob = null,
@@ -1159,26 +1162,46 @@ public sealed partial class NavigationTools
         var excludes = BuildExcludes(excludePath, firstPartyOnly);
         if (pathGlob is { Length: > 0 } exactPath &&
             exactPath.IndexOfAny(new[] { '*', '?', '[' }) < 0 &&
-            q.FileByPath(NormalizePath(exactPath)) is { Language: not "cs" } unsupportedFile)
+            q.FileByPath(NormalizePath(exactPath)) is { } exactFile &&
+            (exactFile.Language is not ("cs" or "fs") || IsFSharpScriptPath(exactPath)))
         {
-            return UnsupportedLanguage(exactPath, unsupportedFile.Language, "search_symbol");
+            return UnsupportedLanguage(exactPath,
+                IsFSharpScriptPath(exactPath) ? "fsx" : exactFile.Language,
+                "search_symbol");
         }
         List<string> scopeLanguages = pathGlob is { Length: > 0 }
             ? q.SourceLanguagesForPathScope(pathGlob, excludes, includeGenerated)
             : [];
         List<string> unsupportedScopeLanguages = scopeLanguages
-            .Where(language => !language.Equals("cs", StringComparison.OrdinalIgnoreCase))
+            .Where(language =>
+                !language.Equals("cs", StringComparison.OrdinalIgnoreCase) &&
+                !language.Equals("fs", StringComparison.OrdinalIgnoreCase))
             .ToList();
-        bool scopeHasCSharp = scopeLanguages.Any(language =>
-            language.Equals("cs", StringComparison.OrdinalIgnoreCase));
-        if (pathGlob is { Length: > 0 } unsupportedScope && !scopeHasCSharp &&
+        bool scopeHasSupportedLanguage = scopeLanguages.Any(language =>
+            language.Equals("cs", StringComparison.OrdinalIgnoreCase) ||
+            language.Equals("fs", StringComparison.OrdinalIgnoreCase));
+        if (pathGlob is { Length: > 0 } unsupportedScope && !scopeHasSupportedLanguage &&
             unsupportedScopeLanguages.Count > 0)
         {
             return UnsupportedLanguage(unsupportedScope,
                 string.Join(',', unsupportedScopeLanguages), "search_symbol");
         }
-        bool unsupportedLanguageFilesSkipped = scopeHasCSharp &&
+        bool unsupportedLanguageFilesSkipped = scopeHasSupportedLanguage &&
             unsupportedScopeLanguages.Count > 0;
+        FSharpParseCoverage fsharpParseCoverage = q.FSharpParseCoverageForScope(
+            pathGlob, excludes, includeGenerated);
+        bool fsharpParseIncomplete = fsharpParseCoverage.IsIncomplete;
+        string[] blockingOptionReasons = fsharpParseCoverage.OptionPartialReasons
+            .Where(reason => !reason.Equals("fsharp_project_options_imported",
+                StringComparison.Ordinal))
+            .ToArray();
+        var partialReasons = new List<string>();
+        if (fsharpParseCoverage.FailedFiles > 0)
+            partialReasons.Add("fsharp_parse_failed");
+        partialReasons.AddRange(blockingOptionReasons);
+        if (unsupportedLanguageFilesSkipped)
+            partialReasons.Add("unsupported_language_files_skipped");
+        partialReasons = partialReasons.Distinct(StringComparer.Ordinal).ToList();
 
         List<SymbolHit> hits;
         string effectiveMatch = match;
@@ -1285,9 +1308,33 @@ public sealed partial class NavigationTools
             // count so a byte-budget shrink doesn't skip the dropped tail (bug e2q).
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}:{effectiveMatch}" : null,
             truncated,
-            partial = unsupportedLanguageFilesSkipped ? true : (bool?)null,
-            partialReason = unsupportedLanguageFilesSkipped
-                ? "unsupported_language_files_skipped"
+            partial = unsupportedLanguageFilesSkipped || fsharpParseIncomplete
+                ? true
+                : (bool?)null,
+            partialReason = partialReasons.Count > 0
+                ? string.Join("; ", partialReasons)
+                : null,
+            partialReasons = partialReasons.Count > 0 ? partialReasons : null,
+            fsharpParseCoverage = fsharpParseCoverage.FailedFiles > 0
+                ? new
+                {
+                    fsharpParseCoverage.FailedFiles,
+                    fsharpParseCoverage.PartialFailureFiles,
+                    fsharpParseCoverage.TotalFailureFiles,
+                    fsharpParseCoverage.FailedContexts,
+                    fsharpParseCoverage.TotalContexts,
+                }
+                : null,
+            fsharpProjectOptionCoverage = fsharpParseCoverage.ProjectOptionAffectedFiles > 0
+                ? new
+                {
+                    affectedFiles = fsharpParseCoverage.ProjectOptionAffectedFiles,
+                    projectFileContexts = fsharpParseCoverage.OptionProjectCount,
+                    failedProjectFileContexts = fsharpParseCoverage.FailedOptionProjects,
+                    partialProjectFileContexts = fsharpParseCoverage.PartialOptionProjects,
+                    reasons = fsharpParseCoverage.OptionPartialReasons,
+                    advisoryOnly = blockingOptionReasons.Length == 0 ? true : (bool?)null,
+                }
                 : null,
             scopeLanguages = scopeLanguages.Count > 0 ? scopeLanguages : null,
             unsupportedLanguages = unsupportedScopeLanguages.Count > 0
@@ -1296,7 +1343,7 @@ public sealed partial class NavigationTools
             // Steer the follow-up (feedback: nothing nudged toward references after a symbol
             // hit). First page only — repeating it on cursored pages just burns budget.
             hint = items.Count > 0 && cursor is null
-                ? "Next: references(name) for usages by project; definition(name, includeBody:true) for the declaration with source."
+                ? "Next: source_context(path, 'startLine-endLine') for indexed source. C#: references(name) for usages or definition(name, includeBody:true). F#: definition(path+line+column) for compiler-backed declaration evidence."
                 : null,
             meta,
         });
@@ -1383,6 +1430,15 @@ public sealed partial class NavigationTools
                 indexedFile = languageQueries.FileByPath(path);
             if (indexedFile is { Language: "fs" })
             {
+                if (resolvedHandleHit is not null)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_semantic_position_required",
+                        operation = "definition",
+                        detail = "F# Stage 2A definition requires an explicit path + line + column; idx handle resolution is not available yet.",
+                    });
+                }
                 if (line <= 0)
                 {
                     return Json.Serialize(new
@@ -1505,7 +1561,7 @@ public sealed partial class NavigationTools
         var hits = resolvedHandleHit is not null
             ? new List<SymbolHit> { resolvedHandleHit }
             : q.SearchSymbols(lookupName, "exact", SplitCsv(kinds), 100,
-                includeGenerated: true);
+                includeGenerated: true, language: "cs");
         if (container is { } c)
         {
             hits = hits.Where(h =>
@@ -1776,7 +1832,7 @@ public sealed partial class NavigationTools
             });
         }
         targetSym ??= q.SearchSymbols(
-            lookupName, "exact", null, 1, arity: arity).FirstOrDefault();
+            lookupName, "exact", null, 1, arity: arity, language: "cs").FirstOrDefault();
         int? fallbackArity = targetSym?.Arity ?? arity;
         string? targetKind = targetSym?.Kind;
         var meta = Meta.From(_manager.Health(), "heuristic", "syntax");
@@ -2394,7 +2450,8 @@ public sealed partial class NavigationTools
         // production case. The ORDER BY still ranks non-generated first, so picks only change when
         // the non-generated candidates are dead.
         var hits = q.SearchSymbols(
-            name, "exact", SplitCsv(kinds), 20, includeGenerated: true, arity: arity);
+            name, "exact", SplitCsv(kinds), 20, includeGenerated: true, arity: arity,
+            language: "cs");
         if (container is { } c)
         {
             hits = hits.Where(h =>
@@ -2539,6 +2596,9 @@ public sealed partial class NavigationTools
         };
     }
 
+    private static bool IsFSharpScriptPath(string path) =>
+        Path.GetExtension(path).Equals(".fsx", StringComparison.OrdinalIgnoreCase);
+
     private string UnsupportedLanguage(string path, string language, string operation)
     {
         bool compileOwnedFSharp = false;
@@ -2559,7 +2619,12 @@ public sealed partial class NavigationTools
         string language, string operation, bool compileOwnedFSharp = false)
     {
         string extension = Path.GetExtension(path);
+        if (language == "fs" && extension.Equals(".fsx", StringComparison.OrdinalIgnoreCase))
+            language = "fsx";
         bool fsharpSemanticEligible = language == "fs" && compileOwnedFSharp &&
+            (extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+             extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase));
+        bool fsharpSyntaxIndexed = language == "fs" &&
             (extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
              extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase));
         return Json.WithStringBudget(path, 4096, (boundedPath, pathTruncated) => new
@@ -2569,16 +2634,20 @@ public sealed partial class NavigationTools
             path = boundedPath,
             pathTruncated = pathTruncated ? true : (bool?)null,
             language,
-            supportedLanguages = operation is "symbol_at" or "definition"
+            supportedLanguages = operation is "symbol_at" or "definition" or "search_symbol"
                 ? new[] { "cs", "fs" }
                 : new[] { "cs" },
             availableForFile = fsharpSemanticEligible
-                ? new[] { "find_file", "search_text", "source_context", "projects_containing", "outline", "symbol_at", "definition" }
+                ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol", "outline", "symbol_at", "definition" }
+                : fsharpSyntaxIndexed
+                ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol" }
                 : new[] { "find_file", "search_text", "source_context", "projects_containing" },
             detail = fsharpSemanticEligible
                 ? "F# supports text, project-graph navigation, FCS outlines, position-based symbol_at, and same-project definition for compile-owned .fs/.fsi files. Other compiler-semantic operations remain unavailable."
-                : language == "fs"
-                    ? "This F# file is not a compile-owned .fs/.fsi input, so only text and project-graph navigation are available."
+                : language == "fsx"
+                    ? "F# script files are text-only; indexed F# declaration search covers .fs and .fsi project inputs."
+                    : language == "fs"
+                    ? "This F# file is not a compile-owned .fs/.fsi semantic input; syntax-indexed search_symbol plus text and project-graph navigation remain available."
                     : $"The indexed language '{language}' supports text navigation only; C# syntax and compiler semantics are not available.",
             meta = Meta.From(health, "indexed", "text"),
         });

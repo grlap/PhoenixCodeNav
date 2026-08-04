@@ -27,25 +27,65 @@ public static class CompileItemResolver
         IReadOnlyDictionary<string, long> projectIds,
         IReadOnlyDictionary<string, long> sourceFileIdsByPath)
     {
+        Dictionary<string, List<ParsedProject>> ownersByPath =
+            ResolveOwners(projects, sourceFileIdsByPath.Keys);
+        foreach ((string path, List<ParsedProject> owners) in ownersByPath
+                     .OrderBy(entry => entry.Key, WorkspacePaths.FileSystemPathComparer))
+        {
+            long fileId = sourceFileIdsByPath[path];
+            foreach (ParsedProject owner in owners)
+                store.InsertCompileItem(tx, projectIds[owner.RelPath], fileId);
+        }
+    }
+
+    /// <summary>Resolves the same compile ownership facts used by <see cref="Write"/> without
+    /// touching SQLite. The F# syntax index consumes this before source rows are persisted so its
+    /// FCS parse contexts and the final compile graph cannot drift apart.</summary>
+    internal static Dictionary<string, List<ParsedProject>> ResolveOwners(
+        IReadOnlyList<ParsedProject> projects,
+        IEnumerable<string> sourcePaths)
+    {
+        string[] sourcePathArray = sourcePaths
+            .Distinct(WorkspacePaths.FileSystemPathComparer)
+            .OrderBy(path => path, WorkspacePaths.FileSystemPathComparer)
+            .ToArray();
+        var sourcePathSet = sourcePathArray.ToHashSet(WorkspacePaths.FileSystemPathComparer);
+        var ownersByPath = new Dictionary<string, List<ParsedProject>>(
+            WorkspacePaths.FileSystemPathComparer);
+
+        void AddOwner(string path, ParsedProject project)
+        {
+            if (!ownersByPath.TryGetValue(path, out List<ParsedProject>? owners))
+            {
+                owners = [];
+                ownersByPath[path] = owners;
+            }
+            if (!owners.Any(owner => WorkspacePaths.FileSystemPathComparer.Equals(
+                    owner.RelPath, project.RelPath)))
+            {
+                owners.Add(project);
+            }
+        }
+
         // Sorted path index so an include glob scans only the range under its literal prefix
         // instead of every file (a 2k-legacy-project monolith would otherwise pay P x F matches).
-        var pathsByLanguage = sourceFileIdsByPath.Keys
+        var pathsByLanguage = sourcePathArray
             .GroupBy(SourceLanguage, StringComparer.Ordinal)
             .ToDictionary(group => group.Key,
                 group => group.OrderBy(path => path, WorkspacePaths.FileSystemPathComparer).ToArray(),
                 StringComparer.Ordinal);
 
-        var defaultRoots = new Dictionary<(string Language, string Dir), long>(
+        var defaultRoots = new Dictionary<(string Language, string Dir), ParsedProject>(
             new LanguageDirectoryComparer());
-        var removesByPid = new Dictionary<long, List<string>>();
+        var removesByProject = new Dictionary<string, List<string>>(
+            WorkspacePaths.FileSystemPathComparer);
 
         foreach (var p in projects)
         {
-            long pid = projectIds[p.RelPath];
             pathsByLanguage.TryGetValue(p.Language, out string[]? projectLanguagePaths);
             projectLanguagePaths ??= [];
             var removes = p.CompileRemoveGlobs;
-            if (removes is { Count: > 0 }) removesByPid[pid] = removes;
+            if (removes is { Count: > 0 }) removesByProject[p.RelPath] = removes;
 
             // POLICY (review 3a): a Remove prunes DEFAULT-item ownership only — an explicit Include
             // (exact or glob) is affirmative evidence of compilation and always wins. This makes the
@@ -58,9 +98,9 @@ public static class CompileItemResolver
                 foreach (var item in items)
                 {
                     if (SourceLanguage(item) == p.Language &&
-                        sourceFileIdsByPath.TryGetValue(item, out long fid))
+                        sourcePathSet.Contains(item))
                     {
-                        store.InsertCompileItem(tx, pid, fid);
+                        AddOwner(item, p);
                     }
                 }
             }
@@ -69,7 +109,7 @@ public static class CompileItemResolver
                 // SDK default items (or a failed-parse project, whose shape is unknowable): the
                 // project dir becomes a glob root; ownership resolved in the prefix pass below.
                 string dir = WorkspacePaths.ToGitPath(Path.GetDirectoryName(p.RelPath) ?? "");
-                defaultRoots[(p.Language, dir)] = pid;
+                defaultRoots[(p.Language, dir)] = p;
             }
 
             if (p.CompileIncludeGlobs is { } globs)
@@ -77,22 +117,26 @@ public static class CompileItemResolver
                 foreach (var glob in globs)
                 {
                     foreach (var path in CandidatePaths(projectLanguagePaths,
-                                 sourceFileIdsByPath, glob.Include))
+                                 sourcePathSet, glob.Include))
                     {
                         if (SourceLanguage(path) == p.Language &&
                             MsBuildGlob.IsMatch(path, glob.Include) &&
                             !IsRemoved(glob.Excludes, path))
                         {
-                            store.InsertCompileItem(tx, pid, sourceFileIdsByPath[path]);
+                            AddOwner(path, p);
                         }
                     }
                 }
             }
         }
 
-        if (defaultRoots.Count == 0) return;
+        if (defaultRoots.Count == 0)
+        {
+            SortOwners(ownersByPath);
+            return ownersByPath;
+        }
 
-        foreach (var (path, fid) in sourceFileIdsByPath)
+        foreach (string path in sourcePathArray)
         {
             // Language grouping is broader than SDK implicit ownership: F# projects may explicitly
             // compile .fsi files, and .fsx remains searchable text, but the SDK default glob is
@@ -108,17 +152,29 @@ public static class CompileItemResolver
             {
                 int slash = dir.LastIndexOf('/');
                 dir = slash < 0 ? "" : dir[..slash];
-                if (defaultRoots.TryGetValue((SourceLanguage(path), dir), out long pid))
+                if (defaultRoots.TryGetValue((SourceLanguage(path), dir),
+                        out ParsedProject? project))
                 {
-                    if (!removesByPid.TryGetValue(pid, out var removes) || !IsRemoved(removes, path))
+                    if (!removesByProject.TryGetValue(project.RelPath, out var removes) ||
+                        !IsRemoved(removes, path))
                     {
-                        store.InsertCompileItem(tx, pid, fid);
+                        AddOwner(path, project);
                     }
                     break;
                 }
                 if (slash < 0) break;
             }
         }
+
+        SortOwners(ownersByPath);
+        return ownersByPath;
+    }
+
+    private static void SortOwners(Dictionary<string, List<ParsedProject>> ownersByPath)
+    {
+        foreach (List<ParsedProject> owners in ownersByPath.Values)
+            owners.Sort((left, right) => StringComparer.Ordinal.Compare(
+                left.RelPath, right.RelPath));
     }
 
     private static string SourceLanguage(string path)
@@ -162,11 +218,11 @@ public static class CompileItemResolver
     /// <summary>Paths that can possibly match the glob: an exact pattern is a dictionary probe; a
     /// wildcard pattern binary-searches the sorted list for its literal-prefix range.</summary>
     private static IEnumerable<string> CandidatePaths(
-        string[] sortedPaths, IReadOnlyDictionary<string, long> byPath, string glob)
+        string[] sortedPaths, IReadOnlySet<string> byPath, string glob)
     {
         if (!MsBuildGlob.ContainsWildcard(glob))
         {
-            if (byPath.ContainsKey(glob)) yield return glob;
+            if (byPath.Contains(glob)) yield return glob;
             yield break;
         }
         string prefix = MsBuildGlob.LiteralPrefix(glob);

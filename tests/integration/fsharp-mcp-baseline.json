@@ -8,7 +8,7 @@
     "fsharpProjects": 72,
     "csharpFiles": 243,
     "fsharpFiles": 6432,
-    "symbols": 8696,
+    "symbols": 116168,
     "orphanedFiles": 4174
   },
   "target": {
@@ -20,6 +20,8 @@
     "minimumPreciseTextHits": 2,
     "outlineModule": "Option",
     "outlineFunction": "map",
+    "symbolNamespace": "Microsoft.FSharp.Core.Option",
+    "symbolStartLine": 94,
     "line": 95,
     "column": 16,
     "semanticError": "fsharp_semantic_property_function_unsupported",

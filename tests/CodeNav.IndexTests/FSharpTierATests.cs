@@ -128,12 +128,15 @@ public class FSharpTierATests
             for (int i = 0; i < 3; i++)
             {
                 File.WriteAllText(Path.Combine(sourceDirectory, $"Small{i}.fs"),
-                    $"module Memory.Small{i}\n// " + new string('x', 4_000));
+                    $"module Memory.Small{i}\n" +
+                    string.Join('\n', Enumerable.Range(0, 20)
+                        .Select(value => $"let retainedSymbol{value} = {value}")) +
+                    "\n// " + new string('x', 1_000));
             }
             File.WriteAllText(Path.Combine(sourceDirectory, "Oversized.fs"),
                 "module Memory.Oversized\n// " + new string('y', 40_000));
 
-            const long budgetBytes = 30_000;
+            const long budgetBytes = 80_000;
             var batches = new List<(long Bytes, int Count)>();
             var hooks = new FSharpPipelineTestHooks(budgetBytes,
                 (bytes, count) => batches.Add((bytes, count)));
@@ -151,6 +154,11 @@ public class FSharpTierATests
                 batch.Count == 1 || batch.Bytes <= budgetBytes,
                 $"F# batch retained {batch.Bytes} bytes across {batch.Count} files " +
                 $"under a {budgetBytes}-byte aggregate budget"));
+            long textOnlyRetainedBytes = Directory.EnumerateFiles(sourceDirectory, "*.fs")
+                .Sum(path => new FileInfo(path).Length +
+                             (long)File.ReadAllText(path).Length * sizeof(char) + 256);
+            Assert.True(batches.Sum(batch => batch.Bytes) > textOnlyRetainedBytes,
+                "Prepared F# batch accounting must include retained symbol rows, not only source bytes and decoded text.");
         }
         finally { Cleanup(root); }
     }
@@ -479,7 +487,9 @@ public class FSharpTierATests
                 Assert.Contains(text.Hits, hit => hit.FilePath == "Core/Library.fs");
                 FileHit fsFile = Assert.Single(q.FindFiles("*.fs", 10));
                 Assert.Equal("fs", fsFile.Language);
-                Assert.Empty(q.Outline("Core/Library.fs"));
+                List<SymbolHit> indexedOutline = q.Outline("Core/Library.fs");
+                Assert.Contains(indexedOutline, symbol =>
+                    symbol.Name == "fsharpTierAMarker" && symbol.Kind == "value");
             }
 
             using (var semanticWorkspace = new SemanticWorkspace(root, dbPath))
@@ -510,6 +520,7 @@ public class FSharpTierATests
             Assert.Contains("fsharp-outline", featureIds);
             Assert.Contains("fsharp-outline-parse-context-selection", featureIds);
             Assert.Contains("fsharp-outline-parse-context-budget", featureIds);
+            Assert.Contains("fsharp-indexed-symbol-name-search", featureIds);
             Assert.Contains("fsharp-symbol-at-semantic", featureIds);
             Assert.Contains("fsharp-definition-same-project", featureIds);
             Assert.Contains("fsharp-type-check-context-selection", featureIds);
@@ -558,20 +569,37 @@ public class FSharpTierATests
             Assert.Equal(2, marker.GetProperty("startLine").GetInt32());
             Assert.Equal("indexed", outline.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.Equal("syntax", outline.GetProperty("meta").GetProperty("navigationLayer").GetString());
-            JsonElement symbols = Parse(tools.SearchSymbol("fsharpTierAMarker",
+            JsonElement symbolSearch = Parse(tools.SearchSymbol("fsharpTierAMarker",
                 pathGlob: "Core/Library.fs"));
-            Assert.Equal("unsupported_language", symbols.GetProperty("error").GetString());
+            JsonElement indexedMarker = Assert.Single(symbolSearch.GetProperty("symbols")
+                .EnumerateArray());
+            Assert.Equal("fsharpTierAMarker", indexedMarker.GetProperty("name").GetString());
+            Assert.Equal("value", indexedMarker.GetProperty("kind").GetString());
+            Assert.Equal("Core/Library.fs", indexedMarker.GetProperty("path").GetString());
+            Assert.Equal(2, indexedMarker.GetProperty("startLine").GetInt32());
+            Assert.Equal("indexed",
+                symbolSearch.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.Equal("syntax",
+                symbolSearch.GetProperty("meta").GetProperty("navigationLayer").GetString());
             foreach (string fsharpScope in new[] { "Library.fs", "*.fs", "Core/*.fs" })
             {
                 JsonElement scoped = Parse(tools.SearchSymbol("fsharpTierAMarker",
                     pathGlob: fsharpScope));
-                Assert.Equal("unsupported_language", scoped.GetProperty("error").GetString());
-                Assert.Equal("search_symbol", scoped.GetProperty("operation").GetString());
+                Assert.Contains(scoped.GetProperty("symbols").EnumerateArray(), symbol =>
+                    symbol.GetProperty("name").GetString() == "fsharpTierAMarker" &&
+                    symbol.GetProperty("path").GetString() == "Core/Library.fs");
             }
             JsonElement unscopedCSharp = Parse(tools.SearchSymbol("Wrapper"));
             Assert.Contains(unscopedCSharp.GetProperty("symbols").EnumerateArray(), symbol =>
                 symbol.GetProperty("name").GetString() == "Wrapper");
             Assert.False(unscopedCSharp.TryGetProperty("partial", out _));
+            Assert.False(unscopedCSharp.TryGetProperty("partialReason", out _));
+            JsonElement advisoryCoverage =
+                unscopedCSharp.GetProperty("fsharpProjectOptionCoverage");
+            Assert.True(advisoryCoverage.GetProperty("advisoryOnly").GetBoolean());
+            Assert.Contains("fsharp_project_options_imported",
+                advisoryCoverage.GetProperty("reasons").EnumerateArray()
+                    .Select(reason => reason.GetString()));
             JsonElement mixedScope = Parse(tools.SearchSymbol("Wrapper", pathGlob: "**/*.*"));
             Assert.Contains(mixedScope.GetProperty("symbols").EnumerateArray(), symbol =>
                 symbol.GetProperty("name").GetString() == "Wrapper");
@@ -580,8 +608,12 @@ public class FSharpTierATests
                 mixedScope.GetProperty("partialReason").GetString());
             Assert.Contains("cs", mixedScope.GetProperty("scopeLanguages").EnumerateArray()
                 .Select(language => language.GetString()));
-            Assert.Contains("fs", mixedScope.GetProperty("unsupportedLanguages").EnumerateArray()
+            Assert.Contains("fs", mixedScope.GetProperty("scopeLanguages").EnumerateArray()
                 .Select(language => language.GetString()));
+            Assert.Contains("fsx", mixedScope.GetProperty("scopeLanguages").EnumerateArray()
+                .Select(language => language.GetString()));
+            Assert.Contains("fsx", mixedScope.GetProperty("unsupportedLanguages")
+                .EnumerateArray().Select(language => language.GetString()));
             JsonElement projectOutline = Parse(tools.Outline("Core/Core.fsproj"));
             Assert.Equal("unsupported_language", projectOutline.GetProperty("error").GetString());
             Assert.Equal("fsproj", projectOutline.GetProperty("language").GetString());
@@ -1285,6 +1317,22 @@ public class FSharpTierATests
     }
 
     [Fact]
+    public void UnsupportedLanguageEnvelopeUsesStableFSharpScriptIdentityAndAdvertisesIndexedSearch()
+    {
+        var health = new IndexHealth("ready", "test", "indexed", "refreshed", 0,
+            null, 1, "/workspace", "/workspace/index.db");
+
+        JsonElement script = Parse(NavigationTools.UnsupportedLanguageForTest(
+            health, "Scratch.fsx", "fs", "definition"));
+        Assert.Equal("fsx", script.GetProperty("language").GetString());
+
+        JsonElement orphan = Parse(NavigationTools.UnsupportedLanguageForTest(
+            health, "Loose.fs", "fs", "outline"));
+        Assert.Contains("search_symbol", orphan.GetProperty("availableForFile")
+            .EnumerateArray().Select(tool => tool.GetString()));
+    }
+
+    [Fact]
     public void GeneratedFSharpClassificationIsConsistentAcrossColdAndDelta()
     {
         string root = Directory.CreateTempSubdirectory("codenav-fsharp-generated").FullName;
@@ -1317,6 +1365,10 @@ public class FSharpTierATests
                     includeGenerated: false));
                 Assert.Single(FSharpTextHits(queries, "suffixGeneratedFilterMarker",
                     includeGenerated: true));
+                Assert.Empty(queries.SearchSymbols("suffixGeneratedFilterMarker", "exact",
+                    ["value"], 5, includeGenerated: false));
+                Assert.Single(queries.SearchSymbols("suffixGeneratedFilterMarker", "exact",
+                    ["value"], 5, includeGenerated: true));
                 Assert.Empty(FSharpTextHits(queries, "bannerGeneratedFilterMarker",
                     includeGenerated: false));
             }
@@ -1335,6 +1387,10 @@ public class FSharpTierATests
                     includeGenerated: false));
                 Assert.Single(FSharpTextHits(queries, "normalGeneratedFilterMarker",
                     includeGenerated: true));
+                Assert.Empty(queries.SearchSymbols("normalGeneratedFilterMarker", "exact",
+                    ["value"], 5, includeGenerated: false));
+                Assert.Single(queries.SearchSymbols("normalGeneratedFilterMarker", "exact",
+                    ["value"], 5, includeGenerated: true));
             }
         }
         finally { Cleanup(root); }
@@ -1429,6 +1485,741 @@ public class FSharpTierATests
     }
 
     [Fact]
+    public void IndexedFSharpSymbolSearchCoversKindsArityDuplicatesOwnershipAndFilters()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-fsharp-symbol-search").FullName;
+        try
+        {
+            string projectDirectory = Path.Combine(root, "Core");
+            Directory.CreateDirectory(projectDirectory);
+            File.WriteAllText(Path.Combine(projectDirectory, "Core.fsproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Library.fsi" />
+                    <Compile Include="Library.fs" />
+                  </ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(projectDirectory, "Alternate.fsproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                  <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(projectDirectory, "Library.fsi"),
+                """
+                namespace SymbolSearch
+
+                type Pair<'T, 'U> = { Left: 'T; Right: 'U }
+
+                module Api =
+                    val transform: int -> int
+                """);
+            File.WriteAllText(Path.Combine(projectDirectory, "Library.fs"),
+                """
+                namespace SymbolSearch
+
+                type Pair<'T, 'U> = { Left: 'T; Right: 'U }
+
+                type Shape =
+                    | Circle of float
+                    | Point
+
+                module Api =
+                    let transform value = value + 1
+                    let (|Even|Odd|) value = if value % 2 = 0 then Even else Odd
+                """);
+            File.WriteAllText(Path.Combine(root, "Loose.fs"),
+                "module Loose\nlet looseSearchMarker = 1\n");
+            File.WriteAllText(Path.Combine(root, "Script.fsx"),
+                "let scriptSearchMarker = 1\n");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            using var semantic = new SemanticService(manager);
+            var tools = new NavigationTools(manager, semantic);
+
+            JsonElement pairs = Parse(tools.SearchSymbol("Pair", match: "exact",
+                pathGlob: "Core/*"));
+            JsonElement[] pairHits = pairs.GetProperty("symbols").EnumerateArray().ToArray();
+            Assert.Equal(2, pairHits.Length);
+            Assert.Collection(pairHits,
+                hit => Assert.Equal("Core/Library.fs",
+                    hit.GetProperty("path").GetString()),
+                hit => Assert.Equal("Core/Library.fsi",
+                    hit.GetProperty("path").GetString()));
+            Assert.All(pairHits, hit =>
+            {
+                Assert.Equal("record", hit.GetProperty("kind").GetString());
+                Assert.Equal(2, hit.GetProperty("arity").GetInt32());
+                Assert.False(hit.TryGetProperty("orphaned", out _));
+            });
+            JsonElement fsharpHandleDefinition = Parse(tools.Definition(
+                symbolId: pairHits[0].GetProperty("symbolId").GetString()));
+            Assert.Equal("fsharp_semantic_position_required",
+                fsharpHandleDefinition.GetProperty("error").GetString());
+            Assert.Contains("idx handle resolution is not available",
+                fsharpHandleDefinition.GetProperty("detail").GetString(),
+                StringComparison.Ordinal);
+
+            JsonElement functions = Parse(tools.SearchSymbol("transform", kinds: "function",
+                match: "exact", @namespace: "SymbolSearch"));
+            Assert.Equal(2, functions.GetProperty("symbols").GetArrayLength());
+            Assert.All(functions.GetProperty("symbols").EnumerateArray(), hit =>
+                Assert.Equal("function", hit.GetProperty("kind").GetString()));
+
+            JsonElement unionCase = Parse(tools.SearchSymbol("Circle", kinds: "union_case",
+                match: "exact", pathGlob: "Core/Library.fs"));
+            Assert.Equal("union_case",
+                Assert.Single(unionCase.GetProperty("symbols").EnumerateArray())
+                    .GetProperty("kind").GetString());
+            JsonElement filteredUnionCase = Parse(tools.SearchSymbol("Circle", kinds: "class",
+                match: "exact", pathGlob: "Core/Library.fs"));
+            Assert.Empty(filteredUnionCase.GetProperty("symbols").EnumerateArray());
+            Assert.True(filteredUnionCase.GetProperty("existsUnfiltered").GetBoolean());
+            Assert.Contains("union_case",
+                filteredUnionCase.GetProperty("unfilteredKinds").EnumerateArray()
+                    .Select(kind => kind.GetString()));
+
+            JsonElement namespaceEnumeration = Parse(tools.SearchSymbol("",
+                @namespace: "SymbolSearch", kinds: "module"));
+            Assert.Contains(namespaceEnumeration.GetProperty("symbols").EnumerateArray(), hit =>
+                hit.GetProperty("name").GetString() == "Api");
+
+            JsonElement activePattern = Parse(tools.SearchSymbol("|Even|Odd|", match: "exact",
+                pathGlob: "Core/Library.fs"));
+            Assert.Equal("function",
+                Assert.Single(activePattern.GetProperty("symbols").EnumerateArray())
+                    .GetProperty("kind").GetString());
+
+            JsonElement loose = Parse(tools.SearchSymbol("looseSearchMarker", match: "exact"));
+            Assert.True(Assert.Single(loose.GetProperty("symbols").EnumerateArray())
+                .GetProperty("orphaned").GetBoolean());
+            JsonElement script = Parse(tools.SearchSymbol("scriptSearchMarker", match: "exact"));
+            Assert.Empty(script.GetProperty("symbols").EnumerateArray());
+
+            JsonElement scriptScope = Parse(tools.SearchSymbol("scriptSearchMarker",
+                match: "exact", pathGlob: "Script.fsx"));
+            Assert.Equal("unsupported_language",
+                scriptScope.GetProperty("error").GetString());
+            Assert.Equal("fsx", scriptScope.GetProperty("language").GetString());
+
+            JsonElement mixedScope = Parse(tools.SearchSymbol("missingMarker",
+                match: "exact", pathGlob: "*"));
+            Assert.True(mixedScope.GetProperty("partial").GetBoolean());
+            Assert.Equal("unsupported_language_files_skipped",
+                mixedScope.GetProperty("partialReason").GetString());
+            Assert.Contains("fsx", mixedScope.GetProperty("unsupportedLanguages")
+                .EnumerateArray().Select(language => language.GetString()));
+
+            using var queries = new IndexQueries(dbPath);
+            Assert.Equal(2, queries.ProjectsContaining("Core/Library.fs").Count);
+            Assert.Equal(2, queries.SearchSymbols("Pair", "exact", ["record"], 10).Count);
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void FSharpParseFailuresRemainVisibleToColdAndDeltaSymbolSearch()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-symbol-parse-coverage").FullName;
+        try
+        {
+            WriteProject(root, "Core", "Core.fsproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                  <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
+                </Project>
+                """,
+                ("Library.fs",
+                    "module Core.Library\nlet previouslyValidMarker = 1\n"));
+            File.WriteAllText(Path.Combine(root, "Scratch.fsx"),
+                "let scriptOnlyMarker = 1\n");
+
+            string deltaDbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, deltaDbPath);
+            File.WriteAllText(Path.Combine(root, "Core", "Library.fs"),
+                "module Core.Library\nlet previouslyValidMarker = (\n");
+            using (var store = new IndexStore(deltaDbPath, createNew: false))
+            {
+                RefreshResult refresh = DeltaRefresher.Refresh(store, root,
+                    ["Core/Library.fs"]);
+                Assert.Equal(1, refresh.ChangedFiles);
+            }
+            AssertParseFailureDisclosure(deltaDbPath);
+
+            string coldDbPath = Path.Combine(root, ".phoenix", "cold-parse.db");
+            IndexBuilder.Build(root, coldDbPath);
+            AssertParseFailureDisclosure(coldDbPath);
+        }
+        finally { Cleanup(root); }
+
+        void AssertParseFailureDisclosure(string dbPath)
+        {
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            using var semantic = new SemanticService(manager);
+            var tools = new NavigationTools(manager, semantic);
+
+            JsonElement result = Parse(tools.SearchSymbol("previouslyValidMarker",
+                match: "exact", pathGlob: "Core/Library.fs"));
+            Assert.Empty(result.GetProperty("symbols").EnumerateArray());
+            Assert.True(result.GetProperty("partial").GetBoolean());
+            Assert.Equal("fsharp_parse_failed",
+                result.GetProperty("partialReason").GetString());
+            JsonElement coverage = result.GetProperty("fsharpParseCoverage");
+            Assert.Equal(1, coverage.GetProperty("failedFiles").GetInt32());
+            Assert.Equal(1, coverage.GetProperty("totalFailureFiles").GetInt32());
+            Assert.Equal(1, coverage.GetProperty("failedContexts").GetInt32());
+            Assert.Equal(1, coverage.GetProperty("totalContexts").GetInt32());
+
+            JsonElement combined = Parse(tools.SearchSymbol("missingMarker",
+                match: "exact", pathGlob: "*"));
+            Assert.Equal(
+                "fsharp_parse_failed; unsupported_language_files_skipped",
+                combined.GetProperty("partialReason").GetString());
+            Assert.Equal(
+                ["fsharp_parse_failed", "unsupported_language_files_skipped"],
+                combined.GetProperty("partialReasons").EnumerateArray()
+                    .Select(reason => reason.GetString()!).ToArray());
+        }
+    }
+
+    [Fact]
+    public void FSharpProjectOptionFailuresRemainVisibleToColdAndDeltaSymbolSearch()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-symbol-option-coverage").FullName;
+        try
+        {
+            string projectDirectory = Path.Combine(root, "BrokenOwner");
+            Directory.CreateDirectory(projectDirectory);
+            Directory.CreateDirectory(Path.Combine(root, "ValidOwner"));
+            Directory.CreateDirectory(Path.Combine(root, "Shared"));
+            string projectPath = Path.Combine(projectDirectory, "BrokenOwner.fsproj");
+            File.WriteAllText(projectPath,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                  <ItemGroup><Compile Include="../Shared/Library.fs" /></ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(root, "ValidOwner", "ValidOwner.fsproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                  <ItemGroup><Compile Include="../Shared/Library.fs" /></ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(root, "Shared", "Library.fs"),
+                "module Core.Library\nlet optionCoverageMarker = 1\n");
+
+            string deltaDbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, deltaDbPath);
+            File.WriteAllText(projectPath, "<Project><PropertyGroup>");
+            using (var store = new IndexStore(deltaDbPath, createNew: false))
+            {
+                RefreshResult refresh = DeltaRefresher.Refresh(store, root,
+                    ["BrokenOwner/BrokenOwner.fsproj"]);
+                Assert.Equal(1, refresh.ChangedFiles);
+            }
+            AssertOptionFailureDisclosure(deltaDbPath);
+
+            string coldDbPath = Path.Combine(root, ".phoenix", "cold-options.db");
+            IndexBuilder.Build(root, coldDbPath);
+            AssertOptionFailureDisclosure(coldDbPath);
+        }
+        finally { Cleanup(root); }
+
+        void AssertOptionFailureDisclosure(string dbPath)
+        {
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            using var semantic = new SemanticService(manager);
+            var tools = new NavigationTools(manager, semantic);
+
+            JsonElement result = Parse(tools.SearchSymbol("optionCoverageMarker",
+                match: "exact", pathGlob: "Shared/Library.fs"));
+            Assert.True(result.GetProperty("partial").GetBoolean());
+            Assert.Contains("fsharp_project_options_unavailable",
+                result.GetProperty("partialReasons").EnumerateArray()
+                    .Select(reason => reason.GetString()));
+            JsonElement coverage = result.GetProperty("fsharpProjectOptionCoverage");
+            Assert.Equal(1, coverage.GetProperty("affectedFiles").GetInt32());
+            Assert.Equal(1,
+                coverage.GetProperty("failedProjectFileContexts").GetInt32());
+            Assert.Contains("fsharp_project_options_unavailable",
+                coverage.GetProperty("reasons").EnumerateArray()
+                    .Select(reason => reason.GetString()));
+        }
+    }
+
+    [Fact]
+    public void MalformedFSharpProjectAddAndDeleteRefreshGlobalOptionCoverage()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-symbol-global-option-coverage").FullName;
+        string deltaDbPath = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteProject(root, "ValidOwner", "ValidOwner.fsproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFrameworks>net8.0;net9.0</TargetFrameworks></PropertyGroup>
+                  <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
+                </Project>
+                """,
+                ("Library.fs",
+                    """
+                    module ValidOwner.Library
+                    #if NET8_0
+                    let brokenGlobalContextMarker = (
+                    #else
+                    let globalCoverageMarker = 1
+                    #endif
+                    """));
+
+            IndexBuilder.Build(root, deltaDbPath);
+            AssertGlobalFailureDisclosure(deltaDbPath, expected: false);
+
+            string brokenDirectory = Path.Combine(root, "BrokenOwner");
+            Directory.CreateDirectory(brokenDirectory);
+            string brokenProjectPath = Path.Combine(brokenDirectory, "BrokenOwner.fsproj");
+            File.WriteAllText(brokenProjectPath, "<Project><PropertyGroup>");
+            (RefreshResult added, string[] parsedOnAdd) = RefreshWithParseTrace(
+                "BrokenOwner/BrokenOwner.fsproj");
+            Assert.Equal(1, added.AddedFiles);
+            Assert.Empty(parsedOnAdd);
+            AssertGlobalFailureDisclosure(deltaDbPath, expected: true);
+
+            string coldDbPath = Path.Combine(root, ".phoenix", "cold-global-options.db");
+            IndexBuilder.Build(root, coldDbPath);
+            AssertGlobalFailureDisclosure(coldDbPath, expected: true);
+
+            File.Delete(brokenProjectPath);
+            (RefreshResult deleted, string[] parsedOnDelete) = RefreshWithParseTrace(
+                "BrokenOwner/BrokenOwner.fsproj");
+            Assert.Equal(1, deleted.DeletedFiles);
+            Assert.Empty(parsedOnDelete);
+            AssertGlobalFailureDisclosure(deltaDbPath, expected: false);
+        }
+        finally { Cleanup(root); }
+
+        void AssertGlobalFailureDisclosure(string dbPath, bool expected)
+        {
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            using var semantic = new SemanticService(manager);
+            var tools = new NavigationTools(manager, semantic);
+            JsonElement result = Parse(tools.SearchSymbol("globalCoverageMarker",
+                match: "exact", pathGlob: "ValidOwner/Library.fs"));
+            Assert.Single(result.GetProperty("symbols").EnumerateArray());
+            string[] partialReasons = result.TryGetProperty("partialReasons", out JsonElement reasons)
+                ? reasons.EnumerateArray().Select(reason => reason.GetString()!).ToArray()
+                : [];
+            Assert.Equal(expected,
+                partialReasons.Contains("fsharp_project_options_unavailable"));
+            Assert.Contains("fsharp_parse_failed", partialReasons);
+            Assert.True(result.GetProperty("partial").GetBoolean());
+            JsonElement parseCoverage = result.GetProperty("fsharpParseCoverage");
+            Assert.Equal(1, parseCoverage.GetProperty("failedContexts").GetInt32());
+            Assert.Equal(2, parseCoverage.GetProperty("totalContexts").GetInt32());
+            if (expected)
+            {
+                Assert.Contains("fsharp_project_options_unavailable",
+                    result.GetProperty("fsharpProjectOptionCoverage")
+                        .GetProperty("reasons").EnumerateArray()
+                        .Select(reason => reason.GetString()));
+            }
+            else
+            {
+                Assert.DoesNotContain("fsharp_project_options_unavailable", partialReasons);
+            }
+        }
+
+        (RefreshResult Result, string[] ParsedPaths) RefreshWithParseTrace(string changedPath)
+        {
+            var parsedPaths = new List<string>();
+            var gate = new object();
+            FSharpSyntaxIndexer.BeforeParseForTest = path =>
+            {
+                lock (gate) parsedPaths.Add(path);
+            };
+            try
+            {
+                using var store = new IndexStore(deltaDbPath, createNew: false);
+                RefreshResult refresh = DeltaRefresher.Refresh(store, root, [changedPath]);
+                lock (gate) return (refresh, parsedPaths.ToArray());
+            }
+            finally
+            {
+                FSharpSyntaxIndexer.BeforeParseForTest = null;
+            }
+        }
+    }
+
+    [Fact]
+    public void SuccessfulFSharpContextsRemainSearchableWhenAnotherContextFails()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-partial-parse-coverage").FullName;
+        try
+        {
+            WriteProject(root, "Core", "Core.fsproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFrameworks>net8.0;net9.0</TargetFrameworks></PropertyGroup>
+                  <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
+                </Project>
+                """,
+                ("Library.fs",
+                    """
+                    module Core.Library
+                    #if NET8_0
+                    let brokenContextMarker = (
+                    #else
+                    let survivingContextMarker = 9
+                    #endif
+                    """));
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            using var semantic = new SemanticService(manager);
+            var tools = new NavigationTools(manager, semantic);
+
+            JsonElement result = Parse(tools.SearchSymbol("survivingContextMarker",
+                match: "exact", pathGlob: "Core/Library.fs"));
+            Assert.Single(result.GetProperty("symbols").EnumerateArray());
+            Assert.Equal("fsharp_parse_failed",
+                result.GetProperty("partialReason").GetString());
+            JsonElement coverage = result.GetProperty("fsharpParseCoverage");
+            Assert.Equal(1, coverage.GetProperty("failedFiles").GetInt32());
+            Assert.Equal(1, coverage.GetProperty("partialFailureFiles").GetInt32());
+            Assert.Equal(0, coverage.GetProperty("totalFailureFiles").GetInt32());
+            Assert.Equal(1, coverage.GetProperty("failedContexts").GetInt32());
+            Assert.Equal(2, coverage.GetProperty("totalContexts").GetInt32());
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Theory]
+    [InlineData("Pair", "type Pair<'T -> 'U, int> = Pair", 2)]
+    [InlineData("Outer", "type Outer<Inner<int, string>, bool> = Outer", 2)]
+    [InlineData("Pair", "type PairContainer = member Pair<'T, 'U>", 2)]
+    [InlineData("Plain", "type Plain = Plain", 0)]
+    [InlineData("", "", 0)]
+    public void FSharpGenericArityUsesTheDeclaredNameAndIgnoresFunctionArrows(
+        string name, string signature, int expected)
+    {
+        Assert.Equal(expected, FSharpSyntaxIndexer.GenericArity(name, signature));
+    }
+
+    [Fact]
+    public void FSharpTypeKindsReceiveTheExactNameTypePreference()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-type-ranking").FullName;
+        try
+        {
+            string dbPath = Path.Combine(root, "index.db");
+            using (var store = new IndexStore(dbPath, createNew: true))
+            {
+                using var tx = store.BeginTransaction();
+                long fileId = store.InsertFile(tx, "Types.fs", 1, 1, 1, "fs", 6,
+                    isGenerated: false, hasTestAttrs: false);
+                store.InsertContent(tx, fileId, "type ranking fixture");
+                store.InsertSymbols(tx, fileId,
+                [
+                    Symbol(0, "function", "SharedUnion", 1),
+                    Symbol(1, "union", "SharedUnion", 2),
+                    Symbol(2, "value", "SharedType", 3),
+                    Symbol(3, "type", "SharedType", 4),
+                    Symbol(4, "value", "SharedException", 5),
+                    Symbol(5, "exception", "SharedException", 6),
+                ]);
+                tx.Commit();
+            }
+
+            using var queries = new IndexQueries(dbPath);
+            Assert.Equal("union", queries.SearchSymbols(
+                "SharedUnion", "exact", null, 10)[0].Kind);
+            Assert.Equal("type", queries.SearchSymbols(
+                "SharedType", "exact", null, 10)[0].Kind);
+            Assert.Equal("exception", queries.SearchSymbols(
+                "SharedException", "exact", null, 10)[0].Kind);
+        }
+        finally { Cleanup(root); }
+
+        static SymbolRow Symbol(int ordinal, string kind, string name, int line) =>
+            new(ordinal, -1, kind, name, "Ranking", null, name, "public",
+                line, line, false, 0, null);
+    }
+
+    [Fact]
+    public void CSharpOnlyDeltaSkipsTheFSharpFileInventoryScan()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-delta-inventory").FullName;
+        try
+        {
+            WriteProject(root, "Core", "Core.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />",
+                ("Library.cs", "namespace Core; public sealed class Before { }"));
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            File.WriteAllText(Path.Combine(root, "Core", "Library.cs"),
+                "namespace Core; public sealed class After { }");
+
+            using var store = new IndexStore(dbPath, createNew: false);
+            long before = store.FileIdPathLangExecutionCountForTest;
+            RefreshResult refresh = DeltaRefresher.Refresh(store, root,
+                ["Core/Library.cs"]);
+            Assert.Equal(1, refresh.ChangedFiles);
+            Assert.Equal(before, store.FileIdPathLangExecutionCountForTest);
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void NameBasedRoslynResolutionIgnoresSameNamedFSharpDeclarations()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-csharp-name-collision").FullName;
+        try
+        {
+            WriteProject(root, "A_FSharp", "Library.fsproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
+                </Project>
+                """,
+                ("Library.fs",
+                    "namespace Collision\ntype SharedCollision() = class end\n"));
+            WriteProject(root, "Z_CSharp", "Library.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />",
+                ("Library.cs",
+                    "namespace Collision; public sealed class SharedCollision { }"));
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            using var semantic = new SemanticService(manager);
+            var tools = new NavigationTools(manager, semantic);
+
+            JsonElement indexed = Parse(tools.Definition(
+                name: "SharedCollision", mode: "indexed"));
+            Assert.NotEmpty(indexed.GetProperty("declarations").EnumerateArray());
+            Assert.All(indexed.GetProperty("declarations").EnumerateArray(),
+                declaration => Assert.Equal("Z_CSharp/Library.cs",
+                    declaration.GetProperty("path").GetString()));
+
+            if (!semantic.FrameworkRefsAvailable) return;
+
+            JsonElement definition = SemanticRetry.ParseExactWithRetry(() =>
+                tools.Definition(name: "SharedCollision", mode: "semantic",
+                    timeoutMs: 60_000));
+            Assert.Contains(definition.GetProperty("declarations").EnumerateArray(),
+                declaration => declaration.GetProperty("path").GetString() ==
+                               "Z_CSharp/Library.cs");
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void FSharpProjectOptionRefreshReindexesConditionalDeclarations()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-fsharp-symbol-options").FullName;
+        try
+        {
+            string projectDirectory = Path.Combine(root, "Core");
+            Directory.CreateDirectory(projectDirectory);
+            string projectPath = Path.Combine(projectDirectory, "Core.fsproj");
+            string sourcePath = Path.Combine(projectDirectory, "Conditional.fs");
+
+            void WriteProjectDefine(string define) => File.WriteAllText(projectPath,
+                $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+                    <DefineConstants>{define}</DefineConstants>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="Conditional.fs" /></ItemGroup>
+                </Project>
+                """);
+
+            WriteProjectDefine("FIRST_BRANCH");
+            File.WriteAllText(sourcePath,
+                """
+                module Conditional
+                #if FIRST_BRANCH
+                let firstBranchMarker = 1
+                #else
+                let secondBranchMarker = 2
+                #endif
+                #if NET8_0
+                let netEightContextMarker = 8
+                #else
+                let netNineContextMarker = 9
+                #endif
+                """);
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using (var queries = new IndexQueries(dbPath))
+            {
+                Assert.Single(queries.SearchSymbols(
+                    "firstBranchMarker", "exact", ["value"], 5));
+                Assert.Empty(queries.SearchSymbols(
+                    "secondBranchMarker", "exact", ["value"], 5));
+                Assert.Single(queries.SearchSymbols(
+                    "netEightContextMarker", "exact", ["value"], 5));
+                Assert.Single(queries.SearchSymbols(
+                    "netNineContextMarker", "exact", ["value"], 5));
+            }
+
+            WriteProjectDefine("SECOND_BRANCH");
+            using (var store = new IndexStore(dbPath, createNew: false))
+            {
+                RefreshResult refreshed = DeltaRefresher.Refresh(
+                    store, root, ["Core/Core.fsproj"]);
+                Assert.Equal(1, refreshed.ChangedFiles);
+                Assert.True(refreshed.ProjectsRefreshed);
+            }
+            using (var queries = new IndexQueries(dbPath))
+            {
+                Assert.Empty(queries.SearchSymbols(
+                    "firstBranchMarker", "exact", ["value"], 5));
+                Assert.Single(queries.SearchSymbols(
+                    "secondBranchMarker", "exact", ["value"], 5));
+            }
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void FSharpProjectOptionDeltaParsesOnlyAffectedFilesOutsideTheWriteTransaction()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-symbol-option-delta-scope").FullName;
+        try
+        {
+            WriteProject(root, "Alpha", "Alpha.fsproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><DefineConstants>FIRST</DefineConstants></PropertyGroup>
+                  <ItemGroup><Compile Include="Alpha.fs" /></ItemGroup>
+                </Project>
+                """,
+                ("Alpha.fs", "module Alpha\nlet alphaMarker = 1\n"));
+            WriteProject(root, "Beta", "Beta.fsproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <ItemGroup><Compile Include="Beta.fs" /></ItemGroup>
+                </Project>
+                """,
+                ("Beta.fs", "module Beta\nlet betaMarker = 2\n"));
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            File.WriteAllText(Path.Combine(root, "Alpha", "Alpha.fsproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><DefineConstants>SECOND</DefineConstants></PropertyGroup>
+                  <ItemGroup><Compile Include="Alpha.fs" /></ItemGroup>
+                </Project>
+                """);
+
+            using var store = new IndexStore(dbPath, createNew: false);
+            var parsedPaths = new List<string>();
+            var transactionOpenDuringParse = new List<bool>();
+            var observationsLock = new object();
+            FSharpSyntaxIndexer.BeforeParseForTest = path =>
+            {
+                bool? transactionWasOpen = null;
+                if (path.Equals("Alpha/Alpha.fs", StringComparison.Ordinal))
+                {
+                    try
+                    {
+                        using var probe = store.BeginTransaction();
+                        probe.Rollback();
+                        transactionWasOpen = false;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        transactionWasOpen = true;
+                    }
+                }
+                lock (observationsLock)
+                {
+                    parsedPaths.Add(path);
+                    if (transactionWasOpen is { } observed)
+                        transactionOpenDuringParse.Add(observed);
+                }
+            };
+            try
+            {
+                RefreshResult refresh = DeltaRefresher.Refresh(store, root,
+                    ["Alpha/Alpha.fsproj"]);
+                Assert.Equal(1, refresh.ChangedFiles);
+            }
+            finally
+            {
+                FSharpSyntaxIndexer.BeforeParseForTest = null;
+            }
+
+            Assert.Equal(["Alpha/Alpha.fs"], parsedPaths);
+            Assert.All(transactionOpenDuringParse, Assert.False);
+        }
+        finally
+        {
+            FSharpSyntaxIndexer.BeforeParseForTest = null;
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public async Task FSharpParseTestHookIsExecutionContextLocal()
+    {
+        int observed = 0;
+        FSharpSyntaxIndexer.BeforeParseForTest = _ => Interlocked.Increment(ref observed);
+        try
+        {
+            Task foreignParse;
+            using (ExecutionContext.SuppressFlow())
+            {
+                foreignParse = Task.Run(() => FSharpSyntaxIndexer.Parse(
+                    "Foreign/Library.fs", "module Foreign.Library\nlet marker = 1\n"));
+            }
+            await foreignParse;
+            Assert.Equal(0, Volatile.Read(ref observed));
+
+            _ = FSharpSyntaxIndexer.Parse(
+                "Local/Library.fs", "module Local.Library\nlet marker = 1\n");
+            Assert.Equal(1, Volatile.Read(ref observed));
+        }
+        finally
+        {
+            FSharpSyntaxIndexer.BeforeParseForTest = null;
+        }
+    }
+
+    [Fact]
     public void IncrementalRefreshAddsUpdatesAndDeletesExplicitFSharpCompileItem()
     {
         string root = Directory.CreateTempSubdirectory("codenav-fsharp-delta").FullName;
@@ -1460,6 +2251,9 @@ public class FSharpTierATests
                 Assert.Equal("Core", Assert.Single(q.ProjectsContaining("Core/Library.fs")).Name);
                 Assert.Contains(q.SearchText("deltaMarkerOne", 5), hit =>
                     hit.FilePath == "Core/Library.fs");
+                SymbolHit symbol = Assert.Single(q.SearchSymbols(
+                    "deltaMarkerOne", "exact", ["value"], 5));
+                Assert.Equal("Core/Library.fs", symbol.FilePath);
             }
 
             File.WriteAllText(sourcePath, "module Core.Library\nlet deltaMarkerTwo = 2\n");
@@ -1475,6 +2269,8 @@ public class FSharpTierATests
                 Assert.Empty(q.SearchText("deltaMarkerOne", 5));
                 Assert.Contains(q.SearchText("deltaMarkerTwo", 5), hit =>
                     hit.FilePath == "Core/Library.fs");
+                Assert.Empty(q.SearchSymbols("deltaMarkerOne", "exact", null, 5));
+                Assert.Single(q.SearchSymbols("deltaMarkerTwo", "exact", ["value"], 5));
             }
 
             File.Delete(sourcePath);
@@ -1488,6 +2284,7 @@ public class FSharpTierATests
             {
                 Assert.Null(q.FileByPath("Core/Library.fs"));
                 Assert.Empty(q.ProjectsContaining("Core/Library.fs"));
+                Assert.Empty(q.SearchSymbols("deltaMarkerTwo", "exact", null, 5));
             }
         }
         finally { Cleanup(root); }

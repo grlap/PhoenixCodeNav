@@ -975,9 +975,30 @@ try {
         limit = 10
     }
     $fsharpOutline = Invoke-McpTool $fsharpWriter "outline" @{ path = [string]$fsharpBaseline.target.sourcePath; depth = 2 }
-    $evidence.results.fsharpNavigation = [ordered]@{ searchText = $fsharpText; outline = $fsharpOutline }
+    $fsharpSymbolSearch = Invoke-McpTool $fsharpWriter "search_symbol" @{
+        query = [string]$fsharpBaseline.target.outlineFunction
+        kinds = "function"
+        match = "exact"
+        pathGlob = [string]$fsharpBaseline.target.sourcePath
+        limit = 10
+    }
+    $evidence.results.fsharpNavigation = [ordered]@{
+        searchText = $fsharpText
+        searchSymbol = $fsharpSymbolSearch
+        outline = $fsharpOutline
+    }
     Test-IntegrationCase "official FSharp text and syntax navigation" {
         Assert-True ([int]$fsharpText.preciseCount -ge [int]$fsharpBaseline.target.minimumPreciseTextHits) "Official FSharp source text is not searchable"
+        $indexedFunctions = @($fsharpSymbolSearch.symbols | Where-Object {
+            $_.name -eq [string]$fsharpBaseline.target.outlineFunction -and
+            $_.kind -eq "function" -and
+            $_.path -eq [string]$fsharpBaseline.target.sourcePath -and
+            $_.ns -eq [string]$fsharpBaseline.target.symbolNamespace -and
+            $_.startLine -eq [int]$fsharpBaseline.target.symbolStartLine
+        })
+        Assert-Equal 1 $indexedFunctions.Count "Official FSharp function identity is absent or duplicated in indexed symbol-name search"
+        Assert-Equal "indexed" ([string]$fsharpSymbolSearch.meta.confidence) "Official FSharp symbol search confidence changed"
+        Assert-Equal "syntax" ([string]$fsharpSymbolSearch.meta.navigationLayer) "Official FSharp symbol search reported the wrong navigation layer"
         Assert-True ($null -eq $fsharpOutline.error) "Official FSharp outline returned $($fsharpOutline.error)"
         Assert-Equal "indexed" ([string]$fsharpOutline.meta.confidence) "Official FSharp outline confidence changed"
         Assert-Equal "syntax" ([string]$fsharpOutline.meta.navigationLayer) "Official FSharp outline reported the wrong navigation layer"

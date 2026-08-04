@@ -538,7 +538,7 @@ public class FSharpOutlineStage1Tests
 
             JsonElement script = Parse(tools.Outline("Scratch.fsx"));
             Assert.Equal("unsupported_language", script.GetProperty("error").GetString());
-            Assert.Equal("fs", script.GetProperty("language").GetString());
+            Assert.Equal("fsx", script.GetProperty("language").GetString());
         }
         finally
         {

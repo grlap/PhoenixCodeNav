@@ -102,6 +102,26 @@ public static class DeltaRefresher
             StringComparer.Ordinal);
         var hasNonTrivialByLanguage = new Dictionary<string, bool>(StringComparer.Ordinal);
 
+        // F# syntax parsing is intentionally prepared before the SQLite writer transaction.
+        // Candidate reads are reused below so persistence publishes the exact bytes that were
+        // parsed; a later filesystem mutation is attributed by the normal post-refresh sweep.
+        var capturedFSharpCandidates = new Dictionary<string, GitInfo.WorkspaceFileReadResult>(
+            WorkspacePaths.FileSystemPathComparer);
+        foreach (string rel in candidates)
+        {
+            if (!detectAll && WorkspaceScanner.IsExcludedPath(rel)) continue;
+            string language = LangOf(rel);
+            if (language is not ("fs" or "fsproj")) continue;
+            if (!WorkspacePaths.TryResolveGitPathInside(workspaceRoot, rel, out _)) continue;
+            int captureLimit = language == "fsproj"
+                ? IndexBuilder.MaxStructuralFileBytes
+                : MaxIndexedFileBytes;
+            capturedFSharpCandidates[rel] =
+                readWorkspaceFile(workspaceRoot, rel, captureLimit);
+        }
+        PreparedFSharpReindex preparedFSharp = PrepareFSharpReindex(
+            store, candidates, stored, capturedFSharpCandidates, log);
+
         string? refreshedAtUtc = null;
         using (var tx = store.BeginTransaction())
         {
@@ -162,7 +182,9 @@ public static class DeltaRefresher
                     ? IndexBuilder.MaxStructuralFileBytes
                     : MaxIndexedFileBytes;
                 GitInfo.WorkspaceFileReadResult read =
-                    readWorkspaceFile(workspaceRoot, rel, captureLimit);
+                    capturedFSharpCandidates.TryGetValue(rel, out var captured)
+                        ? captured
+                        : readWorkspaceFile(workspaceRoot, rel, captureLimit);
                 byte[]? bytes = read.Bytes;
                 if (bytes is null)
                 {
@@ -171,9 +193,12 @@ public static class DeltaRefresher
                         if (known)
                         {
                             store.DeleteFileCascade(tx, old!.Id,
-                                store.GetContentForWrite(old.Id));
+                                store.GetContentForWrite(old.Id, tx));
                             deleted++;
-                            if (projectShapePath) projectDataDirty = true;
+                            if (projectShapePath)
+                            {
+                                projectDataDirty = true;
+                            }
                         }
                         continue;
                     }
@@ -197,9 +222,13 @@ public static class DeltaRefresher
                     {
                         // A pinned read proved the leaf non-regular. Remove any seeded row;
                         // retaining it would publish source evidence for a refused file type.
-                        store.DeleteFileCascade(tx, old!.Id, store.GetContentForWrite(old.Id));
+                        store.DeleteFileCascade(tx, old!.Id,
+                            store.GetContentForWrite(old.Id, tx));
                         deleted++;
-                        if (projectShapePath) projectDataDirty = true;
+                        if (projectShapePath)
+                        {
+                            projectDataDirty = true;
+                        }
                     }
                     log?.Invoke($"Skipped definitely non-regular file: {rel}");
                     continue;
@@ -220,7 +249,7 @@ public static class DeltaRefresher
                     var parsed = SyntaxIndexer.Parse(rel, content);
                     if (known)
                     {
-                        string oldContent = store.GetContentForWrite(old!.Id) ?? "";
+                        string oldContent = store.GetContentForWrite(old!.Id, tx) ?? "";
                         store.UpdateFileRow(tx, old.Id, bytes.LongLength, mtimeTicks, hash,
                             parsed.LineCount, parsed.LooksGenerated, parsed.HasTestAttributes);
                         store.ReplaceContent(tx, old.Id, oldContent, content);
@@ -253,7 +282,7 @@ public static class DeltaRefresher
                         FileClassifier.LooksGenerated(rel, content);
                     if (known)
                     {
-                        string oldContent = store.GetContentForWrite(old!.Id) ?? "";
+                        string oldContent = store.GetContentForWrite(old!.Id, tx) ?? "";
                         store.UpdateFileRow(tx, old.Id, bytes.LongLength, mtimeTicks, hash, lines,
                             isGenerated, false);
                         store.ReplaceContent(tx, old.Id, oldContent, content);
@@ -265,15 +294,48 @@ public static class DeltaRefresher
                             lang, lines, isGenerated, false);
                         store.InsertContent(tx, id, content);
                         added++;
-                        if (lang == "fs") AttributeAddedSource("fs", rel, id);
+                        if (lang == "fs")
+                        {
+                            AttributeAddedSource("fs", rel, id);
+                        }
                     }
-                    if (projectShapePath) projectDataDirty = true;
+                    if (projectShapePath)
+                    {
+                        projectDataDirty = true;
+                    }
                 }
             }
             if (projectDataDirty)
             {
                 log?.Invoke("Project files changed — rebuilding project graph ...");
                 RefreshProjectDataCore(store, workspaceRoot, tx, readWorkspaceFile, log);
+            }
+
+            if (preparedFSharp.ParsedFiles.Count > 0 || preparedFSharp.CoverageOnly.Count > 0)
+            {
+                Dictionary<string, (long Id, string Lang)> indexedFiles =
+                    store.FileIdPathLang(tx).ToDictionary(row => row.Path,
+                        row => (row.Id, row.Lang), WorkspacePaths.FileSystemPathComparer);
+                foreach ((string path, ParsedFSharpFile parsed) in preparedFSharp.ParsedFiles
+                             .OrderBy(entry => entry.Key, StringComparer.Ordinal))
+                {
+                    if (!indexedFiles.TryGetValue(path, out var indexedFile) ||
+                        indexedFile.Lang != "fs" ||
+                        !IsFSharpDeclarationFile(path))
+                    {
+                        continue;
+                    }
+                    store.DeleteSymbolsForFile(tx, indexedFile.Id);
+                    store.InsertSymbols(tx, indexedFile.Id, parsed.Symbols);
+                    store.ReplaceFSharpParseCoverage(tx, indexedFile.Id, parsed);
+                }
+                foreach ((string path, FSharpIndexCoverage coverage) in preparedFSharp.CoverageOnly
+                             .OrderBy(entry => entry.Key, StringComparer.Ordinal))
+                {
+                    if (!indexedFiles.TryGetValue(path, out var indexedFile) ||
+                        indexedFile.Lang != "fs" || !IsFSharpDeclarationFile(path)) continue;
+                    store.ReplaceFSharpParseCoverage(tx, indexedFile.Id, coverage);
+                }
             }
             if (added + changed + deleted > 0)
             {
@@ -299,6 +361,256 @@ public static class DeltaRefresher
 
         return new RefreshResult(changed, added, deleted, projectDataDirty, sw.Elapsed,
             refreshedAtUtc);
+    }
+
+    private sealed record FSharpProjectInput(
+        ParsedProject Project,
+        string Xml,
+        FSharpParsingContextSelection ContextSelection);
+
+    private sealed record PreparedFSharpReindex(
+        Dictionary<string, ParsedFSharpFile> ParsedFiles,
+        Dictionary<string, FSharpIndexCoverage> CoverageOnly)
+    {
+        internal static PreparedFSharpReindex Empty { get; } = new(
+            new(WorkspacePaths.FileSystemPathComparer),
+            new(WorkspacePaths.FileSystemPathComparer));
+    }
+
+    private static PreparedFSharpReindex PrepareFSharpReindex(
+        IndexStore store,
+        IReadOnlyCollection<string> candidates,
+        IReadOnlyDictionary<string, IndexStore.StoredFile> stored,
+        IReadOnlyDictionary<string, GitInfo.WorkspaceFileReadResult> capturedCandidates,
+        Action<string>? log)
+    {
+        var changedProjects = new HashSet<string>(WorkspacePaths.FileSystemPathComparer);
+        var changedSources = new HashSet<string>(WorkspacePaths.FileSystemPathComparer);
+        foreach (string path in candidates)
+        {
+            string language = LangOf(path);
+            if (language is not ("fs" or "fsproj")) continue;
+            if (!capturedCandidates.TryGetValue(path, out var read)) continue;
+            bool known = stored.TryGetValue(path, out IndexStore.StoredFile? old);
+            bool changed = read.Bytes is { } bytes
+                ? !known || unchecked((long)XxHash64.HashToUInt64(bytes)) != old!.Hash
+                : known && read.Disposition is
+                    GitInfo.WorkspaceFileReadDisposition.Missing or
+                    GitInfo.WorkspaceFileReadDisposition.DefinitelyNonRegular;
+            if (!changed) continue;
+            if (language == "fsproj") changedProjects.Add(path);
+            else if (IsFSharpDeclarationFile(path)) changedSources.Add(path);
+        }
+        if (changedProjects.Count == 0 && changedSources.Count == 0)
+            return PreparedFSharpReindex.Empty;
+
+        Dictionary<string, IndexStore.FSharpParsingProjectSnapshot> storedProjectSnapshots =
+            store.FSharpParsingProjects().ToDictionary(project => project.Path,
+                WorkspacePaths.FileSystemPathComparer);
+        var projectPaths = storedProjectSnapshots.Keys
+            .ToHashSet(WorkspacePaths.FileSystemPathComparer);
+        foreach (string projectPath in changedProjects)
+        {
+            if (capturedCandidates[projectPath].Bytes is null)
+                projectPaths.Remove(projectPath);
+            else
+                projectPaths.Add(projectPath);
+        }
+
+        var projectInputsByPath = new Dictionary<string, FSharpProjectInput>(
+            WorkspacePaths.FileSystemPathComparer);
+        FSharpProjectInput? ProjectInput(string projectPath)
+        {
+            if (projectInputsByPath.TryGetValue(projectPath, out var cached)) return cached;
+            byte[]? projectBytes = changedProjects.Contains(projectPath)
+                ? capturedCandidates[projectPath].Bytes
+                : storedProjectSnapshots.TryGetValue(projectPath, out var snapshot)
+                    ? Encoding.UTF8.GetBytes(snapshot.Xml)
+                    : null;
+            if (projectBytes is null) return null;
+            string xml = DecodeUtf8(projectBytes);
+            ParsedProject project = ProjectFileParser.ParseSnapshot(projectPath, projectBytes);
+            var input = new FSharpProjectInput(project, xml,
+                FSharpSyntaxIndexer.ParsingContextsForProject(
+                    project.RelPath, project.TargetFrameworks, xml));
+            projectInputsByPath[projectPath] = input;
+            return input;
+        }
+
+        var sourcePaths = stored.Values.Where(file =>
+                file.Lang == "fs" && IsFSharpDeclarationFile(file.Path))
+            .Select(file => file.Path)
+            .ToHashSet(WorkspacePaths.FileSystemPathComparer);
+        foreach (string sourcePath in changedSources)
+        {
+            if (capturedCandidates[sourcePath].Bytes is null)
+                sourcePaths.Remove(sourcePath);
+            else
+                sourcePaths.Add(sourcePath);
+        }
+
+        List<(string ProjectPath, string FilePath)> oldOwnership = store.FSharpOwnership();
+        var affectedPaths = new HashSet<string>(changedSources,
+            WorkspacePaths.FileSystemPathComparer);
+        foreach ((string projectPath, string filePath) in oldOwnership)
+        {
+            if (changedProjects.Contains(projectPath)) affectedPaths.Add(filePath);
+        }
+
+        ParsedProject[] changedProjectModels = changedProjects
+            .Select(ProjectInput).Where(input => input is not null)
+            .Select(input => input!.Project).ToArray();
+        Dictionary<string, List<ParsedProject>> changedProjectOwners =
+            CompileItemResolver.ResolveOwners(changedProjectModels, sourcePaths);
+        foreach ((string filePath, List<ParsedProject> owners) in changedProjectOwners)
+        {
+            if (owners.Count > 0) affectedPaths.Add(filePath);
+        }
+        var parsePaths = new HashSet<string>(affectedPaths,
+            WorkspacePaths.FileSystemPathComparer);
+
+        // A project whose options cannot be selected has unknowable linked-file ownership, so cold
+        // build conservatively applies that authority gap to every F# declaration file. Adding,
+        // deleting, or repairing such a project changes the global coverage set even when no known
+        // compile edge names a particular file. Refresh every F# declaration's coverage only on
+        // that rare transition; files whose parser-context set changes are reparsed, while the
+        // others retain their symbol rows. Ordinary valid project edits remain scoped to their
+        // old/new owned files.
+        bool globalFailureAuthorityChanged = changedProjects.Any(projectPath =>
+        {
+            FSharpParsingContextSelection? oldSelection =
+                storedProjectSnapshots.TryGetValue(projectPath, out var oldSnapshot)
+                    ? FSharpSyntaxIndexer.ParsingContextsForProject(
+                        oldSnapshot.Path, oldSnapshot.TargetFrameworks, oldSnapshot.Xml)
+                    : null;
+            FSharpParsingContextSelection? newSelection = ProjectInput(projectPath)?.ContextSelection;
+            return !StringComparer.Ordinal.Equals(
+                GlobalFailureFingerprint(oldSelection),
+                GlobalFailureFingerprint(newSelection));
+        });
+        if (globalFailureAuthorityChanged) affectedPaths.UnionWith(sourcePaths);
+
+        bool hasAddedSource = changedSources.Any(path => !stored.ContainsKey(path) &&
+            sourcePaths.Contains(path));
+        var neededProjectPaths = new HashSet<string>(changedProjects,
+            WorkspacePaths.FileSystemPathComparer);
+        foreach ((string projectPath, string filePath) in oldOwnership)
+        {
+            if (affectedPaths.Contains(filePath) && !changedProjects.Contains(projectPath))
+                neededProjectPaths.Add(projectPath);
+        }
+        foreach (var snapshot in storedProjectSnapshots.Values)
+        {
+            if (snapshot.LoadStatus.StartsWith("failed:", StringComparison.Ordinal))
+                neededProjectPaths.Add(snapshot.Path);
+        }
+        if (hasAddedSource) neededProjectPaths.UnionWith(projectPaths);
+        foreach (string projectPath in neededProjectPaths)
+            _ = ProjectInput(projectPath);
+
+        Dictionary<string, List<ParsedProject>> newOwners;
+        if (hasAddedSource)
+        {
+            newOwners = CompileItemResolver.ResolveOwners(
+                projectInputsByPath.Values.Select(input => input.Project).ToArray(),
+                sourcePaths);
+        }
+        else
+        {
+            newOwners = new Dictionary<string, List<ParsedProject>>(
+                WorkspacePaths.FileSystemPathComparer);
+            void AddOwner(string filePath, ParsedProject owner)
+            {
+                if (!newOwners.TryGetValue(filePath, out List<ParsedProject>? owners))
+                    newOwners[filePath] = owners = [];
+                if (!owners.Any(existing => WorkspacePaths.FileSystemPathComparer.Equals(
+                        existing.RelPath, owner.RelPath)))
+                    owners.Add(owner);
+            }
+            foreach ((string projectPath, string filePath) in oldOwnership)
+            {
+                if (!affectedPaths.Contains(filePath) || changedProjects.Contains(projectPath) ||
+                    !projectInputsByPath.TryGetValue(projectPath, out var input)) continue;
+                AddOwner(filePath, input.Project);
+            }
+            foreach ((string filePath, List<ParsedProject> owners) in changedProjectOwners)
+            {
+                foreach (ParsedProject owner in owners) AddOwner(filePath, owner);
+            }
+        }
+
+        List<FSharpProjectInput> projectInputs = projectInputsByPath.Values.ToList();
+        var inputsByProject = projectInputsByPath;
+        Dictionary<string, IndexStore.StoredFSharpParseCoverage> storedCoverage =
+            globalFailureAuthorityChanged
+                ? store.FSharpParseCoverageByPath()
+                : new(WorkspacePaths.FileSystemPathComparer);
+        var parsedFiles = new Dictionary<string, ParsedFSharpFile>(
+            WorkspacePaths.FileSystemPathComparer);
+        var coverageOnly = new Dictionary<string, FSharpIndexCoverage>(
+            WorkspacePaths.FileSystemPathComparer);
+        bool progressStarted = affectedPaths.Count > 0;
+        if (progressStarted)
+            log?.Invoke($"Preparing F# declaration reindex for {affectedPaths.Count} file(s) ...");
+        foreach (string path in affectedPaths.OrderBy(path => path, StringComparer.Ordinal))
+        {
+            if (!sourcePaths.Contains(path)) continue;
+            var selections = new List<FSharpParsingContextSelection>();
+            bool hasValidOwner = newOwners.TryGetValue(path, out List<ParsedProject>? owners) &&
+                                 owners.Count > 0;
+            if (hasValidOwner)
+            {
+                selections.AddRange(owners!.Select(owner =>
+                    inputsByProject[owner.RelPath].ContextSelection));
+            }
+            selections.AddRange(projectInputs
+                .Where(input => input.ContextSelection.FailedProjects > 0)
+                .Select(input => input.ContextSelection));
+            FSharpParsingContextSelection selection = selections.Count == 0
+                ? FSharpParsingContextSelection.Unowned
+                : FSharpSyntaxIndexer.CombineParsingContexts(selections.Distinct());
+
+            // A newly added/removed globally failed project contributes no parser contexts. For a
+            // file with an unchanged valid owner set, only its option-coverage counters change;
+            // retain the existing symbols and FCS failure count instead of reparsing identical
+            // contexts. Orphans and direct old/new-owner changes still require a real parse.
+            bool updateCoverageOnly = globalFailureAuthorityChanged &&
+                                      !parsePaths.Contains(path) && hasValidOwner;
+            if (updateCoverageOnly)
+            {
+                int failedContexts = storedCoverage.TryGetValue(path, out var oldCoverage)
+                    ? oldCoverage.FailedContexts
+                    : 0;
+                coverageOnly[path] = new FSharpIndexCoverage(
+                    selection.Contexts.Count,
+                    failedContexts,
+                    selection.ProjectCount,
+                    selection.FailedProjects,
+                    selection.PartialProjects,
+                    selection.PartialReasons);
+                continue;
+            }
+
+            string? content = changedSources.Contains(path)
+                ? capturedCandidates[path].Bytes is { } bytes ? DecodeUtf8(bytes) : null
+                : stored.TryGetValue(path, out IndexStore.StoredFile? storedFile)
+                    ? store.GetContentForWrite(storedFile.Id)
+                    : null;
+            if (content is null) continue;
+            parsedFiles[path] = FSharpSyntaxIndexer.Parse(path, content, selection);
+        }
+        if (progressStarted)
+            log?.Invoke($"Prepared F# declaration reindex: {parsedFiles.Count} parsed, " +
+                        $"{coverageOnly.Count} coverage-only file(s).");
+        return new PreparedFSharpReindex(parsedFiles, coverageOnly);
+
+        static string GlobalFailureFingerprint(FSharpParsingContextSelection? selection)
+        {
+            if (selection is null || selection.FailedProjects == 0) return "";
+            return string.Join('\u001f', selection.PartialReasons
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(reason => reason, StringComparer.Ordinal));
+        }
     }
 
     /// <summary>Same longest-dir-prefix map CompileItemResolver builds: non-legacy (SDK or failed-
@@ -451,6 +763,13 @@ public static class DeltaRefresher
                         || name.Equals("global.json", StringComparison.OrdinalIgnoreCase) => "config",
             _ => name.Equals("packages.config", StringComparison.OrdinalIgnoreCase) ? "config" : "other",
         };
+    }
+
+    private static bool IsFSharpDeclarationFile(string path)
+    {
+        string extension = Path.GetExtension(path);
+        return extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsPackagesConfig(string relPath) =>

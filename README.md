@@ -28,7 +28,7 @@ navigation questions in four layers, each labeled with how trustworthy it is:
 |---|---|---|
 | **Indexed text** (SQLite FTS5, C# + F# + Markdown + SQL) | `find_file`, `search_text`, `source_context`, `config_lookup`, `references` (candidates) | `indexed` |
 | **Syntax (C#)** (Roslyn parse, no compile; includes implicit/explicit conversion operators) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
-| **Syntax (F#)** (FCS parse, no type check) | `outline` for project-owned `.fs` / `.fsi` | `indexed` |
+| **Syntax (F#)** (FCS parse, no type check) | `search_symbol`; `outline` for project-owned `.fs` / `.fsi` | `indexed` |
 | **Semantic** (Roslyn for C#; bounded FCS type checks for F# Stage 2A) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at` and same-project `definition` | C# may be `exact`; bounded F# Stage 2A is `indexed` with explicit partial causes |
 
 Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`project_graph`,
@@ -38,9 +38,14 @@ never select projects or contribute build, ownership, dependency, or symbol-reso
 
 **F# support is real, and deliberately bounded.** Phoenix indexes `.fs`, `.fsi`, and `.fsx` text,
 parses `.fsproj` compile ownership and references, and preserves C#↔F# project edges. Compile-owned
-`.fs` / `.fsi` files get syntax-only `outline`s from a pinned FSharp.Compiler.Service adapter, plus
-position-based `symbol_at` and same-project `definition` through a bounded FCS type check. F# name
-search, references, implementations, callers/callees, and hierarchy stay **unsupported** rather than
+`.fs` / `.fsi` files get indexed declaration-name search and syntax-only `outline`s from a pinned
+FSharp.Compiler.Service adapter, plus position-based `symbol_at` and same-project `definition`
+through a bounded FCS type check. FCS syntax parse failures and unavailable/unevaluated project-option
+contexts are retained as index coverage evidence: `search_symbol` returns stable joined
+`partialReason` / `partialReasons` causes plus parse and project-file-context counts instead of
+treating missing rows as authoritative absence. Ordinary SDK/import limitations remain visible in
+`fsharpProjectOptionCoverage` as advisory evidence without making every search partial. F# references, implementations, callers/callees, and hierarchy stay
+**unsupported** rather than
 returning an empty or falsely exact answer. Phoenix never executes MSBuild targets or tasks: it
 evaluates a documented subset of project files (simple properties and conditions, `Choose`, literal workspace-local
 `.props`, and the nearest ancestor `Directory.Build.props`/`.targets`). Unsupported authority either
@@ -294,14 +299,20 @@ watcher, and lifecycle test projects under `tests/`.
 - Token-mode `search_text` grades at most 300 files after applying language/path/project/scope
   filters; clipped calls report `filesScanned`, `filesAtLeast`, and
   `partialReason:"candidate_file_cap"` rather than presenting bounded counts as complete.
-- F# `outline` is syntax-only and limited to compile-owned `.fs` / `.fsi`; `.fsx` is text-only.
+- F# `search_symbol` persists syntax declarations from `.fs` / `.fsi` across indexed owner/TFM
+  parse contexts; paired signature/implementation files remain separate deterministic hits, linked
+  multi-owner files remain one physical declaration set, orphaned files are labeled, and failed
+  parses or unavailable/unevaluated project-option contexts are disclosed as partial coverage;
+  ordinary SDK/import limitations remain advisory structured coverage. `.fsx` stays text-only: script-only scopes are
+  refused, while mixed scopes explicitly report skipped scripts. F# `outline` is syntax-only and
+  limited to compile-owned `.fs` / `.fsi`.
   F# semantics are position-only (`symbol_at`, `definition`) within one physical project and target
   framework, over a documented MSBuild-evaluation subset. Unsupported authority either fails closed
   with a stable cause or continues only through the explicitly partial standard-SDK/toolchain and
-  host-selected `FSharp.Core` boundaries described above. F# name search, references,
-  implementations, callers/callees, and hierarchy are not supported. Unscoped indexed search stays
-  language-neutral; an F#-only `search_symbol` scope discloses `unsupported_language`, and a mixed
-  scope marks its C# results partial.
+  host-selected `FSharp.Core` boundaries described above. F# references, implementations,
+  callers/callees, and hierarchy are not supported. Unscoped and explicit F# `search_symbol`
+  scopes query the shared syntax index; results are partial when the scope contains a text-only
+  language or when any F# parse context or actionable project-option context is incomplete.
 - Indexed `references` are whole-identifier text candidates; use `mode="semantic"` (or the
   default auto-upgrade) for compiler-exact results. When the caller-selected `maxFiles` boundary
   is reached, the response reports candidate-file coverage, `totalIsLowerBound:true`, and

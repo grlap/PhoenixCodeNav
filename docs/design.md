@@ -16,7 +16,7 @@ PhoenixCodeNav.sln
 │   │                          #   SemanticService(+.Graph) (definition/references/impls/callers/callees/hierarchy),
 │   │                          #   ReferenceAssemblyLocator
 │   └── WorkspacePaths.cs      # path-containment + reparse-point safety
-├── src/CodeNav.FSharp/        # isolated, pinned FCS syntax-outline adapter
+├── src/CodeNav.FSharp/        # isolated, pinned FCS syntax-declaration/semantic adapter
 ├── src/CodeNav.Mcp/           # the server, published as PhoenixCodeNav.Mcp.exe
 │   ├── Program.cs             # host + stdio transport; starts indexing in the background
 │   ├── NavigationTools*.cs             # 27 MCP tools across partial-class files
@@ -54,8 +54,16 @@ for code identifiers.
    *syntax-only* parsing (no compilation) extracts namespaces/types/members with spans,
    signatures, accessibility, partial flags, and generated/test classification. This is the
    token-saver: `outline` before any large-file read, then `source_context` for the spans.
-3. **Syntax (F#)** — `outline` for compile-owned `.fs` and `.fsi`. A pinned, isolated
-    FSharp.Compiler.Service adapter parses on demand without type checking; `.fsx` stays text-only.
+3. **Syntax (F#)** — `search_symbol` over persisted `.fs` / `.fsi` declaration rows and `outline`
+    for compile-owned `.fs` and `.fsi`. A pinned, isolated FSharp.Compiler.Service adapter parses
+    without type checking; `.fsx` stays text-only. Stored symbol search unions every available
+    owner/TFM parser context and persists both FCS parse failures and project-option
+    unavailable/partial causes, so a hit or miss remains explicitly partial whenever actionable
+    context authority is incomplete. Ordinary SDK/import limitations remain advisory structured
+    coverage rather than making every search partial. Cold build and delta refresh use the same
+    context-selection model. Ordinary project changes parse only their old/new owned F# files
+    before the SQLite persistence phase; a malformed-project authority transition refreshes global
+    coverage, but reparses only files whose effective parser-context set changes.
     An exact same-directory legacy `Project.fsproj` + dual-target `Project.Net.fsproj` ownership
     pair selects the single-target legacy parse context and discloses up to 64 project/TFM parse
     contexts with complete coverage counts. A parse context controls only F# `#if` symbols and
@@ -112,8 +120,18 @@ returns a byte-budgeted `pathSuggestions` object with `paths`, exact `total`, an
 `truncated` state. The original result remains a not-found error or empty list; suggestions are
 never substituted, never read from the mutable filesystem, and never widen into Git history.
 
-F# `.fs/.fsi/.fsx` content and `.fsproj` ownership/reference graphs are indexed. The FCS semantic
-adapter consumes one immutable source/project snapshot captured from a pinned index epoch, copies
+F# `.fs/.fsi/.fsx` content and `.fsproj` ownership/reference graphs are indexed. The syntax index
+unions `.fs/.fsi` declaration rows deterministically across every indexed owning project and
+declared target-framework parse context. Paired signature/implementation declarations remain
+separate rows, linked multi-owner files are stored once, generic arity is retained where syntax
+exposes it, and source or project-option refreshes replace affected rows transactionally. Search
+filters, generated-file policy, namespace scoping, ownership/orphan disclosure, paging, and indexed
+confidence use the same shared contract as C#. Per-file FCS parse coverage records total and failed
+contexts; any affected search scope reports `fsharp_parse_failed`, including partial-context recovery
+where successful declarations remain searchable. `.fsx` remains text-only, so script-only scopes fail
+closed and mixed scopes disclose the skipped script files.
+
+The FCS semantic adapter consumes one immutable source/project snapshot captured from a pinned index epoch, copies
 workspace `HintPath` assemblies through verified open handles into request-private snapshots, releases
 SQLite before type checking, and bounds source count/bytes, references, concurrency, cache size,
 deadline, diagnostics, contexts, and response bytes. Stage 2A deliberately accepts only literal
@@ -142,8 +160,8 @@ verified after the check; declarations remain same-project only. The host's targ
 `FSharp.Core` fallback is always disclosed as partial because it was not selected by evaluated
 project authority. Package/project-reference closure and the
 remaining semantic operations still disclose stable unsupported boundaries. Generic indexed search
-remains language-neutral. For the C# `search_symbol` surface, an explicit F#-only path scope is
-rejected and a mixed scope returns C# results with `unsupported_language_files_skipped`. This keeps
+is language-neutral for C# and F# `.fs/.fsi`: an `.fsx`-only or other text-only scope is refused,
+while a mixed scope reports `unsupported_language_files_skipped`. This keeps
 cross-language graph holes visible without fabricating semantics for unsupported F# project shapes.
 Exact-name type declarations receive a soft ordering preference over same-named members, but both
 remain pageable results. A first-page empty result probes the same name/match semantics without
@@ -249,7 +267,8 @@ discovery is capped at 256 matching names and five seconds before any handles ar
 names the exceeded bound and observed candidate count separately from an unsafe-link-set refusal. A
 live claimed stage denies successor ownership, foreign publications are retained, and unrelated
 names are retained.
-F# outlines are parsed on demand and are not stored.
+F# outline response trees are parsed on demand; the normalized declaration rows used by
+`search_symbol` are stored in the shared syntax index.
 Solution files are
 optional editor inventory: they never select projects or provide build, dependency, ownership,
 or symbol-resolution authority. A cold build of a

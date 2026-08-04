@@ -418,8 +418,8 @@ newCompilation.ReplaceSyntaxTree(...)
     "pendingChanges": 0,
     "confidence": "exact",
     "navigationLayer": "semantic",
-    "build": "0.12.51+9f3c1e2b4a71",
-    "indexSchema": "24",
+    "build": "0.12.52+9f3c1e2b4a71",
+    "indexSchema": "26",
     "indexMode": "writer"
   }
 }</code></pre>
@@ -650,7 +650,7 @@ args = [
 
         <div class="faq" data-reveal>
           <h3>Good questions before you start</h3>
-          <details><summary><span>Does Phoenix support every language?</span><i aria-hidden="true">+</i></summary><p>No. PhoenixCodeNav is C#-first, with deliberately bounded F# support: F# source is indexed for text search, compile-owned <code>.fs</code>/<code>.fsi</code> files get syntax outlines, and a bounded same-project semantic layer answers position lookups. Markdown and SQL are indexed for text navigation only. Everything beyond those bounds is labeled unsupported instead of returning a misleading empty answer.</p></details>
+          <details><summary><span>Does Phoenix support every language?</span><i aria-hidden="true">+</i></summary><p>No. PhoenixCodeNav is C#-first, with deliberately bounded F# support: <code>.fs</code>/<code>.fsi</code> declarations support indexed symbol-name search, compile-owned files get syntax outlines, and a bounded same-project semantic layer answers position lookups and definitions. Markdown and SQL are indexed for text navigation only. Everything beyond those bounds is labeled unsupported instead of returning a misleading empty answer.</p></details>
           <details><summary><span>Is every answer compiler-exact?</span><i aria-hidden="true">+</i></summary><p>No—and that honesty is a feature. Semantic answers are exact when the required Roslyn cluster and references load. Otherwise Phoenix labels indexed, heuristic, partial, or stale coverage so the agent can verify or widen deliberately.</p></details>
           <details><summary><span>Does it require MSBuild to load my solution?</span><i aria-hidden="true">+</i></summary><p>No. Phoenix builds lazy Roslyn workspaces directly from parsed project facts. Building Phoenix from source requires the .NET 10 SDK; exact legacy semantics may also need .NET Framework reference assemblies.</p></details>
           <details><summary><span>Will it edit my repository?</span><i aria-hidden="true">+</i></summary><p>It does not edit tracked source files, apply code changes, or change Git refs. It writes local indexes under <code>.codenav/</code>, including inside an existing worktree you explicitly ask it to index; those files should be ignored by Git.</p></details>

@@ -208,7 +208,8 @@ public sealed partial class NavigationTools
         int arity)
     {
         List<SymbolHit> hits = queries.SearchSymbols(
-            name, "exact", kinds, 20, includeGenerated: true, arity: arity);
+            name, "exact", kinds, 20, includeGenerated: true, arity: arity,
+            language: "cs");
         if (hits.Count == 0) return null;
 
         var orphaned = queries.OrphanedPaths(

@@ -220,6 +220,14 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.Contains("definition", semantic.GetProperty("fsharpIndexedTools")
             .EnumerateArray().Select(tool => tool.GetString()));
+        Assert.DoesNotContain("search_symbol", semantic.GetProperty("fsharpIndexedTools")
+            .EnumerateArray().Select(tool => tool.GetString()));
+        Assert.Contains("search_symbol", semantic.GetProperty("fsharpSyntaxIndexedTools")
+            .EnumerateArray().Select(tool => tool.GetString()));
+        Assert.Contains("compiler-checked", semantic.GetProperty("note").GetString());
+        Assert.Contains("syntax-indexed", semantic.GetProperty("fsharpSyntaxNote").GetString());
+        Assert.Contains("SDK/import limits advisory",
+            semantic.GetProperty("fsharpSyntaxNote").GetString());
     }
 
     // Deploy-verifiability (field feedback: an agent could not confirm a deploy because the version
@@ -263,6 +271,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("generic-arity-resolution", ids);
         Assert.Contains("friend-assembly-semantics", ids);
         Assert.Contains("fsharp-outline-parse-context-budget", ids);
+        Assert.Contains("fsharp-indexed-symbol-name-search", ids);
         Assert.Contains("fsharp-symbol-at-semantic", ids);
         Assert.Contains("fsharp-definition-same-project", ids);
         Assert.Contains("fsharp-type-check-context-selection", ids);
@@ -328,6 +337,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(1, idList.Count(id => id == "indexed-path-suggestions"));
         Assert.Equal(1, idList.Count(id => id == "source-context-range-alias"));
         Assert.Equal(1, idList.Count(id => id == "markdown-sql-text-indexing"));
+        Assert.Equal(1, idList.Count(id => id == "fsharp-indexed-symbol-name-search"));
         Assert.Equal(1, idList.Count(id => id == "csharp-symbol-free-outline"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-operator-indexing"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-semantic-handles"));
@@ -360,6 +370,20 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(
             1,
             idList.Count(id => id == "implementations-semantic-retry-guidance"));
+        string fsharpSymbolSearch = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-indexed-symbol-name-search")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.52", fsharpSymbolSearch);
+        Assert.Contains("schema v26", fsharpSymbolSearch);
+        Assert.Contains("all available indexed owner/TFM parse contexts", fsharpSymbolSearch);
+        Assert.Contains("project-option delta convergence", fsharpSymbolSearch);
+        Assert.Contains("parse and project-option coverage", fsharpSymbolSearch);
+        Assert.Contains("actionably incomplete contexts are partial", fsharpSymbolSearch);
+        Assert.Contains("SDK/import limits remain advisory", fsharpSymbolSearch);
+        Assert.Contains(".fsx-only scopes fail closed", fsharpSymbolSearch);
         string portalReadOnly = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

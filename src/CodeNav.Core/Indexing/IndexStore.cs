@@ -244,6 +244,22 @@ public sealed class IndexStore : IDisposable
               stale INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE fsharp_parse_coverage(
+              file_id INTEGER PRIMARY KEY,
+              total_contexts INTEGER NOT NULL CHECK(total_contexts >= 0),
+              failed_contexts INTEGER NOT NULL
+                CHECK(failed_contexts >= 0 AND failed_contexts <= total_contexts),
+              option_project_count INTEGER NOT NULL DEFAULT 0
+                CHECK(option_project_count >= 0),
+              option_failed_projects INTEGER NOT NULL DEFAULT 0
+                CHECK(option_failed_projects >= 0 AND
+                      option_failed_projects <= option_project_count),
+              option_partial_projects INTEGER NOT NULL DEFAULT 0
+                CHECK(option_partial_projects >= 0 AND
+                      option_partial_projects <= option_project_count),
+              option_partial_reasons TEXT NOT NULL DEFAULT ''
+            );
+
             CREATE TABLE file_contents(
               file_id INTEGER PRIMARY KEY,
               content TEXT NOT NULL
@@ -1087,6 +1103,12 @@ public sealed class IndexStore : IDisposable
     // ================================================================ delta refresh API
 
     public sealed record StoredFile(long Id, string Path, long Hash, string Lang);
+    public sealed record FSharpParsingProjectSnapshot(
+        string Path,
+        string TargetFrameworks,
+        string Xml,
+        string LoadStatus);
+    public sealed record StoredFSharpParseCoverage(string Path, int FailedContexts);
 
     public Dictionary<string, StoredFile> AllFilesByPath(SqliteTransaction? tx = null)
     {
@@ -1103,12 +1125,74 @@ public sealed class IndexStore : IDisposable
         return map;
     }
 
-    public string? GetContentForWrite(long fileId)
+    public string? GetContentForWrite(long fileId, SqliteTransaction? tx = null)
     {
         using var cmd = _write.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = "SELECT content FROM file_contents WHERE file_id = $id";
         cmd.Parameters.AddWithValue("$id", fileId);
         return cmd.ExecuteScalar() as string;
+    }
+
+    public List<FSharpParsingProjectSnapshot> FSharpParsingProjects(
+        SqliteTransaction? tx = null)
+    {
+        var projects = new List<FSharpParsingProjectSnapshot>();
+        using var cmd = _write.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = """
+            SELECT p.path, p.tfms, content.content, p.load_status
+            FROM projects p
+            JOIN files project_file ON project_file.path = p.path
+            JOIN file_contents content ON content.file_id = project_file.id
+            WHERE p.lang = 'fs'
+            ORDER BY p.path
+            """;
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            projects.Add(new(reader.GetString(0), reader.GetString(1),
+                reader.GetString(2), reader.GetString(3)));
+        }
+        return projects;
+    }
+
+    public Dictionary<string, StoredFSharpParseCoverage> FSharpParseCoverageByPath()
+    {
+        var coverage = new Dictionary<string, StoredFSharpParseCoverage>(
+            WorkspacePaths.FileSystemPathComparer);
+        using var cmd = _write.CreateCommand();
+        cmd.CommandText = """
+            SELECT f.path, coverage.failed_contexts
+            FROM fsharp_parse_coverage coverage
+            JOIN files f ON f.id = coverage.file_id
+            WHERE f.lang = 'fs'
+            """;
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            string path = reader.GetString(0);
+            coverage[path] = new(path, reader.GetInt32(1));
+        }
+        return coverage;
+    }
+
+    public List<(string ProjectPath, string FilePath)> FSharpOwnership()
+    {
+        var ownership = new List<(string, string)>();
+        using var cmd = _write.CreateCommand();
+        cmd.CommandText = """
+            SELECT project.path, source.path
+            FROM compile_items item
+            JOIN projects project ON project.id = item.project_id
+            JOIN files source ON source.id = item.file_id
+            WHERE project.lang = 'fs' AND source.lang = 'fs'
+            ORDER BY project.path, source.path
+            """;
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            ownership.Add((reader.GetString(0), reader.GetString(1)));
+        return ownership;
     }
 
     public void UpdateFileRow(SqliteTransaction tx, long fileId, long size, long mtimeTicks, ulong hash,
@@ -1138,6 +1222,53 @@ public sealed class IndexStore : IDisposable
         ExecTx(tx, "DELETE FROM symbols WHERE file_id=$id", ("$id", fileId));
     }
 
+    public void ReplaceFSharpParseCoverage(SqliteTransaction tx, long fileId,
+        ParsedFSharpFile parsed)
+        => ReplaceFSharpParseCoverage(tx, fileId, parsed.Coverage);
+
+    internal void ReplaceFSharpParseCoverage(SqliteTransaction tx, long fileId,
+        FSharpIndexCoverage coverage)
+    {
+        bool incomplete = coverage.FailedParseContextCount > 0 ||
+                          coverage.FailedOptionProjectCount > 0 ||
+                          coverage.PartialOptionProjectCount > 0;
+        if (!incomplete)
+        {
+            ExecTx(tx, "DELETE FROM fsharp_parse_coverage WHERE file_id=$id",
+                ("$id", fileId));
+            return;
+        }
+        if (coverage.ParseContextCount < 0 || coverage.FailedParseContextCount < 0 ||
+            coverage.FailedParseContextCount > coverage.ParseContextCount ||
+            coverage.OptionProjectCount < 0 || coverage.FailedOptionProjectCount < 0 ||
+            coverage.PartialOptionProjectCount < 0 ||
+            coverage.FailedOptionProjectCount > coverage.OptionProjectCount ||
+            coverage.PartialOptionProjectCount > coverage.OptionProjectCount)
+            throw new ArgumentOutOfRangeException(nameof(coverage));
+        string reasons = string.Join(';', coverage.OptionPartialReasons
+            .Distinct(StringComparer.Ordinal).OrderBy(reason => reason, StringComparer.Ordinal));
+        ExecTx(tx, """
+            INSERT INTO fsharp_parse_coverage(
+              file_id, total_contexts, failed_contexts,
+              option_project_count, option_failed_projects,
+              option_partial_projects, option_partial_reasons)
+            VALUES($id, $total, $failed, $projects, $optionFailed, $optionPartial, $reasons)
+            ON CONFLICT(file_id) DO UPDATE SET
+              total_contexts=excluded.total_contexts,
+              failed_contexts=excluded.failed_contexts,
+              option_project_count=excluded.option_project_count,
+              option_failed_projects=excluded.option_failed_projects,
+              option_partial_projects=excluded.option_partial_projects,
+              option_partial_reasons=excluded.option_partial_reasons
+            """,
+            ("$id", fileId), ("$total", coverage.ParseContextCount),
+            ("$failed", coverage.FailedParseContextCount),
+            ("$projects", coverage.OptionProjectCount),
+            ("$optionFailed", coverage.FailedOptionProjectCount),
+            ("$optionPartial", coverage.PartialOptionProjectCount),
+            ("$reasons", reasons));
+    }
+
     public void DeleteFileCascade(SqliteTransaction tx, long fileId, string? oldContent)
     {
         if (oldContent is not null)
@@ -1146,6 +1277,7 @@ public sealed class IndexStore : IDisposable
                 ("$id", fileId), ("$old", oldContent));
         }
         ExecTx(tx, "DELETE FROM file_contents WHERE file_id=$id", ("$id", fileId));
+        ExecTx(tx, "DELETE FROM fsharp_parse_coverage WHERE file_id=$id", ("$id", fileId));
         DeleteSymbolsForFile(tx, fileId);
         ExecTx(tx, "DELETE FROM compile_items WHERE file_id=$id", ("$id", fileId));
         ExecTx(tx, "DELETE FROM files WHERE id=$id", ("$id", fileId));
@@ -1159,9 +1291,12 @@ public sealed class IndexStore : IDisposable
         }
     }
 
+    internal long FileIdPathLangExecutionCountForTest { get; private set; }
+
     public List<(long Id, string Path, string Lang)> FileIdPathLang(
         SqliteTransaction? tx = null)
     {
+        FileIdPathLangExecutionCountForTest++;
         var list = new List<(long, string, string)>();
         using var cmd = _write.CreateCommand();
         cmd.Transaction = tx;

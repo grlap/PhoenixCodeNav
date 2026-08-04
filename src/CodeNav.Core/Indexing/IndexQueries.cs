@@ -19,7 +19,8 @@ public sealed record SymbolHit(
 public static class IndexedSymbolKinds
 {
     public static IReadOnlyList<string> TypeDeclarations { get; } = Array.AsReadOnly(
-        new[] { "class", "interface", "struct", "record", "record_struct", "enum", "delegate" });
+        new[] { "class", "interface", "struct", "record", "record_struct", "enum", "delegate",
+            "union", "type", "exception" });
 
     internal static string TypeDeclarationsSql { get; } = string.Join(
         ',',
@@ -28,6 +29,23 @@ public static class IndexedSymbolKinds
 
 public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated,
     string Language = "cs");
+
+public sealed record FSharpParseCoverage(
+    int FailedFiles,
+    int PartialFailureFiles,
+    int TotalFailureFiles,
+    int FailedContexts,
+    int TotalContexts,
+    int ProjectOptionAffectedFiles,
+    int OptionProjectCount,
+    int FailedOptionProjects,
+    int PartialOptionProjects,
+    IReadOnlyList<string> OptionPartialReasons)
+{
+    public bool IsIncomplete => FailedFiles > 0 || FailedOptionProjects > 0 ||
+        OptionPartialReasons.Any(reason =>
+            !reason.Equals("fsharp_project_options_imported", StringComparison.Ordinal));
+}
 
 public sealed record PathSuggestionResult(IReadOnlyList<string> Paths, int Total);
 
@@ -461,9 +479,72 @@ public sealed partial class IndexQueries : IDisposable
         if (!includeGenerated) where.Append(" AND f.is_generated = 0");
         AppendPathFilter(where, args, pathGlob, excludePaths);
         return Query(
-            $"SELECT DISTINCT f.lang FROM files f {where} ORDER BY f.lang",
+            $"""
+            SELECT DISTINCT CASE
+              WHEN f.lang = 'fs' AND f.path LIKE '%.fsx' THEN 'fsx'
+              ELSE f.lang
+            END AS scope_lang
+            FROM files f {where}
+            ORDER BY scope_lang
+            """,
             reader => reader.GetString(0),
             args.ToArray());
+    }
+
+    /// <summary>Aggregated FCS syntax-parse gaps inside the same file scope used by symbol search.
+    /// Only affected files contribute context counts, so a caller can distinguish partial-context
+    /// recovery from files whose every authoritative parse context failed.</summary>
+    public FSharpParseCoverage FSharpParseCoverageForScope(string? pathGlob,
+        IReadOnlyList<string>? excludePaths = null, bool includeGenerated = false)
+    {
+        var args = new List<(string, object)>();
+        var where = new System.Text.StringBuilder("WHERE (coverage.failed_contexts > 0 OR " +
+            "coverage.option_failed_projects > 0 OR coverage.option_partial_projects > 0)");
+        if (!includeGenerated) where.Append(" AND f.is_generated = 0");
+        AppendPathFilter(where, args, pathGlob, excludePaths);
+        var aggregate = Query(
+            $"""
+            SELECT
+              COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 THEN 1 ELSE 0 END), 0),
+              COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 AND
+                                     coverage.failed_contexts < coverage.total_contexts
+                                THEN 1 ELSE 0 END), 0),
+              COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 AND
+                                     coverage.failed_contexts = coverage.total_contexts
+                                THEN 1 ELSE 0 END), 0),
+              COALESCE(SUM(coverage.failed_contexts), 0),
+              COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0
+                                THEN coverage.total_contexts ELSE 0 END), 0),
+              COALESCE(SUM(CASE WHEN coverage.option_failed_projects > 0 OR
+                                     coverage.option_partial_projects > 0
+                                THEN 1 ELSE 0 END), 0),
+              COALESCE(SUM(coverage.option_project_count), 0),
+              COALESCE(SUM(coverage.option_failed_projects), 0),
+              COALESCE(SUM(coverage.option_partial_projects), 0),
+              COALESCE(GROUP_CONCAT(DISTINCT
+                  NULLIF(coverage.option_partial_reasons, '')), '')
+            FROM fsharp_parse_coverage coverage
+            JOIN files f ON f.id = coverage.file_id
+            {where}
+            """,
+            reader => (
+                Coverage: new FSharpParseCoverage(
+                    reader.GetInt32(0),
+                    reader.GetInt32(1),
+                    reader.GetInt32(2),
+                    reader.GetInt32(3),
+                    reader.GetInt32(4),
+                    reader.GetInt32(5),
+                    reader.GetInt32(6),
+                    reader.GetInt32(7),
+                    reader.GetInt32(8),
+                    []),
+                Reasons: reader.GetString(9)), args.ToArray()).Single();
+        var optionReasons = aggregate.Reasons.Split([';', ','],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal).OrderBy(reason => reason, StringComparer.Ordinal)
+            .ToArray();
+        return aggregate.Coverage with { OptionPartialReasons = optionReasons };
     }
 
     // ---------------------------------------------------------------- search_text
@@ -694,7 +775,7 @@ public sealed partial class IndexQueries : IDisposable
     public List<SymbolHit> SearchSymbols(string query, string mode, IReadOnlyList<string>? kinds, int limit,
         bool includeGenerated = false, int offset = 0,
         string? pathGlob = null, IReadOnlyList<string>? excludePaths = null, string? ns = null,
-        int? arity = null)
+        int? arity = null, string? language = null)
     {
         string esc = EscapeLike(query);
         string pattern = mode switch
@@ -712,6 +793,11 @@ public sealed partial class IndexQueries : IDisposable
         string kindFilter = KindFilter(kinds);
         if (kindFilter.Length > 0) where.Append(' ').Append(kindFilter);
         if (!includeGenerated) where.Append(" AND f.is_generated = 0");
+        if (!string.IsNullOrEmpty(language))
+        {
+            where.Append(" AND f.lang = $language");
+            args.Add(("$language", language));
+        }
         if (arity is { } requestedArity)
         {
             where.Append(" AND s.arity = $arity");
@@ -2625,7 +2711,8 @@ public sealed partial class IndexQueries : IDisposable
         }
 
         // 2. {Name}Tests naming convention.
-        foreach (var hit in SearchSymbols(symbolName + "Tests", "exact", new[] { "class" }, 10, includeGenerated: false))
+        foreach (var hit in SearchSymbols(symbolName + "Tests", "exact", new[] { "class" },
+                     10, includeGenerated: false, language: "cs"))
         {
             foreach (var owner in ProjectsContaining(hit.FilePath).Where(p => p.IsTest))
             {

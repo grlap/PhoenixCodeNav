@@ -1120,6 +1120,9 @@ public partial class FSharpSemanticStage2Tests
                 """);
 
             using var fixture = Fixture.Create(root);
+            int semanticSnapshotCount = 0;
+            fixture.Semantic.FSharpSemanticSnapshotCapturedForTest = () =>
+                Interlocked.Increment(ref semanticSnapshotCount);
             string raw = CallSemantic(() => fixture.Tools.SymbolAt(
                 "Core/Use.fs", 4, 27, timeoutMs: 60_000));
             JsonElement response = Parse(raw);
@@ -1127,13 +1130,12 @@ public partial class FSharpSemanticStage2Tests
                         found.GetBoolean(), raw);
             Assert.Equal("target",
                 response.GetProperty("symbol").GetProperty("name").GetString());
-
-            string definitionRaw = CallSemantic(() => fixture.Tools.Definition(
-                path: "Core/Use.fs", line: 4, column: 27, mode: "semantic",
-                timeoutMs: 60_000));
-            JsonElement definition = Parse(definitionRaw);
-            Assert.Contains(definition.GetProperty("declarations").EnumerateArray(), site =>
+            Assert.Contains(response.GetProperty("declarations").EnumerateArray(), site =>
                 site.GetProperty("path").GetString() == "Core/Core.fs");
+            // SymbolAt already carries the FCS declaration evidence. Re-querying through
+            // Definition doubled this regression's exposure to the semantic deadline under
+            // full-suite CPU contention without proving another project-evaluation property.
+            Assert.Equal(1, Volatile.Read(ref semanticSnapshotCount));
         }
         finally
         {
