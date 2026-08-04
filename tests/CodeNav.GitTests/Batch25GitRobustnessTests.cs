@@ -193,8 +193,8 @@ public class Batch25GitRobustnessTests
             string firstCommit = Assert.IsType<string>(GitInfo.HeadCommit(root));
 
             bool firstCommitRecorded = WaitUntil(() => string.Equals(
-                    m.Health().IndexedCommit, firstCommit, StringComparison.OrdinalIgnoreCase)
-                    && m.Health().IndexedCommit is not null, 60000); // n7ly: 20s starved under suite load
+                    m.Health().IndexedCommit, firstCommit, StringComparison.OrdinalIgnoreCase),
+                60000); // n7ly: 20s starved under suite load
             if (!firstCommitRecorded)
             {
                 // Review (n7ly): message built LAZILY and the log snapshotted UNDER ITS LOCK — the

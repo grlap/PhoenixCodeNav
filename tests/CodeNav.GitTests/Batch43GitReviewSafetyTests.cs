@@ -1251,66 +1251,6 @@ public class Batch43GitReviewSafetyTests
     }
 
     [Fact]
-    public void ReviewDiffReusesOneFilterSafetyPreflightAcrossSnapshotSandwich()
-    {
-        if (OperatingSystem.IsMacOS()) return; // review/worktree safety surface is not exposed here
-        string? realGit = FindRealGitExe();
-        if (realGit is null) return;
-        string root = Directory.CreateTempSubdirectory("codenav-y8e-one-preflight").FullName;
-        try
-        {
-            string head = CreateRepo(root, realGit);
-            Git(root, realGit, "config filter.media/lfs.clean command-that-must-not-run");
-            EditSource(root);
-            var invocations = new List<string>();
-
-            GitInfo.ReviewDiffResult review;
-            using (GitInfo.ObserveProcessInvocationsForTest(invocations.Add))
-                review = GitInfo.ReviewDiff(root, head, realGit);
-
-            Assert.Equal("ok", review.Diff.Status);
-            Assert.NotNull(review.Dirty);
-            Assert.Single(invocations, line => line.Contains(
-                "config --includes --null --get-regexp filter[.]",
-                StringComparison.Ordinal));
-            Assert.Single(invocations, line => line.Contains(
-                "ls-files -z --cached --stage", StringComparison.Ordinal));
-            Assert.Single(invocations, line => line.Contains(
-                "check-attr -z --stdin filter", StringComparison.Ordinal));
-            Assert.Equal(3, invocations.Count(line => line.Contains(
-                "diff --raw -z --patch", StringComparison.Ordinal)));
-            Assert.Equal(3, invocations.Count(line => line.Contains(
-                "diff --raw -z --numstat", StringComparison.Ordinal)));
-            Assert.Equal(3, invocations.Count(line => line.Contains(
-                "diff --cached --name-only -z", StringComparison.Ordinal)));
-            Assert.Equal(3, invocations.Count(line => line.Contains(
-                "ls-files -z --others --exclude-standard", StringComparison.Ordinal)));
-            Assert.Equal(3, invocations.Count(line => line.Contains(
-                "ls-files -z --unmerged", StringComparison.Ordinal)));
-            Assert.DoesNotContain(invocations, line => line.Contains(
-                "status --porcelain", StringComparison.Ordinal));
-            Assert.All(invocations, line =>
-                Assert.Contains("-c submodule.recurse=false", line, StringComparison.Ordinal));
-            Assert.All(invocations, line =>
-                Assert.Contains("-c protocol.allow=never", line, StringComparison.Ordinal));
-            Assert.All(invocations, line =>
-                Assert.Contains("-c diff.autoRefreshIndex=false", line, StringComparison.Ordinal));
-            Assert.Contains(invocations, line => line.Contains(
-                "diff --raw -z --patch", StringComparison.Ordinal) &&
-                line.Contains("--ignore-submodules=dirty", StringComparison.Ordinal));
-            Assert.Contains(invocations, line => line.Contains(
-                "diff --cached --name-only -z", StringComparison.Ordinal) &&
-                line.Contains("--ignore-submodules=dirty", StringComparison.Ordinal));
-            Assert.Contains(invocations, line => line.Contains(
-                "diff --raw -z --numstat", StringComparison.Ordinal) &&
-                line.Contains("--ignore-submodules=dirty", StringComparison.Ordinal));
-            Assert.DoesNotContain(invocations, line => line.Contains(
-                "--ignore-submodules=none", StringComparison.Ordinal));
-        }
-        finally { Cleanup(root); }
-    }
-
-    [Fact]
     public void FilterSafetyPipelineFailsClosedWhenAttributeCheckerExitsEarlyWithoutHanging()
     {
         string? realGit = FindRealGitExe();

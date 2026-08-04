@@ -2271,20 +2271,23 @@ public static class GitInfo
     private static GitRepositoryLayout? ResolveGitRepositoryLayout(string workspaceRoot,
         string gitExe, IReadOnlyDictionary<string, string?> environment)
     {
+        // Git 2.29 does not recognize --path-format=absolute and echoes it as ordinary output.
+        // ResolveAbsoluteGitPath already makes Git's relative metadata paths absolute, so the
+        // older portable forms preserve the same containment checks without a version probe.
         string? gitDir = ResolveAbsoluteGitPath(workspaceRoot, gitExe,
             "rev-parse --absolute-git-dir", environment);
         string? commonDir = ResolveAbsoluteGitPath(workspaceRoot, gitExe,
-            "rev-parse --path-format=absolute --git-common-dir", environment);
+            "rev-parse --git-common-dir", environment);
         string? objects = ResolveAbsoluteGitPath(workspaceRoot, gitExe,
-            "rev-parse --path-format=absolute --git-path objects", environment);
+            "rev-parse --git-path objects", environment);
         string? index = ResolveAbsoluteGitPath(workspaceRoot, gitExe,
-            "rev-parse --path-format=absolute --git-path index", environment,
+            "rev-parse --git-path index", environment,
             requireExisting: false);
         string? sparse = ResolveAbsoluteGitPath(workspaceRoot, gitExe,
-            "rev-parse --path-format=absolute --git-path info/sparse-checkout", environment,
+            "rev-parse --git-path info/sparse-checkout", environment,
             requireExisting: false);
         string? topLevel = ResolveAbsoluteGitPath(workspaceRoot, gitExe,
-            "rev-parse --path-format=absolute --show-toplevel", environment);
+            "rev-parse --show-toplevel", environment);
         string commonConfig = Path.Combine(commonDir ?? "", "config");
         var format = commonDir is null
             ? null
@@ -3065,17 +3068,15 @@ public static class GitInfo
             if (executableDrivers.Count > 0)
             {
                 string attrInvocation = GitArgs("check-attr -z --stdin filter");
-                ProcessInvocationObserverSlot.Value?.Invoke(attrInvocation);
                 var (attrExe, attrArgs) = Invocation(gitExe, attrInvocation);
-                attributes = Process.Start(CreateProcessStartInfo(
+                attributes = StartObservedProcess(CreateProcessStartInfo(
                     attrExe, workspaceRoot, attrArgs, environment));
                 if (attributes is null) return null;
             }
 
             string indexInvocation = GitArgs("ls-files -z --cached --stage");
-            ProcessInvocationObserverSlot.Value?.Invoke(indexInvocation);
             var (indexExe, indexArgs) = Invocation(gitExe, indexInvocation);
-            index = Process.Start(CreateProcessStartInfo(
+            index = StartObservedProcess(CreateProcessStartInfo(
                 indexExe, workspaceRoot, indexArgs, environment));
             if (index is null)
             {
@@ -3502,7 +3503,6 @@ public static class GitInfo
         string exe;
         string wrapped;
         string invocation = GitArgs(args);
-        ProcessInvocationObserverSlot.Value?.Invoke(invocation);
         try { (exe, wrapped) = Invocation(gitExe, invocation); }
         catch { return new ProcessResult(null, "spawn_failed", false); }
         return RunProcessEx(exe, cwd, wrapped, standardInput: standardInput,
@@ -3793,7 +3793,7 @@ public static class GitInfo
             // Git documents GIT_DIFF_OPTS as overriding --unified on the command line. Letting an
             // inherited value broaden hunks would make review symbol selection host-dependent.
             psi.Environment.Remove("GIT_DIFF_OPTS");
-            child = Process.Start(psi);
+            child = StartObservedProcess(psi);
             if (child is null) return new ProcessResult(null, "spawn_failed", false);
             Process p = child;
             // Dedicated background reader THREADS, not Task continuations: under a saturated thread
@@ -3897,6 +3897,27 @@ public static class GitInfo
         finally
         {
             child?.Dispose();
+        }
+    }
+
+    /// <summary>Single external-process boundary for GitInfo. The test observer runs only after
+    /// the OS accepted the final executable/argument transport. A diagnostic callback is never
+    /// allowed to escape the same spawn-failure contract as Process.Start.</summary>
+    private static Process? StartObservedProcess(ProcessStartInfo startInfo)
+    {
+        Process? process = Process.Start(startInfo);
+        if (process is null) return null;
+        try
+        {
+            ProcessInvocationObserverSlot.Value?.Invoke(
+                $"{startInfo.FileName} {startInfo.Arguments}".TrimEnd());
+            return process;
+        }
+        catch
+        {
+            KillAndCut(process);
+            process.Dispose();
+            return null;
         }
     }
 
