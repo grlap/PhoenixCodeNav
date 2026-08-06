@@ -11,6 +11,9 @@ public sealed record ParsedFSharpFile(
     bool LooksGenerated,
     List<SymbolRow> Symbols,
     int ParseContextCount,
+    int TotalParseContextCount,
+    int TruncatedParseContextCount,
+    int TruncatedOwnerProjectCount,
     int FailedParseContextCount,
     int OptionProjectCount,
     int FailedOptionProjectCount,
@@ -19,6 +22,9 @@ public sealed record ParsedFSharpFile(
 {
     internal FSharpIndexCoverage Coverage => new(
         ParseContextCount,
+        TotalParseContextCount,
+        TruncatedParseContextCount,
+        TruncatedOwnerProjectCount,
         FailedParseContextCount,
         OptionProjectCount,
         FailedOptionProjectCount,
@@ -28,21 +34,44 @@ public sealed record ParsedFSharpFile(
 
 internal sealed record FSharpIndexCoverage(
     int ParseContextCount,
+    int TotalParseContextCount,
+    int TruncatedParseContextCount,
+    int TruncatedOwnerProjectCount,
     int FailedParseContextCount,
     int OptionProjectCount,
     int FailedOptionProjectCount,
     int PartialOptionProjectCount,
     IReadOnlyList<string> OptionPartialReasons);
 
+internal sealed record FSharpParsingContextOwner(
+    string ProjectPath,
+    IReadOnlyList<string[]> Contexts);
+
 internal sealed record FSharpParsingContextSelection(
     IReadOnlyList<string[]> Contexts,
+    int TotalContextCount,
+    IReadOnlyList<FSharpParsingContextOwner> ContextOwners,
     int ProjectCount,
     int FailedProjects,
     int PartialProjects,
     IReadOnlyList<string> PartialReasons)
 {
+    internal int TruncatedContextCount => TotalContextCount - Contexts.Count;
+
+    internal int TruncatedOwnerProjectCount
+    {
+        get
+        {
+            if (TruncatedContextCount == 0 || ContextOwners.Count == 0) return 0;
+            var retained = Contexts.Select(FSharpSyntaxIndexer.ContextKey)
+                .ToHashSet(StringComparer.Ordinal);
+            return ContextOwners.Count(owner => owner.Contexts.Any(context =>
+                !retained.Contains(FSharpSyntaxIndexer.ContextKey(context))));
+        }
+    }
+
     internal static FSharpParsingContextSelection Unowned { get; } =
-        new([Array.Empty<string>()], 0, 0, 0, []);
+        new([Array.Empty<string>()], 1, [], 0, 0, 0, []);
 }
 
 /// <summary>
@@ -52,6 +81,8 @@ internal sealed record FSharpParsingContextSelection(
 /// </summary>
 public static class FSharpSyntaxIndexer
 {
+    internal const int MaxStoredParseContexts = 64;
+
     // Keep the diagnostic seam inside the installing test's execution context. A process-wide
     // delegate can observe unrelated xUnit classes while they build F# indexes in parallel and can
     // make one test's callback fail another test's parse.
@@ -74,7 +105,7 @@ public static class FSharpSyntaxIndexer
         if (!extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) &&
             !extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase))
         {
-            return new(relPath, content, lineCount, generated, [], 0, 0,
+            return new(relPath, content, lineCount, generated, [], 0, 0, 0, 0, 0,
                 0, 0, 0, []);
         }
 
@@ -134,24 +165,13 @@ public static class FSharpSyntaxIndexer
         }
 
         return new(relPath, content, lineCount, generated, symbols,
-            contexts.Count, failedParseContexts,
+            contexts.Count, contextSelection.TotalContextCount,
+            contextSelection.TruncatedContextCount,
+            contextSelection.TruncatedOwnerProjectCount, failedParseContexts,
             contextSelection.ProjectCount,
             contextSelection.FailedProjects,
             contextSelection.PartialProjects,
             contextSelection.PartialReasons);
-    }
-
-    internal static FSharpParsingContextSelection ParsingContexts(
-        IEnumerable<(string ProjectPath, string TargetFrameworks, string ProjectXml)> owners)
-    {
-        FSharpParsingContextSelection[] selections = owners
-            .GroupBy(owner => owner.ProjectPath, WorkspacePaths.FileSystemPathComparer)
-            .Select(group => group.First())
-            .OrderBy(owner => owner.ProjectPath, StringComparer.Ordinal)
-            .Select(owner => ParsingContextsForProject(
-                owner.ProjectPath, owner.TargetFrameworks, owner.ProjectXml))
-            .ToArray();
-        return CombineParsingContexts(selections, unowned: selections.Length == 0);
     }
 
     internal static FSharpParsingContextSelection ParsingContextsForProject(
@@ -197,8 +217,15 @@ public static class FSharpSyntaxIndexer
             failed = contexts.Count == 0;
         }
 
+        string[][] orderedContexts = contexts.Values
+            .OrderBy(ContextKey, StringComparer.Ordinal)
+            .ToArray();
         return new FSharpParsingContextSelection(
-            contexts.Values.OrderBy(ContextKey, StringComparer.Ordinal).ToList(),
+            orderedContexts,
+            orderedContexts.Length,
+            orderedContexts.Length > 0
+                ? [new FSharpParsingContextOwner(projectPath, orderedContexts)]
+                : [],
             ProjectCount: 1,
             FailedProjects: failed ? 1 : 0,
             PartialProjects: !failed && partial ? 1 : 0,
@@ -211,19 +238,73 @@ public static class FSharpSyntaxIndexer
     {
         FSharpParsingContextSelection[] materialized = selections.ToArray();
         if (materialized.Length == 0)
-            return unowned ? FSharpParsingContextSelection.Unowned : new([], 0, 0, 0, []);
+            return unowned
+                ? FSharpParsingContextSelection.Unowned
+                : new([], 0, [], 0, 0, 0, []);
 
         var contexts = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        var contextsByOwner = new Dictionary<string, Dictionary<string, string[]>>(
+            WorkspacePaths.FileSystemPathComparer);
         var reasons = new SortedSet<string>(StringComparer.Ordinal);
         foreach (FSharpParsingContextSelection selection in materialized)
         {
             foreach (string[] context in selection.Contexts)
                 contexts.TryAdd(ContextKey(context), context);
+            foreach (FSharpParsingContextOwner owner in selection.ContextOwners)
+            {
+                if (!contextsByOwner.TryGetValue(owner.ProjectPath,
+                        out Dictionary<string, string[]>? ownerContexts))
+                {
+                    ownerContexts = new(StringComparer.Ordinal);
+                    contextsByOwner[owner.ProjectPath] = ownerContexts;
+                }
+                foreach (string[] context in owner.Contexts)
+                {
+                    string key = ContextKey(context);
+                    ownerContexts.TryAdd(key, context);
+                    contexts.TryAdd(key, context);
+                }
+            }
             foreach (string reason in selection.PartialReasons)
                 reasons.Add(reason);
         }
+        string[][] orderedContexts = contexts.Values
+            .OrderBy(ContextKey, StringComparer.Ordinal)
+            .ToArray();
+        FSharpParsingContextOwner[] orderedOwners = contextsByOwner
+            .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+            .Select(entry => new FSharpParsingContextOwner(
+                entry.Key,
+                entry.Value.Values.OrderBy(ContextKey, StringComparer.Ordinal).ToArray()))
+            .ToArray();
+
+        // Give every valid compile owner one deterministic representative before using the
+        // remaining budget in the historical global option-key order. A context shared by owners
+        // represents each of them without consuming another slot. If owners themselves exceed the
+        // budget, project-path order decides which owners are represented and the persisted
+        // truncated-owner count makes that loss observable.
+        var selectedKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (FSharpParsingContextOwner owner in orderedOwners)
+        {
+            if (selectedKeys.Count >= MaxStoredParseContexts) break;
+            if (owner.Contexts.Any(context => selectedKeys.Contains(ContextKey(context))))
+                continue;
+            string[]? representative = owner.Contexts.FirstOrDefault();
+            if (representative is not null)
+                selectedKeys.Add(ContextKey(representative));
+        }
+        foreach (string[] context in orderedContexts)
+        {
+            if (selectedKeys.Count >= MaxStoredParseContexts) break;
+            selectedKeys.Add(ContextKey(context));
+        }
+        string[][] retainedContexts = orderedContexts
+            .Where(context => selectedKeys.Contains(ContextKey(context)))
+            .ToArray();
         return new FSharpParsingContextSelection(
-            contexts.Values.OrderBy(ContextKey, StringComparer.Ordinal).ToList(),
+            retainedContexts,
+            orderedContexts.Length,
+            orderedOwners,
             materialized.Sum(selection => selection.ProjectCount),
             materialized.Sum(selection => selection.FailedProjects),
             materialized.Sum(selection => selection.PartialProjects),
@@ -238,7 +319,7 @@ public static class FSharpSyntaxIndexer
             destination.Add(reason);
     }
 
-    private static string ContextKey(string[] arguments) =>
+    internal static string ContextKey(string[] arguments) =>
         string.Join('\u001f', arguments);
 
     private static void AddDeclarations(

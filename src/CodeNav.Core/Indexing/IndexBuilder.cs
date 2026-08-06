@@ -124,8 +124,12 @@ public static class IndexBuilder
     /// computing and persisting a separate SHA-256 context digest for every symbol.
     /// v26: FCS syntax declarations from .fs/.fsi files persist in the shared symbols table for
     /// indexed F# symbol-name search; project/TFM parse contexts are unioned deterministically and
-    /// delta refresh reindexes declarations after source or project-option changes.</summary>
-    public const string SchemaVersion = "26";
+    /// delta refresh reindexes declarations after source or project-option changes.
+    /// v27: stored F# indexing processes at most 64 deterministically ordered owner/TFM parse
+    /// contexts per file and persists total/processed/truncated coverage.
+    /// v28: context-budget selection reserves representation for valid compile owners and
+    /// persists truncated-owner coverage.</summary>
+    public const string SchemaVersion = "28";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }
@@ -814,7 +818,7 @@ public static class IndexBuilder
                 selections.AddRange(owners.Select(owner =>
                     fsharpContextsByProject.TryGetValue(owner.RelPath, out var selection)
                         ? selection
-                        : new FSharpParsingContextSelection([], 1, 1, 0,
+                        : new FSharpParsingContextSelection([], 0, [], 1, 1, 0,
                             ["fsharp_project_options_unavailable"])));
             }
             // A project whose XML/options cannot be read may contain linked Compile items

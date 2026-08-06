@@ -1268,7 +1268,11 @@ public partial class FSharpSemanticStage2Tests
         {
             var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            // Every fixture operation opens a protected semantic snapshot. Queryability precedes
+            // completion of the mandatory startup sweep, so do not expose tests to the transient
+            // index_snapshot_unavailable window.
+            Assert.True(WaitUntil(() => manager.State == "ready", 30_000),
+                manager.Health().Error);
             var semantic = new SemanticService(manager);
             return new Fixture(manager, semantic);
         }

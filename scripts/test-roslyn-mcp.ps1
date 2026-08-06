@@ -31,8 +31,12 @@ if ($SelfTestProcessHost) {
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $grandchild = [Diagnostics.Process]::Start($start)
+    # Publish the descendant identity on the quiet control stream before intentionally flooding
+    # stderr. Under full-suite CPU contention, discovering this line through the asynchronous
+    # rolling stderr tail made readiness depend on how quickly 200 KiB could be drained.
+    [Console]::Out.WriteLine("GRANDCHILD_PID=$($grandchild.Id)")
+    [Console]::Out.Flush()
     [Console]::Error.Write((('x' * 200000) -join ''))
-    [Console]::Error.WriteLine("`nGRANDCHILD_PID=$($grandchild.Id)")
     Start-Sleep -Seconds 60
     exit 0
 }
@@ -447,20 +451,15 @@ function Start-ProcessLifecycleSelfTestClient {
         NextId = 0
         StderrTail = $stderrTail
         StderrTask = $stderrTail.DrainAsync($process.StandardError)
+        ReadyTask = $process.StandardOutput.ReadLineAsync()
         AllowNonZeroExit = $true
     }
 }
 
 if ($SelfTestProcessLifecycle) {
     $client = Start-ProcessLifecycleSelfTestClient
-    $readyDeadline = [DateTime]::UtcNow.AddSeconds(15)
-    $pidMatch = $null
-    while ([DateTime]::UtcNow -lt $readyDeadline) {
-        $stderr = [string]$client.StderrTail.Snapshot()
-        $pidMatch = [regex]::Match($stderr, "GRANDCHILD_PID=(\d+)")
-        if ($pidMatch.Success -or $client.Process.HasExited) { break }
-        Start-Sleep -Milliseconds 50
-    }
+    Assert-True ($client.ReadyTask.Wait(15000)) "Lifecycle host did not report readiness"
+    $pidMatch = [regex]::Match([string]$client.ReadyTask.Result, "GRANDCHILD_PID=(\d+)")
     Assert-True $pidMatch.Success "Lifecycle host did not report its descendant pid"
     $grandchildPid = [int]$pidMatch.Groups[1].Value
 

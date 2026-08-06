@@ -521,6 +521,7 @@ public class FSharpTierATests
             Assert.Contains("fsharp-outline-parse-context-selection", featureIds);
             Assert.Contains("fsharp-outline-parse-context-budget", featureIds);
             Assert.Contains("fsharp-indexed-symbol-name-search", featureIds);
+            Assert.Contains("fsharp-indexed-parse-context-budget", featureIds);
             Assert.Contains("fsharp-symbol-at-semantic", featureIds);
             Assert.Contains("fsharp-definition-same-project", featureIds);
             Assert.Contains("fsharp-type-check-context-selection", featureIds);
@@ -1695,6 +1696,297 @@ public class FSharpTierATests
     }
 
     [Fact]
+    public void StoredFSharpParsingContextsStopAtApprovedBudgetDeterministically()
+    {
+        var owners = Enumerable.Range(0, 65)
+            .Select(index => (
+                ProjectPath: $"Owner{index:D2}/Owner{index:D2}.fsproj",
+                TargetFrameworks: "net9.0",
+                ProjectXml: $"""
+                    <Project>
+                      <PropertyGroup>
+                        <TargetFramework>net9.0</TargetFramework>
+                        <DefineConstants>CONTEXT_{index:D2}</DefineConstants>
+                      </PropertyGroup>
+                    </Project>
+                    """))
+            .Reverse()
+            .ToArray();
+
+        FSharpParsingContextSelection[] selections = owners
+            .Select(owner => FSharpSyntaxIndexer.ParsingContextsForProject(
+                owner.ProjectPath, owner.TargetFrameworks, owner.ProjectXml))
+            .ToArray();
+        FSharpParsingContextSelection selection =
+            FSharpSyntaxIndexer.CombineParsingContexts(selections);
+
+        Assert.Equal(FSharpSyntaxIndexer.MaxStoredParseContexts,
+            selection.Contexts.Count);
+        Assert.Equal(65, selection.TotalContextCount);
+        Assert.Equal(1, selection.TruncatedContextCount);
+        Assert.Equal(1, selection.TruncatedOwnerProjectCount);
+        Assert.DoesNotContain(selection.Contexts,
+            context => context.Contains("--define:CONTEXT_64", StringComparer.Ordinal));
+
+        FSharpParsingContextSelection boundary =
+            FSharpSyntaxIndexer.CombineParsingContexts(selections.Take(64));
+        Assert.Equal(64, boundary.Contexts.Count);
+        Assert.Equal(64, boundary.TotalContextCount);
+        Assert.Equal(0, boundary.TruncatedContextCount);
+        Assert.Equal(0, boundary.TruncatedOwnerProjectCount);
+    }
+
+    [Fact]
+    public void StoredFSharpContextBudgetRepresentsEachCompileOwnerBeforeOrdinalFill()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-symbol-owner-fair-context-limit").FullName;
+        try
+        {
+            string ownerATargetFrameworks = string.Join(';', Enumerable.Range(0, 64)
+                .Select(index => $"net9.0-platform{index:D2}"));
+            Directory.CreateDirectory(Path.Combine(root, "OwnerA"));
+            Directory.CreateDirectory(Path.Combine(root, "OwnerB"));
+            Directory.CreateDirectory(Path.Combine(root, "Shared"));
+            string ownerAProjectXml = $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFrameworks>{ownerATargetFrameworks}</TargetFrameworks>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="../Shared/Library.fs" /></ItemGroup>
+                </Project>
+                """;
+            string ownerBProjectXml = """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net9.0</TargetFramework>
+                    <DefineConstants>ZZZ_OWNER_B</DefineConstants>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="../Shared/Library.fs" /></ItemGroup>
+                </Project>
+                """;
+            File.WriteAllText(Path.Combine(root, "OwnerA", "OwnerA.fsproj"),
+                ownerAProjectXml);
+            File.WriteAllText(Path.Combine(root, "OwnerB", "OwnerB.fsproj"),
+                ownerBProjectXml);
+            string sharedSource = """
+                module Shared.Library
+                #if ZZZ_OWNER_B
+                let ownerBContextMarker = 99
+                #else
+                #if NET9_0_PLATFORM63
+                let ownerATruncatedContextMarker = 63
+                #else
+                let ownerARetainedContextMarker = 1
+                #endif
+                #endif
+                """;
+            File.WriteAllText(Path.Combine(root, "Shared", "Library.fs"), sharedSource);
+
+            FSharpParsingContextSelection ownerASelection =
+                FSharpSyntaxIndexer.ParsingContextsForProject(
+                    "OwnerA/OwnerA.fsproj", ownerATargetFrameworks, ownerAProjectXml);
+            FSharpParsingContextSelection ownerBSelection =
+                FSharpSyntaxIndexer.ParsingContextsForProject(
+                    "OwnerB/OwnerB.fsproj", "net9.0", ownerBProjectXml);
+            Assert.Contains(ownerBSelection.Contexts,
+                context => context.Contains("--define:ZZZ_OWNER_B", StringComparer.Ordinal));
+            ParsedFSharpFile ownerBParsed = FSharpSyntaxIndexer.Parse(
+                "Shared/Library.fs", sharedSource, ownerBSelection);
+            Assert.Contains(ownerBParsed.Symbols,
+                symbol => symbol.Name == "ownerBContextMarker");
+            FSharpParsingContextSelection combined =
+                FSharpSyntaxIndexer.CombineParsingContexts(
+                    [ownerASelection, ownerBSelection]);
+            Assert.Contains(combined.Contexts,
+                context => context.Contains("--define:ZZZ_OWNER_B", StringComparer.Ordinal));
+            Assert.Equal(1, combined.TruncatedOwnerProjectCount);
+            ParsedFSharpFile directlyParsed = FSharpSyntaxIndexer.Parse(
+                "Shared/Library.fs", sharedSource, combined);
+            Assert.Contains(directlyParsed.Symbols,
+                symbol => symbol.Name == "ownerBContextMarker");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            using var semantic = new SemanticService(manager);
+            var tools = new NavigationTools(manager, semantic);
+
+            JsonElement ownerB = Parse(tools.SearchSymbol("ownerBContextMarker",
+                match: "exact", pathGlob: "Shared/Library.fs"));
+            Assert.Single(ownerB.GetProperty("symbols").EnumerateArray());
+            JsonElement ownerA = Parse(tools.SearchSymbol("ownerARetainedContextMarker",
+                match: "exact", pathGlob: "Shared/Library.fs"));
+            Assert.Single(ownerA.GetProperty("symbols").EnumerateArray());
+            JsonElement omitted = Parse(tools.SearchSymbol("ownerATruncatedContextMarker",
+                match: "exact", pathGlob: "Shared/Library.fs"));
+            Assert.Empty(omitted.GetProperty("symbols").EnumerateArray());
+
+            Assert.Equal("fsharp_parse_contexts_truncated",
+                ownerB.GetProperty("partialReason").GetString());
+            JsonElement coverage = ownerB.GetProperty("fsharpParseCoverage");
+            Assert.Equal(65, coverage.GetProperty("totalContexts").GetInt32());
+            Assert.Equal(64, coverage.GetProperty("processedContexts").GetInt32());
+            Assert.Equal(1, coverage.GetProperty("truncatedContexts").GetInt32());
+            Assert.Equal(1,
+                coverage.GetProperty("truncatedOwnerProjects").GetInt32());
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void TruncatedFSharpContextsWithEveryProcessedFailureRemainPartial()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-symbol-truncated-failures").FullName;
+        try
+        {
+            string targetFrameworks = string.Join(';', Enumerable.Range(0, 65)
+                .Select(index => $"net9.0-platform{index:D2}"));
+            WriteProject(root, "Core", "Core.fsproj",
+                $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFrameworks>{targetFrameworks}</TargetFrameworks>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
+                </Project>
+                """,
+                ("Library.fs",
+                    """
+                    module Core.Library
+                    #if NET9_0_PLATFORM64
+                    let omittedRecoveryMarker = 1
+                    #else
+                    let everyProcessedContextFails = (
+                    #endif
+                    """));
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            using var semantic = new SemanticService(manager);
+            var tools = new NavigationTools(manager, semantic);
+
+            JsonElement result = Parse(tools.SearchSymbol("omittedRecoveryMarker",
+                match: "exact", pathGlob: "Core/Library.fs"));
+            Assert.Empty(result.GetProperty("symbols").EnumerateArray());
+            Assert.Equal(
+                ["fsharp_parse_failed", "fsharp_parse_contexts_truncated"],
+                result.GetProperty("partialReasons").EnumerateArray()
+                    .Select(reason => reason.GetString()!).ToArray());
+            JsonElement coverage = result.GetProperty("fsharpParseCoverage");
+            Assert.Equal(1, coverage.GetProperty("failedFiles").GetInt32());
+            Assert.Equal(1, coverage.GetProperty("partialFailureFiles").GetInt32());
+            Assert.Equal(0, coverage.GetProperty("totalFailureFiles").GetInt32());
+            Assert.Equal(1, coverage.GetProperty("truncatedFiles").GetInt32());
+            Assert.Equal(64, coverage.GetProperty("failedContexts").GetInt32());
+            Assert.Equal(65, coverage.GetProperty("totalContexts").GetInt32());
+            Assert.Equal(64, coverage.GetProperty("processedContexts").GetInt32());
+            Assert.Equal(1, coverage.GetProperty("truncatedContexts").GetInt32());
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void StoredFSharpContextTruncationIsHonestAcrossColdAndDelta()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-symbol-context-limit").FullName;
+        try
+        {
+            string targetFrameworks = string.Join(';', Enumerable.Range(0, 65)
+                .Select(index => $"net9.0-platform{index:D2}"));
+            WriteProject(root, "Core", "Core.fsproj",
+                $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFrameworks>{targetFrameworks}</TargetFrameworks>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
+                </Project>
+                """,
+                ("Library.fs",
+                    """
+                    module Core.Library
+                    #if NET9_0_PLATFORM64
+                    let omittedContextMarker = 64
+                    #else
+                    let retainedContextMarker = 1
+                    #endif
+                    """));
+
+            string deltaDbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, deltaDbPath);
+            AssertTruncationDisclosure(deltaDbPath, totalContexts: 65,
+                truncatedContexts: 1);
+
+            targetFrameworks += ";net9.0-platform65";
+            File.WriteAllText(Path.Combine(root, "Core", "Core.fsproj"),
+                $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFrameworks>{targetFrameworks}</TargetFrameworks>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
+                </Project>
+                """);
+            using (var store = new IndexStore(deltaDbPath, createNew: false))
+            {
+                RefreshResult refresh = DeltaRefresher.Refresh(store, root,
+                    ["Core/Core.fsproj"]);
+                Assert.Equal(1, refresh.ChangedFiles);
+            }
+            AssertTruncationDisclosure(deltaDbPath, totalContexts: 66,
+                truncatedContexts: 2);
+
+            string coldDbPath = Path.Combine(root, ".phoenix", "cold-context-limit.db");
+            IndexBuilder.Build(root, coldDbPath);
+            AssertTruncationDisclosure(coldDbPath, totalContexts: 66,
+                truncatedContexts: 2);
+        }
+        finally { Cleanup(root); }
+
+        void AssertTruncationDisclosure(string dbPath, int totalContexts,
+            int truncatedContexts)
+        {
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            using var semantic = new SemanticService(manager);
+            var tools = new NavigationTools(manager, semantic);
+
+            JsonElement retained = Parse(tools.SearchSymbol("retainedContextMarker",
+                match: "exact", pathGlob: "Core/Library.fs"));
+            Assert.Single(retained.GetProperty("symbols").EnumerateArray());
+            Assert.True(retained.GetProperty("partial").GetBoolean());
+            Assert.Equal("fsharp_parse_contexts_truncated",
+                retained.GetProperty("partialReason").GetString());
+            Assert.Equal(["fsharp_parse_contexts_truncated"],
+                retained.GetProperty("partialReasons").EnumerateArray()
+                    .Select(reason => reason.GetString()!).ToArray());
+            JsonElement coverage = retained.GetProperty("fsharpParseCoverage");
+            Assert.Equal(0, coverage.GetProperty("failedFiles").GetInt32());
+            Assert.Equal(1, coverage.GetProperty("truncatedFiles").GetInt32());
+            Assert.Equal(0, coverage.GetProperty("failedContexts").GetInt32());
+            Assert.Equal(totalContexts, coverage.GetProperty("totalContexts").GetInt32());
+            Assert.Equal(64, coverage.GetProperty("processedContexts").GetInt32());
+            Assert.Equal(truncatedContexts,
+                coverage.GetProperty("truncatedContexts").GetInt32());
+
+            JsonElement omitted = Parse(tools.SearchSymbol("omittedContextMarker",
+                match: "exact", pathGlob: "Core/Library.fs"));
+            Assert.Empty(omitted.GetProperty("symbols").EnumerateArray());
+            Assert.Equal("fsharp_parse_contexts_truncated",
+                omitted.GetProperty("partialReason").GetString());
+        }
+    }
+
+    [Fact]
     public void FSharpProjectOptionFailuresRemainVisibleToColdAndDeltaSymbolSearch()
     {
         string root = Directory.CreateTempSubdirectory(
@@ -1772,17 +2064,19 @@ public class FSharpTierATests
         string deltaDbPath = IndexBuilder.DefaultDbPath(root);
         try
         {
+            string targetFrameworks = string.Join(';', Enumerable.Range(0, 65)
+                .Select(index => $"net9.0-platform{index:D2}"));
             WriteProject(root, "ValidOwner", "ValidOwner.fsproj",
-                """
+                $"""
                 <Project Sdk="Microsoft.NET.Sdk">
-                  <PropertyGroup><TargetFrameworks>net8.0;net9.0</TargetFrameworks></PropertyGroup>
+                  <PropertyGroup><TargetFrameworks>{targetFrameworks}</TargetFrameworks></PropertyGroup>
                   <ItemGroup><Compile Include="Library.fs" /></ItemGroup>
                 </Project>
                 """,
                 ("Library.fs",
                     """
                     module ValidOwner.Library
-                    #if NET8_0
+                    #if NET9_0_PLATFORM00
                     let brokenGlobalContextMarker = (
                     #else
                     let globalCoverageMarker = 1
@@ -1831,10 +2125,17 @@ public class FSharpTierATests
             Assert.Equal(expected,
                 partialReasons.Contains("fsharp_project_options_unavailable"));
             Assert.Contains("fsharp_parse_failed", partialReasons);
+            Assert.Contains("fsharp_parse_contexts_truncated", partialReasons);
             Assert.True(result.GetProperty("partial").GetBoolean());
             JsonElement parseCoverage = result.GetProperty("fsharpParseCoverage");
+            Assert.Equal(1, parseCoverage.GetProperty("failedFiles").GetInt32());
+            Assert.Equal(1, parseCoverage.GetProperty("partialFailureFiles").GetInt32());
+            Assert.Equal(0, parseCoverage.GetProperty("totalFailureFiles").GetInt32());
+            Assert.Equal(1, parseCoverage.GetProperty("truncatedFiles").GetInt32());
             Assert.Equal(1, parseCoverage.GetProperty("failedContexts").GetInt32());
-            Assert.Equal(2, parseCoverage.GetProperty("totalContexts").GetInt32());
+            Assert.Equal(65, parseCoverage.GetProperty("totalContexts").GetInt32());
+            Assert.Equal(64, parseCoverage.GetProperty("processedContexts").GetInt32());
+            Assert.Equal(1, parseCoverage.GetProperty("truncatedContexts").GetInt32());
             if (expected)
             {
                 Assert.Contains("fsharp_project_options_unavailable",

@@ -247,8 +247,15 @@ public sealed class IndexStore : IDisposable
             CREATE TABLE fsharp_parse_coverage(
               file_id INTEGER PRIMARY KEY,
               total_contexts INTEGER NOT NULL CHECK(total_contexts >= 0),
+              processed_contexts INTEGER NOT NULL
+                CHECK(processed_contexts >= 0 AND processed_contexts <= total_contexts),
+              truncated_contexts INTEGER NOT NULL
+                CHECK(truncated_contexts >= 0 AND
+                      truncated_contexts = total_contexts - processed_contexts),
+              truncated_owner_projects INTEGER NOT NULL
+                CHECK(truncated_owner_projects >= 0),
               failed_contexts INTEGER NOT NULL
-                CHECK(failed_contexts >= 0 AND failed_contexts <= total_contexts),
+                CHECK(failed_contexts >= 0 AND failed_contexts <= processed_contexts),
               option_project_count INTEGER NOT NULL DEFAULT 0
                 CHECK(option_project_count >= 0),
               option_failed_projects INTEGER NOT NULL DEFAULT 0
@@ -257,7 +264,8 @@ public sealed class IndexStore : IDisposable
               option_partial_projects INTEGER NOT NULL DEFAULT 0
                 CHECK(option_partial_projects >= 0 AND
                       option_partial_projects <= option_project_count),
-              option_partial_reasons TEXT NOT NULL DEFAULT ''
+              option_partial_reasons TEXT NOT NULL DEFAULT '',
+              CHECK(truncated_owner_projects <= option_project_count)
             );
 
             CREATE TABLE file_contents(
@@ -1230,6 +1238,7 @@ public sealed class IndexStore : IDisposable
         FSharpIndexCoverage coverage)
     {
         bool incomplete = coverage.FailedParseContextCount > 0 ||
+                          coverage.TruncatedParseContextCount > 0 ||
                           coverage.FailedOptionProjectCount > 0 ||
                           coverage.PartialOptionProjectCount > 0;
         if (!incomplete)
@@ -1238,10 +1247,17 @@ public sealed class IndexStore : IDisposable
                 ("$id", fileId));
             return;
         }
-        if (coverage.ParseContextCount < 0 || coverage.FailedParseContextCount < 0 ||
+        if (coverage.ParseContextCount < 0 || coverage.TotalParseContextCount < 0 ||
+            coverage.TruncatedParseContextCount < 0 ||
+            coverage.ParseContextCount > coverage.TotalParseContextCount ||
+            coverage.TruncatedParseContextCount !=
+                coverage.TotalParseContextCount - coverage.ParseContextCount ||
+            coverage.TruncatedOwnerProjectCount < 0 ||
+            coverage.FailedParseContextCount < 0 ||
             coverage.FailedParseContextCount > coverage.ParseContextCount ||
             coverage.OptionProjectCount < 0 || coverage.FailedOptionProjectCount < 0 ||
             coverage.PartialOptionProjectCount < 0 ||
+            coverage.TruncatedOwnerProjectCount > coverage.OptionProjectCount ||
             coverage.FailedOptionProjectCount > coverage.OptionProjectCount ||
             coverage.PartialOptionProjectCount > coverage.OptionProjectCount)
             throw new ArgumentOutOfRangeException(nameof(coverage));
@@ -1249,19 +1265,27 @@ public sealed class IndexStore : IDisposable
             .Distinct(StringComparer.Ordinal).OrderBy(reason => reason, StringComparer.Ordinal));
         ExecTx(tx, """
             INSERT INTO fsharp_parse_coverage(
-              file_id, total_contexts, failed_contexts,
+              file_id, total_contexts, processed_contexts, truncated_contexts,
+              truncated_owner_projects, failed_contexts,
               option_project_count, option_failed_projects,
               option_partial_projects, option_partial_reasons)
-            VALUES($id, $total, $failed, $projects, $optionFailed, $optionPartial, $reasons)
+            VALUES($id, $total, $processed, $truncated, $truncatedOwners, $failed,
+                   $projects, $optionFailed, $optionPartial, $reasons)
             ON CONFLICT(file_id) DO UPDATE SET
               total_contexts=excluded.total_contexts,
+              processed_contexts=excluded.processed_contexts,
+              truncated_contexts=excluded.truncated_contexts,
+              truncated_owner_projects=excluded.truncated_owner_projects,
               failed_contexts=excluded.failed_contexts,
               option_project_count=excluded.option_project_count,
               option_failed_projects=excluded.option_failed_projects,
               option_partial_projects=excluded.option_partial_projects,
               option_partial_reasons=excluded.option_partial_reasons
             """,
-            ("$id", fileId), ("$total", coverage.ParseContextCount),
+            ("$id", fileId), ("$total", coverage.TotalParseContextCount),
+            ("$processed", coverage.ParseContextCount),
+            ("$truncated", coverage.TruncatedParseContextCount),
+            ("$truncatedOwners", coverage.TruncatedOwnerProjectCount),
             ("$failed", coverage.FailedParseContextCount),
             ("$projects", coverage.OptionProjectCount),
             ("$optionFailed", coverage.FailedOptionProjectCount),

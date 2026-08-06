@@ -21,9 +21,11 @@ Default flow:
 2. For anything that is a **code identifier** (type, method, property), use the symbol tools:
    `search_symbol`, `definition`, `references`, `implementations` — not text search. Indexed
    `search_symbol` supports F# `.fs/.fsi` declarations too; `.fsx` remains text-only. Treat
-   `fsharp_parse_failed` and any project-option cause in `partialReasons` as incomplete indexed F#
+   `fsharp_parse_failed`, `fsharp_parse_contexts_truncated`, and any project-option cause in `partialReasons` as incomplete indexed F#
    declaration evidence rather than authoritative absence; inspect the parse/project-option
-   coverage objects too. `fsharp_project_options_imported` alone is advisory structured coverage,
+   coverage objects too. Stored indexing reserves one context per valid compile owner while the
+   64-context budget has capacity; `truncatedOwnerProjects` counts owners whose distinct contexts
+   were still omitted. `fsharp_project_options_imported` alone is advisory structured coverage,
    not a blanket partial result.
    F# semantic Stage 2A is narrower: use
    position-based `symbol_at` / `definition`; references, implementations, callers/callees, and

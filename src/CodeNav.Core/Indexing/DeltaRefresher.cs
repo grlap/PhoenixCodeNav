@@ -583,6 +583,9 @@ public static class DeltaRefresher
                     : 0;
                 coverageOnly[path] = new FSharpIndexCoverage(
                     selection.Contexts.Count,
+                    selection.TotalContextCount,
+                    selection.TruncatedContextCount,
+                    selection.TruncatedOwnerProjectCount,
                     failedContexts,
                     selection.ProjectCount,
                     selection.FailedProjects,

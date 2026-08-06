@@ -56,10 +56,12 @@ for code identifiers.
    token-saver: `outline` before any large-file read, then `source_context` for the spans.
 3. **Syntax (F#)** — `search_symbol` over persisted `.fs` / `.fsi` declaration rows and `outline`
     for compile-owned `.fs` and `.fsi`. A pinned, isolated FSharp.Compiler.Service adapter parses
-    without type checking; `.fsx` stays text-only. Stored symbol search unions every available
-    owner/TFM parser context and persists both FCS parse failures and project-option
+    without type checking; `.fsx` stays text-only. Stored symbol search deterministically composes
+    every available owner/TFM parser context, reserves one context per valid compile owner while
+    the 64-context budget has capacity, fills the remainder in global ordinal order, and persists exact
+    total/processed/truncated counts plus `truncatedOwnerProjects` alongside FCS parse failures and project-option
     unavailable/partial causes, so a hit or miss remains explicitly partial whenever actionable
-    context authority is incomplete. Ordinary SDK/import limitations remain advisory structured
+    context authority is incomplete or contexts were omitted. Ordinary SDK/import limitations remain advisory structured
     coverage rather than making every search partial. Cold build and delta refresh use the same
     context-selection model. Ordinary project changes parse only their old/new owned F# files
     before the SQLite persistence phase; a malformed-project authority transition refreshes global
@@ -121,14 +123,17 @@ returns a byte-budgeted `pathSuggestions` object with `paths`, exact `total`, an
 never substituted, never read from the mutable filesystem, and never widen into Git history.
 
 F# `.fs/.fsi/.fsx` content and `.fsproj` ownership/reference graphs are indexed. The syntax index
-unions `.fs/.fsi` declaration rows deterministically across every indexed owning project and
-declared target-framework parse context. Paired signature/implementation declarations remain
+unions `.fs/.fsi` declaration rows deterministically across at most 64 indexed owning-project and
+declared-target-framework parse contexts per file. It reserves one context per valid compile owner
+while capacity remains, then fills in global ordinal order. Paired signature/implementation declarations remain
 separate rows, linked multi-owner files are stored once, generic arity is retained where syntax
 exposes it, and source or project-option refreshes replace affected rows transactionally. Search
 filters, generated-file policy, namespace scoping, ownership/orphan disclosure, paging, and indexed
-confidence use the same shared contract as C#. Per-file FCS parse coverage records total and failed
-contexts; any affected search scope reports `fsharp_parse_failed`, including partial-context recovery
-where successful declarations remain searchable. `.fsx` remains text-only, so script-only scopes fail
+confidence use the same shared contract as C#. Per-file FCS parse coverage records total, processed,
+truncated, and failed contexts plus the number of owners whose distinct contexts were truncated;
+affected search scopes report `fsharp_parse_failed` and/or
+`fsharp_parse_contexts_truncated`, including partial-context recovery where successful declarations
+remain searchable. `.fsx` remains text-only, so script-only scopes fail
 closed and mixed scopes disclose the skipped script files.
 
 The FCS semantic adapter consumes one immutable source/project snapshot captured from a pinned index epoch, copies

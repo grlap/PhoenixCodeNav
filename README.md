@@ -40,10 +40,14 @@ never select projects or contribute build, ownership, dependency, or symbol-reso
 parses `.fsproj` compile ownership and references, and preserves C#↔F# project edges. Compile-owned
 `.fs` / `.fsi` files get indexed declaration-name search and syntax-only `outline`s from a pinned
 FSharp.Compiler.Service adapter, plus position-based `symbol_at` and same-project `definition`
-through a bounded FCS type check. FCS syntax parse failures and unavailable/unevaluated project-option
-contexts are retained as index coverage evidence: `search_symbol` returns stable joined
-`partialReason` / `partialReasons` causes plus parse and project-file-context counts instead of
-treating missing rows as authoritative absence. Ordinary SDK/import limitations remain visible in
+through a bounded FCS type check. Stored declaration indexing processes at most 64 deterministically
+selected owner/TFM parse contexts per file, reserving one context per valid compile owner while
+capacity remains before filling the budget in global ordinal order. FCS syntax parse failures, context truncation, and
+unavailable/unevaluated project-option contexts are retained as index coverage evidence:
+`search_symbol` returns stable joined `partialReason` / `partialReasons` causes plus
+total/processed/truncated parse and project-file-context counts, including
+`truncatedOwnerProjects`, instead of treating missing rows as
+authoritative absence. Ordinary SDK/import limitations remain visible in
 `fsharpProjectOptionCoverage` as advisory evidence without making every search partial. F# references, implementations, callers/callees, and hierarchy stay
 **unsupported** rather than
 returning an empty or falsely exact answer. Phoenix never executes MSBuild targets or tasks: it
@@ -300,9 +304,11 @@ watcher, and lifecycle test projects under `tests/`.
   filters; clipped calls report `filesScanned`, `filesAtLeast`, and
   `partialReason:"candidate_file_cap"` rather than presenting bounded counts as complete.
 - F# `search_symbol` persists syntax declarations from `.fs` / `.fsi` across indexed owner/TFM
-  parse contexts; paired signature/implementation files remain separate deterministic hits, linked
+  parse contexts, processing at most 64 deterministic contexts per file with one context reserved
+  per valid compile owner while capacity remains, and disclosing exact
+  total/processed/truncated coverage plus `truncatedOwnerProjects`; paired signature/implementation files remain separate deterministic hits, linked
   multi-owner files remain one physical declaration set, orphaned files are labeled, and failed
-  parses or unavailable/unevaluated project-option contexts are disclosed as partial coverage;
+  parses, truncated contexts, or unavailable/unevaluated project-option contexts are disclosed as partial coverage;
   ordinary SDK/import limitations remain advisory structured coverage. `.fsx` stays text-only: script-only scopes are
   refused, while mixed scopes explicitly report skipped scripts. F# `outline` is syntax-only and
   limited to compile-owned `.fs` / `.fsi`.
@@ -312,7 +318,8 @@ watcher, and lifecycle test projects under `tests/`.
   host-selected `FSharp.Core` boundaries described above. F# references, implementations,
   callers/callees, and hierarchy are not supported. Unscoped and explicit F# `search_symbol`
   scopes query the shared syntax index; results are partial when the scope contains a text-only
-  language or when any F# parse context or actionable project-option context is incomplete.
+  language or when any F# parse context is failed/truncated or any actionable project-option
+  context is incomplete.
 - Indexed `references` are whole-identifier text candidates; use `mode="semantic"` (or the
   default auto-upgrade) for compiler-exact results. When the caller-selected `maxFiles` boundary
   is reached, the response reports candidate-file coverage, `totalIsLowerBound:true`, and

@@ -272,6 +272,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("friend-assembly-semantics", ids);
         Assert.Contains("fsharp-outline-parse-context-budget", ids);
         Assert.Contains("fsharp-indexed-symbol-name-search", ids);
+        Assert.Contains("fsharp-indexed-parse-context-budget", ids);
         Assert.Contains("fsharp-symbol-at-semantic", ids);
         Assert.Contains("fsharp-definition-same-project", ids);
         Assert.Contains("fsharp-type-check-context-selection", ids);
@@ -338,6 +339,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(1, idList.Count(id => id == "source-context-range-alias"));
         Assert.Equal(1, idList.Count(id => id == "markdown-sql-text-indexing"));
         Assert.Equal(1, idList.Count(id => id == "fsharp-indexed-symbol-name-search"));
+        Assert.Equal(1, idList.Count(id => id == "fsharp-indexed-parse-context-budget"));
         Assert.Equal(1, idList.Count(id => id == "csharp-symbol-free-outline"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-operator-indexing"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-semantic-handles"));
@@ -378,12 +380,26 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .GetString()!;
         Assert.Contains("v0.12.52", fsharpSymbolSearch);
         Assert.Contains("schema v26", fsharpSymbolSearch);
-        Assert.Contains("all available indexed owner/TFM parse contexts", fsharpSymbolSearch);
+        Assert.Contains("indexed owner/TFM parse contexts", fsharpSymbolSearch);
+        Assert.DoesNotContain("all available", fsharpSymbolSearch);
         Assert.Contains("project-option delta convergence", fsharpSymbolSearch);
         Assert.Contains("parse and project-option coverage", fsharpSymbolSearch);
         Assert.Contains("actionably incomplete contexts are partial", fsharpSymbolSearch);
         Assert.Contains("SDK/import limits remain advisory", fsharpSymbolSearch);
         Assert.Contains(".fsx-only scopes fail closed", fsharpSymbolSearch);
+        string fsharpIndexedContextBudget = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-indexed-parse-context-budget")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.55", fsharpIndexedContextBudget);
+        Assert.Contains("schema v28", fsharpIndexedContextBudget);
+        Assert.Contains("at most 64", fsharpIndexedContextBudget);
+        Assert.Contains("one context per valid compile owner", fsharpIndexedContextBudget);
+        Assert.Contains("total/processed/truncated", fsharpIndexedContextBudget);
+        Assert.Contains("truncatedOwnerProjects", fsharpIndexedContextBudget);
+        Assert.Contains("fsharp_parse_contexts_truncated", fsharpIndexedContextBudget);
         string portalReadOnly = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

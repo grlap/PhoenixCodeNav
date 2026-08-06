@@ -134,7 +134,8 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-outline", summary = "v0.12.1 owned .fs/.fsi FCS outline" },
                 new { id = "fsharp-outline-parse-context-selection", summary = "v0.12.4 base/.Net project+TFM parse-context selection affects only F# parser options and #if symbols" },
                 new { id = "fsharp-outline-parse-context-budget", summary = "v0.12.4 max 64 project/TFM parse contexts with total/returned/truncated coverage; 64 KiB hard envelope" },
-                new { id = "fsharp-indexed-symbol-name-search", summary = "v0.12.52 schema v26 persists deterministic FCS syntax declarations plus parse and project-option coverage from .fs/.fsi files across all available indexed owner/TFM parse contexts; search_symbol supports F# kinds, namespace/path/generated filters, generic arity, orphan disclosure, paired signature/implementation rows, linked multi-owner files, and source/project-option delta convergence; actionably incomplete contexts are partial while ordinary SDK/import limits remain advisory coverage, .fsx-only scopes fail closed, and mixed script scopes disclose skipped text-only files" },
+                new { id = "fsharp-indexed-symbol-name-search", summary = "v0.12.52 schema v26 persists deterministic FCS syntax declarations plus parse and project-option coverage from .fs/.fsi files across indexed owner/TFM parse contexts; search_symbol supports F# kinds, namespace/path/generated filters, generic arity, orphan disclosure, paired signature/implementation rows, linked multi-owner files, and source/project-option delta convergence; actionably incomplete contexts are partial while ordinary SDK/import limits remain advisory coverage, .fsx-only scopes fail closed, and mixed script scopes disclose skipped text-only files" },
+                new { id = "fsharp-indexed-parse-context-budget", summary = "v0.12.55 schema v28 processes at most 64 deterministic owner/TFM parse contexts per .fs/.fsi file, reserves one context per valid compile owner while capacity remains, persists total/processed/truncated plus truncatedOwnerProjects coverage across cold and delta indexing, and makes affected search_symbol scopes partial with fsharp_parse_contexts_truncated" },
                 new { id = "fsharp-symbol-at-semantic", summary = "v0.12.5 FCS position resolution for one explicit physical .fsproj + TFM type-check context" },
                 new { id = "fsharp-definition-same-project", summary = "v0.12.5 FCS signature/implementation declarations within the selected physical F# project" },
                 new { id = "fsharp-type-check-context-selection", summary = "v0.12.5 ambiguous owner/TFM sets fail closed and expose bounded selected/available F# type-check contexts" },
@@ -1129,7 +1130,7 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- symbols
 
     [McpServerTool(Name = "search_symbol")]
-    [Description("Find C# and F# declared symbols by name across the workspace (types, methods, properties, modules, functions, values, union cases...). Exact-name type declarations receive a soft relevance preference over same-named members. A first-page empty result remains successful and reports existsUnfiltered plus appliedFilters; when filters hid declarations, unfilteredKinds says what exists. C# plus F# .fs/.fsi path scopes are indexed; .fsx and other text-only languages are refused when exclusive and disclosed when mixed. Failed FCS parse contexts or unavailable/unevaluated F# project options make results explicitly partial and expose fsharpParseCoverage or fsharpProjectOptionCoverage; ordinary SDK/import limitations remain advisory structured coverage rather than making every search partial. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored source). Hits carry an 'orphaned' flag (present only when true) for files in NO project's compile set — dead code the compiler never builds (Compile Include globs expanded, Compile Remove honored).")]
+    [Description("Find C# and F# declared symbols by name across the workspace (types, methods, properties, modules, functions, values, union cases...). Exact-name type declarations receive a soft relevance preference over same-named members. A first-page empty result remains successful and reports existsUnfiltered plus appliedFilters; when filters hid declarations, unfilteredKinds says what exists. C# plus F# .fs/.fsi path scopes are indexed; .fsx and other text-only languages are refused when exclusive and disclosed when mixed. Failed or truncated FCS parse contexts and unavailable/unevaluated F# project options make results explicitly partial and expose fsharpParseCoverage or fsharpProjectOptionCoverage; stored F# indexing processes at most 64 deterministic owner/TFM contexts per file, reserving one per valid compile owner while capacity remains, while ordinary SDK/import limitations remain advisory structured coverage rather than making every search partial. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored source). Hits carry an 'orphaned' flag (present only when true) for files in NO project's compile set — dead code the compiler never builds (Compile Include globs expanded, Compile Remove honored).")]
     public string SearchSymbol(
         [Description("Symbol name. Match behavior set by 'match'. Empty (or '*') with a 'namespace' or 'pathGlob' ENUMERATES that scope's symbols instead — kind-filterable, paged.")] string query = "",
         [Description("Comma-separated kind filter. C#: class,interface,struct,record,record_struct,enum,delegate,method,constructor,property,field,event,enum_member. F#: namespace,module,class,interface,struct,record,union,type,exception,delegate,function,value,method,constructor,property,field,union_case,enum_member. Empty = all.")] string? kinds = null,
@@ -1198,6 +1199,8 @@ public sealed partial class NavigationTools
         var partialReasons = new List<string>();
         if (fsharpParseCoverage.FailedFiles > 0)
             partialReasons.Add("fsharp_parse_failed");
+        if (fsharpParseCoverage.TruncatedFiles > 0)
+            partialReasons.Add("fsharp_parse_contexts_truncated");
         partialReasons.AddRange(blockingOptionReasons);
         if (unsupportedLanguageFilesSkipped)
             partialReasons.Add("unsupported_language_files_skipped");
@@ -1315,14 +1318,19 @@ public sealed partial class NavigationTools
                 ? string.Join("; ", partialReasons)
                 : null,
             partialReasons = partialReasons.Count > 0 ? partialReasons : null,
-            fsharpParseCoverage = fsharpParseCoverage.FailedFiles > 0
+            fsharpParseCoverage = fsharpParseCoverage.FailedFiles > 0 ||
+                                  fsharpParseCoverage.TruncatedFiles > 0
                 ? new
                 {
                     fsharpParseCoverage.FailedFiles,
                     fsharpParseCoverage.PartialFailureFiles,
                     fsharpParseCoverage.TotalFailureFiles,
+                    fsharpParseCoverage.TruncatedFiles,
                     fsharpParseCoverage.FailedContexts,
                     fsharpParseCoverage.TotalContexts,
+                    fsharpParseCoverage.ProcessedContexts,
+                    fsharpParseCoverage.TruncatedContexts,
+                    fsharpParseCoverage.TruncatedOwnerProjects,
                 }
                 : null,
             fsharpProjectOptionCoverage = fsharpParseCoverage.ProjectOptionAffectedFiles > 0

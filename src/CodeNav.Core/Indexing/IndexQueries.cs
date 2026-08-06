@@ -34,15 +34,20 @@ public sealed record FSharpParseCoverage(
     int FailedFiles,
     int PartialFailureFiles,
     int TotalFailureFiles,
+    int TruncatedFiles,
     int FailedContexts,
     int TotalContexts,
+    int ProcessedContexts,
+    int TruncatedContexts,
+    int TruncatedOwnerProjects,
     int ProjectOptionAffectedFiles,
     int OptionProjectCount,
     int FailedOptionProjects,
     int PartialOptionProjects,
     IReadOnlyList<string> OptionPartialReasons)
 {
-    public bool IsIncomplete => FailedFiles > 0 || FailedOptionProjects > 0 ||
+    public bool IsIncomplete => FailedFiles > 0 || TruncatedFiles > 0 ||
+        FailedOptionProjects > 0 ||
         OptionPartialReasons.Any(reason =>
             !reason.Equals("fsharp_project_options_imported", StringComparison.Ordinal));
 }
@@ -492,13 +497,15 @@ public sealed partial class IndexQueries : IDisposable
     }
 
     /// <summary>Aggregated FCS syntax-parse gaps inside the same file scope used by symbol search.
-    /// Only affected files contribute context counts, so a caller can distinguish partial-context
-    /// recovery from files whose every authoritative parse context failed.</summary>
+    /// Only affected files contribute context counts. Failure buckets partition processed contexts;
+    /// truncated contexts are reported separately so unprocessed authority is never called a total
+    /// parse failure.</summary>
     public FSharpParseCoverage FSharpParseCoverageForScope(string? pathGlob,
         IReadOnlyList<string>? excludePaths = null, bool includeGenerated = false)
     {
         var args = new List<(string, object)>();
         var where = new System.Text.StringBuilder("WHERE (coverage.failed_contexts > 0 OR " +
+            "coverage.truncated_contexts > 0 OR " +
             "coverage.option_failed_projects > 0 OR coverage.option_partial_projects > 0)");
         if (!includeGenerated) where.Append(" AND f.is_generated = 0");
         AppendPathFilter(where, args, pathGlob, excludePaths);
@@ -507,14 +514,23 @@ public sealed partial class IndexQueries : IDisposable
             SELECT
               COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 THEN 1 ELSE 0 END), 0),
               COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 AND
-                                     coverage.failed_contexts < coverage.total_contexts
+                                     (coverage.failed_contexts < coverage.processed_contexts OR
+                                      coverage.truncated_contexts > 0)
                                 THEN 1 ELSE 0 END), 0),
               COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 AND
-                                     coverage.failed_contexts = coverage.total_contexts
+                                     coverage.failed_contexts = coverage.processed_contexts AND
+                                     coverage.truncated_contexts = 0
                                 THEN 1 ELSE 0 END), 0),
+              COALESCE(SUM(CASE WHEN coverage.truncated_contexts > 0 THEN 1 ELSE 0 END), 0),
               COALESCE(SUM(coverage.failed_contexts), 0),
-              COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0
+              COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 OR
+                                     coverage.truncated_contexts > 0
                                 THEN coverage.total_contexts ELSE 0 END), 0),
+              COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 OR
+                                     coverage.truncated_contexts > 0
+                                THEN coverage.processed_contexts ELSE 0 END), 0),
+              COALESCE(SUM(coverage.truncated_contexts), 0),
+              COALESCE(SUM(coverage.truncated_owner_projects), 0),
               COALESCE(SUM(CASE WHEN coverage.option_failed_projects > 0 OR
                                      coverage.option_partial_projects > 0
                                 THEN 1 ELSE 0 END), 0),
@@ -538,8 +554,12 @@ public sealed partial class IndexQueries : IDisposable
                     reader.GetInt32(6),
                     reader.GetInt32(7),
                     reader.GetInt32(8),
+                    reader.GetInt32(9),
+                    reader.GetInt32(10),
+                    reader.GetInt32(11),
+                    reader.GetInt32(12),
                     []),
-                Reasons: reader.GetString(9)), args.ToArray()).Single();
+                Reasons: reader.GetString(13)), args.ToArray()).Single();
         var optionReasons = aggregate.Reasons.Split([';', ','],
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.Ordinal).OrderBy(reason => reason, StringComparer.Ordinal)

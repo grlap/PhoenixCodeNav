@@ -1624,7 +1624,11 @@ public class SemanticColdStartLoaderTests
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            // References opens a protected index snapshot. Queryability is published before the
+            // mandatory startup sweep has fully converged, so wait for the lifecycle state that
+            // guarantees TryOpenReviewSnapshot can succeed under full-suite contention.
+            Assert.True(WaitUntil(() => manager.State == "ready", 30_000),
+                manager.Health().Error);
             using var semantic = new SemanticService(manager);
             SemanticWorkspace workspace = semantic.TestOnlyWorkspace;
             workspace.TestOnlyMaxLoadedProjects = 1;
