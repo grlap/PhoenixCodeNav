@@ -352,7 +352,8 @@ public sealed class UnavailableSourceRefreshTests
             Assert.True(manager.RequestGitRefreshForTest(
                 [relativePath], failedRequestCommit, out Task failedRefreshCompleted));
             await failedRefreshCompleted.WaitAsync(TimeSpan.FromSeconds(20));
-            Assert.Equal("stale", manager.State);
+            Assert.Equal(IndexManager.RefreshInputUnavailableCause,
+                manager.Health().RefreshIncompleteReason);
             Assert.Equal(oldCommit, manager.Health().IndexedCommit);
             using (var persistedBeforeRecovery =
                    new IndexStore(database, createNew: false))

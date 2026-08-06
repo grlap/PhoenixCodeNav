@@ -118,6 +118,31 @@ public sealed class RoslynHarnessLifecycleTests
     }
 
     [Fact]
+    public void ProcessLifecycleReadinessIsProtectedByCleanupFinally()
+    {
+        string root = FindRepositoryRoot();
+        string script = File.ReadAllText(
+            Path.Combine(root, "scripts", "test-roslyn-mcp.ps1"));
+        int blockStart = script.IndexOf(
+            "if ($SelfTestProcessLifecycle -or $SelfTestProcessLifecycleReadinessFailure) {",
+            StringComparison.Ordinal);
+        Assert.True(blockStart >= 0, "Lifecycle self-test block was not found.");
+
+        int blockEnd = script.IndexOf("function Test-RetryableSemanticPayload",
+            blockStart, StringComparison.Ordinal);
+        Assert.True(blockEnd > blockStart,
+            "Lifecycle self-test block terminator was not found after its start.");
+        string lifecycleBlock = script[blockStart..blockEnd];
+        Assert.Contains("$client = $null", lifecycleBlock, StringComparison.Ordinal);
+        Assert.Contains("try {", lifecycleBlock, StringComparison.Ordinal);
+        Assert.Contains("} finally {", lifecycleBlock, StringComparison.Ordinal);
+        Assert.Contains("if ($null -ne $client)", lifecycleBlock,
+            StringComparison.Ordinal);
+        Assert.Contains("Stop-McpClient $client", lifecycleBlock,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task SemanticRetryIncludesIndexedAutoFallbacks()
     {
         // The script body is immediate; this outer bound includes PowerShell startup while the
@@ -137,7 +162,32 @@ public sealed class RoslynHarnessLifecycleTests
         Assert.Contains("Process lifecycle self-test passed", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ReadinessFailureStillKillsDescendantProcessTree()
+    {
+        (int exitCode, string output) = await RunSelfTestProcess(
+            "-SelfTestProcessLifecycleReadinessFailure", TimeSpan.FromSeconds(45));
+        Assert.NotEqual(0, exitCode);
+        System.Text.RegularExpressions.Match match =
+            System.Text.RegularExpressions.Regex.Match(output,
+                "READINESS_FAILURE_GRANDCHILD_PID=(\\d+)");
+        Assert.True(match.Success, output);
+        int grandchildPid = int.Parse(match.Groups[1].Value,
+            System.Globalization.CultureInfo.InvariantCulture);
+        Assert.False(IsProcessAlive(grandchildPid),
+            $"Readiness-failure cleanup left descendant {grandchildPid} alive:{Environment.NewLine}{output}");
+    }
+
     private static async Task<string> RunSelfTest(string switchName, TimeSpan timeout)
+    {
+        (int exitCode, string output) = await RunSelfTestProcess(switchName, timeout);
+        Assert.True(exitCode == 0,
+            $"Roslyn harness self-test {switchName} exited {exitCode}:{Environment.NewLine}{output}");
+        return output;
+    }
+
+    private static async Task<(int ExitCode, string Output)> RunSelfTestProcess(
+        string switchName, TimeSpan timeout)
     {
         string root = FindRepositoryRoot();
         string script = Path.Combine(root, "scripts", "test-roslyn-mcp.ps1");
@@ -171,9 +221,24 @@ public sealed class RoslynHarnessLifecycleTests
         }
 
         string output = (await stdout) + Environment.NewLine + (await stderr);
-        Assert.True(process.ExitCode == 0,
-            $"Roslyn harness self-test {switchName} exited {process.ExitCode}:{Environment.NewLine}{output}");
-        return output;
+        return (process.ExitCode, output);
+    }
+
+    private static bool IsProcessAlive(int processId)
+    {
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static string FindRepositoryRoot()

@@ -8,6 +8,7 @@ param(
     [string]$FSharpBaselinePath,
     [string]$EvidencePath,
     [switch]$SelfTestProcessLifecycle,
+    [switch]$SelfTestProcessLifecycleReadinessFailure,
     [switch]$SelfTestProcessHost,
     [switch]$SelfTestProcessGrandchild,
     [switch]$SelfTestSemanticRetryContract
@@ -456,25 +457,39 @@ function Start-ProcessLifecycleSelfTestClient {
     }
 }
 
-if ($SelfTestProcessLifecycle) {
-    $client = Start-ProcessLifecycleSelfTestClient
-    Assert-True ($client.ReadyTask.Wait(15000)) "Lifecycle host did not report readiness"
-    $pidMatch = [regex]::Match([string]$client.ReadyTask.Result, "GRANDCHILD_PID=(\d+)")
-    Assert-True $pidMatch.Success "Lifecycle host did not report its descendant pid"
-    $grandchildPid = [int]$pidMatch.Groups[1].Value
+if ($SelfTestProcessLifecycle -or $SelfTestProcessLifecycleReadinessFailure) {
+    $client = $null
+    try {
+        $client = Start-ProcessLifecycleSelfTestClient
+        Assert-True ($client.ReadyTask.Wait(15000)) "Lifecycle host did not report readiness"
+        $pidMatch = [regex]::Match([string]$client.ReadyTask.Result, "GRANDCHILD_PID=(\d+)")
+        Assert-True $pidMatch.Success "Lifecycle host did not report its descendant pid"
+        $grandchildPid = [int]$pidMatch.Groups[1].Value
+        if ($SelfTestProcessLifecycleReadinessFailure) {
+            Write-Host "READINESS_FAILURE_GRANDCHILD_PID=$grandchildPid"
+            throw "Injected lifecycle readiness assertion failure"
+        }
 
-    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    Stop-McpClient $client
-    $stderr = [string]$client.StderrTail.Snapshot()
-    Assert-True ($stopwatch.Elapsed -lt [TimeSpan]::FromSeconds(15)) "Lifecycle teardown exceeded its hard bound"
-    Assert-True ($stderr.Length -le 65536) "Captured stderr exceeded the rolling-tail bound"
-    $deadline = [DateTime]::UtcNow.AddSeconds(2)
-    while ([DateTime]::UtcNow -lt $deadline -and
-           $null -ne (Get-Process -Id $grandchildPid -ErrorAction SilentlyContinue)) {
-        Start-Sleep -Milliseconds 50
+        $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+        Stop-McpClient $client
+        $stderr = [string]$client.StderrTail.Snapshot()
+        $client = $null
+        Assert-True ($stopwatch.Elapsed -lt [TimeSpan]::FromSeconds(15)) "Lifecycle teardown exceeded its hard bound"
+        Assert-True ($stderr.Length -le 65536) "Captured stderr exceeded the rolling-tail bound"
+        $deadline = [DateTime]::UtcNow.AddSeconds(2)
+        while ([DateTime]::UtcNow -lt $deadline -and
+               $null -ne (Get-Process -Id $grandchildPid -ErrorAction SilentlyContinue)) {
+            Start-Sleep -Milliseconds 50
+        }
+        Assert-True ($null -eq (Get-Process -Id $grandchildPid -ErrorAction SilentlyContinue)) "Lifecycle teardown left a descendant running"
+        Write-Host "Process lifecycle self-test passed"
+    } finally {
+        if ($null -ne $client) {
+            try { Stop-McpClient $client } catch {
+                Write-Warning "Lifecycle cleanup after readiness failure also failed: $($_.Exception.Message)"
+            }
+        }
     }
-    Assert-True ($null -eq (Get-Process -Id $grandchildPid -ErrorAction SilentlyContinue)) "Lifecycle teardown left a descendant running"
-    Write-Host "Process lifecycle self-test passed"
     exit 0
 }
 
