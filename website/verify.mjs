@@ -17,6 +17,22 @@ function check(condition, message) {
   if (!condition) failures.push(message);
 }
 
+function structuredDataDiagnostic(source) {
+  let data;
+  try {
+    data = JSON.parse(source);
+  } catch (error) {
+    return `Structured data must be valid JSON: ${error.message}`;
+  }
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return "Structured data must be a JSON object.";
+  }
+  if (data.operatingSystem !== "Windows") {
+    return "Structured data must match the Windows setup path documented by this page.";
+  }
+  return "";
+}
+
 function matches(pattern, value = html) {
   return [...value.matchAll(pattern)];
 }
@@ -107,15 +123,18 @@ for (const asset of [...stylesheets, ...scripts]) {
 const structuredData = matches(/<script\b[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi);
 check(structuredData.length === 1, "The page must contain exactly one JSON-LD block.");
 if (structuredData.length === 1) {
-  try {
-    const data = JSON.parse(structuredData[0][1]);
-    check(true, "Structured data must be valid JSON.");
-    check(data.operatingSystem === "Windows",
-      "Structured data must match the Windows setup path documented by this page.");
-  } catch (error) {
-    check(false, `Structured data must be valid JSON: ${error.message}`);
-  }
+  const diagnostic = structuredDataDiagnostic(structuredData[0][1]);
+  check(diagnostic === "", diagnostic || "Structured data must be valid and match the documented shape.");
 }
+check(structuredDataDiagnostic("{").startsWith("Structured data must be valid JSON:"),
+  "The JSON-LD verifier must classify syntax errors as invalid JSON.");
+check(structuredDataDiagnostic("null") === "Structured data must be a JSON object.",
+  "The JSON-LD verifier must classify valid non-object JSON as a shape error.");
+check(structuredDataDiagnostic('{"operatingSystem":"Linux"}') ===
+  "Structured data must match the Windows setup path documented by this page.",
+  "The JSON-LD verifier must keep the Windows operating-system contract.");
+check(structuredDataDiagnostic('{"operatingSystem":"Windows"}') === "",
+  "The JSON-LD verifier must accept the documented Windows object.");
 
 check(/<html\b[^>]*\bclass="[^"]*\bno-js\b[^"]*"[^>]*\blang="en"/i.test(html), "The document must ship with the no-JavaScript fallback class and language.");
 check(!/<button\b(?![^>]*\btype="button")[^>]*>/i.test(html), "Every button must declare type=button.");
@@ -172,7 +191,7 @@ if (definitionExampleText) {
     check(example.meta.confidence === "exact" && example.meta.navigationLayer === "semantic", "The definition example must label compiler evidence as exact semantic navigation.");
     check(/^[0-9a-f]{32}$/.test(example.meta.indexVersion), "The representative indexVersion must preserve the emitted opaque GUID format.");
     check(/^\d+\.\d+\.\d+\+(?:[0-9a-f]{12}|unknown)$/.test(example.meta.build),
-      "The representative build stamp must use a twelve-character commit or unknown.");
+      "The representative build stamp must use Phoenix's standard twelve-character lowercase hexadecimal commit suffix or unknown.");
   } catch (error) {
     check(false, `The definition response example must be valid JSON after HTML entity decoding: ${error.message}`);
   }
