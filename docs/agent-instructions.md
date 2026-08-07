@@ -36,7 +36,10 @@ Default flow:
    build input that the selected project/TFM context does not claim to know. Standard SDK/toolchain
    implicit authority is disclosed as partial. The nearest indexed ancestor `Directory.Build.props`
    and `.targets` are evaluated only for bounded properties, conditions, and metadata-free Reference
-   Include/Remove lists. The nearest indexed `Directory.Packages.props` contributes bounded,
+   Include/Remove lists. For C# semantic navigation, an unconditional simple `PackageVersion` in the
+   nearest indexed `Directory.Packages.props` supplies a versionless direct `PackageReference`; the
+   exact package version must already be installed. Unsupported evaluation shapes retain established
+   unresolved-reference behavior rather than guessing. For F#, the nearest indexed `Directory.Packages.props` contributes bounded,
    conditional `PackageVersion` authority for active versionless `PackageReference` items. Those
    identities use the selected target from an already-restored `project.assets.json`; transitive
    compile assets are copied into immutable request-private snapshots, while missing/stale or

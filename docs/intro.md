@@ -39,6 +39,13 @@ carries `confidence` + index-freshness metadata.
 
 Markdown and SQL files are indexed for path lookup, ranked text search, regex/context search, and
 bounded source reads, but remain text-only and never claim syntax or compiler semantics.
+C# Roslyn project loading understands unconditional central package versions from the nearest indexed
+`Directory.Packages.props`: versionless direct `PackageReference` inputs use an exact installed cache
+version and central changes reload warm projects. Unsupported evaluation shapes and existing packages
+without a compatible compiler library retain the established unresolved-reference behavior without
+guessing or invoking restore or MSBuild, while an unavailable selected exact version directory fails
+closed. This does not claim target-specific transitive package closure
+for C#.
 F# source text, `.fsproj` compile ownership, and C#↔F# project edges are indexed. Compile-owned
 `.fs` / `.fsi` files support FCS outlines plus position-based `symbol_at` and same-project
 `definition` in a selected physical-project/TFM type-check context. The semantic path evaluates a

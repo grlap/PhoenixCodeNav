@@ -134,6 +134,16 @@ public sealed record SemanticProjectEdge(
 
 public sealed record DirectoryBuildSemanticAuthority(bool HasPotentialAuthority, string Identity);
 
+/// <summary>The nearest indexed central-package authority and the exact indexed content that
+/// produced its model identity. Content is null when the structural snapshot was unavailable;
+/// callers must then fail closed rather than consulting the mutable live file.</summary>
+public sealed record DirectoryPackagesSemanticAuthority(
+    bool HasPotentialAuthority,
+    string Identity,
+    string? Path = null,
+    string? Content = null,
+    bool PathAmbiguous = false);
+
 public sealed record ReferenceGroup(string Project, bool IsTestProject, int Count, List<TextHit> Samples);
 
 public sealed record OverviewStats(
@@ -2420,6 +2430,104 @@ public sealed partial class IndexQueries : IDisposable
                 targets.Ambiguous ? "targets:ambiguous" :
                     $"targets:{targets.Path}:{targets.Hash}");
             result[name] = new DirectoryBuildSemanticAuthority(potential, identity);
+        }
+        return result;
+    }
+
+    /// <summary>Nearest indexed Directory.Packages.props authority plus its targeted identity and
+    /// bounded indexed content. The batched lookup lets warm C# semantic workspaces notice central
+    /// version changes without broad workspace invalidation or live-filesystem authority.</summary>
+    public Dictionary<string, DirectoryPackagesSemanticAuthority>
+        ProjectDirectoryPackagesSemanticAuthorities(IReadOnlyCollection<ProjectRow> projects,
+            CancellationToken cancellationToken = default)
+    {
+        bool windows = OperatingSystem.IsWindows();
+        var candidatesByProject = new Dictionary<string, List<string>>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (ProjectRow project in projects)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string projectPath = WorkspacePaths.Normalize(project.Path);
+            int slash = projectPath.LastIndexOf('/');
+            string directory = slash < 0 ? "" : projectPath[..slash];
+            var candidates = new List<string>();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string prefix = directory.Length == 0 ? "" : directory + "/";
+                candidates.Add(prefix + "Directory.Packages.props");
+                if (directory.Length == 0) break;
+                int parentSlash = directory.LastIndexOf('/');
+                directory = parentSlash < 0 ? "" : directory[..parentSlash];
+            }
+            candidatesByProject[project.Name] = candidates;
+        }
+
+        var indexed = new List<(string Path, long Hash, string? Content)>();
+        foreach (string[] chunk in candidatesByProject.Values.SelectMany(value => value)
+                     .Distinct(windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+                     .Chunk(300))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$p{i}");
+                args.Add(($"$p{i}", chunk[i]));
+            }
+            args.Add(("$max", IndexBuilder.MaxStructuralFileBytes));
+            string lhs = windows ? "f.path COLLATE NOCASE" : "f.path";
+            indexed.AddRange(QueryCancellable(
+                $"SELECT f.path, f.hash, " +
+                $"CASE WHEN f.size <= $max AND length(c.content) <= $max THEN c.content END " +
+                $"FROM files f LEFT JOIN file_contents c ON c.file_id = f.id " +
+                $"WHERE {lhs} IN ({string.Join(",", parameters)})",
+                reader => (reader.GetString(0), reader.GetInt64(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2)), cancellationToken,
+                args.ToArray()));
+        }
+
+        var exact = indexed.ToDictionary(row => row.Path, row => row,
+            StringComparer.Ordinal);
+        Dictionary<string, List<(string Path, long Hash, string? Content)>>? aliases = windows
+            ? indexed.GroupBy(row => row.Path, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.ToList(),
+                    StringComparer.OrdinalIgnoreCase)
+            : null;
+        var result = new Dictionary<string, DirectoryPackagesSemanticAuthority>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach ((string name, List<string> candidates) in candidatesByProject)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            (string? Path, long Hash, string? Content, bool Ambiguous) resolved =
+                (null, 0, null, false);
+            foreach (string candidate in candidates)
+            {
+                if (exact.TryGetValue(candidate, out var row))
+                {
+                    resolved = (row.Path, row.Hash, row.Content, false);
+                    break;
+                }
+                if (aliases is null || !aliases.TryGetValue(candidate, out var matches))
+                    continue;
+                resolved = matches.Count switch
+                {
+                    1 => (matches[0].Path, matches[0].Hash, matches[0].Content, false),
+                    _ => (null, 0, null, true),
+                };
+                break;
+            }
+
+            string identity = resolved.Ambiguous
+                ? "packages:ambiguous"
+                : $"packages:{resolved.Path}:{resolved.Hash}";
+            result[name] = new DirectoryPackagesSemanticAuthority(
+                resolved.Path is not null || resolved.Ambiguous,
+                identity,
+                resolved.Path,
+                resolved.Content,
+                resolved.Ambiguous);
         }
         return result;
     }

@@ -136,6 +136,23 @@ affected search scopes report `fsharp_parse_failed` and/or
 remain searchable. `.fsx` remains text-only, so script-only scopes fail
 closed and mixed scopes disclose the skipped script files.
 
+The C# Roslyn cold-start loader supports the standard unconditional central-package shape without
+invoking MSBuild or restore. For a versionless project `PackageReference`, it reads the nearest
+applicable `Directory.Packages.props` from the same pinned index snapshot, requires
+`ManagePackageVersionsCentrally=true`, and projects one unconditioned simple `PackageVersion` for
+that identity. The central path and indexed hash are part of the targeted semantic model identity,
+so an indexed central-version change reloads an already-warm project while unrelated config changes
+do not. Centrally selected packages resolve only from the exact global-cache version directory;
+missing versions never fall back to the newest installed version, while an existing analyzer-only
+or target-incompatible package keeps the established unresolved-reference degradation. Imports, conditions, duplicate or
+mutating `PackageVersion` items, `GlobalPackageReference`, invalid versions, missing authority, and
+Windows path ambiguity are not projected and retain established unresolved-reference behavior. A
+selected exact version whose cache directory is absent fails with the stable
+`csharp_semantic_central_package_asset_unavailable` cause. Direct-version
+`PackageReference` and legacy `packages.config` keep their established behavior. This is deliberately
+the existing C# direct-package assembly model with central version authority, not the target-specific
+transitive `project.assets.json` closure implemented for F# below.
+
 The FCS semantic adapter consumes one immutable source/project snapshot captured from a pinned index epoch, copies
 workspace `HintPath` assemblies and restored package compile assets through verified open handles into request-private snapshots, releases
 SQLite before type checking, and bounds source count/bytes, references, concurrency, cache size,

@@ -279,6 +279,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("fsharp-semantic-snapshot", ids);
         Assert.Contains("fsharp-semantic-bounded-project-evaluation", ids);
         Assert.Contains("fsharp-semantic-package-asset-closure", ids);
+        Assert.Contains("csharp-semantic-central-package-management", ids);
         Assert.Contains("workspace-msbuild-config-indexing", ids);
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
@@ -413,6 +414,18 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("project.assets.json", fsharpPackageClosure);
         Assert.Contains("transitive compile assets", fsharpPackageClosure);
         Assert.Contains("without restore or MSBuild execution", fsharpPackageClosure);
+        string csharpCentralPackages = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "csharp-semantic-central-package-management")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.57", csharpCentralPackages);
+        Assert.Contains("Directory.Packages.props", csharpCentralPackages);
+        Assert.Contains("PackageVersion", csharpCentralPackages);
+        Assert.Contains("exact global-cache directories", csharpCentralPackages);
+        Assert.Contains("warm model identity", csharpCentralPackages);
+        Assert.Contains("without guessing or executing restore", csharpCentralPackages);
         string portalReadOnly = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

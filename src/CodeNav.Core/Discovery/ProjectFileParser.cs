@@ -54,6 +54,11 @@ public sealed record FSharpParsingOptionsSnapshot(
 
 public sealed record FSharpPackageReferenceSnapshot(string Id, string? RequestedVersion);
 
+internal sealed record CSharpPackageReferenceSnapshot(
+    string Id,
+    string Version,
+    bool CentrallyManaged = false);
+
 /// <summary>Literal, ordered inputs that are safe to hand to the isolated FCS semantic adapter.
 /// This is intentionally narrower than <see cref="ParsedProject"/>: F# compile order is semantic,
 /// so an unevaluated wildcard/condition/default item is a hard boundary rather than a best-effort

@@ -83,9 +83,8 @@ public static class ReferenceAssemblyLocator
         }
 
         // 3. NuGet cache (auto-restored by SDK builds targeting net472 without a pack).
-        string nuget = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".nuget", "packages", "microsoft.netframework.referenceassemblies.net472");
+        string nuget = Path.Combine(GlobalPackagesRoot(),
+            "microsoft.netframework.referenceassemblies.net472");
         if (Directory.Exists(nuget))
         {
             var candidate = Directory.EnumerateDirectories(nuget)
@@ -107,15 +106,35 @@ public static class ReferenceAssemblyLocator
 
     /// <summary>Resolves a NuGet package assembly for net472-ish targets from the global cache.</summary>
     public static string? ResolvePackageDll(string packageId, string version)
+        => ResolvePackageDll(packageId, version, requireExactVersion: false);
+
+    /// <summary>Resolves only the selected package version. CPM authority must never drift to the
+    /// newest cache directory when the restored central version is absent.</summary>
+    internal static string? ResolvePackageDllExact(string packageId, string version,
+        out bool exactVersionDirectoryExists)
+        => ResolvePackageDll(packageId, version, requireExactVersion: true,
+            out exactVersionDirectoryExists);
+
+    private static string? ResolvePackageDll(string packageId, string version,
+        bool requireExactVersion)
+        => ResolvePackageDll(packageId, version, requireExactVersion,
+            out _);
+
+    private static string? ResolvePackageDll(string packageId, string version,
+        bool requireExactVersion, out bool exactVersionDirectoryExists)
     {
-        string root = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".nuget", "packages", packageId.ToLowerInvariant());
+        exactVersionDirectoryExists = false;
+        string root = Path.Combine(GlobalPackagesRoot(), packageId.ToLowerInvariant());
         if (!Directory.Exists(root)) return null;
 
-        string? versionDir = Directory.Exists(Path.Combine(root, version))
-            ? Path.Combine(root, version)
-            : Directory.EnumerateDirectories(root).OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
+        string exactVersionDir = Path.Combine(root, version);
+        exactVersionDirectoryExists = Directory.Exists(exactVersionDir);
+        string? versionDir = exactVersionDirectoryExists
+            ? exactVersionDir
+            : requireExactVersion
+                ? null
+                : Directory.EnumerateDirectories(root)
+                    .OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
         if (versionDir is null) return null;
 
         string lib = Path.Combine(versionDir, "lib");
@@ -176,11 +195,7 @@ public static class ReferenceAssemblyLocator
             : "netstandard2.1";
         if (packageVersion.Length > 0)
         {
-            string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
-            { Length: > 0 } configuredPackages
-                ? configuredPackages
-                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    ".nuget", "packages");
+            string packagesRoot = GlobalPackagesRoot();
             string candidate = Path.Combine(packagesRoot, "fsharp.core", packageVersion,
                 "lib", targetAsset, "FSharp.Core.dll");
             if (File.Exists(candidate))
@@ -191,6 +206,15 @@ public static class ReferenceAssemblyLocator
         }
 
         return runtimePath;
+    }
+
+    internal static string GlobalPackagesRoot()
+    {
+        string? configured = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        return string.IsNullOrWhiteSpace(configured)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".nuget", "packages")
+            : configured;
     }
 
     private static string? ProbeNetCoreReferenceDir(string targetFramework)

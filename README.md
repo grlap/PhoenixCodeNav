@@ -36,6 +36,18 @@ Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`proje
 `impact`, `related_tests`). Solution files may be inventoried for editor context, but they
 never select projects or contribute build, ownership, dependency, or symbol-resolution authority.
 
+**C# semantic loading supports standard central package management.** A versionless
+`PackageReference` can take its unconditional simple version from the nearest indexed
+`Directory.Packages.props`. That central file participates in the warm Roslyn project identity, so
+an indexed `PackageVersion` refresh reloads the affected project. Phoenix never runs restore or
+MSBuild: the selected version must already exist in its exact global-cache directory. Existing
+analyzer-only or target-incompatible packages keep the established unresolved-reference behavior. Central shapes
+that require MSBuild evaluation retain the established unresolved-reference behavior instead of
+guessing, while a selected but unavailable exact package fails the project load rather than
+substituting another installed version. This extends the existing
+C# direct-package assembly strategy; the verified transitive-assets closure described below remains
+specific to F#.
+
 **F# support is real, and deliberately bounded.** Phoenix indexes `.fs`, `.fsi`, and `.fsx` text,
 parses `.fsproj` compile ownership and references, and preserves C#↔F# project edges. Compile-owned
 `.fs` / `.fsi` files get indexed declaration-name search and syntax-only `outline`s from a pinned

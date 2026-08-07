@@ -100,6 +100,7 @@ public sealed partial class SemanticWorkspace
         (long Count, long Sum) Fingerprint,
         IReadOnlyList<(string Path, long Size)> Files,
         bool HasDirectoryBuildAuthority,
+        DirectoryPackagesSemanticAuthority DirectoryPackagesAuthority,
         long ProjectFileSize,
         long PackagesFileSize);
 
@@ -782,11 +783,22 @@ public sealed partial class SemanticWorkspace
                 Dictionary<string, DirectoryBuildSemanticAuthority> plannedAuthorities =
                     queries.ProjectDirectoryBuildSemanticAuthorities(selectedCSharpRows,
                         cancellationToken);
+                Dictionary<string, DirectoryPackagesSemanticAuthority> plannedPackageAuthorities =
+                    queries.ProjectDirectoryPackagesSemanticAuthorities(selectedCSharpRows,
+                        cancellationToken);
+                long directoryPackagesBytes = plannedPackageAuthorities.Values
+                    .Where(authority => authority.Path is not null && authority.Content is not null)
+                    .GroupBy(authority => authority.Path!, StringComparer.Ordinal)
+                    .Select(group => group.First().Content!.Length * (long)sizeof(char))
+                    .Aggregate(0L, SaturatingAdd);
+                using InputReservation directoryPackagesLease =
+                    _coldStartRuntime.Accounting.Reserve(directoryPackagesBytes);
 
                 string ModelIdentity(string name) => string.Join('\u001f',
                     plannedMetadata.SchemaVersion,
                     plannedMetadata.IndexVersion,
-                    plannedAuthorities.GetValueOrDefault(name)?.Identity);
+                    plannedAuthorities.GetValueOrDefault(name)?.Identity,
+                    plannedPackageAuthorities.GetValueOrDefault(name)?.Identity);
                 foreach (string name in residentRequested)
                 {
                     if (!string.Equals(resident[name].ModelIdentity, ModelIdentity(name),
@@ -883,10 +895,13 @@ public sealed partial class SemanticWorkspace
                     ProjectId id = plannedIds[name];
                     DirectoryBuildSemanticAuthority authority =
                         plannedAuthorities.GetValueOrDefault(name) ?? new(false, "");
+                    DirectoryPackagesSemanticAuthority packageAuthority =
+                        plannedPackageAuthorities.GetValueOrDefault(name) ?? new(false, "");
                     plans.Add(new PlannedProject(
                         name, row, id, ModelIdentity(name), fingerprint,
                         filesByProject.GetValueOrDefault(name) ?? [],
                         authority.HasPotentialAuthority,
+                        packageAuthority,
                         0,
                         0));
                 }
@@ -994,10 +1009,15 @@ public sealed partial class SemanticWorkspace
                     Dictionary<string, DirectoryBuildSemanticAuthority> currentAuthorities =
                         verify.ProjectDirectoryBuildSemanticAuthorities(currentCSharpRows,
                             cancellationToken);
+                    Dictionary<string, DirectoryPackagesSemanticAuthority>
+                        currentPackageAuthorities =
+                            verify.ProjectDirectoryPackagesSemanticAuthorities(currentCSharpRows,
+                                cancellationToken);
                     string CurrentModelIdentity(string name) => string.Join('\u001f',
                         currentMetadata.SchemaVersion,
                         currentMetadata.IndexVersion,
-                        currentAuthorities.GetValueOrDefault(name)?.Identity);
+                        currentAuthorities.GetValueOrDefault(name)?.Identity,
+                        currentPackageAuthorities.GetValueOrDefault(name)?.Identity);
                     bool staleIndex = requested.Any(name =>
                         (currentFingerprints.TryGetValue(name, out var current)
                             ? current : (0L, 0L)) !=
@@ -1392,6 +1412,7 @@ public sealed partial class SemanticWorkspace
 
                 long parseStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 ParsedProject parsed;
+                IReadOnlyList<string> resolvedPackageDlls;
                 long projectByteCount;
                 long packagesByteCount;
                 try
@@ -1418,6 +1439,36 @@ public sealed partial class SemanticWorkspace
                     packagesByteCount = packagesBytes?.LongLength ?? 0;
                     parsed = ProjectFileParser.ParseSnapshot(
                         plan.Row.Path, projectBytes, packagesBytes);
+                    List<CSharpPackageReferenceSnapshot> packageReferences =
+                        ProjectFileParser.EvaluateCSharpPackageReferencesSnapshot(
+                            projectBytes, parsed.PackageRefs,
+                            plan.DirectoryPackagesAuthority.Content,
+                            plan.DirectoryPackagesAuthority.PathAmbiguous);
+                    parsed = parsed with
+                    {
+                        PackageRefs = packageReferences
+                            .Select(reference => (reference.Id, reference.Version)).ToList(),
+                    };
+                    var packageDlls = new List<string>();
+                    foreach (CSharpPackageReferenceSnapshot reference in
+                             packageReferences)
+                    {
+                        bool exactVersionDirectoryExists = false;
+                        string? dll = reference.CentrallyManaged
+                            ? ReferenceAssemblyLocator.ResolvePackageDllExact(
+                                reference.Id, reference.Version,
+                                out exactVersionDirectoryExists)
+                            : ReferenceAssemblyLocator.ResolvePackageDll(
+                                reference.Id, reference.Version);
+                        if (reference.CentrallyManaged && !exactVersionDirectoryExists)
+                        {
+                            return PreparedProject.Failed(plan,
+                                "csharp_semantic_central_package_asset_unavailable",
+                                projectQueueTicks);
+                        }
+                        if (dll is not null) packageDlls.Add(dll);
+                    }
+                    resolvedPackageDlls = packageDlls;
                 }
                 finally
                 {
@@ -1428,7 +1479,7 @@ public sealed partial class SemanticWorkspace
                 long descriptorRetainedBytes = SaturatingAdd(projectByteCount * 2,
                     packagesByteCount * 2);
                 long estimate = EstimateProjectBytes(plan, parsed, projectByteCount,
-                    packagesByteCount, sourceBounds);
+                    packagesByteCount, sourceBounds, resolvedPackageDlls);
                 InputReservation reservation = _coldStartRuntime.Accounting.Reserve(estimate);
 
                 var metadataLeases = new List<MetadataReferenceLease>();
@@ -1523,11 +1574,7 @@ public sealed partial class SemanticWorkspace
                             hint.Replace('/', Path.DirectorySeparatorChar));
                         AddCandidate(assembly, full);
                     }
-                    foreach ((string package, string version) in parsed.PackageRefs)
-                    {
-                        if (ReferenceAssemblyLocator.ResolvePackageDll(package, version) is { } dll)
-                            AddCandidate(null, dll);
-                    }
+                    foreach (string dll in resolvedPackageDlls) AddCandidate(null, dll);
                     long metadataTicks = System.Diagnostics.Stopwatch.GetTimestamp() - metadataStarted;
 
                     bool unproven = parsed.InternalsVisibleTo is { Count: > 0 } &&
@@ -1585,7 +1632,8 @@ public sealed partial class SemanticWorkspace
     }
 
     private long EstimateProjectBytes(PlannedProject plan, ParsedProject parsed,
-        long projectBytes, long packagesBytes, IReadOnlyList<long> sourceBounds)
+        long projectBytes, long packagesBytes, IReadOnlyList<long> sourceBounds,
+        IReadOnlyList<string> resolvedPackageDlls)
     {
         long estimate = SaturatingAdd(PreparedProjectOverheadBytes,
             SaturatingAdd(projectBytes * 2, packagesBytes * 2));
@@ -1601,11 +1649,8 @@ public sealed partial class SemanticWorkspace
             estimate = SaturatingAdd(estimate, MetadataFileSize(Path.Combine(_workspaceRoot,
                 hint.Replace('/', Path.DirectorySeparatorChar))));
         }
-        foreach ((string package, string version) in parsed.PackageRefs)
-        {
-            if (ReferenceAssemblyLocator.ResolvePackageDll(package, version) is { } dll)
-                estimate = SaturatingAdd(estimate, MetadataFileSize(dll));
-        }
+        foreach (string dll in resolvedPackageDlls)
+            estimate = SaturatingAdd(estimate, MetadataFileSize(dll));
         if (parsed.InternalsVisibleTo is { Count: > 0 } friendAssemblies)
         {
             string generated = InternalsVisibleToSource(friendAssemblies);
