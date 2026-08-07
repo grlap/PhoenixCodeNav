@@ -62,13 +62,13 @@ public class Batch43GitReviewSafetyTests
             -old one
             -old two
             """.Replace("{TAB}", "\t", StringComparison.Ordinal)
-               .Replace("\n", "\r\n", StringComparison.Ordinal);
+               .ReplaceLineEndings("\r\n");
 
         var result = GitInfo.ParseDiffOutput(DiffOutput(new[]
         {
             new RawEntry("000000", "100644", 'A', "Ünicode Space.cs"),
             new RawEntry("100644", "000000", 'D', "Old.cs"),
-        }, patch + "\n"));
+        }, patch + "\r\n"));
         Assert.Equal("ok", result.Status);
         var files = Assert.IsType<List<GitInfo.DiffFile>>(result.Files);
 
