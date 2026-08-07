@@ -664,23 +664,25 @@ public partial class FSharpSemanticStage2Tests
             });
         Assert.Equal("fsharp_semantic_import_items_unsupported", importedItems.Error);
 
-        foreach ((string item, string expected) in new[]
-                 {
-                     ("<PackageReference Include=\"Imported.Package\" />",
-                         "fsharp_semantic_package_references_unsupported"),
-                     ("<ProjectReference Include=\"Imported.fsproj\" />",
-                         "fsharp_semantic_project_references_unsupported"),
-                 })
-        {
-            FSharpSemanticOptionsSnapshot importedStage2B = EvaluateBoundedProject(
-                "<Import Project=\"../Build/Stage2B.props\" />",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["Build/Stage2B.props"] =
-                        $"<Project><ItemGroup>{item}</ItemGroup></Project>",
-                });
-            Assert.Equal(expected, importedStage2B.Error);
-        }
+        FSharpSemanticOptionsSnapshot importedPackage = EvaluateBoundedProject(
+            "<Import Project=\"../Build/Packages.props\" />",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Build/Packages.props"] =
+                    "<Project><ItemGroup><PackageReference Include=\"Imported.Package\" Version=\"1.2.3\" /></ItemGroup></Project>",
+            });
+        Assert.Null(importedPackage.Error);
+        Assert.Equal([new FSharpPackageReferenceSnapshot("Imported.Package", "1.2.3")],
+            importedPackage.PackageReferences);
+
+        FSharpSemanticOptionsSnapshot importedProject = EvaluateBoundedProject(
+            "<Import Project=\"../Build/Projects.props\" />",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Build/Projects.props"] =
+                    "<Project><ItemGroup><ProjectReference Include=\"Imported.fsproj\" /></ItemGroup></Project>",
+            });
+        Assert.Equal("fsharp_semantic_project_references_unsupported", importedProject.Error);
 
         FSharpSemanticOptionsSnapshot cycle = EvaluateBoundedProject(
             "<Import Project=\"../Build/A.props\" />",
@@ -690,6 +692,302 @@ public partial class FSharpSemanticStage2Tests
                 ["Build/B.props"] = "<Project><Import Project=\"A.props\" /></Project>",
             });
         Assert.Equal("fsharp_semantic_import_cycle", cycle.Error);
+    }
+
+    [Fact]
+    public void CentralPackageManagementUsesImportedConditionalPackageVersions()
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Core/Directory.Packages.props"] = """
+                <Project>
+                  <Import Project="../Build/Versions.props" />
+                </Project>
+                """,
+            ["Build/Versions.props"] = """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="Example.Package" Version="1.0.0" />
+                    <PackageVersion Update="Example.Package" Version="9.0.0"
+                                    Condition="'$(TargetFramework)' == 'net9.0'" />
+                    <PackageVersion Update="Example.Package" Version="10.0.10"
+                                    Condition="'$(TargetFramework)' == 'net10.0'" />
+                  </ItemGroup>
+                </Project>
+                """,
+        };
+
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject(
+            "<ItemGroup><PackageReference Include=\"Example.Package\" /></ItemGroup>",
+            imports, directoryPackagesPropsPath: "Core/Directory.Packages.props");
+
+        Assert.Null(result.Error);
+        Assert.Equal([new FSharpPackageReferenceSnapshot("Example.Package", "10.0.10")],
+            result.PackageReferences);
+
+        FSharpSemanticOptionsSnapshot overridden = EvaluateBoundedProject(
+            "<ItemGroup><PackageReference Include=\"Example.Package\" VersionOverride=\"10.0.11\" /></ItemGroup>",
+            imports, directoryPackagesPropsPath: "Core/Directory.Packages.props");
+        Assert.Null(overridden.Error);
+        Assert.Equal([new FSharpPackageReferenceSnapshot("Example.Package", "10.0.11")],
+            overridden.PackageReferences);
+    }
+
+    [Fact]
+    public void CentralPackageManagementFailsClosedForMissingOrInvalidAuthority()
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Packages.props"] = """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                    <CentralPackageVersionOverrideEnabled>false</CentralPackageVersionOverrideEnabled>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="Known.Package" Version="1.2.3" />
+                  </ItemGroup>
+                </Project>
+                """,
+        };
+
+        Assert.Equal("fsharp_semantic_package_reference_unresolved",
+            EvaluateBoundedProject(
+                "<ItemGroup><PackageReference Include=\"Missing.Package\" /></ItemGroup>",
+                imports, directoryPackagesPropsPath: "Directory.Packages.props").Error);
+        Assert.Equal("fsharp_semantic_package_reference_unresolved",
+            EvaluateBoundedProject(
+                "<ItemGroup><PackageReference Include=\"Known.Package\" Version=\"1.2.3\" /></ItemGroup>",
+                imports, directoryPackagesPropsPath: "Directory.Packages.props").Error);
+        Assert.Equal("fsharp_semantic_package_reference_unresolved",
+            EvaluateBoundedProject(
+                "<ItemGroup><PackageReference Include=\"Known.Package\" VersionOverride=\"1.2.4\" /></ItemGroup>",
+                imports, directoryPackagesPropsPath: "Directory.Packages.props").Error);
+        Assert.Equal("fsharp_semantic_directory_packages_ambiguous",
+            EvaluateBoundedProject(
+                "<ItemGroup><PackageReference Include=\"Known.Package\" /></ItemGroup>",
+                imports, directoryPackagesPropsPath: "Directory.Packages.props",
+                hasAmbiguousDirectoryPackagesAuthority: true).Error);
+
+        imports["Directory.Packages.props"] = """
+            <Project>
+              <PropertyGroup>
+                <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageVersion Include="Known.Package" Version="[1.0,2.0)" />
+              </ItemGroup>
+            </Project>
+            """;
+        Assert.Equal("fsharp_semantic_central_package_management_unsupported",
+            EvaluateBoundedProject(
+                "<ItemGroup><PackageReference Include=\"Known.Package\" /></ItemGroup>",
+                imports, directoryPackagesPropsPath: "Directory.Packages.props").Error);
+    }
+
+    [Fact]
+    public void InvalidCentralPackageBooleansPreserveTheirSpecificCause()
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Packages.props"] = """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>sometimes</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="Known.Package" Version="1.2.3" />
+                  </ItemGroup>
+                </Project>
+                """,
+        };
+
+        Assert.Equal("fsharp_semantic_central_package_management_unsupported",
+            EvaluateBoundedProject(
+                "<ItemGroup><PackageReference Include=\"Known.Package\" /></ItemGroup>",
+                imports, directoryPackagesPropsPath: "Directory.Packages.props").Error);
+
+        imports["Directory.Packages.props"] = """
+            <Project>
+              <PropertyGroup>
+                <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                <CentralPackageVersionOverrideEnabled>sometimes</CentralPackageVersionOverrideEnabled>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageVersion Include="Known.Package" Version="1.2.3" />
+              </ItemGroup>
+            </Project>
+            """;
+        Assert.Equal("fsharp_semantic_central_package_management_unsupported",
+            EvaluateBoundedProject(
+                "<ItemGroup><PackageReference Include=\"Known.Package\" VersionOverride=\"1.2.4\" /></ItemGroup>",
+                imports, directoryPackagesPropsPath: "Directory.Packages.props").Error);
+    }
+
+    [Fact]
+    public void PackageReferenceUpdateDoesNotCreateAnUndeclaredItem()
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("""
+            <ItemGroup>
+              <PackageReference Update="Missing.Versionless" />
+              <PackageReference Update="Missing.Versioned" Version="1.2.3" />
+            </ItemGroup>
+            """);
+
+        Assert.Null(result.Error);
+        Assert.NotNull(result.PackageReferences);
+        Assert.Empty(result.PackageReferences);
+
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Packages.props"] = """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                </Project>
+                """,
+        };
+        FSharpSemanticOptionsSnapshot centrallyManaged = EvaluateBoundedProject("""
+            <ItemGroup>
+              <PackageReference Update="Missing.Versionless" />
+              <PackageReference Update="Missing.Versioned" Version="1.2.3" />
+            </ItemGroup>
+            """, imports, directoryPackagesPropsPath: "Directory.Packages.props");
+        Assert.Null(centrallyManaged.Error);
+        Assert.NotNull(centrallyManaged.PackageReferences);
+        Assert.Empty(centrallyManaged.PackageReferences);
+    }
+
+    [Fact]
+    public void SemanticItemDispatchAcceptsCaseInsensitivePackageReferenceNames()
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("""
+            <ItemGroup>
+              <packagereference Include="Lower.Package" Version="1.2.3" />
+              <PaCkAgErEfErEnCe Include="Mixed.Package" Version="4.5.6" />
+            </ItemGroup>
+            """);
+
+        Assert.Null(result.Error);
+        Assert.Equal([
+                new FSharpPackageReferenceSnapshot("Lower.Package", "1.2.3"),
+                new FSharpPackageReferenceSnapshot("Mixed.Package", "4.5.6"),
+            ],
+            result.PackageReferences);
+    }
+
+    [Fact]
+    public void GlobalPackageReferenceFailsClosedAsUnsupportedCentralAuthority()
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Packages.props"] = """
+                <Project>
+                  <ItemGroup>
+                    <GlobalPackageReference Include="Global.Tool" Version="1.2.3" />
+                  </ItemGroup>
+                </Project>
+                """,
+        };
+
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("",
+            imports, directoryPackagesPropsPath: "Directory.Packages.props");
+
+        Assert.Equal("fsharp_semantic_central_package_management_unsupported",
+            result.Error);
+    }
+
+    [Fact]
+    public void DirectPackageReferenceVersionGrammarIsBounded()
+    {
+        FSharpSemanticOptionsSnapshot range = EvaluateBoundedProject(
+            "<ItemGroup><PackageReference Include=\"Range.Package\" Version=\"[1.0,2.0)\" /></ItemGroup>");
+        Assert.Null(range.Error);
+        Assert.Equal([new FSharpPackageReferenceSnapshot("Range.Package", "[1.0,2.0)")],
+            range.PackageReferences);
+
+        FSharpSemanticOptionsSnapshot floating = EvaluateBoundedProject(
+            "<ItemGroup><PackageReference Include=\"Float.Package\" Version=\"1.2.*\" /></ItemGroup>");
+        Assert.Null(floating.Error);
+        Assert.Equal([new FSharpPackageReferenceSnapshot("Float.Package", "1.2.*")],
+            floating.PackageReferences);
+
+        Assert.Equal("fsharp_semantic_package_reference_unresolved",
+            EvaluateBoundedProject(
+                "<ItemGroup><PackageReference Include=\"Unsupported.Package\" Version=\"*\" /></ItemGroup>")
+                .Error);
+    }
+
+    [Theory]
+    [InlineData("ExcludeAssets", "compile")]
+    [InlineData("IncludeAssets", "runtime; build; native")]
+    [InlineData("Aliases", "PackageAlias")]
+    public void PackageReferenceCompilerMetadataFailsClosed(string metadataName,
+        string metadataValue)
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject($$"""
+            <ItemGroup>
+              <PackageReference Include="Metadata.Package" Version="1.2.3"
+                                {{metadataName}}="{{metadataValue}}" />
+            </ItemGroup>
+            """);
+
+        Assert.Equal("fsharp_semantic_package_reference_metadata_unsupported", result.Error);
+        Assert.NotNull(result.PackageReferences);
+        Assert.Empty(result.PackageReferences);
+    }
+
+    [Fact]
+    public void InactivePackageReferenceCompilerMetadataDoesNotBlockEvaluation()
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("""
+            <ItemGroup>
+              <PackageReference Include="Metadata.Package" Version="1.2.3">
+                <Aliases Condition="false">PackageAlias</Aliases>
+              </PackageReference>
+            </ItemGroup>
+            """);
+
+        Assert.Null(result.Error);
+        Assert.Equal([new FSharpPackageReferenceSnapshot("Metadata.Package", "1.2.3")],
+            result.PackageReferences);
+    }
+
+    [Fact]
+    public void DirectoryBuildPropertiesSelectCentralPackageVersions()
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.props"] = """
+                <Project>
+                  <PropertyGroup><PackageChannel>Current</PackageChannel></PropertyGroup>
+                </Project>
+                """,
+            ["Directory.Packages.props"] = """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="Known.Package" Version="1.2.3"
+                                    Condition="'$(PackageChannel)' == 'Current'" />
+                  </ItemGroup>
+                </Project>
+                """,
+        };
+
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject(
+            "<ItemGroup><PackageReference Include=\"Known.Package\" /></ItemGroup>",
+            imports, directoryPackagesPropsPath: "Directory.Packages.props",
+            directoryBuildPropsPath: "Directory.Build.props");
+
+        Assert.Null(result.Error);
+        Assert.Equal([new FSharpPackageReferenceSnapshot("Known.Package", "1.2.3")],
+            result.PackageReferences);
     }
 
     [Fact]
@@ -1466,6 +1764,49 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Fact]
+    public void DirectoryPackagesAuthorityUsesNearestIndexedAncestorAndRejectsCaseAmbiguity()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-directory-packages-authority").FullName;
+        string dbPath = Path.Combine(root, "index.sqlite");
+        try
+        {
+            using (var store = new IndexStore(dbPath, createNew: true))
+            using (var transaction = store.BeginTransaction())
+            {
+                foreach (string path in new[]
+                         {
+                             "Directory.Packages.props",
+                             "Core/Directory.Packages.props",
+                             "Core/Sub/DIRECTORY.PACKAGES.PROPS",
+                             "Core/Sub/directory.packages.props",
+                         })
+                    store.InsertFile(transaction, path, 0, 0, 0,
+                        "config", 0, isGenerated: false, hasTestAttrs: false);
+                transaction.Commit();
+            }
+
+            using var queries = new IndexQueries(dbPath);
+            DirectoryPackagesAuthorityPath unix =
+                queries.ApplicableDirectoryPackagesAuthority(
+                    "Core/Sub/Project.fsproj", useWindowsPathPolicy: false);
+            Assert.Equal("Core/Directory.Packages.props", unix.Path);
+            Assert.False(unix.PathAmbiguous);
+
+            DirectoryPackagesAuthorityPath windows =
+                queries.ApplicableDirectoryPackagesAuthority(
+                    "Core/Sub/Project.fsproj", useWindowsPathPolicy: true);
+            Assert.Null(windows.Path);
+            Assert.True(windows.PathAmbiguous);
+            Assert.True(windows.HasPotentialAuthority);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
     public void WindowsDirectoryBuildAuthorityPrefersAnExactIndexedPathOverCaseAliases()
     {
         string root = Directory.CreateTempSubdirectory(
@@ -1638,9 +1979,11 @@ public partial class FSharpSemanticStage2Tests
         string body,
         IReadOnlyDictionary<string, string>? imports = null,
         CancellationToken cancellationToken = default,
+        string? directoryPackagesPropsPath = null,
         string? directoryBuildPropsPath = null,
         string? directoryBuildTargetsPath = null,
-        bool hasAmbiguousDirectoryBuildAuthority = false)
+        bool hasAmbiguousDirectoryBuildAuthority = false,
+        bool hasAmbiguousDirectoryPackagesAuthority = false)
     {
         string project = $$"""
             <Project>
@@ -1654,10 +1997,13 @@ public partial class FSharpSemanticStage2Tests
             path => imports is not null && imports.TryGetValue(path, out string? content)
                 ? content
                 : null,
+            directoryPackagesPropsPath: directoryPackagesPropsPath,
             directoryBuildPropsPath: directoryBuildPropsPath,
             directoryBuildTargetsPath: directoryBuildTargetsPath,
             cancellationToken: cancellationToken,
-            hasAmbiguousDirectoryBuildAuthority: hasAmbiguousDirectoryBuildAuthority);
+            hasAmbiguousDirectoryBuildAuthority: hasAmbiguousDirectoryBuildAuthority,
+            hasAmbiguousDirectoryPackagesAuthority:
+                hasAmbiguousDirectoryPackagesAuthority);
     }
 
     private static FSharpSemanticOptionsSnapshot EvaluateImportCount(int count)

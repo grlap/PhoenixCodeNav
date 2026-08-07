@@ -29,7 +29,7 @@ navigation questions in four layers, each labeled with how trustworthy it is:
 | **Indexed text** (SQLite FTS5, C# + F# + Markdown + SQL) | `find_file`, `search_text`, `source_context`, `config_lookup`, `references` (candidates) | `indexed` |
 | **Syntax (C#)** (Roslyn parse, no compile; includes implicit/explicit conversion operators) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
 | **Syntax (F#)** (FCS parse, no type check) | `search_symbol`; `outline` for project-owned `.fs` / `.fsi` | `indexed` |
-| **Semantic** (Roslyn for C#; bounded FCS type checks for F# Stage 2A) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at` and same-project `definition` | C# may be `exact`; bounded F# Stage 2A is `indexed` with explicit partial causes |
+| **Semantic** (Roslyn for C#; bounded FCS type checks for F#) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at` and same-project `definition` | C# may be `exact`; bounded F# is `indexed` with explicit partial causes |
 
 Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`project_graph`,
 `projects_containing`, `dependency_path`, `repo_overview`) and composites (`context_pack`,
@@ -40,7 +40,12 @@ never select projects or contribute build, ownership, dependency, or symbol-reso
 parses `.fsproj` compile ownership and references, and preserves C#↔F# project edges. Compile-owned
 `.fs` / `.fsi` files get indexed declaration-name search and syntax-only `outline`s from a pinned
 FSharp.Compiler.Service adapter, plus position-based `symbol_at` and same-project `definition`
-through a bounded FCS type check. Stored declaration indexing processes at most 64 deterministically
+through a bounded FCS type check. Active `PackageReference` items—including conditional central
+`PackageVersion` authority from the nearest indexed `Directory.Packages.props`—use the selected
+target in an already-restored `project.assets.json`; reachable transitive compile assets are
+snapshotted without executing restore or MSBuild, while stale/missing/ambiguous assets and project-reference
+closure fail explicitly. Stored
+declaration indexing processes at most 64 deterministically
 selected owner/TFM parse contexts per file, reserving one context per valid compile owner while
 capacity remains before filling the budget in global ordinal order. FCS syntax parse failures, context truncation, and
 unavailable/unevaluated project-option contexts are retained as index coverage evidence:

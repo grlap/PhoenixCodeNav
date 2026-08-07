@@ -278,6 +278,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("fsharp-type-check-context-selection", ids);
         Assert.Contains("fsharp-semantic-snapshot", ids);
         Assert.Contains("fsharp-semantic-bounded-project-evaluation", ids);
+        Assert.Contains("fsharp-semantic-package-asset-closure", ids);
         Assert.Contains("workspace-msbuild-config-indexing", ids);
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
@@ -400,6 +401,18 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("total/processed/truncated", fsharpIndexedContextBudget);
         Assert.Contains("truncatedOwnerProjects", fsharpIndexedContextBudget);
         Assert.Contains("fsharp_parse_contexts_truncated", fsharpIndexedContextBudget);
+        string fsharpPackageClosure = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-semantic-package-asset-closure")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.56", fsharpPackageClosure);
+        Assert.Contains("Directory.Packages.props", fsharpPackageClosure);
+        Assert.Contains("PackageVersion", fsharpPackageClosure);
+        Assert.Contains("project.assets.json", fsharpPackageClosure);
+        Assert.Contains("transitive compile assets", fsharpPackageClosure);
+        Assert.Contains("without restore or MSBuild execution", fsharpPackageClosure);
         string portalReadOnly = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

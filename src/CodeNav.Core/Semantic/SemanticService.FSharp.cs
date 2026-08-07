@@ -94,12 +94,14 @@ public sealed partial class SemanticService
     internal Action? FSharpSemanticSnapshotCapturedForTest { get; set; }
     internal Action<string?>? FSharpSemanticCheckCompletedForTest { get; set; }
     internal Action<string>? BeforeFSharpReferenceOpenForTest { get; set; }
+    internal Action<string>? BeforeFSharpPackageRootProbeForTest { get; set; }
     internal Action<string>? FSharpReferenceSnapshotCreatedForTest { get; set; }
     internal long? FSharpSemanticReferenceBytesLimitForTest { get; set; }
 
     private sealed record FSharpBinaryReferenceSnapshot(
-        string RelativePath,
+        string SourceIdentity,
         string OriginalFullPath,
+        string AllowedRootFullPath,
         string SnapshotFullPath,
         long Length,
         string Sha256);
@@ -238,8 +240,9 @@ public sealed partial class SemanticService
     /// <summary>
     /// Resolves one F# symbol against a selected physical project + TFM type-check environment.
     /// Admission is bounded before every source byte and project option is captured from one pinned
-    /// index epoch; SQLite is released before invoking FCS. Stage 2A deliberately fails closed for project
-    /// and package reference closure rather than borrowing another physical project's graph.
+    /// index epoch; SQLite is released before invoking FCS. Restored package compile assets are captured
+    /// immutably; project-reference closure still fails closed rather than borrowing another physical
+    /// project's graph.
     /// </summary>
     public async Task<FSharpSemanticResult> FSharpSymbolAtAsync(
         string path,
@@ -459,24 +462,33 @@ public sealed partial class SemanticService
 
         DirectoryBuildAuthorityPaths directoryBuild =
             queries.ApplicableDirectoryBuildAuthority(owner.Path);
+        DirectoryPackagesAuthorityPath directoryPackages =
+            queries.ApplicableDirectoryPackagesAuthority(owner.Path);
+        var evaluatedAuthorityInputs = new Dictionary<string, string>(
+            WorkspacePaths.FileSystemPathComparer);
         FSharpSemanticOptionsSnapshot options =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(owner.Path, projectXml,
                 owner.Tfms, selected.TargetFramework, importPath =>
                 {
                     FileHit? imported = ResolveIndexedFSharpImport(queries, importPath);
-                    return imported is { Language: "config" } &&
-                           imported.Size <= ProjectFileParser.MaxFSharpSemanticImportBytes
+                    string? content = imported is { Language: "config" } &&
+                                      imported.Size <= ProjectFileParser.MaxFSharpSemanticImportBytes
                         ? queries.ContentByPathBounded(imported.Path,
                             ProjectFileParser.MaxFSharpSemanticImportBytes)
                         : null;
+                    if (imported is not null && content is not null)
+                        evaluatedAuthorityInputs[imported.Path] = content;
+                    return content;
                 }, importPath =>
                 {
                     FileHit? imported = ResolveIndexedFSharpImport(queries, importPath);
                     return imported is { Language: "config" } ? imported.Size : null;
-                }, directoryBuildPropsPath: directoryBuild.PropsPath,
+                }, directoryPackagesPropsPath: directoryPackages.Path,
+                directoryBuildPropsPath: directoryBuild.PropsPath,
                 directoryBuildTargetsPath: directoryBuild.TargetsPath,
                 cancellationToken: cancellationToken,
-                hasAmbiguousDirectoryBuildAuthority: directoryBuild.HasAmbiguity);
+                hasAmbiguousDirectoryBuildAuthority: directoryBuild.HasAmbiguity,
+                hasAmbiguousDirectoryPackagesAuthority: directoryPackages.PathAmbiguous);
         if (options.Error is { } optionError)
         {
             failure = new(null, optionError, selected, contexts, options.PartialReason,
@@ -531,7 +543,19 @@ public sealed partial class SemanticService
         }
 
         List<string> bareReferences = options.BareReferences ?? [];
-        if (options.HintPathReferences.Count + bareReferences.Count >
+        List<FSharpPackageReferenceSnapshot> packageReferences =
+            options.PackageReferences ?? [];
+        if (!TryResolveFSharpPackageAssets(owner.Path, projectXml,
+                selected.TargetFramework, packageReferences, evaluatedAuthorityInputs,
+                cancellationToken,
+                out FSharpPackageAssetsSnapshot? packageAssets, out string? packageError))
+        {
+            failure = new(null, packageError!, selected, contexts,
+                options.PartialReason, Health: snapshot.Health);
+            return null;
+        }
+        if (options.HintPathReferences.Count + bareReferences.Count +
+            packageAssets!.CompileAssets.Count >
             MaxFSharpSemanticHintPaths)
         {
             failure = new(null, "fsharp_semantic_reference_limit", selected, contexts,
@@ -568,8 +592,11 @@ public sealed partial class SemanticService
         referenceIdentities.AddRange(frameworkReferences.Select(ReferenceIdentity));
 
         bool hasExplicitFSharpCore = options.HintPathReferences.Any(reference =>
-            Path.GetFileName(reference).Equals("FSharp.Core.dll",
-                StringComparison.OrdinalIgnoreCase));
+                                         Path.GetFileName(reference).Equals("FSharp.Core.dll",
+                                             StringComparison.OrdinalIgnoreCase)) ||
+                                     packageAssets.CompileAssets.Any(reference =>
+                                         Path.GetFileName(reference.FullPath).Equals(
+                                             "FSharp.Core.dll", StringComparison.OrdinalIgnoreCase));
         var partialReasons = new SortedSet<string>(StringComparer.Ordinal);
         AddPartialReasons(partialReasons, options.PartialReason);
         if (!hasExplicitFSharpCore)
@@ -591,6 +618,8 @@ public sealed partial class SemanticService
         }
         if (options.HintPathReferences.Count > 0)
             partialReasons.Add("fsharp_binary_references_snapshotted");
+        if (packageReferences.Count > 0)
+            partialReasons.Add("fsharp_package_references_snapshotted");
 
         if (options.AssemblyName.Length == 0 || options.AssemblyName.Length > 180 ||
             options.AssemblyName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
@@ -608,7 +637,8 @@ public sealed partial class SemanticService
         bool referenceSnapshotOwnershipTransferred = false;
         try
         {
-            if (options.HintPathReferences.Count > 0)
+            if (options.HintPathReferences.Count > 0 ||
+                packageAssets.CompileAssets.Count > 0)
             {
                 referenceSnapshotDirectory = Directory.CreateTempSubdirectory(
                     "PhoenixCodeNav.FSharp.Reference.").FullName;
@@ -641,8 +671,40 @@ public sealed partial class SemanticService
                 }
                 binaryReferences.Add(binary);
                 referencePaths.Add(binary.SnapshotFullPath);
-                referenceIdentities.Add($"{binary.RelativePath}|{binary.Length}|{binary.Sha256}");
+                referenceIdentities.Add($"{binary.SourceIdentity}|{binary.Length}|{binary.Sha256}");
             }
+            foreach (FSharpPackageCompileAsset packageAsset in packageAssets.CompileAssets)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                long remainingReferenceBytes = referenceBytesLimit - totalReferenceBytes;
+                FSharpBinaryReferenceSnapshot? binary = CaptureFSharpBinaryReference(
+                    packageAsset.SourceIdentity, packageAsset.FullPath, packageAsset.PackageRoot,
+                    referenceSnapshotDirectory!, binaryReferences.Count,
+                    remainingReferenceBytes, cancellationToken,
+                    out bool referenceBytesLimitExceeded);
+                if (binary is null)
+                {
+                    failure = new(null, referenceBytesLimitExceeded
+                            ? "fsharp_semantic_reference_bytes_limit"
+                            : "fsharp_semantic_package_asset_unavailable",
+                        selected, contexts, JoinPartialReasons(partialReasons),
+                        Health: snapshot.Health);
+                    return null;
+                }
+                if (!TryAccumulateFSharpSemanticReferenceBytes(ref totalReferenceBytes,
+                        binary.Length))
+                {
+                    binaryReferences.Add(binary);
+                    failure = new(null, "fsharp_semantic_reference_bytes_limit", selected,
+                        contexts, JoinPartialReasons(partialReasons), Health: snapshot.Health);
+                    return null;
+                }
+                binaryReferences.Add(binary);
+                referencePaths.Add(binary.SnapshotFullPath);
+                referenceIdentities.Add($"{binary.SourceIdentity}|{binary.Length}|{binary.Sha256}");
+            }
+            if (packageAssets.Identity.Length > 0)
+                referenceIdentities.Add(packageAssets.Identity);
 
             referencePaths = referencePaths
                 .Distinct(WorkspacePaths.FileSystemPathComparer)
@@ -807,12 +869,35 @@ public sealed partial class SemanticService
         CancellationToken cancellationToken,
         out bool lengthLimitExceeded)
     {
+        if (!TryWorkspaceAbsolutePath(relativePath, out string? fullPath,
+                rejectReparsePoints: true))
+        {
+            lengthLimitExceeded = false;
+            return null;
+        }
+        string workspaceRoot = Path.GetFullPath(_manager.WorkspaceRoot)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return CaptureFSharpBinaryReference(relativePath, fullPath!, workspaceRoot,
+            snapshotDirectory, snapshotIndex, maximumLength, cancellationToken,
+            out lengthLimitExceeded);
+    }
+
+    private FSharpBinaryReferenceSnapshot? CaptureFSharpBinaryReference(
+        string sourceIdentity,
+        string fullPath,
+        string allowedRoot,
+        string snapshotDirectory,
+        int snapshotIndex,
+        long maximumLength,
+        CancellationToken cancellationToken,
+        out bool lengthLimitExceeded)
+    {
         lengthLimitExceeded = false;
         string? snapshotPath = null;
         try
         {
-            if (!TryOpenVerifiedWorkspaceReference(relativePath, out string? fullPath,
-                    out FileStream? stream))
+            if (!TryOpenVerifiedReference(sourceIdentity, fullPath, allowedRoot,
+                    ".dll", out FileStream? stream))
                 return null;
             using (FileStream verifiedStream = stream!)
             {
@@ -841,10 +926,11 @@ public sealed partial class SemanticService
                         out bool copyLengthLimitExceeded))
                 {
                     lengthLimitExceeded = copyLengthLimitExceeded;
-                    throw new InvalidDataException("workspace reference changed during capture");
+                    throw new InvalidDataException("reference changed during capture");
                 }
                 destination.Flush(flushToDisk: true);
-                return new(relativePath, fullPath!, snapshotPath, copiedLength, sha256!);
+                return new(sourceIdentity, Path.GetFullPath(fullPath),
+                    Path.GetFullPath(allowedRoot), snapshotPath, copiedLength, sha256!);
             }
         }
         catch (OperationCanceledException)
@@ -872,10 +958,9 @@ public sealed partial class SemanticService
         foreach (FSharpBinaryReferenceSnapshot expected in references)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!TryOpenVerifiedWorkspaceReference(expected.RelativePath,
-                    out string? fullPath, out FileStream? stream) ||
-                !Path.GetFullPath(fullPath!).Equals(expected.OriginalFullPath,
-                    PathComparison))
+            if (!TryOpenVerifiedReference(expected.SourceIdentity,
+                    expected.OriginalFullPath, expected.AllowedRootFullPath, ".dll",
+                    out FileStream? stream))
                 return false;
             try
             {
@@ -903,22 +988,23 @@ public sealed partial class SemanticService
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
 
-    private bool TryOpenVerifiedWorkspaceReference(string relativePath,
-        out string? fullPath,
-        out FileStream? stream)
+    private bool TryOpenVerifiedReference(string sourceIdentity, string fullPath,
+        string allowedRoot, string requiredExtension, out FileStream? stream)
     {
         stream = null;
-        if (!TryWorkspaceAbsolutePath(relativePath, out fullPath, rejectReparsePoints: true) ||
-            !File.Exists(fullPath) ||
-            !Path.GetExtension(fullPath).Equals(".dll", StringComparison.OrdinalIgnoreCase))
+        if (!TryNormalizeContainedPath(fullPath, allowedRoot, out string? normalizedPath) ||
+            !File.Exists(normalizedPath) ||
+            !Path.GetExtension(normalizedPath).Equals(requiredExtension,
+                StringComparison.OrdinalIgnoreCase))
             return false;
         try
         {
-            BeforeFSharpReferenceOpenForTest?.Invoke(relativePath);
-            stream = new FileStream(fullPath!, FileMode.Open, FileAccess.Read, FileShare.Read,
+            BeforeFSharpReferenceOpenForTest?.Invoke(sourceIdentity);
+            stream = new FileStream(normalizedPath!, FileMode.Open, FileAccess.Read, FileShare.Read,
                 64 * 1024, FileOptions.SequentialScan);
-            if (!TryGetFinalPath(stream.SafeFileHandle, out string? openedPath) ||
-                !Path.GetFullPath(openedPath!).Equals(Path.GetFullPath(fullPath!), PathComparison))
+            bool openedPathMatches = OpenedHandleMatchesPath(stream.SafeFileHandle,
+                normalizedPath!);
+            if (!openedPathMatches)
             {
                 stream.Dispose();
                 stream = null;
@@ -930,6 +1016,41 @@ public sealed partial class SemanticService
         {
             stream?.Dispose();
             stream = null;
+            return false;
+        }
+    }
+
+    private static bool TryNormalizeContainedPath(string path, string allowedRoot,
+        out string? normalizedPath)
+    {
+        normalizedPath = null;
+        try
+        {
+            string root = Path.GetFullPath(allowedRoot)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string candidate = Path.GetFullPath(path);
+            if (!candidate.StartsWith(root + Path.DirectorySeparatorChar, PathComparison))
+                return false;
+
+            string? volumeRoot = Path.GetPathRoot(root);
+            if (string.IsNullOrEmpty(volumeRoot)) return false;
+            string cursor = volumeRoot;
+            string relative = Path.GetRelativePath(volumeRoot, candidate);
+            foreach (string part in relative.Split(
+                         [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                         StringSplitOptions.RemoveEmptyEntries))
+            {
+                cursor = Path.Combine(cursor, part);
+                if (!File.Exists(cursor) && !Directory.Exists(cursor)) return false;
+                if ((File.GetAttributes(cursor) & FileAttributes.ReparsePoint) != 0)
+                    return false;
+            }
+            normalizedPath = candidate;
+            return true;
+        }
+        catch
+        {
+            normalizedPath = null;
             return false;
         }
     }
@@ -962,8 +1083,8 @@ public sealed partial class SemanticService
                 path = Path.GetFullPath(target.FullName);
                 return true;
             }
-            // HintPath semantics fail closed on platforms where an opened handle cannot be
-            // resolved authoritatively. SDK/package-only F# projects remain supported there.
+            // Reference semantics fail closed on platforms where an opened handle cannot be
+            // resolved authoritatively.
             return false;
         }
         catch
@@ -973,9 +1094,63 @@ public sealed partial class SemanticService
         }
     }
 
+    private static bool OpenedHandleMatchesPath(SafeFileHandle handle, string expectedPath)
+    {
+        if (!OperatingSystem.IsMacOS())
+            return TryGetFinalPath(handle, out string? openedPath) &&
+                   Path.GetFullPath(openedPath!).Equals(expectedPath, PathComparison);
+
+        const int bufferSize = 4096;
+        IntPtr buffer = Marshal.AllocHGlobal(bufferSize);
+        try
+        {
+            int length = proc_pidfdinfo(Environment.ProcessId,
+                handle.DangerousGetHandle().ToInt32(), 2, buffer, bufferSize);
+            if (length <= 0 || length > bufferSize) return false;
+            byte[] actual = new byte[length];
+            Marshal.Copy(buffer, actual, 0, length);
+            return MacOsVnodePathMatches(actual, expectedPath);
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    internal static bool MacOsVnodePathMatches(ReadOnlySpan<byte> vnodeFdInfoWithPath,
+        string expectedPath)
+    {
+        // vnode_fdinfowithpath ends with vnode_info_path.vip_path[MAXPATHLEN]. Decode that
+        // single ABI field; scanning the whole structure would accept an attacker-controlled
+        // longer path that merely contains the expected absolute path as a suffix.
+        const int maxPathLength = 1024;
+        if (vnodeFdInfoWithPath.Length < maxPathLength) return false;
+        ReadOnlySpan<byte> pathField = vnodeFdInfoWithPath[^maxPathLength..];
+        int terminator = pathField.IndexOf((byte)0);
+        if (terminator <= 0) return false;
+        try
+        {
+            byte[] expected = System.Text.Encoding.UTF8.GetBytes(
+                Path.GetFullPath(expectedPath));
+            return pathField[..terminator].SequenceEqual(expected);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandle(SafeFileHandle file,
         System.Text.StringBuilder path, uint pathLength, uint flags);
+
+    [DllImport("/usr/lib/libproc.dylib", SetLastError = true)]
+    private static extern int proc_pidfdinfo(int processId, int descriptor,
+        int flavor, IntPtr buffer, int bufferSize);
 
     private void CleanupFSharpReferenceSnapshots(
         CapturedFSharpSemanticProject captured) =>

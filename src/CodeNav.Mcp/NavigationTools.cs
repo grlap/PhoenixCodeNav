@@ -141,8 +141,9 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-type-check-context-selection", summary = "v0.12.5 ambiguous owner/TFM sets fail closed and expose bounded selected/available F# type-check contexts" },
                 new { id = "fsharp-semantic-snapshot", summary = "v0.12.5 immutable source/project snapshot from one pinned index epoch plus request-private snapshots of verified workspace HintPath binaries; bounded deadline, inputs, checker cache, and concurrency" },
                 new { id = "workspace-msbuild-config-indexing", summary = "schema v16 persists arbitrary workspace .props/.targets as config inputs for find_file/config_lookup and pinned bounded project evaluation" },
-                new { id = "fsharp-semantic-bounded-project-evaluation", summary = "v0.12.6 bounded simple properties before semantic items, conditions, Choose, and workspace-local .props imports feed FCS; unresolved SDK/toolchain/ambient inputs remain explicit; no targets/tasks, property functions, package closure, or project closure" },
+                new { id = "fsharp-semantic-bounded-project-evaluation", summary = "v0.12.6 bounded simple properties before semantic items, conditions, Choose, and workspace-local .props imports feed FCS; unresolved SDK/toolchain/ambient inputs remain explicit; no targets/tasks, property functions, or project closure" },
                 new { id = "fsharp-semantic-directory-build-reference-evaluation", summary = "v0.12.8 nearest indexed ancestor Directory.Build.props/targets are evaluated around one F# project for bounded properties, conditions, and Reference Include/Remove item-list mutations; irrelevant chained targets are ignored while reference-affecting targets/tasks remain fail-closed" },
+                new { id = "fsharp-semantic-package-asset-closure", summary = "v0.12.56 active F# PackageReference identities, including conditional PackageVersion authority from the nearest indexed Directory.Packages.props, are matched to one already-restored project.assets.json target; reachable transitive compile assets from trusted declared package folders are verified, bounded, copied into request-private immutable snapshots, and reverified after FCS; missing, stale, mismatched, changed, ambiguous, or unsafe closure fails explicitly without restore or MSBuild execution" },
                 new { id = "semantic-parallel-cold-start-loader", summary = "v0.12.9 C# semantic clusters prepare immutable project inputs concurrently through one bounded process scheduler, then commit one dependency-ordered Roslyn solution while preserving reload, cycle, and source-over-binary authority" },
                 new { id = "semantic-candidate-completeness-over-accounting", summary = "v0.12.12 aggregate semantic input accounting never omits an already-selected candidate project; bounded file capture, preparation concurrency, deadlines, and byte/managed-heap pressure retention remain the safety boundaries" },
                 new { id = "semantic-planning-attribution", summary = "v0.12.13 implementations/type_hierarchy semanticOp telemetry splits transitive-closure database query+row mapping, managed identity filtering, frontier bookkeeping, seed discovery, and scan-set planning with privacy-safe work counts and writer/follower accessMode" },
@@ -285,14 +286,14 @@ public sealed partial class NavigationTools
             },
             semantic = new
             {
-                engine = "Roslyn ad hoc for C#; bounded FCS Stage 2A for compile-owned .fs/.fsi",
+                engine = "Roslyn ad hoc for C#; bounded FCS for compile-owned .fs/.fsi",
                 frameworkRefsAvailable,
                 exactTools = new[] { "definition", "references", "implementations" },
                 exactToolsLanguage = "cs",
                 csharpExactTools = new[] { "definition", "references", "implementations" },
                 fsharpIndexedTools = new[] { "symbol_at", "definition" },
                 fsharpSyntaxIndexedTools = new[] { "search_symbol" },
-                note = "C# exact results are scoped to loaded candidate clusters. F# Stage 2A is compiler-checked but indexed/partial and limited to one proven physical project/TFM; coverage and partial fields report anything skipped.",
+                note = "C# exact results are scoped to loaded candidate clusters. F# is compiler-checked but indexed/partial and limited to one proven physical project/TFM; restored package compile assets are snapshotted, project closure remains unsupported, and partial fields report bounded authority.",
                 fsharpSyntaxNote = "F# search_symbol is syntax-indexed across the available owner/TFM parse contexts, including orphaned .fs/.fsi files; it is not compiler-checked, reports actionable incomplete context coverage as partial, and keeps ordinary SDK/import limits advisory.",
             },
             index = new

@@ -528,6 +528,7 @@ public class FSharpTierATests
             Assert.Contains("fsharp-semantic-snapshot", featureIds);
             Assert.Contains("fsharp-semantic-bounded-project-evaluation", featureIds);
             Assert.Contains("fsharp-semantic-directory-build-reference-evaluation", featureIds);
+            Assert.Contains("fsharp-semantic-package-asset-closure", featureIds);
             Assert.Contains("workspace-msbuild-config-indexing", featureIds);
             Assert.DoesNotContain("fsharp-outline-context-selection", featureIds);
             Assert.DoesNotContain("fsharp-outline-context-budget", featureIds);

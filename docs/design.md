@@ -73,7 +73,7 @@ for code identifiers.
     workspaces. Without that base owner, a multi-target project selects its first declared TFM and
     marks the result partial.
 4. **Semantic** — C# uses lazy Roslyn compilations for `definition`, `references`,
-   `implementations`, `callers`, `callees`, and `type_hierarchy`. F# Stage 2A uses a bounded FCS
+   `implementations`, `callers`, `callees`, and `type_hierarchy`. F# uses a bounded FCS
    type check for position-based `symbol_at` and same-physical-project `definition`. An F# type-check
    context is exactly one physical `.fsproj` plus one target framework; ambiguous files require
    explicit selection, and the selection never changes or merges ownership/reference graph facts.
@@ -137,9 +137,9 @@ remain searchable. `.fsx` remains text-only, so script-only scopes fail
 closed and mixed scopes disclose the skipped script files.
 
 The FCS semantic adapter consumes one immutable source/project snapshot captured from a pinned index epoch, copies
-workspace `HintPath` assemblies through verified open handles into request-private snapshots, releases
+workspace `HintPath` assemblies and restored package compile assets through verified open handles into request-private snapshots, releases
 SQLite before type checking, and bounds source count/bytes, references, concurrency, cache size,
-deadline, diagnostics, contexts, and response bytes. Stage 2A deliberately accepts only literal
+deadline, diagnostics, contexts, and response bytes. The bounded evaluator deliberately accepts only literal
 ordered compile items and a bounded evaluation-lite project subset: simple property
 assignment/expansion before semantic items, comparisons and boolean/`Exists` conditions, `Choose`, and recursively loaded
 literal workspace-local `.props` imports with count/depth/aggregate-byte limits and cycle detection.
@@ -152,18 +152,46 @@ and applies bounded metadata-free reference input lists plus top-level `Referenc
 Local chained `.props`/`.targets` files are inspected without executing targets: unrelated target
 logic is ignored, but a target or task that can mutate compile/reference/compiler facts remains a
 hard boundary.
+For central package management, the nearest indexed ancestor `Directory.Packages.props` is evaluated
+after `Directory.Build.props` and before the project with the same bounded property/condition/import
+machinery. Conditional simple-version `PackageVersion` Include/Update/Remove items may depend on the
+selected TFM and supported earlier property authority; dependence on a property first defined later in
+the project fails closed as unresolved rather than being guessed. Versionless
+`PackageReference` items must resolve through that authority, direct Version metadata is rejected
+under CPM, and disabled VersionOverride authority fails closed. Ambiguous Windows host-case matches
+and unsupported central constructs, including `GlobalPackageReference`, remain explicit. Active `ExcludeAssets`, `IncludeAssets`, or
+`Aliases` metadata fails closed because the bounded evaluator does not model package compile-asset
+filtering or reference aliases.
+Active package identities are matched against the selected target in the project's existing
+`obj/project.assets.json`; Phoenix never restores or invokes MSBuild. The assets snapshot must name
+the same physical project, selected framework, direct package identities, and evaluated version
+constraints, select a package version satisfying each constraint, and must be newer than the
+project plus every live evaluated package/build/import authority file whose content must still
+match the pinned index snapshot.
+Direct versions support one-to-four-part numeric versions with optional prerelease/build labels,
+bounded NuGet ranges (including exact `[version]`), and numeric-prefix floating versions from `major.*`
+through `major.minor.patch.*`; unsupported shapes fail closed. Central `PackageVersion` authority
+remains restricted to simple versions.
+Only target packages reachable from the evaluated direct PackageReference roots contribute
+transitive `compile` assets. Each reachable package resolves its containing root once beneath
+declared package folders that match the host-configured/default global NuGet cache or remain inside
+the workspace, bounded by the existing dependency/reference/byte budgets and request cancellation,
+copied to immutable request-private files, and reverified
+after FCS. Missing, stale, mismatched, changed, non-managed, or path-unsafe package inputs fail with
+explicit `fsharp_semantic_package_*` causes. Project-reference closure remains unsupported.
 Import paths are selected only from canonical paths in the pinned index using the host path policy;
 ambiguous Windows case aliases fail closed, and semantic evaluation never walks the mutable live
 filesystem to resolve casing.
 Known compiler target imports are terminal boundaries. It never runs MSBuild, targets, or tasks and
-rejects property functions, item transforms/metadata, imported compile items, and unsupported conditions
+rejects property functions, compiler-item transforms/metadata outside restored PackageReference
+authority, imported compile items, and unsupported conditions
 with stable causes. Standard `Microsoft.NET.Sdk` and recognized toolchain implicit authority are
 partial, including unobservable build authority above the workspace root; custom/child/qualified SDK
 declarations, Directory.Build mutations outside the bounded reference projection, and ordinary
 project/import property assignment after semantic items fail closed. Workspace-contained managed `HintPath` snapshots have their original identity
 verified after the check; declarations remain same-project only. The host's target-compatible
 `FSharp.Core` fallback is always disclosed as partial because it was not selected by evaluated
-project authority. Package/project-reference closure and the
+project authority. Project-reference closure and the
 remaining semantic operations still disclose stable unsupported boundaries. Generic indexed search
 is language-neutral for C# and F# `.fs/.fsi`: an `.fsx`-only or other text-only scope is refused,
 while a mixed scope reports `unsupported_language_files_skipped`. This keeps
@@ -184,7 +212,7 @@ Every response carries a `confidence`:
 
 - `exact` — compiler-verified by a closed Roslyn project model.
 - `indexed` — trustworthy indexed/syntax evidence, including bounded FCS compiler checks
-  whose deliberately incomplete Stage 2A project model remains partial.
+  whose deliberately incomplete project model remains partial.
 - `heuristic` — inferred from naming, base-list text, or project relationships
   (`implementations` fallback, `related_tests`) — leads, not facts.
 - degradation flags: `partial` (a deadline/coverage limit was hit), `stale` (index older

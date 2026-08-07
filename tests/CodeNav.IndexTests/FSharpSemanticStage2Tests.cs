@@ -229,6 +229,826 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Fact]
+    public void PackageReferenceCompileAssetEnablesFSharpSemanticResolution()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-package").FullName;
+        try
+        {
+            const string packageId = "System.IO.Hashing";
+            const string packageVersion = "10.0.10";
+            string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+            { Length: > 0 } configuredPackages
+                ? configuredPackages
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget", "packages");
+            string packageFolder = Path.Combine(packagesRoot, packageId.ToLowerInvariant(),
+                packageVersion);
+            string packageDll = Path.Combine(packageFolder, "lib", "net10.0",
+                "System.IO.Hashing.dll");
+            Assert.True(File.Exists(packageDll),
+                $"The solution restore must provide the package fixture: {packageDll}");
+
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Use.fs" />
+                    <PackageReference Include="System.IO.Hashing" Version="10.0.10" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                namespace PackageConsumer
+                open System.IO.Hashing
+                module Use =
+                    let hasher = XxHash64()
+                """);
+            WritePackageAssets(root, "Core/Core.fsproj", "net10.0", packageId,
+                packageVersion, packagesRoot, "lib/net10.0/System.IO.Hashing.dll");
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 4, 19, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.False(response.TryGetProperty("error", out _), raw);
+            Assert.True(response.GetProperty("found").GetBoolean(), raw);
+            Assert.Equal("XxHash64",
+                response.GetProperty("symbol").GetProperty("name").GetString());
+            Assert.Equal("System.IO.Hashing",
+                response.GetProperty("symbol").GetProperty("assembly").GetString());
+            Assert.Contains("fsharp_package_references_snapshotted",
+                response.GetProperty("partialReason").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void PackageReferenceUsesTransitiveCompileAssetsFromSelectedTarget()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-package-transitive").FullName;
+        try
+        {
+            const string directId = "Microsoft.Extensions.Hosting";
+            const string transitiveId = "Microsoft.Extensions.DependencyInjection.Abstractions";
+            const string version = "10.0.10";
+            string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+            { Length: > 0 } configuredPackages
+                ? configuredPackages
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget", "packages");
+            Assert.True(File.Exists(Path.Combine(packagesRoot, directId.ToLowerInvariant(),
+                version, "lib", "net10.0", "Microsoft.Extensions.Hosting.dll")));
+            Assert.True(File.Exists(Path.Combine(packagesRoot, transitiveId.ToLowerInvariant(),
+                version, "lib", "net10.0",
+                "Microsoft.Extensions.DependencyInjection.Abstractions.dll")));
+
+            WriteProject(root, "Core/Core.fsproj", $$"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Use.fs" />
+                    <PackageReference Include="{{directId}}" Version="{{version}}" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                namespace PackageConsumer
+                open Microsoft.Extensions.DependencyInjection
+                module Use =
+                    let configure (services: IServiceCollection) = services
+                """);
+            WritePackageAssets(root, "Core/Core.fsproj", "net10.0", directId,
+                version, packagesRoot, "lib/net10.0/Microsoft.Extensions.Hosting.dll",
+                (transitiveId, version,
+                    "lib/net10.0/Microsoft.Extensions.DependencyInjection.Abstractions.dll"));
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 4, 30, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.False(response.TryGetProperty("error", out _), raw);
+            Assert.True(response.GetProperty("found").GetBoolean(), raw);
+            Assert.Equal("IServiceCollection",
+                response.GetProperty("symbol").GetProperty("name").GetString());
+            Assert.Equal("Microsoft.Extensions.DependencyInjection.Abstractions",
+                response.GetProperty("symbol").GetProperty("assembly").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void PackageReferenceIgnoresUnreachableRestoredPackageCompileAssets()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-package-unreachable").FullName;
+        try
+        {
+            const string packageId = "System.IO.Hashing";
+            const string packageVersion = "10.0.10";
+            string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+            { Length: > 0 } configuredPackages
+                ? configuredPackages
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget", "packages");
+            Assert.True(File.Exists(Path.Combine(packagesRoot, packageId.ToLowerInvariant(),
+                packageVersion, "lib", "net10.0", "System.IO.Hashing.dll")));
+
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Use.fs" />
+                    <PackageReference Include="System.IO.Hashing" Version="10.0.10" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                namespace PackageConsumer
+                open System.IO.Hashing
+                module Use =
+                    let hasher = XxHash64()
+                """);
+            WritePackageAssetsWithUnreachablePackage(root, "Core/Core.fsproj", "net10.0",
+                packageId, packageVersion, packagesRoot,
+                "lib/net10.0/System.IO.Hashing.dll",
+                ("Removed.Package", "1.0.0", "lib/net10.0/Missing.dll"));
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 4, 19, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.False(response.TryGetProperty("error", out _), raw);
+            Assert.True(response.GetProperty("found").GetBoolean(), raw);
+            Assert.Equal("XxHash64",
+                response.GetProperty("symbol").GetProperty("name").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void PackageReferenceRejectsLibraryPathRedirectedToAnotherPackage()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-package-library-redirect").FullName;
+        try
+        {
+            const string declaredPackageId = "Expected.Package";
+            const string declaredPackageVersion = "1.0.0";
+            const string actualPackageId = "System.IO.Hashing";
+            const string actualPackageVersion = "10.0.10";
+            string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+            { Length: > 0 } configuredPackages
+                ? configuredPackages
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget", "packages");
+            Assert.True(File.Exists(Path.Combine(packagesRoot, actualPackageId.ToLowerInvariant(),
+                actualPackageVersion, "lib", "net10.0", "System.IO.Hashing.dll")));
+
+            WriteProject(root, "Core/Core.fsproj", $$"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Use.fs" />
+                    <PackageReference Include="{{declaredPackageId}}" Version="{{declaredPackageVersion}}" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                namespace PackageConsumer
+                open System.IO.Hashing
+                module Use =
+                    let hasher = XxHash64()
+                """);
+            WritePackageAssetsWithLibraryPath(root, "Core/Core.fsproj", "net10.0",
+                declaredPackageId, declaredPackageVersion, packagesRoot,
+                "lib/net10.0/System.IO.Hashing.dll",
+                $"{actualPackageId.ToLowerInvariant()}/{actualPackageVersion}");
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 4, 19, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.True(response.TryGetProperty("error", out JsonElement error), raw);
+            Assert.Equal("fsharp_semantic_package_assets_unavailable",
+                error.GetString());
+            Assert.False(response.TryGetProperty("found", out JsonElement found) &&
+                         found.ValueKind == JsonValueKind.True);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void PackageRootSearchStopsProbingAfterRequestCancellation()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-package-root-cancellation").FullName;
+        try
+        {
+            string firstRoot = Path.Combine(root, "PackagesA");
+            string secondRoot = Path.Combine(root, "PackagesB");
+            Directory.CreateDirectory(firstRoot);
+            Directory.CreateDirectory(secondRoot);
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Use.fs" />
+                    <PackageReference Include="Example.Package" Version="1.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Use.fs", "module Use\nlet value = 1\n");
+            WritePackageAssetsWithRoots(root, "Core/Core.fsproj", "net10.0",
+                "Example.Package", "1.0.0", [firstRoot, secondRoot],
+                "lib/net10.0/Example.Package.dll");
+
+            using var fixture = Fixture.Create(root);
+            int probes = 0;
+            fixture.Semantic.BeforeFSharpPackageRootProbeForTest = _ =>
+            {
+                if (Interlocked.Increment(ref probes) == 1) Thread.Sleep(750);
+            };
+            JsonElement response = Parse(fixture.Tools.SymbolAt(
+                "Core/Use.fs", 2, 5, timeoutMs: 500));
+
+            Assert.Equal("fsharp_semantic_timeout",
+                response.GetProperty("error").GetString());
+            Assert.Equal(1, Volatile.Read(ref probes));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void PackageReferenceAcceptsNuGetNormalizedMinimumVersion()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-package-normalized-version").FullName;
+        try
+        {
+            const string packageId = "System.IO.Hashing";
+            const string restoredVersion = "10.0.10";
+            string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+            { Length: > 0 } configuredPackages
+                ? configuredPackages
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget", "packages");
+            Assert.True(File.Exists(Path.Combine(packagesRoot, packageId.ToLowerInvariant(),
+                restoredVersion, "lib", "net10.0", "System.IO.Hashing.dll")));
+
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Use.fs" />
+                    <PackageReference Include="System.IO.Hashing" Version="10.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                namespace PackageConsumer
+                open System.IO.Hashing
+                module Use =
+                    let hasher = XxHash64()
+                """);
+            WritePackageAssets(root, "Core/Core.fsproj", "net10.0", packageId,
+                restoredVersion, packagesRoot, "lib/net10.0/System.IO.Hashing.dll",
+                requestedMinimumVersion: "10.0.0");
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 4, 19, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.False(response.TryGetProperty("error", out _), raw);
+            Assert.True(response.GetProperty("found").GetBoolean(), raw);
+            Assert.Equal("XxHash64",
+                response.GetProperty("symbol").GetProperty("name").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void PackageReferenceAcceptsFullNuGetTargetKeyForNet472()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-package-net472").FullName;
+        try
+        {
+            const string packageId = "System.IO.Hashing";
+            const string packageVersion = "10.0.10";
+            string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+            { Length: > 0 } configuredPackages
+                ? configuredPackages
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget", "packages");
+            Assert.True(File.Exists(Path.Combine(packagesRoot, packageId.ToLowerInvariant(),
+                packageVersion, "lib", "net462", "System.IO.Hashing.dll")));
+
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net472</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Use.fs" />
+                    <PackageReference Include="System.IO.Hashing" Version="10.0.10" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                namespace PackageConsumer
+                open System.IO.Hashing
+                module Use =
+                    let hasher = XxHash64()
+                """);
+            WritePackageAssetsForConstraint(root, "Core/Core.fsproj", "net472",
+                ".NETFramework,Version=v4.7.2", packageId, packageVersion, packagesRoot,
+                "lib/net462/System.IO.Hashing.dll", "[10.0.10, )");
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 4, 19, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            if (response.TryGetProperty("error", out JsonElement error))
+            {
+                Assert.Equal("fsharp_framework_references_unavailable", error.GetString());
+                Assert.Empty(ReferenceAssemblyLocator.FrameworkReferencePaths("net472", out _));
+                return;
+            }
+            Assert.False(response.TryGetProperty("error", out _), raw);
+            Assert.True(response.GetProperty("found").GetBoolean(), raw);
+            Assert.Equal("XxHash64",
+                response.GetProperty("symbol").GetProperty("name").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void PackageReferenceRangesAndFloatingVersionsAreValidatedAgainstAssets()
+    {
+        const string packageId = "System.IO.Hashing";
+        const string packageVersion = "10.0.10";
+        string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+        { Length: > 0 } configuredPackages
+            ? configuredPackages
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".nuget", "packages");
+        Assert.True(File.Exists(Path.Combine(packagesRoot, packageId.ToLowerInvariant(),
+            packageVersion, "lib", "net10.0", "System.IO.Hashing.dll")));
+
+        foreach ((string name, string requested, string restoredConstraint,
+                     bool shouldSucceed) in new[]
+                 {
+                     ("range-match", "[10.0,11.0)", "[10.0.0, 11.0.0)", true),
+                     ("range-mismatch", "[9.0,10.0)", "[10.0.0, 11.0.0)", false),
+                     ("floating-match", "10.*", "[10.*, )", true),
+                     ("floating-mismatch", "9.*", "[10.*, )", false),
+                 })
+        {
+            string root = Directory.CreateTempSubdirectory(
+                $"codenav-fsharp-semantic-package-{name}").FullName;
+            try
+            {
+                WriteProject(root, "Core/Core.fsproj", $$"""
+                    <Project Sdk="Microsoft.NET.Sdk">
+                      <PropertyGroup>
+                        <TargetFramework>net10.0</TargetFramework>
+                        <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                      </PropertyGroup>
+                      <ItemGroup>
+                        <Compile Include="Use.fs" />
+                        <PackageReference Include="System.IO.Hashing" Version="{{requested}}" />
+                      </ItemGroup>
+                    </Project>
+                    """);
+                WriteProject(root, "Core/Use.fs", """
+                    namespace PackageConsumer
+                    open System.IO.Hashing
+                    module Use =
+                        let hasher = XxHash64()
+                    """);
+                WritePackageAssetsForConstraint(root, "Core/Core.fsproj", "net10.0",
+                    "net10.0", packageId, packageVersion, packagesRoot,
+                    "lib/net10.0/System.IO.Hashing.dll", restoredConstraint);
+
+                using var fixture = Fixture.Create(root);
+                string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                    "Core/Use.fs", 4, 19, timeoutMs: 60_000));
+                JsonElement response = Parse(raw);
+                if (shouldSucceed)
+                {
+                    Assert.False(response.TryGetProperty("error", out _), raw);
+                    Assert.True(response.GetProperty("found").GetBoolean(), raw);
+                }
+                else
+                {
+                    Assert.Equal("fsharp_semantic_package_assets_stale",
+                        response.GetProperty("error").GetString());
+                    Assert.False(response.TryGetProperty("found", out JsonElement found) &&
+                                 found.ValueKind == JsonValueKind.True);
+                }
+            }
+            finally
+            {
+                Cleanup(root);
+            }
+        }
+    }
+
+    [Fact]
+    public void CentralPackageManagementRejectsAssetsFromAnotherCentralVersion()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-central-package-stale").FullName;
+        try
+        {
+            const string packageId = "System.IO.Hashing";
+            const string restoredVersion = "10.0.10";
+            string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+            { Length: > 0 } configuredPackages
+                ? configuredPackages
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget", "packages");
+            Assert.True(File.Exists(Path.Combine(packagesRoot, packageId.ToLowerInvariant(),
+                restoredVersion, "lib", "net10.0", "System.IO.Hashing.dll")));
+
+            WriteProject(root, "Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="System.IO.Hashing" Version="10.0.10" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Use.fs" />
+                    <PackageReference Include="System.IO.Hashing" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                namespace PackageConsumer
+                open System.IO.Hashing
+                module Use =
+                    let hasher = XxHash64()
+                """);
+            WritePackageAssets(root, "Core/Core.fsproj", "net10.0", packageId,
+                restoredVersion, packagesRoot, "lib/net10.0/System.IO.Hashing.dll",
+                requestedMinimumVersion: "9.9.9");
+
+            using var fixture = Fixture.Create(root);
+            JsonElement response = Parse(CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 4, 19, timeoutMs: 60_000)));
+            Assert.Equal("fsharp_semantic_package_assets_stale",
+                response.GetProperty("error").GetString());
+            Assert.False(response.TryGetProperty("found", out JsonElement found) &&
+                         found.ValueKind == JsonValueKind.True);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void CentralPackageManagementEnablesFSharpSemanticResolution()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-central-package").FullName;
+        try
+        {
+            const string packageId = "System.IO.Hashing";
+            const string packageVersion = "10.0.10";
+            string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+            { Length: > 0 } configuredPackages
+                ? configuredPackages
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget", "packages");
+            Assert.True(File.Exists(Path.Combine(packagesRoot, packageId.ToLowerInvariant(),
+                packageVersion, "lib", "net10.0", "System.IO.Hashing.dll")));
+
+            WriteProject(root, "Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="System.IO.Hashing" Version="10.0.10" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Use.fs" />
+                    <PackageReference Include="System.IO.Hashing" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                namespace PackageConsumer
+                open System.IO.Hashing
+                module Use =
+                    let hasher = XxHash64()
+                """);
+            WritePackageAssets(root, "Core/Core.fsproj", "net10.0", packageId,
+                packageVersion, packagesRoot, "lib/net10.0/System.IO.Hashing.dll");
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 4, 19, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.False(response.TryGetProperty("error", out _), raw);
+            Assert.True(response.GetProperty("found").GetBoolean(), raw);
+            Assert.Equal("XxHash64",
+                response.GetProperty("symbol").GetProperty("name").GetString());
+            Assert.Contains("fsharp_package_references_snapshotted",
+                response.GetProperty("partialReason").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void PackageAssetsFailClosedWhenEvaluatedCentralAuthorityChangesAfterRestore()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-central-package-authority-stale").FullName;
+        try
+        {
+            const string packageId = "System.IO.Hashing";
+            const string packageVersion = "10.0.10";
+            string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+            { Length: > 0 } configuredPackages
+                ? configuredPackages
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget", "packages");
+            string directoryPackagesPath = Path.Combine(root, "Directory.Packages.props");
+            WriteProject(root, "Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="System.IO.Hashing" Version="10.0.10" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Use.fs" />
+                    <PackageReference Include="System.IO.Hashing" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Use.fs", "module Use\nlet value = 1\n");
+            WritePackageAssets(root, "Core/Core.fsproj", "net10.0", packageId,
+                packageVersion, packagesRoot, "lib/net10.0/System.IO.Hashing.dll");
+
+            using var fixture = Fixture.Create(root);
+            WriteProject(root, "Directory.Packages.props", """
+                <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageVersion Include="System.IO.Hashing" Version="10.0.10" />
+                    <PackageVersion Include="Transitive.Pin" Version="2.0.0" />
+                  </ItemGroup>
+                </Project>
+                """);
+            string assetsPath = Path.Combine(root, "Core", "obj", "project.assets.json");
+            File.SetLastWriteTimeUtc(directoryPackagesPath,
+                File.GetLastWriteTimeUtc(assetsPath).AddMinutes(1));
+
+            JsonElement response = Parse(CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 2, 5, timeoutMs: 60_000)));
+            Assert.Equal("fsharp_semantic_package_assets_stale",
+                response.GetProperty("error").GetString());
+            Assert.False(response.TryGetProperty("found", out JsonElement found) &&
+                         found.ValueKind == JsonValueKind.True);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void PackageReferenceFailsClosedWhenAssetsAreMissingStaleOrMismatched()
+    {
+        static void WriteConsumer(string root)
+        {
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Use.fs" />
+                    <PackageReference Include="System.IO.Hashing" Version="10.0.10" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Use.fs", "module Use\nlet value = 1\n");
+        }
+
+        string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+        { Length: > 0 } configuredPackages
+            ? configuredPackages
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".nuget", "packages");
+        foreach ((string scenario, Action<string> arrange, string expected) in new[]
+                 {
+                     ("missing", (Action<string>)(_ => { }),
+                         "fsharp_semantic_package_assets_unavailable"),
+                     ("stale", root =>
+                     {
+                         WritePackageAssets(root, "Core/Core.fsproj", "net10.0",
+                             "System.IO.Hashing", "10.0.10", packagesRoot,
+                             "lib/net10.0/System.IO.Hashing.dll");
+                         File.SetLastWriteTimeUtc(Path.Combine(root, "Core", "obj",
+                                 "project.assets.json"),
+                             File.GetLastWriteTimeUtc(Path.Combine(root, "Core", "Core.fsproj"))
+                                 .AddMinutes(-1));
+                     }, "fsharp_semantic_package_assets_stale"),
+                     ("equal-mtime", root =>
+                     {
+                         WritePackageAssets(root, "Core/Core.fsproj", "net10.0",
+                             "System.IO.Hashing", "10.0.10", packagesRoot,
+                             "lib/net10.0/System.IO.Hashing.dll");
+                         File.SetLastWriteTimeUtc(Path.Combine(root, "Core", "obj",
+                                 "project.assets.json"),
+                             File.GetLastWriteTimeUtc(Path.Combine(root, "Core", "Core.fsproj")));
+                     }, "fsharp_semantic_package_assets_stale"),
+                     ("mismatched", root => WritePackageAssets(root, "Core/Core.fsproj",
+                             "net10.0", "Different.Package", "10.0.10", packagesRoot,
+                             "lib/net10.0/System.IO.Hashing.dll"),
+                         "fsharp_semantic_package_assets_stale"),
+                     ("mismatched-version", root => WritePackageAssets(root,
+                             "Core/Core.fsproj", "net10.0", "System.IO.Hashing", "9.9.9",
+                             packagesRoot, "lib/net10.0/System.IO.Hashing.dll"),
+                         "fsharp_semantic_package_assets_stale"),
+                     ("unsafe-path", root => WritePackageAssets(root, "Core/Core.fsproj",
+                             "net10.0", "System.IO.Hashing", "10.0.10", packagesRoot,
+                             "../../outside/System.IO.Hashing.dll"),
+                         "fsharp_semantic_package_assets_unavailable"),
+                     ("untrusted-root", root => WritePackageAssets(root, "Core/Core.fsproj",
+                             "net10.0", "System.IO.Hashing", "10.0.10",
+                             Path.GetPathRoot(root)!, "System.IO.Hashing.dll"),
+                         "fsharp_semantic_package_assets_unavailable"),
+                 })
+        {
+            string root = Directory.CreateTempSubdirectory(
+                $"codenav-fsharp-semantic-package-{scenario}").FullName;
+            try
+            {
+                WriteConsumer(root);
+                arrange(root);
+                using var fixture = Fixture.Create(root);
+                JsonElement response = Parse(CallSemantic(() => fixture.Tools.SymbolAt(
+                    "Core/Use.fs", 2, 5, timeoutMs: 60_000)));
+                Assert.Equal(expected, response.GetProperty("error").GetString());
+                Assert.False(response.TryGetProperty("found", out JsonElement found) &&
+                             found.ValueKind == JsonValueKind.True);
+            }
+            finally
+            {
+                Cleanup(root);
+            }
+        }
+    }
+
+    [Fact]
+    public void ChangedPackageCompileAssetInvalidatesCompletedFSharpCheck()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-package-race").FullName;
+        try
+        {
+            const string packageId = "System.IO.Hashing";
+            const string packageVersion = "10.0.10";
+            string restoredPackages = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+            { Length: > 0 } configuredPackages
+                ? configuredPackages
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget", "packages");
+            string restoredDll = Path.Combine(restoredPackages, packageId.ToLowerInvariant(),
+                packageVersion, "lib", "net10.0", "System.IO.Hashing.dll");
+            string privatePackages = Path.Combine(root, "Packages");
+            string packageDll = Path.Combine(privatePackages, packageId.ToLowerInvariant(),
+                packageVersion, "lib", "net10.0", "System.IO.Hashing.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(packageDll)!);
+            File.Copy(restoredDll, packageDll);
+
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Use.fs" />
+                    <PackageReference Include="System.IO.Hashing" Version="10.0.10" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                namespace PackageConsumer
+                open System.IO.Hashing
+                module Use =
+                    let hasher = XxHash64()
+                """);
+            WritePackageAssets(root, "Core/Core.fsproj", "net10.0", packageId,
+                packageVersion, privatePackages, "lib/net10.0/System.IO.Hashing.dll");
+
+            using var fixture = Fixture.Create(root);
+            fixture.Semantic.FSharpSemanticSnapshotCapturedForTest = () =>
+            {
+                using var stream = new FileStream(packageDll, FileMode.Open,
+                    FileAccess.ReadWrite, FileShare.Read);
+                stream.Position = 32;
+                int original = stream.ReadByte();
+                Assert.True(original >= 0);
+                stream.Position = 32;
+                stream.WriteByte((byte)(original ^ 1));
+            };
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 4, 19, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.Equal("fsharp_semantic_reference_changed",
+                response.GetProperty("error").GetString());
+            Assert.Contains("fsharp_package_references_snapshotted",
+                response.GetProperty("partialReason").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
     public void ExplicitTypeCheckSelectionRequiresBothProjectAndTargetAndControlsIfDef()
     {
         string root = Directory.CreateTempSubdirectory("codenav-fsharp-semantic-tfm").FullName;
@@ -678,6 +1498,36 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Fact]
+    public void MacOsVnodePathDecoderRejectsSuffixCollisionAndMalformedFields()
+    {
+        const int maxPathLength = 1024;
+        string expectedPath = Path.GetFullPath(
+            "/Users/example/.nuget/packages/example/1.0.0/lib/net10.0/Example.dll");
+
+        static byte[] VnodeBuffer(string path, bool terminate = true)
+        {
+            const int prefixBytes = 192;
+            const int pathBytes = 1024;
+            byte[] buffer = new byte[prefixBytes + pathBytes];
+            byte[] encoded = System.Text.Encoding.UTF8.GetBytes(path);
+            Assert.True(encoded.Length + (terminate ? 1 : 0) <= pathBytes);
+            encoded.CopyTo(buffer, prefixBytes);
+            if (!terminate) Array.Fill(buffer, (byte)'x', prefixBytes + encoded.Length,
+                pathBytes - encoded.Length);
+            return buffer;
+        }
+
+        Assert.True(SemanticService.MacOsVnodePathMatches(
+            VnodeBuffer(expectedPath), expectedPath));
+        Assert.False(SemanticService.MacOsVnodePathMatches(
+            VnodeBuffer("/workspace/mirror" + expectedPath), expectedPath));
+        Assert.False(SemanticService.MacOsVnodePathMatches(
+            new byte[maxPathLength - 1], expectedPath));
+        Assert.False(SemanticService.MacOsVnodePathMatches(
+            VnodeBuffer(expectedPath, terminate: false), expectedPath));
+    }
+
+    [Fact]
     public void SemanticReferenceCopyRejectsAStreamThatGrowsPastItsAdmittedLength()
     {
         using var exactSource = new MemoryStream([1, 2, 3, 4]);
@@ -1059,7 +1909,9 @@ public partial class FSharpSemanticStage2Tests
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
                 prefix + "<ItemGroup><Compile Include=\"Core.fs\" /><PackageReference Include=\"Example\" Version=\"1.0.0\" /></ItemGroup></Project>",
                 "net10.0", "net10.0");
-        Assert.Equal("fsharp_semantic_package_references_unsupported", package.Error);
+        Assert.Null(package.Error);
+        Assert.Equal([new FSharpPackageReferenceSnapshot("Example", "1.0.0")],
+            package.PackageReferences);
 
         FSharpSemanticOptionsSnapshot sourceEscape =
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
@@ -1177,6 +2029,155 @@ public partial class FSharpSemanticStage2Tests
         string path = Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar));
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content);
+    }
+
+    private static void WritePackageAssets(string root, string projectPath,
+        string targetFramework, string packageId, string packageVersion, string packagesRoot,
+        string compileAsset,
+        params (string Id, string Version, string CompileAsset)[] transitivePackages)
+    {
+        WritePackageAssetsCore(root, projectPath, targetFramework, packageId,
+            packageVersion, [packagesRoot], compileAsset, targetFramework,
+            $"[{packageVersion}, )", transitivePackages, []);
+    }
+
+    private static void WritePackageAssets(string root, string projectPath,
+        string targetFramework, string packageId, string packageVersion, string packagesRoot,
+        string compileAsset, string requestedMinimumVersion)
+    {
+        WritePackageAssetsCore(root, projectPath, targetFramework, packageId,
+            packageVersion, [packagesRoot], compileAsset, targetFramework,
+            $"[{requestedMinimumVersion}, )", [], []);
+    }
+
+    private static void WritePackageAssetsForConstraint(string root, string projectPath,
+        string targetFramework, string assetsTargetFramework, string packageId,
+        string packageVersion, string packagesRoot, string compileAsset,
+        string dependencyVersion)
+    {
+        WritePackageAssetsCore(root, projectPath, targetFramework, packageId,
+            packageVersion, [packagesRoot], compileAsset, assetsTargetFramework,
+            dependencyVersion, [], []);
+    }
+
+    private static void WritePackageAssetsWithRoots(string root, string projectPath,
+        string targetFramework, string packageId, string packageVersion,
+        IReadOnlyList<string> packagesRoots, string compileAsset)
+    {
+        WritePackageAssetsCore(root, projectPath, targetFramework, packageId,
+            packageVersion, packagesRoots, compileAsset, targetFramework,
+            $"[{packageVersion}, )", [], []);
+    }
+
+    private static void WritePackageAssetsWithUnreachablePackage(string root,
+        string projectPath, string targetFramework, string packageId,
+        string packageVersion, string packagesRoot, string compileAsset,
+        (string Id, string Version, string CompileAsset) unreachablePackage)
+    {
+        WritePackageAssetsCore(root, projectPath, targetFramework, packageId,
+            packageVersion, [packagesRoot], compileAsset, targetFramework,
+            $"[{packageVersion}, )", [], [unreachablePackage]);
+    }
+
+    private static void WritePackageAssetsWithLibraryPath(string root,
+        string projectPath, string targetFramework, string packageId,
+        string packageVersion, string packagesRoot, string compileAsset,
+        string libraryPath)
+    {
+        WritePackageAssetsCore(root, projectPath, targetFramework, packageId,
+            packageVersion, [packagesRoot], compileAsset, targetFramework,
+            $"[{packageVersion}, )", [], [], libraryPath);
+    }
+
+    private static void WritePackageAssetsCore(string root, string projectPath,
+        string targetFramework, string packageId, string packageVersion,
+        IReadOnlyList<string> packagesRoots,
+        string compileAsset, string assetsTargetFramework, string dependencyVersion,
+        IReadOnlyList<(string Id, string Version, string CompileAsset)> transitivePackages,
+        IReadOnlyList<(string Id, string Version, string CompileAsset)> unreachablePackages,
+        string? directLibraryPathOverride = null)
+    {
+        string absoluteProjectPath = Path.Combine(root,
+            projectPath.Replace('/', Path.DirectorySeparatorChar));
+        string[] normalizedPackagesRoots = packagesRoots.Select(packagesRoot =>
+                Path.TrimEndingDirectorySeparator(packagesRoot) + Path.DirectorySeparatorChar)
+            .ToArray();
+        string libraryKey = $"{packageId}/{packageVersion}";
+        string libraryPath = directLibraryPathOverride ??
+                             $"{packageId.ToLowerInvariant()}/{packageVersion}";
+        string directDependencies = string.Join("," + Environment.NewLine,
+            transitivePackages.Select(package =>
+                $"\"{package.Id}\": \"{package.Version}\""));
+        var additionalPackages = transitivePackages.Concat(unreachablePackages).ToArray();
+        string transitiveTargets = string.Join("," + Environment.NewLine,
+            additionalPackages.Select(package => $$"""
+                  "{{package.Id}}/{{package.Version}}": {
+                    "type": "package",
+                    "compile": { "{{package.CompileAsset}}": {} }
+                  }
+                """));
+        string transitiveLibraries = string.Join("," + Environment.NewLine,
+            additionalPackages.Select(package => $$"""
+                "{{package.Id}}/{{package.Version}}": {
+                  "type": "package",
+                  "path": "{{package.Id.ToLowerInvariant()}}/{{package.Version}}"
+                }
+                """));
+        string packageFolders = string.Join("," + Environment.NewLine,
+            normalizedPackagesRoots.Select(packageRoot =>
+                $"{JsonSerializer.Serialize(packageRoot)}: {{}}"));
+        string json = $$"""
+            {
+              "version": 3,
+              "targets": {
+                "{{assetsTargetFramework}}": {
+                  "{{libraryKey}}": {
+                    "type": "package",
+                    "dependencies": { {{directDependencies}} },
+                    "compile": { "{{compileAsset}}": {} }
+                  }{{(transitiveTargets.Length == 0 ? "" : "," + Environment.NewLine + transitiveTargets)}}
+                }
+              },
+              "libraries": {
+                "{{libraryKey}}": {
+                  "type": "package",
+                  "path": "{{libraryPath}}"
+                }{{(transitiveLibraries.Length == 0 ? "" : "," + Environment.NewLine + transitiveLibraries)}}
+              },
+              "projectFileDependencyGroups": {
+                "{{targetFramework}}": [ "{{packageId}} >= {{packageVersion}}" ]
+              },
+              "packageFolders": {
+                {{packageFolders}}
+              },
+              "project": {
+                "restore": {
+                  "projectPath": {{JsonSerializer.Serialize(absoluteProjectPath)}},
+                  "packagesPath": {{JsonSerializer.Serialize(normalizedPackagesRoots[0])}},
+                  "originalTargetFrameworks": [ "{{targetFramework}}" ],
+                  "frameworks": {
+                    "{{targetFramework}}": {
+                      "targetAlias": "{{targetFramework}}",
+                      "projectReferences": {}
+                    }
+                  }
+                },
+                "frameworks": {
+                  "{{targetFramework}}": {
+                    "dependencies": {
+                      "{{packageId}}": {
+                        "target": "Package",
+                        "version": "{{dependencyVersion}}"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+        WriteProject(root,
+            Path.Combine(Path.GetDirectoryName(projectPath) ?? "", "obj", "project.assets.json")
+                .Replace(Path.DirectorySeparatorChar, '/'), json);
     }
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;

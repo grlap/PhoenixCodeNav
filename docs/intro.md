@@ -31,7 +31,7 @@ each of which tells you *how much to trust it*:
 | **Indexed text** (FTS5, C# + F# + Markdown + SQL) | where literal text/config/keys appear, ranked | `indexed` |
 | **Syntax (C#)** (Roslyn parse) | file outlines, symbol declarations, spans | `indexed` |
 | **Syntax (F#)** (FCS parse) | compile-owned `.fs` / `.fsi` outlines | `indexed` |
-| **Semantic** (Roslyn for C#; bounded FCS Stage 2A for F#) | exact C# navigation; F# position symbols and same-project definitions | C# may be `exact`; F# is compiler-checked `indexed` with explicit partial causes |
+| **Semantic** (Roslyn for C#; bounded FCS for F#) | exact C# navigation; F# position symbols and same-project definitions, including restored direct/transitive and centrally managed package compile assets | C# may be `exact`; F# is compiler-checked `indexed` with explicit partial causes |
 
 Plus structural facts (project graph, ownership, dependency paths) and composites
 (`context_pack`, `impact`). Every response is budget-capped, line-addressable, and
@@ -46,9 +46,10 @@ bounded legacy-project subset (simple properties and conditions, `Choose`, and l
 `.props`) without executing MSBuild. It also evaluates the nearest indexed ancestor
 `Directory.Build.props`/`.targets` around the project for bounded, metadata-free Reference
 Include/Remove item-list mutations; target/task-driven mutations still fail closed. Standard
-SDK/toolchain implicit authority is partial, and custom SDK authority remains unsupported. Package/project-reference
-closure and broader F# semantic operations still return explicit unsupported boundaries rather
-than misleading empty answers. Indexed search is language-neutral unless the caller supplies a file
+SDK/toolchain implicit authority is partial, and custom SDK authority remains unsupported. Restored
+`PackageReference` closure is supported only when Phoenix can verify the selected direct and transitive
+compile assets safely; project-reference closure and broader F# semantic operations still return
+explicit unsupported boundaries rather than misleading empty answers. Indexed search is language-neutral unless the caller supplies a file
 scope; a mixed C#/F# symbol scope returns the available C# symbols and marks the skipped portion
 partial.
 

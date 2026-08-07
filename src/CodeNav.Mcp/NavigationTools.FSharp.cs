@@ -202,9 +202,20 @@ public sealed partial class NavigationTools
                 "Line-only F# lookup is disabled for this source size; provide a 1-based column.",
             "fsharp_semantic_position_invalid" =>
                 "F# semantic positions require line >= 1 and column >= 0 (0 means line-only).",
-            "fsharp_semantic_package_references_unsupported" or
-                "fsharp_semantic_project_references_unsupported" =>
-                "This Stage 2A type-check context requires reference closure scheduled for Stage 2B.",
+            "fsharp_semantic_project_references_unsupported" =>
+                "This F# type-check context requires project-reference closure that is not available yet.",
+            "fsharp_semantic_package_reference_unresolved" =>
+                "An active PackageReference identity could not be resolved by the bounded project evaluator.",
+            "fsharp_semantic_package_reference_metadata_unsupported" =>
+                "An active PackageReference uses compile-asset or alias metadata that the bounded F# evaluator cannot model safely.",
+            "fsharp_semantic_central_package_management_unsupported" =>
+                "Directory.Packages.props uses central package authority outside the bounded property, condition, import, and PackageVersion projection.",
+            "fsharp_semantic_package_assets_unavailable" =>
+                "The selected project has PackageReference items but no safe, readable target-specific project.assets.json snapshot.",
+            "fsharp_semantic_package_assets_stale" =>
+                "The restored package assets do not match the indexed project snapshot and selected target framework.",
+            "fsharp_semantic_package_asset_unavailable" =>
+                "A target-specific package compile asset is missing, unsafe, unreadable, or not a managed assembly.",
             "fsharp_semantic_compile_order_unavailable" =>
                 "F# semantic checking requires deterministic literal Compile membership in compiler order; wildcards, defaults, exclusions, and unevaluated membership are unsupported.",
             "fsharp_semantic_items_conditioned" =>
@@ -217,6 +228,8 @@ public sealed partial class NavigationTools
                 "An applicable Directory.Build file changes F# inputs outside the bounded property/condition/reference projection.",
             "fsharp_semantic_directory_build_ambiguous" =>
                 "Applicable Directory.Build authority is ambiguous under the Windows host-case policy; F# semantic checking stopped instead of selecting a different indexed file.",
+            "fsharp_semantic_directory_packages_ambiguous" =>
+                "Applicable Directory.Packages.props authority is ambiguous under the Windows host-case policy; F# semantic checking stopped instead of selecting a different indexed file.",
             "fsharp_semantic_import_items_unsupported" =>
                 "An imported .props file contributes active Compile/reference items; imported semantic items remain outside Stage 2A.",
             "fsharp_semantic_import_path_outside_workspace" =>
@@ -234,9 +247,9 @@ public sealed partial class NavigationTools
             "fsharp_semantic_import_bytes_limit" =>
                 "The selected project's workspace project imports/inputs exceed the bounded aggregate UTF-8 byte limit.",
             "fsharp_semantic_item_list_limit" =>
-                "Directory.Build reference input lists exceed the bounded Stage 2A item count.",
+                "Project/package reference input lists exceed the bounded F# semantic item count.",
             "fsharp_semantic_dependency_limit" =>
-                "Directory.Build reference property/item dependencies exceed the bounded Stage 2A graph size.",
+                "Project/package reference dependencies exceed the bounded F# semantic graph size.",
             "fsharp_semantic_condition_unsupported" =>
                 "The selected project uses an MSBuild condition outside the bounded Stage 2A grammar.",
             "fsharp_semantic_condition_limit" =>

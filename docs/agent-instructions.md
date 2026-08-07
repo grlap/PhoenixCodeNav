@@ -27,16 +27,21 @@ Default flow:
    64-context budget has capacity; `truncatedOwnerProjects` counts owners whose distinct contexts
    were still omitted. `fsharp_project_options_imported` alone is advisory structured coverage,
    not a blanket partial result.
-   F# semantic Stage 2A is narrower: use
+   F# semantic resolution is narrower: use
    position-based `symbol_at` / `definition`; references, implementations, callers/callees, and
-   hierarchy are not available yet. Stage 2A evaluates a
+   hierarchy are not available yet. The bounded evaluator processes a
    bounded subset of simple project properties/conditions/`Choose` and local `.props`; an explicit
    `fsharp_semantic_*_unsupported` cause means the project crossed that boundary, not that the symbol
    is absent. An unresolved condition-property cause means the result depends on an ambient/global
    build input that the selected project/TFM context does not claim to know. Standard SDK/toolchain
    implicit authority is disclosed as partial. The nearest indexed ancestor `Directory.Build.props`
    and `.targets` are evaluated only for bounded properties, conditions, and metadata-free Reference
-   Include/Remove lists; custom SDKs and target/task-driven semantic mutations fail closed.
+   Include/Remove lists. The nearest indexed `Directory.Packages.props` contributes bounded,
+   conditional `PackageVersion` authority for active versionless `PackageReference` items. Those
+   identities use the selected target from an already-restored `project.assets.json`; transitive
+   compile assets are copied into immutable request-private snapshots, while missing/stale or
+   ambiguous assets and all project-reference closure fail closed. Custom SDKs and
+   target/task-driven semantic mutations fail closed.
    If `implementations` returns `retryRecommended:true` with a cold-load or semantic-timeout
    reason, retry it once with the same arguments; non-partial exact responses omit that signal.
 3. Use `search_text` only for literals: config keys, route strings, error messages, log
@@ -53,7 +58,7 @@ Default flow:
    and `dependency_path` — never guess from folder names.
 9. Trust `meta.confidence`:
    - `exact` — compiler-verified by a closed Roslyn project model; safe to act on.
-   - `indexed` — index/syntax-backed leads, including bounded FCS Stage 2A results whose
+   - `indexed` — index/syntax-backed leads, including bounded FCS results whose
      `partialReason` names unevaluated project inputs; verify with `source_context` before
      large edits. `partial: true` or a `partialReason` means coverage was bounded —
       use `maxProjects: 0` after an explicitly bounded call, raise `timeoutMs`, or narrow the

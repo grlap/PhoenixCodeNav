@@ -25,6 +25,7 @@ public static partial class ProjectFileParser
         List<string> CommandLineArgs,
         List<string> HintPathReferences,
         List<string> BareReferences,
+        List<FSharpPackageReferenceSnapshot> PackageReferences,
         string AssemblyName,
         string? PartialReason = null,
         string? Error = null);
@@ -37,6 +38,7 @@ public static partial class ProjectFileParser
     {
         Project,
         ExplicitImport,
+        DirectoryPackagesProps,
         DirectoryBuildProps,
         DirectoryBuildTargets,
     }
@@ -60,6 +62,14 @@ public static partial class ProjectFileParser
             @"@\((?<name>[A-Za-z_][A-Za-z0-9_.-]*)\)",
             RegexOptions.CultureInvariant);
 
+        private static readonly Regex SimplePackageVersion = new(
+            @"^[0-9]+(?:\.[0-9]+){0,3}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$",
+            RegexOptions.CultureInvariant);
+
+        private static readonly Regex FloatingPackageVersion = new(
+            @"^[0-9]+(?:\.[0-9]+){0,2}\.\*$",
+            RegexOptions.CultureInvariant);
+
         private static readonly Regex ExistsCondition = new(
             @"^Exists\s*\(\s*(?:'(?<path>[^'\r\n]*)'|""(?<path>[^""\r\n]*)"")\s*\)$",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -72,6 +82,7 @@ public static partial class ProjectFileParser
         private readonly Func<string, long?>? _importSizeResolver;
         private readonly string? _directoryBuildPropsPath;
         private readonly string? _directoryBuildTargetsPath;
+        private readonly string? _directoryPackagesPropsPath;
         private readonly CancellationToken _cancellationToken;
         private readonly Dictionary<string, FSharpSemanticProperty> _properties =
             new(StringComparer.OrdinalIgnoreCase);
@@ -79,6 +90,10 @@ public static partial class ProjectFileParser
         private readonly HashSet<string> _sourceSet =
             new(WorkspacePaths.FileSystemPathComparer);
         private readonly List<FSharpSemanticReference> _references = [];
+        private readonly Dictionary<string, string?> _packageReferences =
+            new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, string> _packageVersions =
+            new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, List<string>> _itemLists =
             new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, string> _incompleteItemListErrors =
@@ -113,6 +128,7 @@ public static partial class ProjectFileParser
             string[] targetFrameworks,
             Func<string, string?>? importResolver,
             Func<string, long?>? importSizeResolver,
+            string? directoryPackagesPropsPath,
             string? directoryBuildPropsPath,
             string? directoryBuildTargetsPath,
             CancellationToken cancellationToken)
@@ -124,6 +140,8 @@ public static partial class ProjectFileParser
             _targetFrameworks = targetFrameworks;
             _importResolver = importResolver;
             _importSizeResolver = importSizeResolver;
+            _directoryPackagesPropsPath = NormalizeOptionalWorkspacePath(
+                directoryPackagesPropsPath);
             _directoryBuildPropsPath = NormalizeOptionalWorkspacePath(directoryBuildPropsPath);
             _directoryBuildTargetsPath = NormalizeOptionalWorkspacePath(directoryBuildTargetsPath);
             _cancellationToken = cancellationToken;
@@ -152,6 +170,9 @@ public static partial class ProjectFileParser
             if (_directoryBuildPropsPath is not null)
                 ProcessResolvedImport(_directoryBuildPropsPath,
                     FSharpSemanticDocumentRole.DirectoryBuildProps, depth: 0);
+            if (_error is null && _directoryPackagesPropsPath is not null)
+                ProcessResolvedImport(_directoryPackagesPropsPath,
+                    FSharpSemanticDocumentRole.DirectoryPackagesProps, depth: 0);
             if (_error is null)
                 ProcessContainer(root, _projectPath,
                     FSharpSemanticDocumentRole.Project, depth: 0);
@@ -213,6 +234,10 @@ public static partial class ProjectFileParser
                 _references.Where(reference => reference.HintPath is null)
                     .Select(reference => reference.SimpleName)
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                _packageReferences.OrderBy(reference => reference.Key,
+                        StringComparer.OrdinalIgnoreCase)
+                    .Select(reference => new FSharpPackageReferenceSnapshot(
+                        reference.Key, reference.Value)).ToList(),
                 assemblyName, parsing.PartialReason);
         }
 
@@ -221,6 +246,12 @@ public static partial class ProjectFileParser
 
         private static bool IsDirectoryBuildRole(FSharpSemanticDocumentRole role) =>
             role is FSharpSemanticDocumentRole.DirectoryBuildProps or
+                FSharpSemanticDocumentRole.DirectoryBuildTargets;
+
+        private static bool IsDirectoryPropsAuthorityRole(
+            FSharpSemanticDocumentRole role) =>
+            role is FSharpSemanticDocumentRole.DirectoryPackagesProps or
+                FSharpSemanticDocumentRole.DirectoryBuildProps or
                 FSharpSemanticDocumentRole.DirectoryBuildTargets;
 
         private bool ValidateSdkAuthority(XElement root, bool allowStandardSdk)
@@ -259,6 +290,10 @@ public static partial class ProjectFileParser
                 _references.Where(reference => reference.HintPath is null)
                     .Select(reference => reference.SimpleName)
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                _packageReferences.OrderBy(reference => reference.Key,
+                        StringComparer.OrdinalIgnoreCase)
+                    .Select(reference => new FSharpPackageReferenceSnapshot(
+                        reference.Key, reference.Value)).ToList(),
                 assemblyName ?? Path.GetFileNameWithoutExtension(_projectPath),
                 _partialReasons.Count == 0 ? null : string.Join(';', _partialReasons), error);
 
@@ -411,11 +446,16 @@ public static partial class ProjectFileParser
             CheckCancellation();
             bool hasSemanticItems = group.Elements().Any(item =>
                 IsSemanticItemName(item.Name.LocalName));
+            bool hasNonPackageVersionSemanticItems = group.Elements().Any(item =>
+                IsSemanticItemName(item.Name.LocalName) &&
+                !item.Name.LocalName.Equals("PackageVersion",
+                    StringComparison.OrdinalIgnoreCase));
             bool groupProcess = true;
             if (hasSemanticItems)
             {
                 if (!ShouldProcess(group, documentPath, out groupProcess)) return;
-                if (!groupProcess && ConditionMayDependOnProperties(group))
+                if (!groupProcess && hasNonPackageVersionSemanticItems &&
+                    ConditionMayDependOnProperties(group))
                 {
                     _semanticItemPhaseStarted = true;
                     _directSemanticItemPhaseStarted = true;
@@ -435,26 +475,38 @@ public static partial class ProjectFileParser
                 if (!ShouldProcess(item, documentPath, out bool process)) return;
                 if (!process)
                 {
-                    if (ConditionMayDependOnProperties(item))
+                    if (!itemName.Equals("PackageVersion",
+                            StringComparison.OrdinalIgnoreCase) &&
+                        ConditionMayDependOnProperties(item))
                     {
                         _semanticItemPhaseStarted = true;
                         _directSemanticItemPhaseStarted = true;
                     }
                     continue;
                 }
+                if (itemName.Equals("PackageVersion", StringComparison.OrdinalIgnoreCase))
+                {
+                    ProcessPackageVersion(item, documentPath);
+                    if (_error is not null) return;
+                    continue;
+                }
                 _semanticItemPhaseStarted = true;
                 _directSemanticItemPhaseStarted = true;
+                if (role == FSharpSemanticDocumentRole.DirectoryPackagesProps)
+                {
+                    _error = "fsharp_semantic_central_package_management_unsupported";
+                    return;
+                }
                 if (role == FSharpSemanticDocumentRole.ExplicitImport)
                 {
-                    _error = itemName switch
-                    {
-                        "ProjectReference" =>
-                            "fsharp_semantic_project_references_unsupported",
-                        "PackageReference" =>
-                            "fsharp_semantic_package_references_unsupported",
-                        _ => "fsharp_semantic_import_items_unsupported",
-                    };
-                    return;
+                    _error = itemName.Equals("ProjectReference",
+                        StringComparison.OrdinalIgnoreCase)
+                        ? "fsharp_semantic_project_references_unsupported"
+                        : itemName.Equals("PackageReference",
+                            StringComparison.OrdinalIgnoreCase)
+                            ? null
+                            : "fsharp_semantic_import_items_unsupported";
+                    if (_error is not null) return;
                 }
                 if (IsDirectoryBuildRole(role) &&
                     itemName.Equals("Compile", StringComparison.OrdinalIgnoreCase))
@@ -463,29 +515,332 @@ public static partial class ProjectFileParser
                     return;
                 }
 
-                switch (itemName)
+                if (itemName.Equals("Compile", StringComparison.OrdinalIgnoreCase))
                 {
-                    case "Compile":
-                        ProcessCompile(item);
-                        break;
-                    case "Reference":
-                        ProcessReference(item, documentPath);
-                        break;
-                    case "ProjectReference":
-                        _error = "fsharp_semantic_project_references_unsupported";
-                        break;
-                    case "PackageReference":
-                        _error = "fsharp_semantic_package_references_unsupported";
-                        break;
-                    case "ReferencePath":
-                    case "ReferencePathWithRefAssemblies":
-                    case "ResolvedCompileFileDefinitions":
-                    case "_ResolvedProjectReferencePaths":
-                        _error = "fsharp_semantic_reference_unresolved";
-                        break;
+                    ProcessCompile(item);
+                }
+                else if (itemName.Equals("Reference", StringComparison.OrdinalIgnoreCase))
+                {
+                    ProcessReference(item, documentPath);
+                }
+                else if (itemName.Equals("ProjectReference",
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    _error = "fsharp_semantic_project_references_unsupported";
+                }
+                else if (itemName.Equals("PackageReference",
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    ProcessPackageReference(item, documentPath);
+                }
+                else if (itemName.Equals("GlobalPackageReference",
+                             StringComparison.OrdinalIgnoreCase))
+                {
+                    _error = "fsharp_semantic_central_package_management_unsupported";
+                }
+                else
+                {
+                    _error = "fsharp_semantic_reference_unresolved";
                 }
                 if (_error is not null) return;
             }
+        }
+
+        private void ProcessPackageReference(XElement item, string documentPath)
+        {
+            string? rawInclude = item.Attribute("Include")?.Value.Trim();
+            string? rawUpdate = item.Attribute("Update")?.Value.Trim();
+            string? rawRemove = item.Attribute("Remove")?.Value.Trim();
+            int operations = (rawInclude is null ? 0 : 1) + (rawUpdate is null ? 0 : 1) +
+                             (rawRemove is null ? 0 : 1);
+            if (operations != 1 || item.Attribute("Exclude") is not null)
+            {
+                _error = "fsharp_semantic_package_reference_unresolved";
+                return;
+            }
+            string raw = rawInclude ?? rawUpdate ?? rawRemove!;
+            if (!TryExpandItemSpecs(raw, out List<string> specs))
+            {
+                _error ??= "fsharp_semantic_package_reference_unresolved";
+                return;
+            }
+            if (specs.Count == 0)
+            {
+                _error = "fsharp_semantic_package_reference_unresolved";
+                return;
+            }
+
+            var ids = new List<string>(specs.Count);
+            foreach (string spec in specs)
+            {
+                if (++_itemListEntries > MaxFSharpSemanticItemListEntries)
+                {
+                    _error = "fsharp_semantic_item_list_limit";
+                    return;
+                }
+                string id = spec.Trim();
+                if (!IsValidPackageId(id))
+                {
+                    _error = "fsharp_semantic_package_reference_unresolved";
+                    return;
+                }
+                ids.Add(id);
+            }
+            if (rawUpdate is not null && ids.All(id =>
+                    !_packageReferences.ContainsKey(id)))
+                return;
+            if (rawRemove is null &&
+                !PackageReferenceCompilerMetadataIsSupported(item, documentPath))
+                return;
+
+            string? requestedVersion = null;
+            bool versionOverrideUsed = false;
+            if (rawRemove is null && !TryGetPackageVersion(item, documentPath,
+                    allowVersionOverride: true, out requestedVersion,
+                    out versionOverrideUsed))
+                return;
+            if (requestedVersion is not null &&
+                !IsSupportedPackageVersionExpression(requestedVersion))
+            {
+                _error = "fsharp_semantic_package_reference_unresolved";
+                return;
+            }
+
+            bool centrallyManaged = IsCentralPackageManagementEnabled();
+            if (_error is not null) return;
+            if (centrallyManaged && requestedVersion is not null &&
+                !versionOverrideUsed)
+            {
+                _error = "fsharp_semantic_package_reference_unresolved";
+                return;
+            }
+            bool versionOverrideEnabled = !versionOverrideUsed ||
+                                          IsCentralPackageVersionOverrideEnabled();
+            if (_error is not null) return;
+            if (versionOverrideUsed &&
+                (!centrallyManaged || !versionOverrideEnabled ||
+                 requestedVersion is null ||
+                 !SimplePackageVersion.IsMatch(requestedVersion)))
+            {
+                _error = "fsharp_semantic_package_reference_unresolved";
+                return;
+            }
+
+            foreach (string id in ids)
+            {
+                if (rawRemove is not null)
+                    _packageReferences.Remove(id);
+                else if (rawUpdate is not null)
+                {
+                    if (!_packageReferences.ContainsKey(id)) continue;
+                    if (requestedVersion is null) continue;
+                    _packageReferences[id] = requestedVersion;
+                }
+                else
+                {
+                    string? effectiveVersion = requestedVersion;
+                    if (effectiveVersion is null &&
+                        (!centrallyManaged || !_packageVersions.TryGetValue(id,
+                            out effectiveVersion)))
+                    {
+                        _error = "fsharp_semantic_package_reference_unresolved";
+                        return;
+                    }
+                    _packageReferences[id] = effectiveVersion;
+                }
+            }
+        }
+
+        private bool PackageReferenceCompilerMetadataIsSupported(XElement item,
+            string documentPath)
+        {
+            static bool ChangesCompilerReferenceShape(string name) =>
+                name.Equals("ExcludeAssets", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("IncludeAssets", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("Aliases", StringComparison.OrdinalIgnoreCase);
+
+            if (item.Attributes().Any(attribute =>
+                    ChangesCompilerReferenceShape(attribute.Name.LocalName)))
+            {
+                _error = "fsharp_semantic_package_reference_metadata_unsupported";
+                return false;
+            }
+
+            foreach (XElement metadata in item.Elements().Where(element =>
+                         ChangesCompilerReferenceShape(element.Name.LocalName)))
+            {
+                if (!ShouldProcess(metadata, documentPath, out bool process)) return false;
+                if (!process) continue;
+                _error = "fsharp_semantic_package_reference_metadata_unsupported";
+                return false;
+            }
+            return true;
+        }
+
+        private void ProcessPackageVersion(XElement item, string documentPath)
+        {
+            string? rawInclude = item.Attribute("Include")?.Value.Trim();
+            string? rawUpdate = item.Attribute("Update")?.Value.Trim();
+            string? rawRemove = item.Attribute("Remove")?.Value.Trim();
+            int operations = (rawInclude is null ? 0 : 1) + (rawUpdate is null ? 0 : 1) +
+                             (rawRemove is null ? 0 : 1);
+            if (operations != 1 || item.Attribute("Exclude") is not null)
+            {
+                _error = "fsharp_semantic_central_package_management_unsupported";
+                return;
+            }
+
+            string raw = rawInclude ?? rawUpdate ?? rawRemove!;
+            if (!TryExpandItemSpecs(raw, out List<string> specs) || specs.Count == 0)
+            {
+                _error ??= "fsharp_semantic_central_package_management_unsupported";
+                return;
+            }
+
+            string? version = null;
+            if (rawRemove is null && !TryGetPackageVersion(item, documentPath,
+                    allowVersionOverride: false, out version, out _))
+                return;
+            if (rawInclude is not null && version is null)
+            {
+                _error = "fsharp_semantic_central_package_management_unsupported";
+                return;
+            }
+            if (version is not null && !SimplePackageVersion.IsMatch(version))
+            {
+                _error = "fsharp_semantic_central_package_management_unsupported";
+                return;
+            }
+
+            foreach (string spec in specs)
+            {
+                if (++_itemListEntries > MaxFSharpSemanticItemListEntries)
+                {
+                    _error = "fsharp_semantic_item_list_limit";
+                    return;
+                }
+                string id = spec.Trim();
+                if (!IsValidPackageId(id))
+                {
+                    _error = "fsharp_semantic_central_package_management_unsupported";
+                    return;
+                }
+                if (rawRemove is not null)
+                    _packageVersions.Remove(id);
+                else if (rawInclude is not null && _packageVersions.ContainsKey(id))
+                {
+                    _error = "fsharp_semantic_central_package_management_unsupported";
+                    return;
+                }
+                else if (rawUpdate is not null && !_packageVersions.ContainsKey(id))
+                {
+                    _error = "fsharp_semantic_central_package_management_unsupported";
+                    return;
+                }
+                else if (version is not null)
+                    _packageVersions[id] = version;
+                else if (!_packageVersions.ContainsKey(id))
+                {
+                    _error = "fsharp_semantic_central_package_management_unsupported";
+                    return;
+                }
+            }
+        }
+
+        private bool TryGetPackageVersion(XElement item, string documentPath,
+            bool allowVersionOverride, out string? requestedVersion,
+            out bool versionOverrideUsed)
+        {
+            requestedVersion = null;
+            versionOverrideUsed = false;
+            var values = new List<string>();
+            foreach (string attributeName in allowVersionOverride
+                         ? new[] { "VersionOverride", "Version" }
+                         : new[] { "Version" })
+            {
+                if (item.Attribute(attributeName)?.Value is { } attributeValue)
+                {
+                    values.Add(attributeValue);
+                    versionOverrideUsed = attributeName.Equals("VersionOverride",
+                        StringComparison.OrdinalIgnoreCase);
+                    break;
+                }
+                foreach (XElement metadata in item.Elements().Where(element =>
+                             element.Name.LocalName.Equals(attributeName,
+                                 StringComparison.OrdinalIgnoreCase)))
+                {
+                    if (!ShouldProcess(metadata, documentPath, out bool process)) return false;
+                    if (process)
+                    {
+                        values.Add(metadata.Value);
+                        versionOverrideUsed = attributeName.Equals("VersionOverride",
+                            StringComparison.OrdinalIgnoreCase);
+                    }
+                }
+                if (values.Count > 0) break;
+            }
+            if (values.Count > 1)
+            {
+                _error = "fsharp_semantic_package_reference_unresolved";
+                return false;
+            }
+            if (values.Count == 0) return true;
+            if (!TryExpandProperties(values[0].Trim(), null,
+                    out string expanded, out bool complete))
+                return false;
+            if (!complete || expanded.Length == 0)
+            {
+                _error = "fsharp_semantic_package_reference_unresolved";
+                return false;
+            }
+            requestedVersion = expanded;
+            return true;
+        }
+
+        private bool IsCentralPackageManagementEnabled() =>
+            TryGetBooleanProperty("ManagePackageVersionsCentrally", defaultValue: false);
+
+        private bool IsCentralPackageVersionOverrideEnabled() =>
+            TryGetBooleanProperty("CentralPackageVersionOverrideEnabled", defaultValue: true);
+
+        private bool TryGetBooleanProperty(string name, bool defaultValue)
+        {
+            if (!_properties.TryGetValue(name, out FSharpSemanticProperty property))
+                return defaultValue;
+            if (!property.Complete || !bool.TryParse(property.Value.Trim(), out bool value))
+            {
+                _error = "fsharp_semantic_central_package_management_unsupported";
+                return false;
+            }
+            return value;
+        }
+
+        private static bool IsValidPackageId(string id) =>
+            id.Length > 0 && !id.Contains('/') && !id.Contains('\\');
+
+        private static bool IsSupportedPackageVersionExpression(string expression)
+        {
+            string value = expression.Trim();
+            if (SimplePackageVersion.IsMatch(value) ||
+                FloatingPackageVersion.IsMatch(value))
+                return true;
+            if (value.Length >= 3 && value[0] == '[' && value[^1] == ']' &&
+                !value.Contains(','))
+                return SimplePackageVersion.IsMatch(value[1..^1].Trim());
+            if (value.Length < 3 || value[0] is not ('[' or '(') ||
+                value[^1] is not (']' or ')'))
+                return false;
+            string body = value[1..^1];
+            int comma = body.IndexOf(',');
+            if (comma < 0 || comma != body.LastIndexOf(',')) return false;
+            string lower = body[..comma].Trim();
+            string upper = body[(comma + 1)..].Trim();
+            if (lower.Length == 0 && value[0] != '(' ||
+                upper.Length == 0 && value[^1] != ')' ||
+                lower.Length == 0 && upper.Length == 0)
+                return false;
+            return (lower.Length == 0 || SimplePackageVersion.IsMatch(lower)) &&
+                   (upper.Length == 0 || SimplePackageVersion.IsMatch(upper));
         }
 
         private void ProcessReferenceInputItem(XElement group, XElement item,
@@ -807,7 +1162,7 @@ public static partial class ProjectFileParser
             string? deferredConditionError = null;
             if (!ShouldProcess(import, documentPath, out bool process))
             {
-                if (!IsDirectoryBuildRole(role)) return;
+                if (!IsDirectoryPropsAuthorityRole(role)) return;
                 deferredConditionError = _error ??
                                          "fsharp_semantic_condition_unsupported";
                 _error = null;
@@ -882,7 +1237,7 @@ public static partial class ProjectFileParser
                 return;
             }
             ProcessResolvedImport(importPath,
-                IsDirectoryBuildRole(role)
+                IsDirectoryPropsAuthorityRole(role)
                     ? role
                     : FSharpSemanticDocumentRole.ExplicitImport,
                 depth);
@@ -1571,13 +1926,19 @@ public static partial class ProjectFileParser
              name.Equals("FscAdditionalArgs", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("AssemblyName", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("DisableImplicitFrameworkDefines", StringComparison.OrdinalIgnoreCase) ||
-             name.Equals("EnableDefaultCompileItems", StringComparison.OrdinalIgnoreCase));
+             name.Equals("EnableDefaultCompileItems", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("ManagePackageVersionsCentrally",
+                 StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("CentralPackageVersionOverrideEnabled",
+                 StringComparison.OrdinalIgnoreCase));
 
         private static bool IsSemanticItemName(string? name) => name is not null &&
             (name.Equals("Compile", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("Reference", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("PackageReference", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("GlobalPackageReference", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("PackageVersion", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("ReferencePath", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("ReferencePathWithRefAssemblies", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("ResolvedCompileFileDefinitions", StringComparison.OrdinalIgnoreCase) ||

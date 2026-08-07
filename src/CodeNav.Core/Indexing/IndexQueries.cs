@@ -65,6 +65,13 @@ public sealed record DirectoryBuildAuthorityPaths(
     public bool HasPotentialAuthority => HasAny || HasAmbiguity;
 }
 
+public sealed record DirectoryPackagesAuthorityPath(
+    string? Path,
+    bool PathAmbiguous = false)
+{
+    public bool HasPotentialAuthority => Path is not null || PathAmbiguous;
+}
+
 /// <summary>A whole-token FTS candidate attributed to one physical project row. Keeping the
 /// physical path/language here prevents an unsupported F# owner from being silently replaced by
 /// a same-logical-name C# project during semantic scan-set construction.</summary>
@@ -2243,6 +2250,61 @@ public sealed partial class IndexQueries : IDisposable
             if (propsComplete && targetsComplete) break;
         }
         return new(props, targets, propsAmbiguous, targetsAmbiguous);
+    }
+
+    /// <summary>Returns the nearest indexed Directory.Packages.props applicable to a project,
+    /// matching NuGet central package management's single-file ancestor discovery rule. The
+    /// lookup uses only the pinned index and fails closed on ambiguous Windows host-case matches.</summary>
+    public DirectoryPackagesAuthorityPath ApplicableDirectoryPackagesAuthority(
+        string projectPath) => ApplicableDirectoryPackagesAuthority(projectPath,
+        OperatingSystem.IsWindows());
+
+    internal DirectoryPackagesAuthorityPath ApplicableDirectoryPackagesAuthority(
+        string projectPath, bool useWindowsPathPolicy)
+    {
+        projectPath = WorkspacePaths.Normalize(projectPath);
+        int slash = projectPath.LastIndexOf('/');
+        string directory = slash < 0 ? "" : projectPath[..slash];
+        var candidates = new List<string>();
+        while (true)
+        {
+            string prefix = directory.Length == 0 ? "" : directory + "/";
+            candidates.Add(prefix + "Directory.Packages.props");
+            if (directory.Length == 0) break;
+            int parentSlash = directory.LastIndexOf('/');
+            directory = parentSlash < 0 ? "" : directory[..parentSlash];
+        }
+
+        var indexedPaths = new List<string>();
+        foreach (string[] chunk in candidates.Chunk(200))
+        {
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$p{i}");
+                args.Add(($"$p{i}", chunk[i]));
+            }
+            string lhs = useWindowsPathPolicy ? "path COLLATE NOCASE" : "path";
+            indexedPaths.AddRange(Query(
+                $"SELECT path FROM files WHERE {lhs} IN ({string.Join(",", parameters)})",
+                reader => reader.GetString(0), args.ToArray()));
+        }
+
+        foreach (string candidate in candidates)
+        {
+            string? exact = indexedPaths.FirstOrDefault(path =>
+                path.Equals(candidate, StringComparison.Ordinal));
+            if (exact is not null) return new(exact);
+            if (!useWindowsPathPolicy) continue;
+            string[] matches = indexedPaths
+                .Where(path => path.Equals(candidate, StringComparison.OrdinalIgnoreCase))
+                .Take(2)
+                .ToArray();
+            if (matches.Length == 1) return new(matches[0]);
+            if (matches.Length > 1) return new(null, PathAmbiguous: true);
+        }
+        return new(null);
     }
 
     /// <summary>Whether either applicable Directory.Build file exists in the pinned index.</summary>
