@@ -100,6 +100,7 @@ public sealed partial class SemanticWorkspace
         (long Count, long Sum) Fingerprint,
         IReadOnlyList<(string Path, long Size)> Files,
         bool HasDirectoryBuildAuthority,
+        bool HasDirectoryBuildTargetsAuthority,
         DirectoryPackagesSemanticAuthority DirectoryPackagesAuthority,
         long ProjectFileSize,
         long PackagesFileSize);
@@ -901,6 +902,7 @@ public sealed partial class SemanticWorkspace
                         name, row, id, ModelIdentity(name), fingerprint,
                         filesByProject.GetValueOrDefault(name) ?? [],
                         authority.HasPotentialAuthority,
+                        authority.HasPotentialTargetsAuthority,
                         packageAuthority,
                         0,
                         0));
@@ -1443,7 +1445,8 @@ public sealed partial class SemanticWorkspace
                         ProjectFileParser.EvaluateCSharpPackageReferencesSnapshot(
                             projectBytes, parsed.PackageRefs,
                             plan.DirectoryPackagesAuthority.Content,
-                            plan.DirectoryPackagesAuthority.PathAmbiguous);
+                            plan.DirectoryPackagesAuthority.PathAmbiguous,
+                            plan.HasDirectoryBuildTargetsAuthority);
                     parsed = parsed with
                     {
                         PackageRefs = packageReferences

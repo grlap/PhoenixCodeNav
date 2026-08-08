@@ -132,7 +132,10 @@ public sealed record SemanticProjectEdge(
     long ToId, string ToPath, string ToProject, string ToLanguage,
     string Kind = "project");
 
-public sealed record DirectoryBuildSemanticAuthority(bool HasPotentialAuthority, string Identity);
+public sealed record DirectoryBuildSemanticAuthority(
+    bool HasPotentialAuthority,
+    string Identity,
+    bool HasPotentialTargetsAuthority = false);
 
 /// <summary>The nearest indexed central-package authority and the exact indexed content that
 /// produced its model identity. Content is null when the structural snapshot was unavailable;
@@ -2429,7 +2432,10 @@ public sealed partial class IndexQueries : IDisposable
                 props.Ambiguous ? "props:ambiguous" : $"props:{props.Path}:{props.Hash}",
                 targets.Ambiguous ? "targets:ambiguous" :
                     $"targets:{targets.Path}:{targets.Hash}");
-            result[name] = new DirectoryBuildSemanticAuthority(potential, identity);
+            result[name] = new DirectoryBuildSemanticAuthority(
+                potential,
+                identity,
+                targets.Path is not null || targets.Ambiguous);
         }
         return result;
     }

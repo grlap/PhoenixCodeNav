@@ -38,13 +38,17 @@ never select projects or contribute build, ownership, dependency, or symbol-reso
 
 **C# semantic loading supports standard central package management.** A versionless
 `PackageReference` can take its unconditional simple version from the nearest indexed
-`Directory.Packages.props`. That central file participates in the warm Roslyn project identity, so
-an indexed `PackageVersion` refresh reloads the affected project. Phoenix never runs restore or
-MSBuild: the selected version must already exist in its exact global-cache directory. Existing
-analyzer-only or target-incompatible packages keep the established unresolved-reference behavior. Central shapes
-that require MSBuild evaluation retain the established unresolved-reference behavior instead of
-guessing, while a selected but unavailable exact package fails the project load rather than
-substituting another installed version. This extends the existing
+`Directory.Packages.props`. A `PackageVersion` may use bounded `$(Name)` expansion from local,
+unconditional `PropertyGroup` assignments, including assignment-time chains and reassignment; project
+overrides, explicit project imports, applicable `Directory.Build.targets`, conditions, property
+functions, unresolved references, and over-budget property tables retain the established
+unresolved-reference behavior. Literal central versions are unaffected by the property budgets. That central file participates in the
+warm Roslyn project identity, so an indexed property or `PackageVersion` refresh reloads the affected
+project. Phoenix never runs restore or MSBuild: the selected version must already exist in its exact
+global-cache directory. Existing analyzer-only or target-incompatible packages keep the established
+unresolved-reference behavior. Other central shapes that require MSBuild evaluation retain that
+behavior instead of guessing, while a selected but unavailable exact package fails the project load
+rather than substituting another installed version. This extends the existing
 C# direct-package assembly strategy; the verified transitive-assets closure described below remains
 specific to F#.
 

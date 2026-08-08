@@ -42,12 +42,72 @@ public sealed class CSharpCentralPackageManagementTests
     }
 
     [Fact]
+    public async Task LocalCentralPackagePropertySuppliesCSharpCompilerReference()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-csharp-cpm-property").FullName;
+        try
+        {
+            WriteWorkspace(root, "5.6.0");
+            WriteDirectoryPackagesWithProperty(root, "5.6.0");
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+
+            using var workspace = new SemanticWorkspace(root, dbPath);
+            using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
+                ["Cpm.Consumer"], CancellationToken.None);
+
+            Project project = Assert.Single(lease.Solution.Projects);
+            Assert.Empty(lease.Coverage.FailedProjects);
+            Assert.Contains("5.6.0", PackageReferencePath(project),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task LateDirectoryBuildTargetsPropertyAuthorityPreservesDirectReference()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-csharp-cpm-late-targets").FullName;
+        try
+        {
+            WriteWorkspace(root, "5.6.0");
+            WriteDirectoryPackagesWithProperty(root, "5.6.0");
+            File.WriteAllText(Path.Combine(root, "Directory.Build.targets"), """
+                <Project>
+                  <PropertyGroup>
+                    <NetLibVersion>3.6.0</NetLibVersion>
+                  </PropertyGroup>
+                </Project>
+                """);
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+
+            using var workspace = new SemanticWorkspace(root, dbPath);
+            using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
+                ["Cpm.Consumer"], CancellationToken.None);
+
+            Project project = Assert.Single(lease.Solution.Projects);
+            Assert.Empty(lease.Coverage.FailedProjects);
+            Assert.DoesNotContain(project.MetadataReferences.OfType<PortableExecutableReference>(),
+                IsPackageReference);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
     public async Task CentralPackageVersionRefreshReloadsTheWarmCSharpProject()
     {
         string root = Directory.CreateTempSubdirectory("codenav-csharp-cpm-refresh").FullName;
         try
         {
             WriteWorkspace(root, "5.6.0");
+            WriteDirectoryPackagesWithProperty(root, "5.6.0");
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
@@ -63,13 +123,14 @@ public sealed class CSharpCentralPackageManagementTests
                     Assert.Single(before.Solution.Projects)), StringComparison.OrdinalIgnoreCase);
             }
 
-            WriteDirectoryPackages(root, "3.6.0");
+            WriteDirectoryPackagesWithProperty(root, "3.6.0");
             Assert.True(manager.RequestRefresh(["Directory.Packages.props"]));
             Assert.True(WaitUntil(() =>
             {
                 using IndexQueries queries = manager.OpenQueries();
                 return queries.ContentByPath("Directory.Packages.props")?.Contains(
-                    "3.6.0", StringComparison.Ordinal) == true;
+                    "<NetLibVersion>3.6.0</NetLibVersion>",
+                    StringComparison.Ordinal) == true;
             }, 20000));
 
             using SemanticSolutionLease after = await workspace.EnsureLoadedAsync(
@@ -261,6 +322,168 @@ public sealed class CSharpCentralPackageManagementTests
         Assert.True(reference.CentrallyManaged);
     }
 
+    [Theory]
+    [InlineData("<NetLibVersion>10.0.2</NetLibVersion>", "10.0.2")]
+    [InlineData("<Major>10</Major><Minor>0</Minor><NetLibVersion>$(Major).$(Minor).2</NetLibVersion>", "10.0.2")]
+    [InlineData("<NetLibVersion>10.0.1</NetLibVersion><NetLibVersion>10.0.2</NetLibVersion>", "10.0.2")]
+    [InlineData("<NetLibVersion>10.0</NetLibVersion><NetLibVersion>$(NetLibVersion).2</NetLibVersion>", "10.0.2")]
+    public void SupportedLocalCentralPropertyExpressionResolvesVersion(
+        string propertyAssignments, string expected)
+    {
+        List<CSharpPackageReferenceSnapshot> result =
+            ProjectFileParser.EvaluateCSharpPackageReferencesSnapshot(
+                Encoding.UTF8.GetBytes(ProjectXml()), [(PackageId, "")],
+                CentralXml("$(NetLibVersion)", extraProperty: propertyAssignments),
+                hasAmbiguousDirectoryPackagesAuthority: false);
+
+        CSharpPackageReferenceSnapshot reference = Assert.Single(result);
+        Assert.Equal(expected, reference.Version);
+        Assert.True(reference.CentrallyManaged);
+    }
+
+    [Theory]
+    [InlineData("undefined-property")]
+    [InlineData("conditioned-property")]
+    [InlineData("conditioned-property-group")]
+    [InlineData("property-function")]
+    [InlineData("forward-property-reference")]
+    [InlineData("cyclic-property-reference")]
+    [InlineData("project-property-override")]
+    [InlineData("project-import")]
+    [InlineData("valid-then-conditioned-reassignment")]
+    [InlineData("valid-then-nonroot-reassignment")]
+    [InlineData("valid-then-unresolved-reassignment")]
+    [InlineData("dotted-property-name")]
+    public void UnsupportedLocalCentralPropertyExpressionPreservesDirectReference(
+        string scenario)
+    {
+        string project = ProjectXml();
+        string central = scenario switch
+        {
+            "undefined-property" => CentralXml("$(MissingVersion)"),
+            "conditioned-property" => CentralXml("$(NetLibVersion)", extraProperty:
+                "<NetLibVersion Condition=\"'$(Configuration)' == 'Release'\">10.0.2</NetLibVersion>"),
+            "conditioned-property-group" => CentralXml("$(NetLibVersion)")
+                .Replace("</PropertyGroup>",
+                    "</PropertyGroup><PropertyGroup Condition=\"'$(Configuration)' == 'Release'\"><NetLibVersion>10.0.2</NetLibVersion></PropertyGroup>",
+                    StringComparison.Ordinal),
+            "property-function" => CentralXml("$(NetLibVersion)", extraProperty:
+                "<NetLibVersion>$([System.String]::Copy('10.0.2'))</NetLibVersion>"),
+            "forward-property-reference" => CentralXml("$(NetLibVersion)", extraProperty:
+                "<NetLibVersion>$(LaterVersion)</NetLibVersion><LaterVersion>10.0.2</LaterVersion>"),
+            "cyclic-property-reference" => CentralXml("$(NetLibVersion)", extraProperty:
+                "<NetLibVersion>$(OtherVersion)</NetLibVersion><OtherVersion>$(NetLibVersion)</OtherVersion>"),
+            "project-property-override" => CentralXml("$(NetLibVersion)", extraProperty:
+                "<NetLibVersion>10.0.2</NetLibVersion>"),
+            "project-import" => CentralXml("$(NetLibVersion)", extraProperty:
+                "<NetLibVersion>10.0.2</NetLibVersion>"),
+            "valid-then-conditioned-reassignment" => CentralXml("$(NetLibVersion)",
+                extraProperty:
+                "<NetLibVersion>10.0.2</NetLibVersion><NetLibVersion Condition=\"'$(Configuration)' == 'Release'\">99.0.0</NetLibVersion>"),
+            "valid-then-nonroot-reassignment" => CentralXml("$(NetLibVersion)",
+                    extraProperty: "<NetLibVersion>10.0.2</NetLibVersion>")
+                .Replace("</PropertyGroup>",
+                    "</PropertyGroup><Target Name=\"Late\"><PropertyGroup><NetLibVersion>99.0.0</NetLibVersion></PropertyGroup></Target>",
+                    StringComparison.Ordinal),
+            "valid-then-unresolved-reassignment" => CentralXml("$(NetLibVersion)",
+                extraProperty:
+                "<NetLibVersion>10.0.2</NetLibVersion><NetLibVersion>$(MissingVersion)</NetLibVersion>"),
+            "dotted-property-name" => CentralXml("$(Net.LibVersion)", extraProperty:
+                "<Net.LibVersion>10.0.2</Net.LibVersion>"),
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario)),
+        };
+        if (scenario == "project-property-override")
+            project = ProjectXml(extraProperty:
+                "<NetLibVersion>99.0.0</NetLibVersion>");
+        else if (scenario == "project-import")
+            project = ProjectXml(
+                $"<Import Project=\"eng/Versions.props\" /><ItemGroup><PackageReference Include=\"{PackageId}\" /></ItemGroup>");
+
+        List<CSharpPackageReferenceSnapshot> result =
+            ProjectFileParser.EvaluateCSharpPackageReferencesSnapshot(
+                Encoding.UTF8.GetBytes(project), [(PackageId, "")], central,
+                hasAmbiguousDirectoryPackagesAuthority: false);
+
+        CSharpPackageReferenceSnapshot reference = Assert.Single(result);
+        Assert.Equal("", reference.Version);
+        Assert.False(reference.CentrallyManaged);
+    }
+
+    [Fact]
+    public void LiteralCentralVersionIgnoresUnrelatedPropertyBudgets()
+    {
+        var assignments = new StringBuilder();
+        for (int index = 0;
+             index < ProjectFileParser.MaxCSharpCentralPackageProperties;
+             index++)
+        {
+            assignments.Append("<P").Append(index).Append(">1</P")
+                .Append(index).Append('>');
+        }
+
+        List<CSharpPackageReferenceSnapshot> result =
+            ProjectFileParser.EvaluateCSharpPackageReferencesSnapshot(
+                Encoding.UTF8.GetBytes(ProjectXml(extraProperty: assignments.ToString())),
+                [(PackageId, "")],
+                CentralXml("5.6.0", extraProperty: assignments.ToString()),
+                hasAmbiguousDirectoryPackagesAuthority: false);
+
+        CSharpPackageReferenceSnapshot reference = Assert.Single(result);
+        Assert.Equal("5.6.0", reference.Version);
+        Assert.True(reference.CentrallyManaged);
+    }
+
+    [Fact]
+    public void CentralPropertyCountOverBudgetPreservesDirectReference()
+    {
+        var assignments = new StringBuilder();
+        for (int index = 0;
+             index < ProjectFileParser.MaxCSharpCentralPackageProperties;
+             index++)
+        {
+            assignments.Append("<P").Append(index).Append(">1</P")
+                .Append(index).Append('>');
+        }
+
+        AssertCentralPropertyAuthorityFallsBack(
+            CentralXml("$(P0)", extraProperty: assignments.ToString()));
+    }
+
+    [Fact]
+    public void CentralPropertyValueOverBudgetPreservesDirectReference()
+    {
+        string oversized = new('1',
+            ProjectFileParser.MaxCSharpCentralPackagePropertyValueChars + 1);
+        AssertCentralPropertyAuthorityFallsBack(CentralXml("$(NetLibVersion)",
+            extraProperty: $"<NetLibVersion>{oversized}</NetLibVersion>"));
+    }
+
+    [Fact]
+    public void CentralPropertyExpansionCountOverBudgetPreservesDirectReference()
+    {
+        string expressions = string.Concat(Enumerable.Repeat("$(P)",
+            ProjectFileParser.MaxCSharpCentralPackagePropertyExpansions));
+        AssertCentralPropertyAuthorityFallsBack(CentralXml("$(NetLibVersion)",
+            extraProperty: $"<P>1</P><NetLibVersion>{expressions}</NetLibVersion>"));
+    }
+
+    [Fact]
+    public void CentralPropertyAggregateCharactersOverBudgetPreservesDirectReference()
+    {
+        string value = new('1', ProjectFileParser.MaxCSharpCentralPackagePropertyValueChars);
+        int propertyCount =
+            ProjectFileParser.MaxCSharpCentralPackageExpandedPropertyChars / value.Length + 1;
+        var assignments = new StringBuilder();
+        for (int index = 0; index < propertyCount; index++)
+        {
+            assignments.Append("<P").Append(index).Append('>')
+                .Append(value).Append("</P").Append(index).Append('>');
+        }
+
+        AssertCentralPropertyAuthorityFallsBack(CentralXml("$(P0)",
+            extraProperty: assignments.ToString()));
+    }
+
     [Fact]
     public async Task SelectedCentralVersionWithoutExactCacheAssetFailsClosed()
     {
@@ -352,6 +575,20 @@ public sealed class CSharpCentralPackageManagementTests
               </PropertyGroup>
               <ItemGroup>
                 <PackageVersion Include="{{packageId}}" Version="{{version}}" />
+              </ItemGroup>
+            </Project>
+            """);
+
+    private static void WriteDirectoryPackagesWithProperty(string root, string version,
+        string packageId = PackageId) =>
+        File.WriteAllText(Path.Combine(root, "Directory.Packages.props"), $$"""
+            <Project>
+              <PropertyGroup>
+                <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+                <NetLibVersion>{{version}}</NetLibVersion>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageVersion Include="{{packageId}}" Version="$(NetLibVersion)" />
               </ItemGroup>
             </Project>
             """);
@@ -453,11 +690,12 @@ public sealed class CSharpCentralPackageManagementTests
         """;
 
     private static string CentralXml(string version, string? extraItem = null,
-        bool? managePackageVersionsCentrally = true) =>
+        bool? managePackageVersionsCentrally = true, string? extraProperty = null) =>
         $$"""
         <Project>
           <PropertyGroup>
             {{(managePackageVersionsCentrally.HasValue ? $"<ManagePackageVersionsCentrally>{managePackageVersionsCentrally.Value.ToString().ToLowerInvariant()}</ManagePackageVersionsCentrally>" : "")}}
+            {{extraProperty}}
           </PropertyGroup>
           <ItemGroup>
             <PackageVersion Include="{{PackageId}}" Version="{{version}}" />
@@ -465,6 +703,16 @@ public sealed class CSharpCentralPackageManagementTests
           </ItemGroup>
         </Project>
         """;
+
+    private static void AssertCentralPropertyAuthorityFallsBack(string centralXml)
+    {
+        CSharpPackageReferenceSnapshot reference = Assert.Single(
+            ProjectFileParser.EvaluateCSharpPackageReferencesSnapshot(
+                Encoding.UTF8.GetBytes(ProjectXml()), [(PackageId, "")], centralXml,
+                hasAmbiguousDirectoryPackagesAuthority: false));
+        Assert.Equal("", reference.Version);
+        Assert.False(reference.CentrallyManaged);
+    }
 
     private static string PackageReferencePath(Project project) =>
         Assert.Single(project.MetadataReferences.OfType<PortableExecutableReference>(),

@@ -37,9 +37,12 @@ Default flow:
    implicit authority is disclosed as partial. The nearest indexed ancestor `Directory.Build.props`
    and `.targets` are evaluated only for bounded properties, conditions, and metadata-free Reference
    Include/Remove lists. For C# semantic navigation, an unconditional simple `PackageVersion` in the
-   nearest indexed `Directory.Packages.props` supplies a versionless direct `PackageReference`; the
-   exact package version must already be installed. Unsupported evaluation shapes retain established
-   unresolved-reference behavior rather than guessing. For F#, the nearest indexed `Directory.Packages.props` contributes bounded,
+   nearest indexed `Directory.Packages.props` supplies a versionless direct `PackageReference`; its
+   version may use bounded simple `$(Name)` expansion from local unconditional properties, and the
+   exact package version must already be installed. Project overrides, explicit project imports,
+   applicable `Directory.Build.targets`, conditions, property functions, unresolved properties,
+   exceeded limits, and other unsupported evaluation shapes retain
+   established unresolved-reference behavior rather than guessing. For F#, the nearest indexed `Directory.Packages.props` contributes bounded,
    conditional `PackageVersion` authority for active versionless `PackageReference` items. Those
    identities use the selected target from an already-restored `project.assets.json`; transitive
    compile assets are copied into immutable request-private snapshots, while missing/stale or

@@ -140,9 +140,19 @@ The C# Roslyn cold-start loader supports the standard unconditional central-pack
 invoking MSBuild or restore. For a versionless project `PackageReference`, it reads the nearest
 applicable `Directory.Packages.props` from the same pinned index snapshot, requires
 `ManagePackageVersionsCentrally=true`, and projects one unconditioned simple `PackageVersion` for
-that identity. The central path and indexed hash are part of the targeted semantic model identity,
-so an indexed central-version change reloads an already-warm project while unrelated config changes
-do not. Centrally selected packages resolve only from the exact global-cache version directory;
+that identity. Its version may contain simple `$(Name)` references to local, unconditional root-level
+property assignments. Properties are expanded at assignment time in document order, so bounded
+chains, reassignment, and self-reassignment through the previous value are supported; the final
+property value supplies the later item pass. When a `PackageVersion` consumes a property, evaluation
+is bounded to 1,024 central property assignments, 1,024 project property names, 4,096 substitutions,
+16 KiB per raw or expanded value, and 256 KiB of aggregate expanded text; literal versions do not pay
+those property-table budgets. Undefined or forward-only references, cycles, property functions,
+conditioned/non-root assignments, project-side reassignment of a consumed version property, explicit
+project imports, applicable `Directory.Build.targets`, and exceeded limits retain the established
+unresolved-reference behavior. The central path and indexed hash are part of the targeted
+semantic model identity, so an indexed central-property or version change reloads an already-warm
+project while unrelated config changes do not. Centrally selected packages resolve only from the
+exact global-cache version directory;
 missing versions never fall back to the newest installed version, while an existing analyzer-only
 or target-incompatible package keeps the established unresolved-reference degradation. Imports, conditions, duplicate or
 mutating `PackageVersion` items, `GlobalPackageReference`, invalid versions, missing authority, and

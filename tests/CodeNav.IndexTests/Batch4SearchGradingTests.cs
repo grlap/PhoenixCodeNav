@@ -280,6 +280,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("fsharp-semantic-bounded-project-evaluation", ids);
         Assert.Contains("fsharp-semantic-package-asset-closure", ids);
         Assert.Contains("csharp-semantic-central-package-management", ids);
+        Assert.Contains("csharp-semantic-central-package-property-expansion", ids);
         Assert.Contains("workspace-msbuild-config-indexing", ids);
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
@@ -426,6 +427,18 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("exact global-cache directories", csharpCentralPackages);
         Assert.Contains("warm model identity", csharpCentralPackages);
         Assert.Contains("without guessing or executing restore", csharpCentralPackages);
+        string csharpCentralPackageProperties = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "csharp-semantic-central-package-property-expansion")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.58", csharpCentralPackageProperties);
+        Assert.Contains("PackageVersion", csharpCentralPackageProperties);
+        Assert.Contains("local-property expansion", csharpCentralPackageProperties);
+        Assert.Contains("assignment-time", csharpCentralPackageProperties);
+        Assert.Contains("later imported property authority", csharpCentralPackageProperties);
+        Assert.Contains("exceeded limits", csharpCentralPackageProperties);
         string portalReadOnly = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
