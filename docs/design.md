@@ -719,10 +719,12 @@ The index is kept live without rebuilding on every keystroke:
   the OS emits no per-child events for them.
 - **Startup sweep.** When an existing index is reopened by the writer, a detect-all sweep
   reconciles edits made while the server was down. Followers never sweep or repair.
-- Every response reports `indexStatus`, `indexVersion`, and `meta.indexMode`; capabilities expose
-  the same role as `index.mode`. `writer` owns refresh/build/worktree mutations. `follower` remains
-  fully queryable but returns `index_writer_required` for `refresh_index` and `index_worktree`;
-  `unavailable` means the process has not attached to either database role. Followers report
+- Every response reports `indexStatus`, `indexVersion`, and `meta.indexMode`. The two fields answer
+  different questions: `index.mode` remains the database ownership role (`writer`, `follower`, or
+  `unavailable`), while `meta.indexMode` reports the runtime topology (`daemon`, `standalone`,
+  `legacy-follower`, or `unavailable`). A writer owns refresh/build/worktree mutations. A legacy
+  follower remains fully queryable but returns `index_writer_required` for `refresh_index` and
+  `index_worktree`; `unavailable` means the process has not attached to either database role. Followers report
   `pendingChangesKnown: false`: their index-backed fields see committed WAL state, not the writer's
   in-process queue. Live source/Git and compiler-backed semantic fields retain their own provenance.
   A follower can continue serving the last compatible committed state after its writer exits, but
@@ -906,6 +908,187 @@ caveats:
    over-cap commit diff falls back to a detect-all reconcile instead of logging watcher-only mode.
    A watcher overflow also escalates to a detect-all sweep; `refresh_index()` remains the manual
    recovery hatch when the reported commit/freshness state is uncertain.
+
+## Shared MCP daemon and per-agent proxies
+
+Phoenix's original deployment is one stdio MCP process per client. On Windows the physical-
+workspace lease elects one writer and allows compatible contenders to attach to its committed
+SQLite WAL state as read-only followers; on Unix a contender remains unavailable. That preserves
+index safety, but every follower still carries a separate host, semantic service, Roslyn workspace,
+FCS state, response caches, and resource budget. A multi-agent session therefore pays almost the
+full process cost per agent and gives only the writer an in-band refresh path.
+
+The target deployment is one **Phoenix daemon per current user and canonical physical worktree**.
+The existing executable remains the MCP command configured by Claude, Codex, and other hosts. The
+target default process is a small stdio proxy; v0.12.59 ships this path behind explicit
+`--shared-daemon` / `CODENAV_SHARED_DAEMON=1` opt-in while standalone remains the default:
+
+```text
+Claude/Codex --stdio--> Phoenix proxy --named pipe / UDS--> Phoenix daemon
+                                                       |-- IndexManager
+                                                       |-- WorkspaceWatcher + refresh pump
+                                                       |-- SQLite read/write pools
+                                                       |-- shared Roslyn workspace
+                                                       `-- shared F# semantic service
+```
+
+The daemon is the sole ordinary live-index reader and writer. Proxies never load Core indexing or
+semantic state and never open SQLite. Cross-worktree seeding is not an ordinary query path: it keeps
+the existing destination and file-level claim protocol. During migration, the daemon presents as
+the writer under the existing workspace mutex/claim contract, so an older Windows process may still
+attach as a legacy read-only follower. A stamped `standalone` mode retains the proven current
+in-process server as a config-disableable availability fallback; identity, ownership, workspace,
+protocol, and schema mismatches always fail closed and never select that fallback.
+
+### Transport and session contract
+
+Phoenix runs MCP itself over the local transport rather than defining a second request RPC. The MCP
+SDK's stream server transport binds one accepted pipe/socket stream to one `McpServer` session;
+all sessions receive the same daemon service provider and therefore the same `IndexManager` and
+`SemanticService` singletons. Tool registration, JSON schemas, cancellation notifications, progress,
+and error envelopes remain single-sourced. The proxy owns only stdio framing relay, discovery,
+autostart, the pre-MCP handshake, liveness, and reconnect before an MCP session is initialized.
+
+Before the first MCP `initialize` message, the proxy and daemon exchange one bounded preamble. It
+contains:
+
+- fixed magic and preamble version;
+- `BuildInfo.Version` and `IndexBuilder.SchemaVersion`;
+- canonical physical-worktree identity and normalized lexical workspace root;
+- current-user identity plus client PID/name;
+- requested mode (`connect` or `retire-and-replace`); and
+- a random connection nonce echoed by the response.
+
+The wire prefix containing the magic, the preamble-version field, and the framed
+`retire-and-replace` request is frozen permanently. Every future daemon version must continue to
+parse that prefix even when it cannot parse the remainder of an older or newer ordinary-connect
+preamble. Fields after the frozen prefix may evolve under an explicit preamble version. This keeps
+graceful retirement available across an otherwise incompatible version distance without allowing a
+new proxy to kill a process it could not authenticate.
+
+The preamble is length-prefixed and capped independently of MCP response budgets. Malformed,
+truncated, over-limit, rooted/mismatched-workspace, wrong-user, incompatible-protocol, or incompatible-
+schema input receives a typed refusal and the stream closes before MCP parsing. A successful
+response repeats daemon PID, version, schema, workspace identity, mode, and nonce. This is an
+authority handshake, not merely discovery metadata: the proxy never trusts a descriptor without a
+successful live exchange.
+
+The stable transport address is derived from current-user identity plus the same canonical physical-
+worktree identity used by the ownership lease; it does not contain the Phoenix version. Windows uses
+a named pipe. Unix uses a short identity hash beneath `$XDG_RUNTIME_DIR/phoenix-codenav/`, falling
+back to an owner-only `/tmp/phoenix-codenav-<uid>/` directory; the socket is never placed beneath a
+possibly deep worktree because Unix socket paths are short. A bounded, endpoint-keyed descriptor
+beside the pipe/socket startup lock publishes address, PID, version, schema, workspace identity, and
+start time for discovery and operations visibility. The descriptor is never written through the
+untrusted worktree; on Unix it remains beneath the owner-only runtime directory. It is still only an
+untrusted hint, and the live handshake remains authoritative.
+
+### Election, upgrades, and shutdown
+
+The proxy first connects to the stable address. A failed connect does not make the descriptor or its
+PID authoritative: the proxy enters the endpoint-keyed startup election and retries the live
+authority handshake. A workspace-keyed startup mutex provides single-flight daemon creation: one
+proxy launches the daemon, losers wait within a bounded startup deadline and then connect. The daemon
+acquires the existing index ownership lease before publishing its endpoint ready; inability to prove
+the configured database belongs to this worktree fails closed.
+Launch passes through a short-lived bootstrap process before the long-lived daemon is started. The
+bootstrap exits immediately, removing the daemon from any one stdio proxy's process tree so an MCP
+host that forcibly tears down a disconnected proxy cannot terminate the shared process serving its
+peers.
+
+Version negotiation replaces versioned endpoint names. The initial compatibility predicate is exact
+`BuildInfo.Version` equality **and** exact `IndexBuilder.SchemaVersion` equality. Any difference is
+ordered by semantic tool version first and schema version second for the older/newer diagnosis; a
+broader compatible range requires a later explicit contract and evidence.
+
+- exactly compatible versions connect normally;
+- an older client facing a newer daemon receives a typed `daemon_newer_than_client` response that
+  tells the host to restart/update its agent;
+- a newer client may request `retire-and-replace`; a compatible older daemon stops accepting new
+  sessions, drains admitted sessions under the existing operation deadline ceiling, removes its
+  ready descriptor/endpoint, and exits; and
+- if graceful retirement exceeds the bounded drain, the new client reports a typed takeover timeout
+  instead of killing an unverified process or serving mixed-version results.
+
+The daemon stays alive for a 15-minute linger after its last client disconnects so normal agent
+restarts retain the watcher and semantic estate. Another connection cancels the idle shutdown. A
+keep-alive option supports build servers. At final shutdown the daemon stops accepting connections,
+drains admitted work, disposes semantic/index services, removes only its own verified descriptor and
+endpoint, and releases the workspace lease. An initialized MCP session ends if its daemon dies: MCP
+does not permit replacing the server transport without a new `initialize` exchange. The MCP host then
+restarts its stdio proxy; replacement proxies use the same bounded autostart election, so one starts
+the successor while peers wait. Negotiation failures before initialization remain visible through the
+typed unavailable shim rather than silently opening the database.
+Retirement or shutdown during an in-flight private staged rebuild abandons that GUID-named stage;
+the existing verified orphan-scavenging contract reaps it after the successor acquires ownership,
+without publishing partial output or deleting another owner's stage.
+
+A fail-closed negotiation refusal must remain visible through MCP. Instead of simply exiting, the
+proxy completes an MCP initialize handshake as a bounded unavailable shim: `server_capabilities`
+reports `meta.indexMode: "unavailable"` plus the stable refusal id and actionable recovery, and every
+other advertised tool returns the same typed unavailable cause. Hosts therefore see messages such as
+"daemon is newer; restart/update this agent" or "takeover timed out" rather than an unexplained dead
+stdio server.
+
+### Security boundary
+
+The daemon is per user and per worktree, never system-wide:
+
+- Windows pipe ACLs grant only the current user SID. The proxy also verifies the named-pipe server
+  process belongs to that user before accepting the preamble, preventing a same-machine pipe-squatting
+  process running as another account from becoming authority.
+- Unix runtime directories are mode `0700`; socket operations are owner-checked and refuse unsafe
+  filesystem objects. The descriptor stays outside the worktree in that same owner-only directory,
+  refuses link/reparse entries, and never becomes authority. The short address is derived from
+  identity, while the full canonical workspace identity is still checked in the preamble.
+- The daemon serves exactly one physical worktree and one configured index destination. A proxy
+  cannot select an arbitrary database path after connection.
+- Daemon executable launch authority is the currently running proxy's verified executable, not a
+  path taken from the workspace or descriptor.
+
+Pure availability failures such as enterprise policy blocking local pipes may enter explicit
+`standalone` fallback when enabled. Security or identity failures never do. Responses expose
+`meta.indexMode: "daemon" | "standalone" | "legacy-follower" | "unavailable"` during migration,
+plus daemon/client identity diagnostics without publishing raw user or workspace paths.
+
+### Multi-client isolation and sizing
+
+Sharing semantic state increases the failure blast radius, so daemon admission is client-aware.
+Each connection receives a stable runtime client id and separate concurrency counters. Global
+semantic and index budgets remain hard ceilings, while weighted fair admission prevents one client
+from monopolizing all semantic slots, refresh requests, pinned snapshots, or response memory.
+Cancellation is scoped to the originating MCP session; closing one proxy cancels only that client's
+outstanding requests. Refresh mutation remains the existing single serialized writer pump, and all
+clients observe the same committed epoch and warm semantic identities.
+
+Tools that launch a companion process, currently `open_operations_portal`, execute in daemon context.
+Their executable resolution, working directory, environment isolation, and child-lifetime contract
+must therefore be derived explicitly from packaged daemon authority rather than inherited implicitly
+from an individual MCP host process.
+
+The current 2.6/3.0 GiB semantic retention tiers are per-process measurements and are not copied
+unchanged into the daemon. The daemon budget is calibrated on the runtime corpus and must grow
+sublinearly with client count. Initial gates require three concurrent clients to remain at or below
+approximately 1.5 times standalone RSS, no statistically meaningful single-client latency regression
+against direct stdio, and no rebuild-wall regression relative to the established cold-index gate.
+
+### Rollout and decisive gates
+
+The rollout is intentionally non-flag-day:
+
+1. ship daemon/proxy behind an explicit opt-in while preserving direct standalone stdio;
+2. prove daemon-as-writer plus old Windows follower compatibility;
+3. make proxy/daemon the default while retaining stamped standalone fallback; and
+4. retire legacy follower attachment only after deployed clients have converged and rollback evidence
+   shows it is no longer needed.
+
+The implementation gate adds tests for the handshake/version/schema/workspace matrix, two-proxy cold-
+start election, stale descriptor recovery, pipe squatting refusal, daemon crash during a write with
+WAL recovery, host reconnect/new-proxy re-election, cancellation isolation, multi-client refresh storms, fairness
+under a pathological semantic request, mixed daemon/legacy populations, idle linger and keep-alive,
+single-client latency, multi-client RSS, and rebuild-wall parity. A test passes only when exactly one
+ordinary database owner and one watcher exist for the physical worktree and every client converges to
+the same committed index and semantic model identity.
 
 ## Result discipline
 

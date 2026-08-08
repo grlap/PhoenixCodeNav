@@ -108,6 +108,12 @@ public sealed partial class NavigationTools
             // Build identity so a caller can verify WHICH build is deployed. The old hardcoded version
             // went stale at 0.1.0 across many feature batches; commit auto-tracks the actual build.
             build = new { version = BuildInfo.Version, commit = BuildInfo.Commit, indexSchema = BuildInfo.IndexSchema },
+            runtime = new
+            {
+                indexMode = PhoenixRuntimeMode.IndexMode(h.AccessMode),
+                processMode = PhoenixRuntimeMode.Current.ToString().ToLowerInvariant(),
+                processId = Environment.ProcessId,
+            },
             languages = new[] { "csharp", "fsharp", "markdown", "sql" },
             languageLayers = new
             {
@@ -146,6 +152,7 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-semantic-package-asset-closure", summary = "v0.12.56 active F# PackageReference identities, including conditional PackageVersion authority from the nearest indexed Directory.Packages.props, are matched to one already-restored project.assets.json target; reachable transitive compile assets from trusted declared package folders are verified, bounded, copied into request-private immutable snapshots, and reverified after FCS; missing, stale, mismatched, changed, ambiguous, or unsafe closure fails explicitly without restore or MSBuild execution" },
                 new { id = "csharp-semantic-central-package-management", summary = "v0.12.57 C# semantic project loading resolves versionless PackageReference compiler inputs from unconditional literal PackageVersion entries in the nearest indexed Directory.Packages.props; centrally selected versions use exact global-cache directories and central authority participates in warm model identity, while shapes requiring MSBuild evaluation retain established unresolved-reference behavior without guessing or executing restore" },
                 new { id = "csharp-semantic-central-package-property-expansion", summary = "v0.12.58 C# central PackageVersion entries support bounded simple local-property expansion with assignment-time chaining and reassignment; project overrides, later imported property authority, unsupported expressions, and exceeded limits retain established unresolved-reference behavior" },
+                new { id = "shared-mcp-daemon", summary = "v0.12.59 opt-in shared daemon mode gives one current-user, physical-worktree index/watcher/Roslyn/FCS owner to multiple lightweight stdio MCP proxies over an authority-checked named pipe or Unix socket; exact tool/schema negotiation, typed unavailable shims, client-fair admission, cancellation isolation, graceful replacement, and explicit standalone fallback preserve honest failure and rollout" },
                 new { id = "semantic-parallel-cold-start-loader", summary = "v0.12.9 C# semantic clusters prepare immutable project inputs concurrently through one bounded process scheduler, then commit one dependency-ordered Roslyn solution while preserving reload, cycle, and source-over-binary authority" },
                 new { id = "semantic-candidate-completeness-over-accounting", summary = "v0.12.12 aggregate semantic input accounting never omits an already-selected candidate project; bounded file capture, preparation concurrency, deadlines, and byte/managed-heap pressure retention remain the safety boundaries" },
                 new { id = "semantic-planning-attribution", summary = "v0.12.13 implementations/type_hierarchy semanticOp telemetry splits transitive-closure database query+row mapping, managed identity filtering, frontier bookkeeping, seed discovery, and scan-set planning with privacy-safe work counts and writer/follower accessMode" },

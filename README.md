@@ -141,16 +141,25 @@ phase rather than re-serving a publication Phoenix can no longer prove belongs t
 Results served from the old index during construction report `building` rather than implying
 freshness they do not have.
 
-On Windows, Phoenix runs **one writer process and many read-only follower processes per index**. A
-crash-recoverable named mutex, keyed by physical workspace/worktree identity so path aliases
-converge, elects the writer that owns builds, watchers, refreshes, and worktree seeding. Every other
-Claude, Codex, or MCP process attaches to the same compatible SQLite WAL index as a follower and can
-use every navigation and semantic tool concurrently. Check `server_capabilities.index.mode` or
-`meta.indexMode` for `writer`, `follower`, or `unavailable`. Followers never build or repair an
-index — `refresh_index` and `index_worktree` return the stable `index_writer_required` error and
-must run from the writer. Followers report `pendingChangesKnown: false` rather than presenting a
-local zero as freshness evidence, and never promote themselves: restart a follower if that process
-should become the next writer.
+Phoenix v0.12.59 introduces an opt-in **shared MCP daemon**. Add `--shared-daemon` (or set
+`CODENAV_SHARED_DAEMON=1`) to every Phoenix MCP entry for a worktree. Each configured stdio process
+then stays a small relay while one same-user daemon owns the index, watcher, refresh pump, Roslyn
+workspace, and F# semantic service. Claude, Codex, and delegated agents see independent MCP
+sessions but share one committed epoch and can all call `refresh_index`; the daemon serializes the
+mutation. The daemon lingers for 15 minutes after the last client disconnects, or indefinitely with
+`--keepalive`. If the daemon dies, initialized MCP sessions end; each MCP host restarts its stdio
+relay, and the replacement relays elect or join one successor daemon. Default launch behavior
+remains standalone during this opt-in release.
+
+Without shared-daemon mode, Windows retains the legacy **one writer plus read-only followers**
+deployment. A crash-recoverable named mutex, keyed by physical workspace/worktree identity so path
+aliases converge, elects the writer that owns builds, watchers, refreshes, and worktree seeding.
+Every other process attaches to the same compatible SQLite WAL index as a follower. Check
+`server_capabilities.index.mode` for database ownership (`writer`, `follower`, or `unavailable`).
+Check response `meta.indexMode` for runtime topology (`daemon`, `standalone`, `legacy-follower`, or
+`unavailable`). Legacy followers never build or repair an index — `refresh_index` and
+`index_worktree` return `index_writer_required`. They report `pendingChangesKnown: false` and never
+promote themselves: restart one if it should become the next writer.
 
 [`docs/design.md`](docs/design.md) documents the publication, claim, drain, and crash-recovery
 mechanics in full.
@@ -188,13 +197,13 @@ Project-scoped `.mcp.json` at the repo root (recommended — checked in for the 
   "mcpServers": {
     "phoenix": {
       "command": "C:\\tools\\phoenix\\PhoenixCodeNav.Mcp.exe",
-      "args": ["--workspace-root", "."]
+      "args": ["--workspace-root", ".", "--shared-daemon"]
     }
   }
 }
 ```
 
-or per-user: `claude mcp add phoenix -- C:\tools\phoenix\PhoenixCodeNav.Mcp.exe --workspace-root C:\path\to\repo`
+or per-user: `claude mcp add phoenix -- C:\tools\phoenix\PhoenixCodeNav.Mcp.exe --workspace-root C:\path\to\repo --shared-daemon`
 
 ### Attach to Codex
 
@@ -203,7 +212,7 @@ or per-user: `claude mcp add phoenix -- C:\tools\phoenix\PhoenixCodeNav.Mcp.exe 
 ```toml
 [mcp_servers.phoenix]
 command = "C:\\tools\\phoenix\\PhoenixCodeNav.Mcp.exe"
-args = ["--workspace-root", "C:\\path\\to\\repo"]
+args = ["--workspace-root", "C:\\path\\to\\repo", "--shared-daemon"]
 ```
 
 Then add the agent instructions from `docs/agent-instructions.md` to your repo's
@@ -279,10 +288,13 @@ refresh from that writer (`refresh_index`) instead. A follower may list worktree
 
 ```text
 PhoenixCodeNav.Mcp.exe --workspace-root <dir> [--index-db <path>] [--rebuild]
+    [--shared-daemon | --standalone] [--keepalive] [--daemon-fallback-standalone]
 ```
 
-`--rebuild` is honored only by the process that acquires the writer lease. A follower remains
-read-only and does not promote itself; restart it after the writer exits if it must become writer.
+`--shared-daemon` is opt-in in v0.12.59. `--daemon-fallback-standalone` applies only to endpoint
+availability failures; identity, ownership, workspace, protocol, and schema refusals remain visible
+and fail closed. `--rebuild` is honored by the shared daemon or by the standalone process that
+acquires the writer lease. A legacy follower remains read-only and does not promote itself.
 
 ## Development
 

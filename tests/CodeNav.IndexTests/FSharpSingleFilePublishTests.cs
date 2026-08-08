@@ -136,7 +136,7 @@ public sealed class FSharpSingleFilePublishTests
                 Name = "F# single-file sidecar canary",
                 Command = Path.GetFileName(executable),
                 WorkingDirectory = publish,
-                Arguments = new[] { "--workspace-root", workspace },
+                Arguments = new[] { "--workspace-root", workspace, "--standalone" },
                 EnvironmentVariables = new Dictionary<string, string?>
                 {
                     ["NUGET_PACKAGES"] = emptyPackageCache,
@@ -147,7 +147,7 @@ public sealed class FSharpSingleFilePublishTests
                 cancellationToken: mcpTimeout.Token);
             JsonElement capabilities = await WaitForReadyAsync(client, TimeSpan.FromSeconds(60),
                 mcpTimeout.Token);
-            Assert.Equal("0.12.58", capabilities.GetProperty("version").GetString());
+            Assert.Equal("0.12.59", capabilities.GetProperty("version").GetString());
             JsonElement semantic = await CallJsonAsync(client, "symbol_at",
                 new Dictionary<string, object?>
                 {

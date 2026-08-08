@@ -530,7 +530,7 @@ Illustrative response; field names are part of the proposal, values are examples
     "confidenceNote": "learned similarity/ranking lead — verify with source and compiler tools",
     "build": "...",
     "indexSchema": "...",
-    "indexMode": "follower"
+    "indexMode": "legacy-follower"
   },
   "conceptIndex": {
     "status": "ready",

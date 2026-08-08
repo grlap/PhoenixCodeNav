@@ -179,7 +179,7 @@ public sealed class OperationsPortalToolTests
             Assert.False(response.GetProperty("browserOpened").GetBoolean());
             Assert.Contains("Show the url field verbatim", response.GetProperty("instruction").GetString());
             Assert.Equal(Path.GetFullPath(root), launcher.WorkspaceRoot);
-            Assert.StartsWith("0.12.58+",
+            Assert.StartsWith("0.12.59+",
                 response.GetProperty("meta").GetProperty("build").GetString());
             Assert.Equal(
                 "indexed",
@@ -309,7 +309,7 @@ public sealed class OperationsPortalToolTests
                 Name = "Operations Portal stdio isolation",
                 Command = executable,
                 WorkingDirectory = Path.GetDirectoryName(executable)!,
-                Arguments = ["--workspace-root", root],
+                Arguments = ["--workspace-root", root, "--standalone"],
             });
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(75));
             await using McpClient client = await McpClient.CreateAsync(
@@ -340,7 +340,7 @@ public sealed class OperationsPortalToolTests
                 client,
                 "server_capabilities",
                 timeout.Token);
-            Assert.Equal("0.12.58", capabilities.GetProperty("version").GetString());
+            Assert.Equal("0.12.59", capabilities.GetProperty("version").GetString());
             Assert.Contains(
                 capabilities.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

@@ -281,6 +281,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("fsharp-semantic-package-asset-closure", ids);
         Assert.Contains("csharp-semantic-central-package-management", ids);
         Assert.Contains("csharp-semantic-central-package-property-expansion", ids);
+        Assert.Contains("shared-mcp-daemon", ids);
         Assert.Contains("workspace-msbuild-config-indexing", ids);
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
@@ -439,6 +440,18 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("assignment-time", csharpCentralPackageProperties);
         Assert.Contains("later imported property authority", csharpCentralPackageProperties);
         Assert.Contains("exceeded limits", csharpCentralPackageProperties);
+        string sharedDaemon = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "shared-mcp-daemon")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.59", sharedDaemon);
+        Assert.Contains("physical-worktree", sharedDaemon);
+        Assert.Contains("named pipe or Unix socket", sharedDaemon);
+        Assert.Contains("typed unavailable", sharedDaemon);
+        Assert.Contains("client-fair", sharedDaemon);
+        Assert.Contains("explicit standalone fallback", sharedDaemon);
         string portalReadOnly = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

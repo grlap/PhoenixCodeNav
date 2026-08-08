@@ -57,7 +57,7 @@ public sealed class McpArgumentValidationTests
                 Name = "Phoenix structured argument validation",
                 Command = executable,
                 WorkingDirectory = Path.GetDirectoryName(executable)!,
-                Arguments = ["--workspace-root", root],
+                Arguments = ["--workspace-root", root, "--standalone"],
             });
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(75));
             await using McpClient client = await McpClient.CreateAsync(

@@ -623,7 +623,7 @@ public sealed class Batch45IndexFollowerTests
 
             JsonElement search = Parse(tools.SearchSymbol("Alpha45", match: "exact"));
             Assert.Single(search.GetProperty("symbols").EnumerateArray());
-            Assert.Equal("follower",
+            Assert.Equal("legacy-follower",
                 search.GetProperty("meta").GetProperty("indexMode").GetString());
             string statusNote = search.GetProperty("meta").GetProperty("statusNote").GetString()!;
             Assert.Contains("index-backed evidence reflects committed writer state", statusNote);
@@ -632,7 +632,7 @@ public sealed class Batch45IndexFollowerTests
             JsonElement definition = Parse(tools.Definition(
                 name: "Alpha45", mode: "auto", timeoutMs: 30_000));
             Assert.False(definition.TryGetProperty("error", out _), definition.ToString());
-            Assert.Equal("follower",
+            Assert.Equal("legacy-follower",
                 definition.GetProperty("meta").GetProperty("indexMode").GetString());
 
             AssertWriterRequired(Parse(tools.RefreshIndex()));
@@ -701,14 +701,14 @@ public sealed class Batch45IndexFollowerTests
 
             JsonElement indexed = Parse(tools.SearchSymbol("Beta45", match: "exact"));
             Assert.Empty(indexed.GetProperty("symbols").EnumerateArray());
-            Assert.Equal("follower",
+            Assert.Equal("legacy-follower",
                 indexed.GetProperty("meta").GetProperty("indexMode").GetString());
 
             JsonElement live = Parse(tools.SourceContext("Beta.cs", "1", contextLines: 0));
             Assert.Equal("live", live.GetProperty("freshness").GetString());
             Assert.Contains("Beta45", live.GetProperty("spans")[0]
                 .GetProperty("source").GetString());
-            Assert.Equal("follower",
+            Assert.Equal("legacy-follower",
                 live.GetProperty("meta").GetProperty("indexMode").GetString());
             string statusNote = live.GetProperty("meta").GetProperty("statusNote").GetString()!;
             Assert.Contains("index-backed evidence reflects committed writer state", statusNote);
@@ -2493,6 +2493,7 @@ public sealed class Batch45IndexFollowerTests
                 workspaceRoot,
                 "--index-db",
                 dbPath,
+                "--standalone",
             },
         });
         return await McpClient.CreateAsync(transport);

@@ -484,6 +484,9 @@ $RECYCLE.BIN/
 *.swp
 artifacts/
 
+# Phoenix workspace-local runtime index and telemetry.
+.codenav/
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db

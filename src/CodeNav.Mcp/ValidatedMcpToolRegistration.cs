@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
+using CodeNav.Mcp.Daemon;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
@@ -15,7 +16,8 @@ namespace CodeNav.Mcp;
 /// </summary>
 internal static class ValidatedMcpToolRegistration
 {
-    internal static IReadOnlyList<McpServerTool> CreateNavigationTools()
+    internal static IReadOnlyList<McpServerTool> CreateNavigationTools(
+        DaemonRequestAdmission? daemonAdmission = null)
     {
         JsonSerializerOptions serializerOptions = McpJsonUtilities.DefaultOptions;
         var createOptions = new McpServerToolCreateOptions
@@ -29,6 +31,9 @@ internal static class ValidatedMcpToolRegistration
             .Where(method => method.GetCustomAttribute<McpServerToolAttribute>() is not null)
             .OrderBy(method => method.MetadataToken)
             .Select(method => Create(method, createOptions, serializerOptions))
+            .Select(tool => daemonAdmission is null
+                ? tool
+                : new DaemonFairMcpServerTool(tool, daemonAdmission))
             .ToArray();
     }
 

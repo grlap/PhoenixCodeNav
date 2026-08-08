@@ -464,7 +464,8 @@ internal sealed record Meta(
         }
         return new Meta(status, h.IndexVersion, h.IndexedAtUtc, h.LastRefreshUtc,
             h.PendingChanges, effectiveConfidence, layer, note, statusNote, BuildInfo.Stamp,
-            BuildInfo.IndexSchema, h.AccessMode, h.RefreshIncompleteReason, incompletePaths,
+            BuildInfo.IndexSchema, PhoenixRuntimeMode.IndexMode(h.AccessMode),
+            h.RefreshIncompleteReason, incompletePaths,
             h.RefreshIncompleteReason is null ? null : h.RefreshIncompletePathCount,
             h.RefreshIncompleteReason is null || !h.RefreshIncompletePathCountIsLowerBound
                 ? null
