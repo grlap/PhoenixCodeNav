@@ -27,7 +27,7 @@ PhoenixCodeNav.sln
 ├── tests/CodeNav.IndexTests/  # index/semantic behavior; shared immutable functional index
 ├── tests/CodeNav.GitTests/    # isolated repositories, worktrees, diffs, and Git safety
 ├── tests/CodeNav.WatcherTests/ # isolated watcher timing checks
-└── tests/CodeNav.LifecycleTests/ # writer leases, followers, and process lifecycle
+└── tests/CodeNav.LifecycleTests/ # writer leases, publication, and process lifecycle
 ```
 
 The functional index collection builds its standard generated workspace once and reuses it
@@ -265,10 +265,10 @@ flags, freshness), `file_contents` + an external-content `fts_content` virtual t
 `projects` / `project_refs` / `package_refs` / `compile_items`, `solutions` /
 `solution_projects`, `symbols` (kind, name facets, spans, parent links), `type_base_edges`
 (syntax-derived direct base name/arity keyed to the derived declaration and deletion file), and `meta`
-(index version, timestamps, coverage). On Windows, WAL mode is exposed as one writer process plus
-many read-only follower processes. Follower index-backed evidence uses committed snapshots and
-followers never open a writer connection; explicitly live source/Git and compiler-backed semantic
-evidence may use newer workspace bytes. Other platforms remain writer-only for now.
+(index version, timestamps, coverage). The MCP deployment exposes one daemon writer. The Core
+library also retains a Windows-only read-only WAL attachment for direct compatibility tests; those
+readers use committed snapshots, never open a writer connection, and are not an MCP process mode.
+Explicitly live source/Git and compiler-backed semantic evidence may use newer workspace bytes.
 
 **Build** (`IndexBuilder`): scan the tree (excluding `.git`, `bin`, `obj`, `packages`,
 `node_modules`, `.vs`, generated files, and symlink/junction targets); parse every `.csproj` and
@@ -298,7 +298,7 @@ v0.12.36, supported
 Windows/Linux workspace-local full rebuilds perform
 that complete load in a pinned private database using MEMORY/OFF journaling while the previous live
 WAL database remains queryable. Only final publication closes local reads, marks the destination
-`rebuilding`, drains every admitted writer query, pinned review snapshot, and old follower handle
+`rebuilding`, drains every admitted writer query, pinned review snapshot, and old compatibility-reader handle
 under one three-minute deadline shared by the local drain and remaining install retries, and
 atomically installs the stage. The anchored stage must match the writer's retained destination
 identity before its build and again before installation, so a Linux lexical directory replacement
@@ -428,7 +428,7 @@ This is the part designed specifically for net472 enterprise scale.
   establishes that gap.
 - **Exact document narrowing for references.** After preparation, eligible name-addressable
   symbols use a conservative candidate-document superset derived from the cached text of that
-  same leased `Solution`. This is intentionally not committed FTS: followers cannot see a
+  same leased `Solution`. This is intentionally not committed FTS: compatibility readers cannot see a
   writer's pending queue and live bytes can move after an index snapshot is pinned. FTS chooses the
   candidate projects; case-exact, identifier-bounded live-text matches choose documents inside the
   leased solution. Global using aliases widen their entire project; documents with C# escapes, numeric
@@ -451,7 +451,7 @@ This is the part designed specifically for net472 enterprise scale.
   Roslyn's existing checksums.
 - **Pinned long scans.** Candidate enumeration and semantic cluster loading pin one local SQLite
   read epoch. A writer drains its own pinned snapshots before rebuilding. A database-destination
-  claim stops new Windows follower opens before replacement while already-open bounded operations
+  claim stops new Windows compatibility-reader opens before replacement while already-open bounded operations
   retain their consistent old SQLite handle; no sidecar reader registration is required.
 - **Reload keeps identity and retention is byte-governed.** A changed project reloads under its
   *existing* `ProjectId`, and eviction only removes projects nothing loaded references — so
@@ -706,10 +706,9 @@ reloading unchanged projects.
 
 The index is kept live without rebuilding on every keystroke:
 
-- **`IndexManager`** owns the lifecycle. One process acquires the index writer lease, opens or
+- **`IndexManager`** owns the lifecycle. The shared daemon acquires the index writer lease, opens or
   builds in the background (never blocking the MCP handshake), and runs the serialized refresh
-  pump. On Windows, compatible contenders attach as read-only followers with no writer
-  connection, pump, watcher, build, or automatic promotion.
+  pump. Ordinary MCP relays never open SQLite or instantiate a competing `IndexManager`.
 - **`WorkspaceWatcher`** (a `FileSystemWatcher`) debounces working-tree changes (600 ms
   quiet window) into batches. `DeltaRefresher` applies them: re-hash changed C#, F#, Markdown,
   and SQL files, update FTS, re-parse C# symbols, mark deletes, and rebuild compile ownership plus the
@@ -717,32 +716,29 @@ The index is kept live without rebuilding on every keystroke:
   non-authoritative editor inventory only.
   Directory-level changes (folder rename/move/delete) escalate to a full detect-all sweep, since
   the OS emits no per-child events for them.
-- **Startup sweep.** When an existing index is reopened by the writer, a detect-all sweep
-  reconciles edits made while the server was down. Followers never sweep or repair.
+- **Startup sweep.** When an existing index is reopened by the daemon, a detect-all sweep
+  reconciles edits made while the server was down.
 - Every response reports `indexStatus`, `indexVersion`, and `meta.indexMode`. The two fields answer
-  different questions: `index.mode` remains the database ownership role (`writer`, `follower`, or
-  `unavailable`), while `meta.indexMode` reports the runtime topology (`daemon`, `standalone`,
-  `legacy-follower`, or `unavailable`). A writer owns refresh/build/worktree mutations. A legacy
-  follower remains fully queryable but returns `index_writer_required` for `refresh_index` and
-  `index_worktree`; `unavailable` means the process has not attached to either database role. Followers report
-  `pendingChangesKnown: false`: their index-backed fields see committed WAL state, not the writer's
-  in-process queue. Live source/Git and compiler-backed semantic fields retain their own provenance.
-  A follower can continue serving the last compatible committed state after its writer exits, but
-  promotion to writer is deliberately restart-only. When a successor publishes a replacement, the
-  follower reopens it on the next request.
+  different questions: `index.mode` is the database ownership role (`writer` or `unavailable` for
+  served MCP sessions), while `meta.indexMode` is the public runtime topology (`daemon`,
+  `standalone`, or `unavailable`). Ordinary launches always report `daemon` once connected. An
+  explicit diagnostics-only standalone process reports `standalone` only if it owns the writer
+  lease; otherwise it serves a typed unavailable shim. The Core library retains a Windows
+  read-only WAL attachment mechanism for direct lifecycle compatibility tests, but `McpApplication`
+  never exposes that attachment as a server topology or automatic fallback.
 - There is no cross-process reader registry or writer-intent turnstile. The writer still drains its
   own in-process ordinary queries and pinned review snapshots at the final publication boundary.
   The sole writer also holds
   `<index-db>.phoenix-owner`, a fixed-size claim containing its physical workspace identity and a
-  `ready`/`rebuilding` state. Windows followers validate the claim before and after each SQLite
+  `ready`/`rebuilding` state. Internal Windows compatibility readers validate the claim before and after each SQLite
   open. Once the writer publishes `rebuilding`, new opens fail honestly while existing bounded
   handles retain their consistent old database; the already-complete private replacement waits
   only for those handles to drain before atomic install. One three-minute publication budget covers
   the writer's local reader drain plus the remaining OS-handle install retries; a local timeout
   restores the prior publication before its store is released. That budget is above Phoenix's
   longest semantic operation deadline
-  (120 seconds). The claim is not a reader registry: followers never write it or register slots.
-  POSIX contenders remain unavailable, so Windows is the only advertised follower platform today.
+  (120 seconds). The claim is not a reader registry: compatibility readers never write it or
+  register slots. This mechanism is not an advertised MCP launch mode.
 
 ### Filesystem notification and refresh serialization
 
@@ -760,10 +756,10 @@ mutations are serialized and each delta is applied in one transaction. A detect-
 uses `DeltaRefresher`; it is not a destructive rebuild. Full rebuild is reserved for a missing,
 incompatible, corrupt, or explicitly rebuilt index.
 
-Before that pump mutates rows it commits a follower-visible `refresh_sweep_pending` marker. A new
+Before that pump mutates rows it commits a reader-visible `refresh_sweep_pending` marker. A new
 database writes the same marker before its schema-version compatibility barrier, and startup keeps
 it through watcher attachment. The marker is cleared only after the serialized post-build/startup
-or ordinary refresh transaction succeeds. Thus a writer and any Windows followers report a
+or ordinary refresh transaction succeeds. Thus a writer and any internal Windows compatibility readers report a
 queryable-but-stale epoch while convergence is pending; neither can publish `ready` in the gap
 between build capture and watcher-backed reconciliation. The manager tracks durable marker
 publication separately from its in-memory state: if the marker transaction fails, it refuses the
@@ -774,12 +770,10 @@ marker also covers ordinary refresh convergence, not only the build/open handoff
 The index writer lease is one named mutex per physical workspace/worktree directory, independent of
 the replaceable database file or its configured spelling. Only the process holding that mutex owns
 the watcher, queue, build, and refresh pump. Its adjacent destination claim prevents different
-workspace identities from sharing one `--index-db`; a contending same-workspace process attaches
-only when the claim proves that its configured database is the writer's destination. On Windows,
-such processes may attach to committed WAL state as read-only followers; followers never watch,
-enqueue, refresh, or rebuild. A clean writer exit removes the claim, but an already-bound follower
-may keep serving the last compatible committed database and never promotes without restart. On
-macOS and Linux, a contender currently remains unavailable rather than attaching as a follower.
+workspace identities from sharing one `--index-db`. The Core library can attach an internal
+Windows compatibility reader to committed WAL state when the claim proves that its configured
+database is the writer's destination; that reader never watches, enqueues, refreshes, rebuilds, or
+appears in the normal MCP process model. macOS and Linux Core contenders remain unavailable.
 When a database moves with its workspace and its stored lexical root no longer exists, an ordinary
 open refuses to infer ownership from temporary unreachability. An explicit full rebuild may rebind
 `workspace_root` to the current location under the mutex and claim; an existing different physical
@@ -788,8 +782,8 @@ Each worktree is an independent lock domain. `index_worktree` may make a zero-wa
 attempt for a target worktree while the caller owns its own workspace; it never blocks on that
 second mutex, so there is no cross-worktree wait cycle. Once acquired, the one-shot publisher
 holds the target destination claim in rebuilding state through the anchored install and rewrites
-the staged database's `workspace_root` to the target before publication. A target Phoenix started
-mid-publication attaches as a restart-only follower; restart it after seeding to elect it writer.
+the staged database's `workspace_root` to the target before publication. A target Phoenix relay
+started mid-publication remains unavailable until it can elect or join the target daemon.
 
 ### Unavailable source capture and retry contract
 
@@ -816,7 +810,7 @@ cannot eliminate an editor save/rename race.
 `Unavailable` and `Oversized` regular sources are refresh failures, not skipped files. `Missing`
 and `DefinitelyNonRegular` scan entries are omitted with skipped-input accounting. `DeltaRefresher` throws a
 typed failure inside the transaction so every row and commit-metadata change in the complete batch
-rolls back while the previously persisted sweep marker remains visible to followers; the manager
+rolls back while the previously persisted sweep marker remains visible to compatibility readers; the manager
 then refines that marker to the specific incomplete-source latch. The single pump retains an
 unavailable request ahead of later
 refreshes and retries the complete transaction
@@ -827,7 +821,7 @@ advance `indexed_commit`, report worktree `inSync`, or allow semantic coverage t
 exact/current source evidence.
 
 If the quick retries are exhausted, the writer keeps a stable `refresh_input_unavailable` cause,
-persists that latch for read-only followers, and remains stale until a complete recovery or full
+persists that latch for read-only compatibility readers, and remains stale until a complete recovery or full
 rebuild succeeds. It schedules autonomous detect-all recovery sweeps after 5, 10, 30, and then
 capped 60 second delays, with one capture attempt per timer-initiated sweep so a permanently
 unreadable source cannot amplify into a tight full-workspace scan loop. A successful sweep clears
@@ -867,7 +861,7 @@ A-to-B-to-A movement therefore restores both A's rows and its attachment state.
 
 `Oversized` is persistent rather than transient and receives no rapid retry loop. The failure
 identifies the regular source that prevented the atomic batch and propagates bounded partial
-coverage through refresh health, follower metadata, worktree-index results, and response metadata.
+coverage through refresh health, compatibility-reader metadata, worktree-index results, and response metadata.
 Because capture aborts on the first known-incomplete input, its path count is explicitly a lower
 bound rather than a complete workspace total. It cannot advance the Git
 baseline or earn `inSync`/exact claims. Strict worktree reconciliation follows the same rule and
@@ -876,7 +870,7 @@ or oversized. Cold and explicit full builds also fail closed on any scanned regu
 cannot capture, so a lossy new database is never published as ready. Regression coverage pins
 transient failure followed by success, transaction rollback,
 retry exhaustion and recovery, oversize behavior, Git-baseline preservation, queued-request
-ordering, follower propagation (including a specific-latch persistence failure), post-build
+ordering, compatibility-reader propagation (including a specific-latch persistence failure), post-build
 publication gating, normal writer refresh, and strict worktree refusal.
 
 ### `git checkout <branch>` / `git pull` / `merge` / `rebase`
@@ -911,17 +905,10 @@ caveats:
 
 ## Shared MCP daemon and per-agent proxies
 
-Phoenix's original deployment is one stdio MCP process per client. On Windows the physical-
-workspace lease elects one writer and allows compatible contenders to attach to its committed
-SQLite WAL state as read-only followers; on Unix a contender remains unavailable. That preserves
-index safety, but every follower still carries a separate host, semantic service, Roslyn workspace,
-FCS state, response caches, and resource budget. A multi-agent session therefore pays almost the
-full process cost per agent and gives only the writer an in-band refresh path.
-
-The target deployment is one **Phoenix daemon per current user and canonical physical worktree**.
-The existing executable remains the MCP command configured by Claude, Codex, and other hosts. The
-target default process is a small stdio proxy; v0.12.59 ships this path behind explicit
-`--shared-daemon` / `CODENAV_SHARED_DAEMON=1` opt-in while standalone remains the default:
+Phoenix's original deployment put one full stdio MCP process behind every client. Phoenix v0.12.60
+replaces that public topology with one **Phoenix daemon per current user and canonical physical
+worktree**. The existing executable remains the MCP command configured by Claude, Codex, and other
+hosts, but every ordinary invocation is now a small stdio proxy with no flag or environment opt-in:
 
 ```text
 Claude/Codex --stdio--> Phoenix proxy --named pipe / UDS--> Phoenix daemon
@@ -934,11 +921,10 @@ Claude/Codex --stdio--> Phoenix proxy --named pipe / UDS--> Phoenix daemon
 
 The daemon is the sole ordinary live-index reader and writer. Proxies never load Core indexing or
 semantic state and never open SQLite. Cross-worktree seeding is not an ordinary query path: it keeps
-the existing destination and file-level claim protocol. During migration, the daemon presents as
-the writer under the existing workspace mutex/claim contract, so an older Windows process may still
-attach as a legacy read-only follower. A stamped `standalone` mode retains the proven current
-in-process server as a config-disableable availability fallback; identity, ownership, workspace,
-protocol, and schema mismatches always fail closed and never select that fallback.
+the existing destination and file-level claim protocol. `--standalone` is an explicit diagnostic
+and isolated-test mode only; it is never selected automatically and refuses to serve unless it
+acquires the writer lease. Every daemon startup, endpoint, identity, ownership, workspace, protocol,
+or schema failure stays visible through the typed unavailable MCP shim.
 
 ### Transport and session contract
 
@@ -1046,10 +1032,10 @@ The daemon is per user and per worktree, never system-wide:
 - Daemon executable launch authority is the currently running proxy's verified executable, not a
   path taken from the workspace or descriptor.
 
-Pure availability failures such as enterprise policy blocking local pipes may enter explicit
-`standalone` fallback when enabled. Security or identity failures never do. Responses expose
-`meta.indexMode: "daemon" | "standalone" | "legacy-follower" | "unavailable"` during migration,
-plus daemon/client identity diagnostics without publishing raw user or workspace paths.
+There is no standalone fallback. Availability, security, and identity failures all stay in the
+typed unavailable surface. Responses expose
+`meta.indexMode: "daemon" | "standalone" | "unavailable"`, plus daemon/client identity diagnostics
+without publishing raw user or workspace paths.
 
 ### Multi-client isolation and sizing
 
@@ -1072,20 +1058,18 @@ sublinearly with client count. Initial gates require three concurrent clients to
 approximately 1.5 times standalone RSS, no statistically meaningful single-client latency regression
 against direct stdio, and no rebuild-wall regression relative to the established cold-index gate.
 
-### Rollout and decisive gates
+### Transparent default and decisive gates
 
-The rollout is intentionally non-flag-day:
-
-1. ship daemon/proxy behind an explicit opt-in while preserving direct standalone stdio;
-2. prove daemon-as-writer plus old Windows follower compatibility;
-3. make proxy/daemon the default while retaining stamped standalone fallback; and
-4. retire legacy follower attachment only after deployed clients have converged and rollback evidence
-   shows it is no longer needed.
+There is one normal topology: every stdio launch proxies to the shared daemon. The obsolete
+`--shared-daemon` spelling remains an unnecessary compatibility alias, and the obsolete
+`--daemon-fallback-standalone` spelling is accepted as an inert no-op so stale configurations do not
+fail argument parsing. Neither changes runtime behavior. Only an explicit `--standalone` selects the
+diagnostic server, and that server must own the writer lease.
 
 The implementation gate adds tests for the handshake/version/schema/workspace matrix, two-proxy cold-
 start election, stale descriptor recovery, pipe squatting refusal, daemon crash during a write with
 WAL recovery, host reconnect/new-proxy re-election, cancellation isolation, multi-client refresh storms, fairness
-under a pathological semantic request, mixed daemon/legacy populations, idle linger and keep-alive,
+under a pathological semantic request, explicit-standalone refusal while a daemon owns the lease, idle linger and keep-alive,
 single-client latency, multi-client RSS, and rebuild-wall parity. A test passes only when exactly one
 ordinary database owner and one watcher exist for the physical worktree and every client converges to
 the same committed index and semantic model identity.

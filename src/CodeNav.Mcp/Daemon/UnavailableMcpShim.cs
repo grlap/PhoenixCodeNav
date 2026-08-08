@@ -87,6 +87,11 @@ internal sealed class UnavailableMcpServerTool : DelegatingMcpServerTool
                         id = "shared-mcp-daemon",
                         summary = "Phoenix shared daemon negotiation is present but unavailable for this session.",
                     },
+                    new
+                    {
+                        id = "shared-mcp-daemon-default",
+                        summary = "Phoenix's default shared-daemon topology is present but unavailable for this session.",
+                    },
                 },
             }
             : new

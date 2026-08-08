@@ -614,7 +614,7 @@ public sealed class Batch45IndexFollowerTests
                 capabilities.GetProperty("index").GetProperty("mode").GetString());
             Assert.False(capabilities.GetProperty("index")
                 .GetProperty("pendingChangesKnown").GetBoolean());
-            Assert.Contains(capabilities.GetProperty("features").EnumerateArray(), feature =>
+            Assert.DoesNotContain(capabilities.GetProperty("features").EnumerateArray(), feature =>
                 feature.GetProperty("id").GetString() == "index-read-followers");
             Assert.Contains(capabilities.GetProperty("features").EnumerateArray(), feature =>
                 feature.GetProperty("id").GetString() == "single-workspace-writer-mutex");
@@ -623,7 +623,7 @@ public sealed class Batch45IndexFollowerTests
 
             JsonElement search = Parse(tools.SearchSymbol("Alpha45", match: "exact"));
             Assert.Single(search.GetProperty("symbols").EnumerateArray());
-            Assert.Equal("legacy-follower",
+            Assert.Equal("standalone",
                 search.GetProperty("meta").GetProperty("indexMode").GetString());
             string statusNote = search.GetProperty("meta").GetProperty("statusNote").GetString()!;
             Assert.Contains("index-backed evidence reflects committed writer state", statusNote);
@@ -632,7 +632,7 @@ public sealed class Batch45IndexFollowerTests
             JsonElement definition = Parse(tools.Definition(
                 name: "Alpha45", mode: "auto", timeoutMs: 30_000));
             Assert.False(definition.TryGetProperty("error", out _), definition.ToString());
-            Assert.Equal("legacy-follower",
+            Assert.Equal("standalone",
                 definition.GetProperty("meta").GetProperty("indexMode").GetString());
 
             AssertWriterRequired(Parse(tools.RefreshIndex()));
@@ -701,14 +701,14 @@ public sealed class Batch45IndexFollowerTests
 
             JsonElement indexed = Parse(tools.SearchSymbol("Beta45", match: "exact"));
             Assert.Empty(indexed.GetProperty("symbols").EnumerateArray());
-            Assert.Equal("legacy-follower",
+            Assert.Equal("standalone",
                 indexed.GetProperty("meta").GetProperty("indexMode").GetString());
 
             JsonElement live = Parse(tools.SourceContext("Beta.cs", "1", contextLines: 0));
             Assert.Equal("live", live.GetProperty("freshness").GetString());
             Assert.Contains("Beta45", live.GetProperty("spans")[0]
                 .GetProperty("source").GetString());
-            Assert.Equal("legacy-follower",
+            Assert.Equal("standalone",
                 live.GetProperty("meta").GetProperty("indexMode").GetString());
             string statusNote = live.GetProperty("meta").GetProperty("statusNote").GetString()!;
             Assert.Contains("index-backed evidence reflects committed writer state", statusNote);

@@ -1,6 +1,9 @@
 using System.Diagnostics;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using CodeNav.Core.Indexing;
+using CodeNav.Mcp;
 using CodeNav.Mcp.Daemon;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -110,7 +113,7 @@ public sealed class SharedDaemonTests
                 DaemonPreambleMode.Connect,
                 request: null);
             var proxy = new DaemonProxy(
-                endpoint, null, false, false, false, "validation-test");
+                endpoint, null, false, false, "validation-test");
             proxy.ValidateResponse(exact, malformed);
             Assert.Equal("daemon_preamble_invalid", malformed.Cause);
         }
@@ -159,6 +162,83 @@ public sealed class SharedDaemonTests
             try { Directory.Delete(workspaceDiscovery); } catch { }
             TestWorkspaceCleanup.DeleteWorkspace(root);
             TestWorkspaceCleanup.DeleteWorkspace(escapedDirectory);
+        }
+    }
+
+    [Fact]
+    public void UnixRuntimeDirectorySkipsInvalidAndOverlongPreferredCandidates()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string root = Directory.CreateTempSubdirectory("Phoenix daemon runtime ladder ").FullName;
+        string overlongParent = Path.Combine(root, new string('x', 120));
+        Directory.CreateDirectory(overlongParent);
+        uint fallbackId = unchecked(3_000_000_000u + (uint)Environment.ProcessId);
+        string expected = Path.Combine(
+            DaemonUnixFileAuthority.ResolveExistingDirectory("/tmp"),
+            $"phoenix-codenav-{fallbackId}");
+        try
+        {
+            string missing = Path.Combine(root, "missing");
+            string selected = DaemonEndpoint.SelectUnixRuntimeDirectory(
+                missing,
+                overlongParent,
+                "/tmp",
+                fallbackId);
+            Assert.Equal(expected, selected);
+            DaemonUnixFileAuthority.VerifyOwnerOnlyDirectory(selected);
+
+            Assert.Throws<DaemonRuntimeDirectoryUnavailableException>(() =>
+                DaemonEndpoint.SelectUnixRuntimeDirectory(
+                    missing,
+                    Path.Combine(root, "also-missing"),
+                    Path.Combine(root, "still-missing"),
+                    userId: 4242));
+        }
+        finally
+        {
+            try { Directory.Delete(expected); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void UnixRuntimeDirectorySkipsUnsafeAndNonWritableExistingCandidates()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string root = Path.Combine("/tmp", $"pr{Guid.NewGuid():N}"[..10]);
+        string unsafeParent = Path.Combine(root, "unsafe");
+        string unsafeTarget = Path.Combine(root, "target");
+        string nonWritableParent = Path.Combine(root, "readonly");
+        string fallbackParent = Path.Combine(root, "fallback");
+        Directory.CreateDirectory(unsafeParent);
+        Directory.CreateDirectory(unsafeTarget);
+        Directory.CreateDirectory(nonWritableParent);
+        Directory.CreateDirectory(fallbackParent);
+        string unsafeCandidate = Path.Combine(unsafeParent, "phoenix-codenav");
+        Directory.CreateSymbolicLink(unsafeCandidate, unsafeTarget);
+        File.SetUnixFileMode(nonWritableParent,
+            UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        try
+        {
+            string selected = DaemonEndpoint.SelectUnixRuntimeDirectory(
+                unsafeParent,
+                nonWritableParent,
+                fallbackParent,
+                userId: 4242);
+            string expected = Path.Combine(
+                DaemonUnixFileAuthority.ResolveExistingDirectory(fallbackParent),
+                "phoenix-codenav-4242");
+
+            Assert.Equal(expected, selected);
+            Assert.NotNull(new DirectoryInfo(unsafeCandidate).LinkTarget);
+            DaemonUnixFileAuthority.VerifyOwnerOnlyDirectory(selected);
+        }
+        finally
+        {
+            File.SetUnixFileMode(nonWritableParent,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -430,6 +510,41 @@ public sealed class SharedDaemonTests
     }
 
     [Fact]
+    public async Task FrameworkDependentLaunchDefaultsToSharedDaemon()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix framework default daemon ").FullName;
+        McpClient? client = null;
+        DaemonEndpoint? endpoint = null;
+        try
+        {
+            string indexDb = Path.Combine(root, ".codenav", "framework-index.db");
+            endpoint = DaemonEndpoint.Create(root, indexDb);
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.NotNull(endpoint.SocketPath);
+                _ = new UnixDomainSocketEndPoint(endpoint.SocketPath);
+            }
+            client = await CreateFrameworkDependentClientAsync(root, indexDb);
+            JsonElement capabilities = await CallAsync(client, "server_capabilities");
+            Assert.Equal("daemon",
+                capabilities.GetProperty("runtime").GetProperty("indexMode").GetString());
+            Assert.Equal("writer",
+                capabilities.GetProperty("index").GetProperty("mode").GetString());
+        }
+        finally
+        {
+            if (endpoint is not null)
+            {
+                try { await RetireDaemonForTestAsync(endpoint); } catch { }
+            }
+            if (client is not null) await TryDisposeClientAsync(client);
+            if (endpoint is not null) await CleanupEndpointForTestAsync(endpoint);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
     public async Task KilledDaemonIsReelectedWithoutReusingTheDeadProcess()
     {
         string root = Directory.CreateTempSubdirectory("Phoenix daemon recovery ").FullName;
@@ -485,12 +600,11 @@ public sealed class SharedDaemonTests
     }
 
     [Fact]
-    public async Task WindowsLegacyStandaloneContenderRemainsAReadOnlyFollowerOfDaemonWriter()
+    public async Task ExplicitStandaloneContenderIsUnavailableInsteadOfServingAsSecondMcpServer()
     {
-        if (!OperatingSystem.IsWindows()) return;
-        string root = Directory.CreateTempSubdirectory("Phoenix mixed daemon follower ").FullName;
+        string root = Directory.CreateTempSubdirectory("Phoenix daemon standalone refusal ").FullName;
         McpClient? daemonClient = null;
-        McpClient? legacyClient = null;
+        McpClient? standaloneClient = null;
         DaemonEndpoint? endpoint = null;
         try
         {
@@ -502,18 +616,24 @@ public sealed class SharedDaemonTests
             Assert.Equal("daemon",
                 daemonCapabilities.GetProperty("runtime").GetProperty("indexMode").GetString());
 
-            legacyClient = await CreateStandaloneClientAsync(executable, root);
-            JsonElement legacyCapabilities = await CallAsync(
-                legacyClient, "server_capabilities");
-            Assert.Equal("legacy-follower",
-                legacyCapabilities.GetProperty("runtime").GetProperty("indexMode").GetString());
-            Assert.Equal("follower",
-                legacyCapabilities.GetProperty("index").GetProperty("mode").GetString());
-            CallToolResult refresh = await legacyClient.CallToolAsync(
+            standaloneClient = await CreateStandaloneClientAsync(executable, root);
+            JsonElement standaloneCapabilities = await CallAsync(
+                standaloneClient, "server_capabilities");
+            Assert.Equal("unavailable",
+                standaloneCapabilities.GetProperty("meta").GetProperty("indexMode").GetString());
+            Assert.Equal("standalone_writer_unavailable",
+                standaloneCapabilities.GetProperty("meta").GetProperty("cause").GetString());
+            Assert.False(standaloneCapabilities.TryGetProperty("index", out _));
+            Assert.DoesNotContain("follower", standaloneCapabilities.GetRawText(),
+                StringComparison.OrdinalIgnoreCase);
+            CallToolResult refresh = await standaloneClient.CallToolAsync(
                 "refresh_index", new Dictionary<string, object?>());
             Assert.True(refresh.IsError);
-            Assert.Equal("index_writer_required",
-                ParseContent(refresh).GetProperty("error").GetString());
+            JsonElement refreshError = ParseContent(refresh);
+            Assert.Equal("phoenix_daemon_unavailable",
+                refreshError.GetProperty("error").GetString());
+            Assert.Equal("standalone_writer_unavailable",
+                refreshError.GetProperty("cause").GetString());
         }
         finally
         {
@@ -522,12 +642,25 @@ public sealed class SharedDaemonTests
                 try { await RetireDaemonForTestAsync(endpoint); } catch { }
             }
             await Task.WhenAll(
-                legacyClient is null ? Task.CompletedTask : TryDisposeClientAsync(legacyClient),
+                standaloneClient is null ? Task.CompletedTask : TryDisposeClientAsync(standaloneClient),
                 daemonClient is null ? Task.CompletedTask : TryDisposeClientAsync(daemonClient));
             if (endpoint is not null)
                 await CleanupEndpointForTestAsync(endpoint);
             TestWorkspaceCleanup.DeleteWorkspace(root);
         }
+    }
+
+    [Fact]
+    public void StandaloneWriterUnavailableFailureNeutralizesCompatibilityReaderDetails()
+    {
+        DaemonUnavailableFailure failure = McpApplication.CreateStandaloneWriterUnavailableFailure(
+            IndexManager.FollowerAccessMode,
+            "read-only follower requires a compatible index from the writer");
+
+        Assert.Equal("standalone_writer_unavailable", failure.Cause);
+        Assert.Contains("another Phoenix process", failure.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("follower", failure.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("without --standalone", failure.Recovery, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -572,11 +705,12 @@ public sealed class SharedDaemonTests
                 daemonBytes <= allowed,
                 $"Three-client daemon RSS {daemonBytes:N0} exceeded 1.5x standalone plus 32 MiB ({allowed:N0}); standalone RSS was {standaloneBytes:N0}.");
 
-            TimeSpan daemonLatency = await BestCapabilitiesLatencyAsync(daemonClients[0]);
-            TimeSpan standaloneLatency = await BestCapabilitiesLatencyAsync(standalone);
+            (TimeSpan daemonLatency, TimeSpan standaloneLatency) =
+                await MedianCapabilitiesLatenciesAsync(daemonClients[0], standalone);
+            TimeSpan relativeCeiling = standaloneLatency * 2 + TimeSpan.FromMilliseconds(100);
             Assert.True(
-                daemonLatency <= standaloneLatency * 2 + TimeSpan.FromMilliseconds(100),
-                $"Warm daemon relay latency {daemonLatency} materially exceeded standalone {standaloneLatency}.");
+                daemonLatency <= relativeCeiling,
+                $"Median warm daemon relay latency {daemonLatency} materially exceeded the 2x standalone plus 100 ms ceiling {relativeCeiling}; median standalone latency was {standaloneLatency}.");
         }
         finally
         {
@@ -634,33 +768,143 @@ public sealed class SharedDaemonTests
     }
 
     [Fact]
-    public void CommandLineRequiresOneExplicitLaunchMode()
+    public async Task AuthorityCheckedRetirementRefusesWrongDatabaseAndStopsMatchingDaemon()
     {
-        string? prior = Environment.GetEnvironmentVariable("CODENAV_SHARED_DAEMON");
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix daemon authority retirement ").FullName;
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        DaemonEndpoint wrongDatabase = DaemonEndpoint.Create(
+            root, Path.Combine(root, "other-index.db"));
+        using Process daemon = LaunchDaemonForTest(
+            FindMcpExecutable(), root, keepAlive: true, idleMilliseconds: 350);
         try
         {
-            Environment.SetEnvironmentVariable("CODENAV_SHARED_DAEMON", "1");
-            Assert.Equal(McpLaunchMode.SharedProxy, McpCommandLine.Parse([]).Mode);
-            Assert.Equal(McpLaunchMode.SharedProxy,
-                McpCommandLine.Parse(["--shared-daemon"]).Mode);
-            Assert.Equal(McpLaunchMode.Standalone,
-                McpCommandLine.Parse(["--standalone"]).Mode);
-            Assert.True(McpCommandLine.Parse([
-                "--shared-daemon", "--daemon-fallback-standalone"]).StandaloneFallback);
-            Assert.True(DaemonProxy.ShouldUseStandaloneFallback(
-                enabled: true, availabilityOnly: true));
-            Assert.False(DaemonProxy.ShouldUseStandaloneFallback(
-                enabled: true, availabilityOnly: false));
-            Assert.False(DaemonProxy.ShouldUseStandaloneFallback(
-                enabled: false, availabilityOnly: true));
-            Assert.Throws<ArgumentException>(() =>
-                McpCommandLine.Parse(["--shared-daemon", "--standalone"]));
-            Assert.Throws<ArgumentException>(() =>
-                McpCommandLine.Parse(["--workspace-root"]));
+            await WaitUntilAsync(
+                () => DaemonDescriptor.TryRead(endpoint)?.Pid == daemon.Id,
+                TimeSpan.FromSeconds(15));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            DaemonRetirementRefusedException refusal = await Assert.ThrowsAsync<
+                DaemonRetirementRefusedException>(() =>
+                DaemonRetirement.RetireForHarnessAsync(wrongDatabase, timeout.Token));
+            Assert.Equal("daemon_index_destination_mismatch", refusal.Response.Cause);
+            Assert.False(daemon.HasExited);
+
+            await DaemonRetirement.RetireForHarnessAsync(endpoint, timeout.Token);
+            await daemon.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(0, daemon.ExitCode);
+
+            // Cleanup is idempotent when the authority-bound endpoint is already gone.
+            await DaemonRetirement.RetireForHarnessAsync(endpoint, timeout.Token);
         }
         finally
         {
-            Environment.SetEnvironmentVariable("CODENAV_SHARED_DAEMON", prior);
+            if (!daemon.HasExited)
+            {
+                try { await RetireDaemonForTestAsync(endpoint); } catch { }
+                try { await daemon.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); }
+                catch { daemon.Kill(entireProcessTree: false); }
+            }
+            await CleanupEndpointForTestAsync(endpoint);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task RetirementWaitsForEndpointWhenDescriptorEvidenceDisappears()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix daemon retirement descriptor gap ").FullName;
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        const int retiringPid = 4242;
+        var observed = new DaemonDescriptorRecord(
+            retiringPid,
+            BuildInfo.Version,
+            BuildInfo.IndexSchema,
+            endpoint.WorkspaceIdentity,
+            endpoint.DatabaseKey,
+            endpoint.EndpointKey,
+            OperatingSystem.IsWindows() ? "named-pipe" : "unix-domain-socket",
+            OperatingSystem.IsWindows() ? endpoint.PipeName : endpoint.SocketPath!,
+            DateTimeOffset.UtcNow.ToString("O"));
+        var firstProbe = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishProbe = new TaskCompletionSource<int>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        int probeCount = 0;
+
+        ValueTask<int> ProbeAsync(DaemonEndpoint _, CancellationToken __)
+        {
+            if (Interlocked.Increment(ref probeCount) == 1)
+            {
+                firstProbe.TrySetResult();
+                return ValueTask.FromResult(retiringPid);
+            }
+            return new ValueTask<int>(finishProbe.Task);
+        }
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            Task wait = DaemonRetirement.WaitForRelinquishmentAsync(
+                endpoint,
+                retiringPid,
+                observed,
+                timeout.Token,
+                readDescriptor: _ => null,
+                probeDaemonPid: ProbeAsync,
+                pollDelay: TimeSpan.Zero);
+
+            await firstProbe.Task.WaitAsync(timeout.Token);
+            await WaitUntilAsync(
+                () => Volatile.Read(ref probeCount) == 2,
+                TimeSpan.FromSeconds(5));
+            Assert.False(wait.IsCompleted);
+
+            finishProbe.SetResult(retiringPid + 1);
+            await wait.WaitAsync(timeout.Token);
+            Assert.Equal(2, Volatile.Read(ref probeCount));
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void CommandLineDefaultsToSharedProxyAndKeepsStandaloneExplicit()
+    {
+        string? priorShared = Environment.GetEnvironmentVariable("CODENAV_SHARED_DAEMON");
+        string? priorFallback = Environment.GetEnvironmentVariable(
+            "CODENAV_DAEMON_STANDALONE_FALLBACK");
+        try
+        {
+            Environment.SetEnvironmentVariable("CODENAV_SHARED_DAEMON", "0");
+            Environment.SetEnvironmentVariable("CODENAV_DAEMON_STANDALONE_FALLBACK", "1");
+            Assert.Equal(McpLaunchMode.SharedProxy, McpCommandLine.Parse([]).Mode);
+            Assert.Equal(McpLaunchMode.SharedProxy,
+                McpCommandLine.Parse(["--shared-daemon"]).Mode);
+            Assert.Equal(McpLaunchMode.SharedProxy,
+                McpCommandLine.Parse(["--daemon-fallback-standalone"]).Mode);
+            Assert.Equal(McpLaunchMode.Standalone,
+                McpCommandLine.Parse(["--standalone"]).Mode);
+            Assert.Equal(McpLaunchMode.DaemonRetireAuthorized,
+                McpCommandLine.Parse(["--daemon-retire-authorized"]).Mode);
+            Assert.Throws<ArgumentException>(() =>
+                McpCommandLine.Parse(["--shared-daemon", "--standalone"]));
+            Assert.Throws<ArgumentException>(() =>
+                McpCommandLine.Parse(["--daemon-retire-authorized", "--standalone"]));
+            Assert.Throws<ArgumentException>(() =>
+                McpCommandLine.Parse(["--workspace-root"]));
+
+            Environment.SetEnvironmentVariable("CODENAV_SHARED_DAEMON", "1");
+            Environment.SetEnvironmentVariable("CODENAV_DAEMON_STANDALONE_FALLBACK", "0");
+            Assert.Equal(McpLaunchMode.SharedProxy, McpCommandLine.Parse([]).Mode);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CODENAV_SHARED_DAEMON", priorShared);
+            Environment.SetEnvironmentVariable(
+                "CODENAV_DAEMON_STANDALONE_FALLBACK", priorFallback);
         }
     }
 
@@ -672,7 +916,6 @@ public sealed class SharedDaemonTests
         var arguments = new List<string>
         {
             "--workspace-root", root,
-            "--shared-daemon",
             "--daemon-idle-ms", "600",
         };
         arguments.AddRange(additionalArguments);
@@ -697,6 +940,30 @@ public sealed class SharedDaemonTests
             Command = executable,
             WorkingDirectory = Path.GetDirectoryName(executable)!,
             Arguments = ["--workspace-root", root, "--standalone"],
+        });
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        return await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
+    }
+
+    private static async Task<McpClient> CreateFrameworkDependentClientAsync(
+        string root,
+        string indexDb)
+    {
+        string executable = FindMcpExecutable();
+        string managedEntry = Path.Combine(
+            Path.GetDirectoryName(executable)!, "PhoenixCodeNav.Mcp.dll");
+        Assert.True(File.Exists(managedEntry), $"MCP managed entry missing: {managedEntry}");
+        var transport = new StdioClientTransport(new StdioClientTransportOptions
+        {
+            Name = "Phoenix framework-dependent daemon test",
+            Command = "dotnet",
+            WorkingDirectory = Path.GetDirectoryName(managedEntry)!,
+            Arguments = [
+                managedEntry,
+                "--workspace-root", root,
+                "--index-db", indexDb,
+                "--daemon-idle-ms", "600",
+            ],
         });
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         return await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
@@ -742,19 +1009,41 @@ public sealed class SharedDaemonTests
         return minimum;
     }
 
-    private static async Task<TimeSpan> BestCapabilitiesLatencyAsync(McpClient client)
+    private static async Task<(TimeSpan Daemon, TimeSpan Standalone)>
+        MedianCapabilitiesLatenciesAsync(McpClient daemon, McpClient standalone)
     {
-        _ = await CallAsync(client, "server_capabilities");
-        TimeSpan best = TimeSpan.MaxValue;
-        for (int sample = 0; sample < 3; sample++)
+        _ = await CallAsync(daemon, "server_capabilities");
+        _ = await CallAsync(standalone, "server_capabilities");
+        var daemonSamples = new TimeSpan[5];
+        var standaloneSamples = new TimeSpan[5];
+        for (int sample = 0; sample < daemonSamples.Length; sample++)
         {
-            var elapsed = Stopwatch.StartNew();
-            for (int i = 0; i < 10; i++)
-                _ = await CallAsync(client, "server_capabilities");
-            elapsed.Stop();
-            if (elapsed.Elapsed < best) best = elapsed.Elapsed;
+            // Alternate order so a short scheduling burst cannot systematically favor either
+            // topology. The median rejects one slow batch without accepting a lucky best sample.
+            if ((sample & 1) == 0)
+            {
+                daemonSamples[sample] = await MeasureCapabilitiesBatchAsync(daemon);
+                standaloneSamples[sample] = await MeasureCapabilitiesBatchAsync(standalone);
+            }
+            else
+            {
+                standaloneSamples[sample] = await MeasureCapabilitiesBatchAsync(standalone);
+                daemonSamples[sample] = await MeasureCapabilitiesBatchAsync(daemon);
+            }
         }
-        return best;
+        Array.Sort(daemonSamples);
+        Array.Sort(standaloneSamples);
+        return (daemonSamples[daemonSamples.Length / 2],
+            standaloneSamples[standaloneSamples.Length / 2]);
+    }
+
+    private static async Task<TimeSpan> MeasureCapabilitiesBatchAsync(McpClient client)
+    {
+        var elapsed = Stopwatch.StartNew();
+        for (int i = 0; i < 10; i++)
+            _ = await CallAsync(client, "server_capabilities");
+        elapsed.Stop();
+        return elapsed.Elapsed;
     }
 
     private static async Task DisposeClientAsync(McpClient client)

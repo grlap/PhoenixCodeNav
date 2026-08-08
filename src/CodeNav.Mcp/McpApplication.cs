@@ -76,9 +76,41 @@ internal static class McpApplication
         CancellationToken cancellationToken = default)
     {
         PhoenixRuntimeMode.Set(PhoenixProcessMode.Standalone);
-        using IHost host = BuildHost(workspaceRoot, indexDb, stdio: true);
-        StartIndex(host, rebuild);
-        await host.RunAsync(cancellationToken).ConfigureAwait(false);
-        return 0;
+        IndexHealth? failureHealth = null;
+        using (IHost host = BuildHost(workspaceRoot, indexDb, stdio: true))
+        {
+            IndexManager manager = StartIndex(host, rebuild);
+            if (manager.IsWriter)
+            {
+                await host.RunAsync(cancellationToken).ConfigureAwait(false);
+                return 0;
+            }
+            failureHealth = manager.Health();
+        }
+
+        DaemonUnavailableFailure failure = CreateStandaloneWriterUnavailableFailure(
+            failureHealth?.AccessMode, failureHealth?.Error);
+        return await UnavailableMcpShim.RunAsync(
+            failure,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static DaemonUnavailableFailure CreateStandaloneWriterUnavailableFailure(
+        string? accessMode,
+        string? error)
+    {
+        bool compatibilityReader = string.Equals(
+            accessMode, IndexManager.FollowerAccessMode, StringComparison.Ordinal) ||
+            error?.Contains("follower", StringComparison.OrdinalIgnoreCase) == true;
+        string detail = compatibilityReader
+            ? "Explicit standalone Phoenix cannot serve because another Phoenix process owns or is establishing the workspace writer role."
+            : string.IsNullOrWhiteSpace(error)
+                ? "Explicit standalone Phoenix could not acquire the workspace writer role."
+                : $"Explicit standalone Phoenix could not start as writer: {error}";
+        string recovery = compatibilityReader
+            ? "Reconnect without --standalone; normal Phoenix launches join the shared daemon automatically."
+            : "Resolve the reported index startup condition, then reconnect without --standalone; normal Phoenix launches join the shared daemon automatically.";
+        return new DaemonUnavailableFailure(
+            "standalone_writer_unavailable", detail, recovery, Retryable: true);
     }
 }

@@ -39,6 +39,10 @@ internal static class DaemonUnixFileAuthority
         uint uid = geteuid();
         if (!Directory.Exists(path))
         {
+            string? parent = Path.GetDirectoryName(path);
+            if (string.IsNullOrWhiteSpace(parent) || !CanCreateChildDirectory(parent))
+                throw new IOException(
+                    "Phoenix daemon runtime parent cannot create the product directory.");
             Directory.CreateDirectory(path, UnixFileMode.UserRead |
                 UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
@@ -57,6 +61,21 @@ internal static class DaemonUnixFileAuthority
                 UnixFileMode.OtherExecute)) != 0)
             throw new IOException("Phoenix daemon runtime directory permissions are unsafe.");
     }
+
+    private static bool CanCreateChildDirectory(string parent)
+    {
+        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        UnixFileMode mode = File.GetUnixFileMode(parent);
+        return HasWriteAndExecute(mode, UnixFileMode.UserWrite, UnixFileMode.UserExecute) ||
+               HasWriteAndExecute(mode, UnixFileMode.GroupWrite, UnixFileMode.GroupExecute) ||
+               HasWriteAndExecute(mode, UnixFileMode.OtherWrite, UnixFileMode.OtherExecute);
+    }
+
+    private static bool HasWriteAndExecute(
+        UnixFileMode mode,
+        UnixFileMode write,
+        UnixFileMode execute) =>
+        (mode & write) != 0 && (mode & execute) != 0;
 
     internal static void VerifyOwnerOnlyDirectory(string path)
     {

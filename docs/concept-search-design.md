@@ -8,8 +8,12 @@ Bead: `PhoenixCodeNav-p8vw`
 
 Relates to: [`intro.md`](./intro.md) (why agent navigation needs more than grep),
 [`design.md`](./design.md) (the existing text, syntax, compiler, graph, freshness, and
-writer/follower architecture), and [`agent-instructions.md`](./agent-instructions.md) (tool
+shared-daemon and internal database-ownership architecture), and [`agent-instructions.md`](./agent-instructions.md) (tool
 routing for agents).
+
+References below to followers describe the Core storage compatibility model and proposed catalog
+snapshot semantics. They are not a Phoenix MCP launch mode: ordinary MCP sessions always proxy to
+the single shared daemon for their physical worktree.
 
 ## Summary
 
@@ -530,7 +534,7 @@ Illustrative response; field names are part of the proposal, values are examples
     "confidenceNote": "learned similarity/ranking lead — verify with source and compiler tools",
     "build": "...",
     "indexSchema": "...",
-    "indexMode": "legacy-follower"
+    "indexMode": "daemon"
   },
   "conceptIndex": {
     "status": "ready",

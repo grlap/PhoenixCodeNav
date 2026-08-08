@@ -118,21 +118,49 @@ public sealed class RoslynHarnessLifecycleTests
     }
 
     [Fact]
-    public void ProcessLifecycleReadinessIsProtectedByCleanupFinally()
+    public void HarnessRetiresSharedDaemonsThroughTheAuthorityCheckedControlPath()
     {
         string root = FindRepositoryRoot();
         string script = File.ReadAllText(
             Path.Combine(root, "scripts", "test-roslyn-mcp.ps1"));
+
+        Assert.Contains("function Request-McpDaemonRetirement", script,
+            StringComparison.Ordinal);
+        Assert.Contains("--daemon-retire-authorized", script, StringComparison.Ordinal);
+        Assert.Contains("Request-McpDaemonRetirement $client", script,
+            StringComparison.Ordinal);
+        Assert.Contains("$initialized = $false", script, StringComparison.Ordinal);
+        Assert.Contains("if ($initialized -and $cleanupErrors.Count -gt 0)", script,
+            StringComparison.Ordinal);
+        Assert.Contains("cleanup after initialization failure also failed", script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("function Stop-McpDaemonProcess", script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Get-Process -Id $daemonPid", script,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProcessLifecycleSelfTestsRunBeforeHeavyHarnessInitializationAndKeepCleanupFinally()
+    {
+        string root = FindRepositoryRoot();
+        string script = File.ReadAllText(
+            Path.Combine(root, "scripts", "test-roslyn-mcp.ps1"));
+        int setupStart = script.IndexOf(
+            "function Stop-ProcessTree", StringComparison.Ordinal);
+        Assert.True(setupStart >= 0, "Lifecycle cleanup helpers were not found.");
+
         int blockStart = script.IndexOf(
             "if ($SelfTestProcessLifecycle -or $SelfTestProcessLifecycleReadinessFailure) {",
-            StringComparison.Ordinal);
-        Assert.True(blockStart >= 0, "Lifecycle self-test block was not found.");
+            setupStart, StringComparison.Ordinal);
+        Assert.True(blockStart > setupStart, "Lifecycle self-test block was not found after its helpers.");
 
-        int blockEnd = script.IndexOf("function Test-RetryableSemanticPayload",
+        int blockEnd = script.IndexOf(
+            "if ($null -eq (\"PhoenixCodeNav.Integration.BoundedTextTail\" -as [type])) {",
             blockStart, StringComparison.Ordinal);
         Assert.True(blockEnd > blockStart,
-            "Lifecycle self-test block terminator was not found after its start.");
-        string lifecycleBlock = script[blockStart..blockEnd];
+            "Heavy harness initialization was not found after the lifecycle self-test.");
+        string lifecycleBlock = script[setupStart..blockEnd];
         Assert.Contains("$client = $null", lifecycleBlock, StringComparison.Ordinal);
         Assert.Contains("try {", lifecycleBlock, StringComparison.Ordinal);
         Assert.Contains("} finally {", lifecycleBlock, StringComparison.Ordinal);
@@ -140,6 +168,12 @@ public sealed class RoslynHarnessLifecycleTests
             StringComparison.Ordinal);
         Assert.Contains("Stop-McpClient $client", lifecycleBlock,
             StringComparison.Ordinal);
+        Assert.Contains("StderrTask = $process.StandardError.ReadToEndAsync()",
+            lifecycleBlock, StringComparison.Ordinal);
+        Assert.DoesNotContain("Add-Type -TypeDefinition", lifecycleBlock,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Get-Content -Raw -LiteralPath $BaselinePath",
+            lifecycleBlock, StringComparison.Ordinal);
     }
 
     [Fact]

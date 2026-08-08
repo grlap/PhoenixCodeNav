@@ -84,6 +84,31 @@ if (!OperatingSystem.IsWindows())
 
 try
 {
+    if (command.Mode == McpLaunchMode.DaemonRetireAuthorized)
+    {
+        try
+        {
+            DaemonEndpoint endpoint = DaemonEndpoint.Create(workspaceRoot, indexDb);
+            using var retirement = CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
+            retirement.CancelAfter(TimeSpan.FromMinutes(2));
+            await DaemonRetirement.RetireForHarnessAsync(endpoint, retirement.Token);
+            return 0;
+        }
+        catch (OperationCanceledException) when (!shutdown.IsCancellationRequested)
+        {
+            Console.Error.WriteLine(
+                "Phoenix daemon did not complete authority-checked retirement before the deadline.");
+            return 3;
+        }
+        catch (Exception ex) when (ex is IOException or ArgumentException or
+                                   NotSupportedException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(
+                $"Phoenix daemon authority-checked retirement failed ({ex.GetType().Name}).");
+            return 3;
+        }
+    }
+
     if (command.Mode == McpLaunchMode.Daemon)
     {
         DaemonProcessIsolation.DetachStandardStreams();
@@ -116,6 +141,14 @@ try
         {
             endpoint = DaemonEndpoint.Create(workspaceRoot, indexDb);
         }
+        catch (DaemonRuntimeDirectoryUnavailableException ex)
+        {
+            return await UnavailableMcpShim.RunAsync(new DaemonUnavailableFailure(
+                "daemon_runtime_directory_unavailable",
+                $"Phoenix could not select a runtime directory for its local transport ({ex.GetType().Name}).",
+                "Shorten XDG_RUNTIME_DIR or the system temporary path, then reconnect.",
+                Retryable: false), shutdown.Token);
+        }
         catch (Exception ex)
         {
             return await UnavailableMcpShim.RunAsync(new DaemonUnavailableFailure(
@@ -131,7 +164,6 @@ try
             indexDb,
             command.Rebuild,
             command.KeepAlive,
-            command.StandaloneFallback,
             clientName,
             command.DaemonIdle);
         return await proxy.RunAsync(shutdown.Token);
@@ -153,6 +185,7 @@ internal enum McpLaunchMode
     SharedProxy,
     DaemonBootstrap,
     Daemon,
+    DaemonRetireAuthorized,
 }
 
 internal sealed record McpCommandLine(
@@ -161,20 +194,18 @@ internal sealed record McpCommandLine(
     string? IndexDb,
     bool Rebuild,
     bool KeepAlive,
-    bool StandaloneFallback,
     TimeSpan? DaemonIdle,
     bool Help)
 {
     internal static McpCommandLine Parse(string[] arguments)
     {
-        bool sharedEnvironment = ReadBooleanEnvironment("CODENAV_SHARED_DAEMON");
         bool shared = false;
         bool daemonBootstrap = false;
         bool daemon = false;
+        bool daemonRetireAuthorized = false;
         bool standalone = false;
         bool rebuild = false;
         bool keepAlive = false;
-        bool fallback = ReadBooleanEnvironment("CODENAV_DAEMON_STANDALONE_FALLBACK");
         bool help = false;
         string? workspaceRoot = null;
         string? indexDb = null;
@@ -195,8 +226,13 @@ internal sealed record McpCommandLine(
                 case "--standalone": standalone = true; break;
                 case "--daemon-bootstrap": daemonBootstrap = true; break;
                 case "--daemon": daemon = true; break;
+                // Internal integration-harness control path. It uses the authenticated daemon
+                // handshake and is intentionally omitted from public usage/help output.
+                case "--daemon-retire-authorized": daemonRetireAuthorized = true; break;
                 case "--keepalive": keepAlive = true; break;
-                case "--daemon-fallback-standalone": fallback = true; break;
+                // v0.12.59 compatibility alias. Shared mode is now unconditional and never
+                // automatically falls back to a standalone process.
+                case "--daemon-fallback-standalone": break;
                 case "--daemon-idle-ms":
                     string raw = RequiredValue(arguments, ref i);
                     if (!long.TryParse(raw, out long milliseconds) ||
@@ -210,27 +246,26 @@ internal sealed record McpCommandLine(
         }
 
         int modes = (shared ? 1 : 0) + (daemonBootstrap ? 1 : 0) +
-                    (daemon ? 1 : 0) + (standalone ? 1 : 0);
+                    (daemon ? 1 : 0) + (daemonRetireAuthorized ? 1 : 0) +
+                    (standalone ? 1 : 0);
         if (modes > 1)
-            throw new ArgumentException("Choose only one of --shared-daemon, --standalone, or --daemon.");
-        McpLaunchMode mode = daemonBootstrap
+            throw new ArgumentException("Choose only one Phoenix launch mode.");
+        McpLaunchMode mode = daemonRetireAuthorized
+            ? McpLaunchMode.DaemonRetireAuthorized
+            : daemonBootstrap
             ? McpLaunchMode.DaemonBootstrap
             : daemon
             ? McpLaunchMode.Daemon
-            : shared
-                ? McpLaunchMode.SharedProxy
-                : standalone
-                    ? McpLaunchMode.Standalone
-                    : sharedEnvironment
-                        ? McpLaunchMode.SharedProxy
-                        : McpLaunchMode.Standalone;
+            : standalone
+                ? McpLaunchMode.Standalone
+                : McpLaunchMode.SharedProxy;
         return new McpCommandLine(
-            mode, workspaceRoot, indexDb, rebuild, keepAlive, fallback, idle, help);
+            mode, workspaceRoot, indexDb, rebuild, keepAlive, idle, help);
     }
 
     internal static void WriteUsage() => Console.Error.WriteLine(
         "Usage: PhoenixCodeNav.Mcp --workspace-root <dir> [--index-db <path>] [--rebuild] " +
-        "[--shared-daemon | --standalone] [--keepalive] [--daemon-fallback-standalone]");
+        "[--standalone] [--keepalive]");
 
     private static string RequiredValue(string[] arguments, ref int index)
     {
@@ -239,7 +274,4 @@ internal sealed record McpCommandLine(
         return arguments[index];
     }
 
-    private static bool ReadBooleanEnvironment(string name) =>
-        Environment.GetEnvironmentVariable(name) is string value &&
-        (value == "1" || bool.TryParse(value, out bool parsed) && parsed);
 }

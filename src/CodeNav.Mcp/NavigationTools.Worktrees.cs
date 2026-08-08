@@ -69,7 +69,7 @@ public sealed partial class NavigationTools
             : ("git_unavailable", "git worktree list failed — git absent, or this workspace is not inside a git repository.");
 
     [McpServerTool(Name = "index_worktree")]
-    [Description("Create or refresh a SIBLING worktree index from the writer process. Read-only followers return index_writer_required. Windows uses a targeted indexed_commit-to-HEAD plus dirt reconcile; Linux uses an anchored full sweep and reports usedFullSweep=true; macOS returns unsupported_platform. Target must come from worktrees. A target owned by another writer reports worktree_index_locked.")]
+    [Description("Create or refresh a SIBLING worktree index through the shared daemon. A diagnostics-only non-writer instance returns index_writer_required. Windows uses a targeted indexed_commit-to-HEAD plus dirt reconcile; Linux uses an anchored full sweep and reports usedFullSweep=true; macOS returns unsupported_platform. Target must come from worktrees. A target owned by another writer reports worktree_index_locked.")]
     public string IndexWorktree(
         [Description("Worktree path exactly as the 'worktrees' tool lists it.")] string path,
         [Description("'auto' (default) | 'create' (recreate from a fresh seed) | 'refresh' (existing only).")] string mode = "auto")

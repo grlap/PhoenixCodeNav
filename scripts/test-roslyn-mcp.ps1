@@ -42,6 +42,152 @@ if ($SelfTestProcessHost) {
     exit 0
 }
 
+$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+
+function Quote-ProcessArgument([string]$Value) {
+    return '"' + $Value.Replace('"', '\"') + '"'
+}
+
+function Stop-ProcessTree([Diagnostics.Process]$Process) {
+    if ($Process.HasExited) { return }
+    $killTree = @($Process.GetType().GetMethods() | Where-Object {
+        $_.Name -eq "Kill" -and $_.GetParameters().Count -eq 1 -and
+        $_.GetParameters()[0].ParameterType -eq [bool]
+    } | Select-Object -First 1)
+    if ($killTree.Count -gt 0) {
+        $killTree[0].Invoke($Process, @($true)) | Out-Null
+        return
+    }
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
+        & $taskkill /PID $Process.Id /T /F 2>$null | Out-Null
+        return
+    }
+    $Process.Kill()
+}
+
+function Get-McpClientStderrSnapshot($Client) {
+    $tailProperty = $Client.PSObject.Properties["StderrTail"]
+    if ($null -ne $tailProperty -and $null -ne $tailProperty.Value) {
+        return [string]$tailProperty.Value.Snapshot()
+    }
+
+    $stderr = [string]$Client.StderrTask.Result
+    if ($stderr.Length -le 65536) { return $stderr }
+    return $stderr.Substring($stderr.Length - 65536)
+}
+
+function Stop-McpClient($Client) {
+    if ($null -eq $Client) { return }
+    $exitConfirmed = $false
+    try {
+        try { $Client.Process.StandardInput.Close() } catch { }
+        if (-not $Client.Process.WaitForExit(5000)) {
+            Stop-ProcessTree $Client.Process
+        }
+        if (-not $Client.Process.WaitForExit(5000)) {
+            throw "$($Client.Label): process tree did not exit after bounded termination"
+        }
+        $exitConfirmed = $true
+        if (-not $Client.StderrTask.Wait(3000)) {
+            throw "$($Client.Label): stderr drain did not complete after process exit"
+        }
+        $stderr = Get-McpClientStderrSnapshot $Client
+        if ($Client.Process.ExitCode -ne 0 -and -not [bool]$Client.AllowNonZeroExit) {
+            $tail = @($stderr -split "`r?`n" | Select-Object -Last 12) -join [Environment]::NewLine
+            throw "$($Client.Label): MCP exited $($Client.Process.ExitCode)`n$tail"
+        }
+    } finally {
+        if (-not $exitConfirmed) {
+            try {
+                if (-not $Client.Process.HasExited) {
+                    Stop-ProcessTree $Client.Process
+                    $Client.Process.WaitForExit(2000) | Out-Null
+                }
+            } catch { }
+        }
+        $Client.Process.Dispose()
+    }
+}
+
+function Start-ProcessLifecycleSelfTestClient {
+    $shell = (Get-Process -Id $PID).Path
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $shell
+    $start.Arguments = "-NoProfile -ExecutionPolicy Bypass -File $(Quote-ProcessArgument $PSCommandPath) -SelfTestProcessHost"
+    $start.WorkingDirectory = $repoRoot
+    $start.UseShellExecute = $false
+    $start.RedirectStandardInput = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.CreateNoWindow = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $start
+    if (-not $process.Start()) { throw "Failed to start lifecycle self-test host" }
+    return [pscustomobject]@{
+        Label = "lifecycle-self-test"
+        Process = $process
+        NextId = 0
+        StderrTail = $null
+        StderrTask = $process.StandardError.ReadToEndAsync()
+        ReadyTask = $process.StandardOutput.ReadLineAsync()
+        AllowNonZeroExit = $true
+    }
+}
+
+# Run lifecycle probes before Add-Type, baseline loading, or external-workspace setup. Their
+# process tree and stderr volume are deliberately bounded, so ReadToEndAsync avoids a cold C#
+# compilation that can starve behind the process-heavy solution projects during the full gate.
+if ($SelfTestProcessLifecycle -or $SelfTestProcessLifecycleReadinessFailure) {
+    $client = $null
+    try {
+        $client = Start-ProcessLifecycleSelfTestClient
+        if (-not $client.ReadyTask.Wait(15000)) {
+            throw "Lifecycle host did not report readiness"
+        }
+        $pidMatch = [regex]::Match([string]$client.ReadyTask.Result, "GRANDCHILD_PID=(\d+)")
+        if (-not $pidMatch.Success) {
+            throw "Lifecycle host did not report its descendant pid"
+        }
+        $grandchildPid = [int]$pidMatch.Groups[1].Value
+        if ($SelfTestProcessLifecycleReadinessFailure) {
+            Write-Host "READINESS_FAILURE_GRANDCHILD_PID=$grandchildPid"
+            throw "Injected lifecycle readiness assertion failure"
+        }
+
+        $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+        Stop-McpClient $client
+        $rawStderrLength = ([string]$client.StderrTask.Result).Length
+        $stderr = Get-McpClientStderrSnapshot $client
+        $client = $null
+        if ($stopwatch.Elapsed -ge [TimeSpan]::FromSeconds(15)) {
+            throw "Lifecycle teardown exceeded its hard bound"
+        }
+        if ($stderr.Length -gt 65536) {
+            throw "Captured stderr exceeded the rolling-tail bound"
+        }
+        if ($rawStderrLength -le 65536) {
+            throw "Lifecycle probe did not produce enough stderr to exercise tail truncation"
+        }
+        $deadline = [DateTime]::UtcNow.AddSeconds(2)
+        while ([DateTime]::UtcNow -lt $deadline -and
+               $null -ne (Get-Process -Id $grandchildPid -ErrorAction SilentlyContinue)) {
+            Start-Sleep -Milliseconds 50
+        }
+        if ($null -ne (Get-Process -Id $grandchildPid -ErrorAction SilentlyContinue)) {
+            throw "Lifecycle teardown left a descendant running"
+        }
+        Write-Host "Process lifecycle self-test passed"
+    } finally {
+        if ($null -ne $client) {
+            try { Stop-McpClient $client } catch {
+                Write-Warning "Lifecycle cleanup after readiness failure also failed: $($_.Exception.Message)"
+            }
+        }
+    }
+    exit 0
+}
+
 if ($null -eq ("PhoenixCodeNav.Integration.BoundedTextTail" -as [type])) {
     Add-Type -TypeDefinition @"
 using System;
@@ -87,7 +233,6 @@ namespace PhoenixCodeNav.Integration
 "@
 }
 
-$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 if ([string]::IsNullOrWhiteSpace($BaselinePath)) {
     $BaselinePath = Join-Path $repoRoot "tests\integration\roslyn-mcp-baseline.json"
 }
@@ -196,7 +341,7 @@ function Get-TypeResultName($Item) {
     return $display
 }
 
-function Get-ReferenceContractSignature($Payload) {
+function Get-ReferenceContractSignature($Payload, [switch]$IgnoreResidentSolutionProjects) {
     $kinds = @($Payload.kinds.PSObject.Properties | Sort-Object Name | ForEach-Object {
         "$([string]$_.Name)|$([int]$_.Value)"
     })
@@ -209,6 +354,13 @@ function Get-ReferenceContractSignature($Payload) {
     $partialReason = if ($null -ne $Payload.PSObject.Properties["partialReason"]) {
         [string]$Payload.partialReason
     } else { "" }
+    $coverage = [ordered]@{
+        loaded = [int]$Payload.coverage.loadedProjects
+        requested = [int]$Payload.coverage.requestedProjects
+    }
+    if (-not $IgnoreResidentSolutionProjects) {
+        $coverage["solution"] = [int]$Payload.coverage.solutionProjects
+    }
     return ([ordered]@{
         symbol = [string]$Payload.symbol.documentationCommentId
         total = [int]$Payload.totalReferences
@@ -217,16 +369,8 @@ function Get-ReferenceContractSignature($Payload) {
         truncated = [bool]$Payload.truncated
         kinds = $kinds
         groups = $groups
-        coverage = [ordered]@{
-            loaded = [int]$Payload.coverage.loadedProjects
-            requested = [int]$Payload.coverage.requestedProjects
-            solution = [int]$Payload.coverage.solutionProjects
-        }
+        coverage = $coverage
     } | ConvertTo-Json -Compress -Depth 20)
-}
-
-function Quote-ProcessArgument([string]$Value) {
-    return '"' + $Value.Replace('"', '\"') + '"'
 }
 
 function Start-McpClient([string]$Label, [string]$WorkspaceRoot, [string]$DatabasePath) {
@@ -237,7 +381,7 @@ function Start-McpClient([string]$Label, [string]$WorkspaceRoot, [string]$Databa
 
     $start = New-Object System.Diagnostics.ProcessStartInfo
     $start.FileName = "dotnet"
-    $start.Arguments = "$(Quote-ProcessArgument $mcpDll) --workspace-root $(Quote-ProcessArgument $WorkspaceRoot) --index-db $(Quote-ProcessArgument $DatabasePath)"
+    $start.Arguments = "$(Quote-ProcessArgument $mcpDll) --workspace-root $(Quote-ProcessArgument $WorkspaceRoot) --index-db $(Quote-ProcessArgument $DatabasePath) --daemon-idle-ms 300"
     $start.WorkingDirectory = $repoRoot
     $start.UseShellExecute = $false
     $start.RedirectStandardInput = $true
@@ -251,6 +395,11 @@ function Start-McpClient([string]$Label, [string]$WorkspaceRoot, [string]$Databa
         Get-ChildItem -LiteralPath $telemetryDirectory -Filter "phoenix-*.jsonl" -File `
             -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
     )
+    $telemetryLineCountsBefore = @{}
+    foreach ($file in $telemetryFilesBefore) {
+        $telemetryLineCountsBefore[$file] = @(Get-Content -LiteralPath $file `
+                -ErrorAction SilentlyContinue).Count
+    }
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $start
     if (-not $process.Start()) { throw "Failed to start MCP $Label process" }
@@ -258,27 +407,38 @@ function Start-McpClient([string]$Label, [string]$WorkspaceRoot, [string]$Databa
     return [pscustomobject]@{
         Label = $Label
         WorkspaceRoot = $WorkspaceRoot
+        DatabasePath = $DatabasePath
         TelemetryFilesBefore = $telemetryFilesBefore
+        TelemetryLineCountsBefore = $telemetryLineCountsBefore
         Process = $process
         NextId = 0
         StderrTail = $stderrTail
         StderrTask = $stderrTail.DrainAsync($process.StandardError)
         AllowNonZeroExit = $false
+        RuntimeProcessId = $null
     }
 }
 
 function Wait-ReferenceTelemetry($Client, [int]$ExpectedCount, [int]$TimeoutMs = 10000) {
     $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
     $telemetryDirectory = Join-Path $Client.WorkspaceRoot ".codenav\telemetry"
-    $pattern = "phoenix-$($Client.Process.Id)-*.jsonl"
+    $producerId = if ($null -ne $Client.RuntimeProcessId) {
+        [int]$Client.RuntimeProcessId
+    } else {
+        [int]$Client.Process.Id
+    }
+    $pattern = "phoenix-$producerId-*.jsonl"
     while ([DateTime]::UtcNow -lt $deadline) {
         $records = @()
         $files = @(Get-ChildItem -LiteralPath $telemetryDirectory -Filter $pattern -File `
-                -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notin $Client.TelemetryFilesBefore } |
-            Sort-Object Name)
+                -ErrorAction SilentlyContinue | Sort-Object Name)
         foreach ($file in $files) {
-            foreach ($line in @(Get-Content -LiteralPath $file.FullName -ErrorAction SilentlyContinue)) {
+            $skip = if ($Client.TelemetryLineCountsBefore.ContainsKey($file.FullName)) {
+                [int]$Client.TelemetryLineCountsBefore[$file.FullName]
+            } else { 0 }
+            $newLines = @(Get-Content -LiteralPath $file.FullName -ErrorAction SilentlyContinue |
+                Select-Object -Skip $skip)
+            foreach ($line in $newLines) {
                 try {
                     $record = $line | ConvertFrom-Json
                     if ([string]$record.tool -eq "references" -and
@@ -373,6 +533,8 @@ function Initialize-McpClient($Client, [string]$ExpectedMode) {
     Assert-Equal "ready" $capabilities.index.state "$($Client.Label): index did not become ready"
     Assert-Equal $ExpectedMode $capabilities.index.mode "$($Client.Label): unexpected index access mode"
     Assert-Equal 2 $stableReadyObservations "$($Client.Label): index readiness did not remain stable"
+    Assert-Equal "daemon" $capabilities.runtime.indexMode "$($Client.Label): ordinary launch did not use the shared daemon"
+    $Client.RuntimeProcessId = [int]$capabilities.runtime.processId
     return [pscustomobject]@{
         Initialize = $initialize
         Tools = $tools
@@ -380,117 +542,60 @@ function Initialize-McpClient($Client, [string]$ExpectedMode) {
     }
 }
 
-function Stop-ProcessTree([Diagnostics.Process]$Process) {
-    if ($Process.HasExited) { return }
-    $killTree = @($Process.GetType().GetMethods() | Where-Object {
-        $_.Name -eq "Kill" -and $_.GetParameters().Count -eq 1 -and
-        $_.GetParameters()[0].ParameterType -eq [bool]
-    } | Select-Object -First 1)
-    if ($killTree.Count -gt 0) {
-        $killTree[0].Invoke($Process, @($true)) | Out-Null
-        return
-    }
-    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-        $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
-        & $taskkill /PID $Process.Id /T /F 2>$null | Out-Null
-        return
-    }
-    $Process.Kill()
-}
-
-function Stop-McpClient($Client) {
+function Request-McpDaemonRetirement($Client) {
     if ($null -eq $Client) { return }
-    $exitConfirmed = $false
-    try {
-        try { $Client.Process.StandardInput.Close() } catch { }
-        if (-not $Client.Process.WaitForExit(5000)) {
-            Stop-ProcessTree $Client.Process
-        }
-        if (-not $Client.Process.WaitForExit(5000)) {
-            throw "$($Client.Label): process tree did not exit after bounded termination"
-        }
-        $exitConfirmed = $true
-        if (-not $Client.StderrTask.Wait(3000)) {
-            throw "$($Client.Label): stderr drain did not complete after process exit"
-        }
-        $stderr = [string]$Client.StderrTail.Snapshot()
-        if ($Client.Process.ExitCode -ne 0 -and -not [bool]$Client.AllowNonZeroExit) {
-            $tail = @($stderr -split "`r?`n" | Select-Object -Last 12) -join [Environment]::NewLine
-            throw "$($Client.Label): MCP exited $($Client.Process.ExitCode)`n$tail"
-        }
-    } finally {
-        if (-not $exitConfirmed) {
-            try {
-                if (-not $Client.Process.HasExited) {
-                    Stop-ProcessTree $Client.Process
-                    $Client.Process.WaitForExit(2000) | Out-Null
-                }
-            } catch { }
-        }
-        $Client.Process.Dispose()
-    }
-}
-
-function Start-ProcessLifecycleSelfTestClient {
-    $shell = (Get-Process -Id $PID).Path
     $start = New-Object System.Diagnostics.ProcessStartInfo
-    $start.FileName = $shell
-    $start.Arguments = "-NoProfile -ExecutionPolicy Bypass -File $(Quote-ProcessArgument $PSCommandPath) -SelfTestProcessHost"
+    $start.FileName = "dotnet"
+    $start.Arguments = "$(Quote-ProcessArgument $script:mcpDllPath) --workspace-root $(Quote-ProcessArgument $Client.WorkspaceRoot) --index-db $(Quote-ProcessArgument $Client.DatabasePath) --daemon-retire-authorized"
     $start.WorkingDirectory = $repoRoot
     $start.UseShellExecute = $false
-    $start.RedirectStandardInput = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     $start.CreateNoWindow = $true
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $start
-    if (-not $process.Start()) { throw "Failed to start lifecycle self-test host" }
-    $stderrTail = [PhoenixCodeNav.Integration.BoundedTextTail]::new(65536)
-    return [pscustomobject]@{
-        Label = "lifecycle-self-test"
-        Process = $process
-        NextId = 0
-        StderrTail = $stderrTail
-        StderrTask = $stderrTail.DrainAsync($process.StandardError)
-        ReadyTask = $process.StandardOutput.ReadLineAsync()
-        AllowNonZeroExit = $true
+    if (-not $process.Start()) {
+        throw "$($Client.Label): failed to start authority-checked daemon retirement"
+    }
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    try {
+        if (-not $process.WaitForExit(130000)) {
+            try { $process.Kill() } catch { }
+            throw "$($Client.Label): authority-checked daemon retirement exceeded its bound"
+        }
+        if (-not $stdout.Wait(3000) -or -not $stderr.Wait(3000)) {
+            throw "$($Client.Label): daemon-retirement output drain did not complete"
+        }
+        if ($process.ExitCode -ne 0) {
+            $detail = ([string]$stderr.Result).Trim()
+            throw "$($Client.Label): authority-checked daemon retirement exited $($process.ExitCode): $detail"
+        }
+    } finally {
+        $process.Dispose()
     }
 }
 
-if ($SelfTestProcessLifecycle -or $SelfTestProcessLifecycleReadinessFailure) {
+function Reset-McpDaemon([string]$Label, [string]$WorkspaceRoot, [string]$DatabasePath) {
     $client = $null
+    $initialized = $false
     try {
-        $client = Start-ProcessLifecycleSelfTestClient
-        Assert-True ($client.ReadyTask.Wait(15000)) "Lifecycle host did not report readiness"
-        $pidMatch = [regex]::Match([string]$client.ReadyTask.Result, "GRANDCHILD_PID=(\d+)")
-        Assert-True $pidMatch.Success "Lifecycle host did not report its descendant pid"
-        $grandchildPid = [int]$pidMatch.Groups[1].Value
-        if ($SelfTestProcessLifecycleReadinessFailure) {
-            Write-Host "READINESS_FAILURE_GRANDCHILD_PID=$grandchildPid"
-            throw "Injected lifecycle readiness assertion failure"
-        }
-
-        $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-        Stop-McpClient $client
-        $stderr = [string]$client.StderrTail.Snapshot()
-        $client = $null
-        Assert-True ($stopwatch.Elapsed -lt [TimeSpan]::FromSeconds(15)) "Lifecycle teardown exceeded its hard bound"
-        Assert-True ($stderr.Length -le 65536) "Captured stderr exceeded the rolling-tail bound"
-        $deadline = [DateTime]::UtcNow.AddSeconds(2)
-        while ([DateTime]::UtcNow -lt $deadline -and
-               $null -ne (Get-Process -Id $grandchildPid -ErrorAction SilentlyContinue)) {
-            Start-Sleep -Milliseconds 50
-        }
-        Assert-True ($null -eq (Get-Process -Id $grandchildPid -ErrorAction SilentlyContinue)) "Lifecycle teardown left a descendant running"
-        Write-Host "Process lifecycle self-test passed"
+        $client = Start-McpClient "$Label-reset" $WorkspaceRoot $DatabasePath
+        $null = Initialize-McpClient $client "writer"
+        $initialized = $true
     } finally {
-        if ($null -ne $client) {
-            try { Stop-McpClient $client } catch {
-                Write-Warning "Lifecycle cleanup after readiness failure also failed: $($_.Exception.Message)"
-            }
+        $cleanupErrors = New-Object System.Collections.Generic.List[string]
+        try { Stop-McpClient $client } catch { $cleanupErrors.Add($_.Exception.Message) }
+        try { Request-McpDaemonRetirement $client } catch {
+            $cleanupErrors.Add($_.Exception.Message)
+        }
+        if ($initialized -and $cleanupErrors.Count -gt 0) {
+            throw "$Label reset cleanup failed: $($cleanupErrors -join '; ')"
+        }
+        foreach ($cleanupError in $cleanupErrors) {
+            Write-Warning "$Label cleanup after initialization failure also failed: $cleanupError"
         }
     }
-    exit 0
 }
 
 function Test-RetryableSemanticPayload($Payload) {
@@ -579,8 +684,10 @@ function Test-IntegrationCase([string]$Name, [scriptblock]$Body) {
 }
 
 $writer = $null
-$follower = $null
+$secondClient = $null
 $fsharpWriter = $null
+Reset-McpDaemon "writer" $Workspace $IndexDb
+Reset-McpDaemon "fsharp-writer" $FSharpWorkspace $FSharpIndexDb
 try {
     $writer = Start-McpClient "writer" $Workspace $IndexDb
     $writerSession = Initialize-McpClient $writer "writer"
@@ -1047,54 +1154,53 @@ try {
         }
     }
 
-    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-        $follower = Start-McpClient "follower" $Workspace $IndexDb
-        $followerSession = Initialize-McpClient $follower "follower"
-        $evidence.results.followerCapabilities = $followerSession.Capabilities
-        Test-IntegrationCase "read-only follower attaches to the same epoch" {
-            Assert-Equal ([string]$writerSession.Capabilities.index.indexVersion) ([string]$followerSession.Capabilities.index.indexVersion) "Follower attached to a different index epoch"
-        }
+    $secondClient = Start-McpClient "second-client" $Workspace $IndexDb
+    $secondSession = Initialize-McpClient $secondClient "writer"
+    $evidence.results.secondClientCapabilities = $secondSession.Capabilities
+    Test-IntegrationCase "second client shares the same daemon and index epoch" {
+        Assert-Equal ([string]$writerSession.Capabilities.index.indexVersion) ([string]$secondSession.Capabilities.index.indexVersion) "Second client attached to a different index epoch"
+        Assert-Equal ([int]$writerSession.Capabilities.runtime.processId) ([int]$secondSession.Capabilities.runtime.processId) "Second client did not join the same daemon process"
+    }
 
-        $followerSearch = Invoke-McpTool $follower "search_symbol" @{ query = [string]$baseline.target.name; limit = 10 }
-        $followerTarget = @($followerSearch.symbols | Where-Object { $_.path -eq [string]$baseline.target.path -and $_.arity -eq [int]$baseline.target.arity })
-        $evidence.results.followerSearch = $followerSearch
-        Test-IntegrationCase "follower symbol identity" {
-            Assert-Equal 1 $followerTarget.Count "Follower target declaration is missing or ambiguous"
-            Assert-Equal $targetHandle ([string]$followerTarget[0].symbolId) "Follower saw a different index handle"
-        }
+    $secondSearch = Invoke-McpTool $secondClient "search_symbol" @{ query = [string]$baseline.target.name; limit = 10 }
+    $secondTarget = @($secondSearch.symbols | Where-Object { $_.path -eq [string]$baseline.target.path -and $_.arity -eq [int]$baseline.target.arity })
+    $evidence.results.secondClientSearch = $secondSearch
+    Test-IntegrationCase "second client symbol identity" {
+        Assert-Equal 1 $secondTarget.Count "Second client target declaration is missing or ambiguous"
+        Assert-Equal $targetHandle ([string]$secondTarget[0].symbolId) "Second client saw a different index handle"
+    }
 
-        $followerReferences = Invoke-SemanticWithRetry $follower "references" @{ symbolId = [string]$followerTarget[0].symbolId; mode = "auto"; maxProjects = 0; maxFiles = 1000; samplesPerGroup = 20; timeoutMs = 60000 }
-        $evidence.results.followerReferences = $followerReferences
-        $followerReferenceTelemetryRecords = @(Wait-ReferenceTelemetry $follower 1)
-        $followerReferenceTelemetry = $followerReferenceTelemetryRecords[-1]
-        $evidence.results.followerReferenceTelemetry = $followerReferenceTelemetry
-        Test-IntegrationCase "follower semantic references parity" {
-            Assert-True ($null -eq $followerReferences.error) "Follower references returned $($followerReferences.error): $($followerReferences.reason)"
-            Assert-Equal ([string]$references.meta.confidence) ([string]$followerReferences.meta.confidence) "Writer/follower references confidence diverged"
-            Assert-Equal (Get-ReferenceContractSignature $references) (Get-ReferenceContractSignature $followerReferences) "Writer/follower reference contract diverged"
-            Assert-Equal "documentScoped" ([string]$followerReferenceTelemetry.queryStages.documentScope.mode) "Follower references did not use live-text document scoping"
-            Assert-True ([int]$followerReferenceTelemetry.queryStages.documentScope.scopedDocuments -lt [int]$followerReferenceTelemetry.queryStages.documentScope.solutionDocuments) "Follower document scope did not reduce the solution"
-        }
+    $secondReferences = Invoke-SemanticWithRetry $secondClient "references" @{ symbolId = [string]$secondTarget[0].symbolId; mode = "auto"; maxProjects = 0; maxFiles = 1000; samplesPerGroup = 20; timeoutMs = 60000 }
+    $evidence.results.secondClientReferences = $secondReferences
+    $secondReferenceTelemetryRecords = @(Wait-ReferenceTelemetry $secondClient 1)
+    $secondReferenceTelemetry = $secondReferenceTelemetryRecords[-1]
+    $evidence.results.secondClientReferenceTelemetry = $secondReferenceTelemetry
+    Test-IntegrationCase "second client semantic references parity" {
+        Assert-True ($null -eq $secondReferences.error) "Second-client references returned $($secondReferences.error): $($secondReferences.reason)"
+        Assert-Equal ([string]$references.meta.confidence) ([string]$secondReferences.meta.confidence) "Shared-client references confidence diverged"
+        # Resident solution size can grow as the shared daemon warms projects for either client.
+        # The semantic result and requested/loaded coverage must remain identical.
+        Assert-Equal (Get-ReferenceContractSignature $references -IgnoreResidentSolutionProjects) (Get-ReferenceContractSignature $secondReferences -IgnoreResidentSolutionProjects) "Shared-client reference contract diverged"
+        Assert-Equal "documentScoped" ([string]$secondReferenceTelemetry.queryStages.documentScope.mode) "Second-client references did not use live-text document scoping"
+        Assert-True ([int]$secondReferenceTelemetry.queryStages.documentScope.scopedDocuments -lt [int]$secondReferenceTelemetry.queryStages.documentScope.solutionDocuments) "Second-client document scope did not reduce the solution"
+    }
 
-        $followerImplementations = Invoke-SemanticWithRetry $follower "implementations" @{ symbolId = [string]$followerTarget[0].symbolId; maxProjects = 0; timeoutMs = 60000 }
-        $evidence.results.followerImplementations = $followerImplementations
-        $followerImplementationNames = @($followerImplementations.implementations | ForEach-Object { Get-TypeResultName $_ }) -join "|"
-        Test-IntegrationCase "follower compiler implementations parity" {
-            Assert-True ($null -eq $followerImplementations.error) "Follower implementations returned $($followerImplementations.error): $($followerImplementations.reason)"
-            Assert-Equal ([string]$implementations.meta.confidence) ([string]$followerImplementations.meta.confidence) "Writer/follower confidence diverged"
-            Assert-Equal ($implementationNames -join "|") $followerImplementationNames "Writer/follower implementation membership diverged"
-        }
-    } else {
-        $evidence.results.follower = [ordered]@{
-            supported = $false
-            reason = "Phoenix read-only followers are Windows-only"
-        }
+    $secondImplementations = Invoke-SemanticWithRetry $secondClient "implementations" @{ symbolId = [string]$secondTarget[0].symbolId; maxProjects = 0; timeoutMs = 60000 }
+    $evidence.results.secondClientImplementations = $secondImplementations
+    $secondImplementationNames = @($secondImplementations.implementations | ForEach-Object { Get-TypeResultName $_ }) -join "|"
+    Test-IntegrationCase "second client compiler implementations parity" {
+        Assert-True ($null -eq $secondImplementations.error) "Second-client implementations returned $($secondImplementations.error): $($secondImplementations.reason)"
+        Assert-Equal ([string]$implementations.meta.confidence) ([string]$secondImplementations.meta.confidence) "Shared-client confidence diverged"
+        Assert-Equal ($implementationNames -join "|") $secondImplementationNames "Shared-client implementation membership diverged"
     }
 } finally {
     $stopErrors = New-Object System.Collections.Generic.List[string]
     try { Stop-McpClient $fsharpWriter } catch { $stopErrors.Add($_.Exception.Message) }
-    try { Stop-McpClient $follower } catch { $stopErrors.Add($_.Exception.Message) }
+    try { Stop-McpClient $secondClient } catch { $stopErrors.Add($_.Exception.Message) }
     try { Stop-McpClient $writer } catch { $stopErrors.Add($_.Exception.Message) }
+    foreach ($client in @($fsharpWriter, $secondClient, $writer)) {
+        try { Request-McpDaemonRetirement $client } catch { $stopErrors.Add($_.Exception.Message) }
+    }
     foreach ($stopError in $stopErrors) { $failures.Add("teardown: $stopError") }
 
     $evidence.completedAtUtc = [DateTime]::UtcNow.ToString("O")

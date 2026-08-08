@@ -282,11 +282,12 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("csharp-semantic-central-package-management", ids);
         Assert.Contains("csharp-semantic-central-package-property-expansion", ids);
         Assert.Contains("shared-mcp-daemon", ids);
+        Assert.Contains("shared-mcp-daemon-default", ids);
         Assert.Contains("workspace-msbuild-config-indexing", ids);
         Assert.Contains("hierarchy-ranking", ids);
         Assert.Contains("capabilities-hard-budget", ids);
         Assert.Contains("semantic-large-repo-budget", ids);
-        Assert.Contains("index-read-followers", ids);
+        Assert.DoesNotContain("index-read-followers", ids);
         Assert.Contains("single-workspace-writer-mutex", ids);
         Assert.Contains("index-destination-claim", ids);
         Assert.DoesNotContain("semantic-rebuild-coordination", ids);
@@ -451,7 +452,17 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("named pipe or Unix socket", sharedDaemon);
         Assert.Contains("typed unavailable", sharedDaemon);
         Assert.Contains("client-fair", sharedDaemon);
-        Assert.Contains("explicit standalone fallback", sharedDaemon);
+        string sharedDaemonDefault = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "shared-mcp-daemon-default")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.60", sharedDaemonDefault);
+        Assert.Contains("no flag or environment opt-in", sharedDaemonDefault);
+        Assert.Contains("compatibility alias", sharedDaemonDefault);
+        Assert.Contains("diagnostics only", sharedDaemonDefault);
+        Assert.Contains("never fall back", sharedDaemonDefault);
         string portalReadOnly = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

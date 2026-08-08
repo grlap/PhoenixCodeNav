@@ -24,8 +24,6 @@ internal static class PhoenixRuntimeMode
     {
         if (string.Equals(accessMode, IndexManager.UnavailableAccessMode, StringComparison.Ordinal))
             return "unavailable";
-        if (string.Equals(accessMode, IndexManager.FollowerAccessMode, StringComparison.Ordinal))
-            return "legacy-follower";
         return Current == PhoenixProcessMode.Daemon ? "daemon" : "standalone";
     }
 }

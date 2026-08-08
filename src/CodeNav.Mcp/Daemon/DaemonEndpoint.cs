@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
@@ -6,6 +7,11 @@ using CodeNav.Core;
 using CodeNav.Core.Indexing;
 
 namespace CodeNav.Mcp.Daemon;
+
+internal sealed class DaemonRuntimeDirectoryUnavailableException : IOException
+{
+    internal DaemonRuntimeDirectoryUnavailableException(string message) : base(message) { }
+}
 
 /// <summary>Derives one stable, version-independent local endpoint from user and physical worktree.</summary>
 internal sealed record DaemonEndpoint(
@@ -63,15 +69,70 @@ internal sealed record DaemonEndpoint(
 
     private static string SelectUnixRuntimeDirectory()
     {
-        string? xdg = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
-        if (!string.IsNullOrWhiteSpace(xdg) && Path.IsPathFullyQualified(xdg))
-            return Path.Combine(
-                DaemonUnixFileAuthority.ResolveExistingDirectory(Path.GetFullPath(xdg)),
-                ProductDirectory);
+        uint userId = GetEffectiveUserId();
+        return SelectUnixRuntimeDirectory(
+            Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR"),
+            Path.GetTempPath(),
+            "/tmp",
+            userId);
+    }
 
-        return Path.Combine(
-            DaemonUnixFileAuthority.ResolveExistingDirectory(Path.GetTempPath()),
-            $"{ProductDirectory}-{GetEffectiveUserId()}");
+    internal static string SelectUnixRuntimeDirectory(
+        string? xdgParent,
+        string? temporaryParent,
+        string? shortFallbackParent,
+        uint userId)
+    {
+        if (TryUnixRuntimeCandidate(xdgParent, ProductDirectory, out string runtime))
+            return runtime;
+        if (TryUnixRuntimeCandidate(
+                temporaryParent, $"{ProductDirectory}-{userId}", out runtime))
+            return runtime;
+        if (TryUnixRuntimeCandidate(
+                shortFallbackParent, $"{ProductDirectory}-{userId}", out runtime))
+            return runtime;
+        throw new DaemonRuntimeDirectoryUnavailableException(
+            "Phoenix daemon runtime path cannot host a Unix-domain socket.");
+    }
+
+    private static bool TryUnixRuntimeCandidate(
+        string? parent,
+        string directoryName,
+        out string runtimeDirectory)
+    {
+        runtimeDirectory = "";
+        if (string.IsNullOrWhiteSpace(parent) || !Path.IsPathFullyQualified(parent))
+            return false;
+
+        try
+        {
+            string resolvedParent = DaemonUnixFileAuthority.ResolveExistingDirectory(
+                Path.GetFullPath(parent));
+            string candidate = Path.Combine(resolvedParent, directoryName);
+            if (!CanHostUnixSocket(candidate)) return false;
+            DaemonUnixFileAuthority.EnsureOwnerOnlyDirectory(candidate);
+            runtimeDirectory = candidate;
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or
+                                   NotSupportedException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool CanHostUnixSocket(string runtimeDirectory)
+    {
+        try
+        {
+            _ = new UnixDomainSocketEndPoint(
+                Path.Combine(runtimeDirectory, new string('0', 32) + ".sock"));
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
     }
 
     private static string CurrentUserIdentity()

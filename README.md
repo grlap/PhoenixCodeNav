@@ -132,7 +132,7 @@ its deliberately minimal envelope does not include the ordinary `meta` object.
 **A full rebuild keeps the prior index available during private construction.** On Windows and
 Linux workspace-local destinations, Phoenix builds and finalizes a private database while the
 previous index stays queryable. During the final bounded reader drain and atomic install, new
-writer or follower queries may briefly retry or fail; already-admitted readers keep their
+queries may briefly retry or fail; already-admitted readers keep their
 consistent handles. Failures during private construction or before stage installation may return a
 previously readable publication to service, but only while workspace and live-database authority
 remain valid. Once the stage has been installed, a later failure cannot restore the previous
@@ -141,25 +141,23 @@ phase rather than re-serving a publication Phoenix can no longer prove belongs t
 Results served from the old index during construction report `building` rather than implying
 freshness they do not have.
 
-Phoenix v0.12.59 introduces an opt-in **shared MCP daemon**. Add `--shared-daemon` (or set
-`CODENAV_SHARED_DAEMON=1`) to every Phoenix MCP entry for a worktree. Each configured stdio process
-then stays a small relay while one same-user daemon owns the index, watcher, refresh pump, Roslyn
-workspace, and F# semantic service. Claude, Codex, and delegated agents see independent MCP
-sessions but share one committed epoch and can all call `refresh_index`; the daemon serializes the
-mutation. The daemon lingers for 15 minutes after the last client disconnects, or indefinitely with
-`--keepalive`. If the daemon dies, initialized MCP sessions end; each MCP host restarts its stdio
-relay, and the replacement relays elect or join one successor daemon. Default launch behavior
-remains standalone during this opt-in release.
+Phoenix v0.12.60 uses a **shared MCP daemon transparently on every ordinary launch**. Each MCP host
+starts a small stdio relay; the relays for one physical worktree automatically join or elect one
+same-user daemon that owns the index, watcher, refresh pump, Roslyn workspace, and F# semantic
+service. There is no opt-in flag or environment variable. Claude, Codex, and delegated agents keep
+independent MCP sessions while sharing one committed epoch, and every session can call
+`refresh_index`; the daemon serializes mutations. The daemon lingers for 15 minutes after the last
+client disconnects, or indefinitely with `--keepalive`. If it dies, initialized MCP sessions end;
+the MCP hosts restart their relays, which elect or join one successor daemon.
 
-Without shared-daemon mode, Windows retains the legacy **one writer plus read-only followers**
-deployment. A crash-recoverable named mutex, keyed by physical workspace/worktree identity so path
-aliases converge, elects the writer that owns builds, watchers, refreshes, and worktree seeding.
-Every other process attaches to the same compatible SQLite WAL index as a follower. Check
-`server_capabilities.index.mode` for database ownership (`writer`, `follower`, or `unavailable`).
-Check response `meta.indexMode` for runtime topology (`daemon`, `standalone`, `legacy-follower`, or
-`unavailable`). Legacy followers never build or repair an index — `refresh_index` and
-`index_worktree` return `index_writer_required`. They report `pendingChangesKnown: false` and never
-promote themselves: restart one if it should become the next writer.
+Normal launches never fall back to a second standalone server or a read-only compatibility
+process. Endpoint, identity, authority, protocol, or startup failures return a typed unavailable
+MCP surface instead of silently changing architecture. Served sessions report database ownership
+as `server_capabilities.index.mode: "writer"`; unavailable shims omit `index` and report
+`meta.indexMode: "unavailable"` with a stable cause. Response `meta.indexMode` reports public
+runtime topology (`daemon`, `standalone`, or `unavailable`). `standalone` occurs only when a human
+explicitly supplies `--standalone` for diagnostics or isolated tests, and it refuses to serve when
+it cannot acquire the writer lease.
 
 [`docs/design.md`](docs/design.md) documents the publication, claim, drain, and crash-recovery
 mechanics in full.
@@ -197,13 +195,13 @@ Project-scoped `.mcp.json` at the repo root (recommended — checked in for the 
   "mcpServers": {
     "phoenix": {
       "command": "C:\\tools\\phoenix\\PhoenixCodeNav.Mcp.exe",
-      "args": ["--workspace-root", ".", "--shared-daemon"]
+      "args": ["--workspace-root", "."]
     }
   }
 }
 ```
 
-or per-user: `claude mcp add phoenix -- C:\tools\phoenix\PhoenixCodeNav.Mcp.exe --workspace-root C:\path\to\repo --shared-daemon`
+or per-user: `claude mcp add phoenix -- C:\tools\phoenix\PhoenixCodeNav.Mcp.exe --workspace-root C:\path\to\repo`
 
 ### Attach to Codex
 
@@ -212,7 +210,7 @@ or per-user: `claude mcp add phoenix -- C:\tools\phoenix\PhoenixCodeNav.Mcp.exe 
 ```toml
 [mcp_servers.phoenix]
 command = "C:\\tools\\phoenix\\PhoenixCodeNav.Mcp.exe"
-args = ["--workspace-root", "C:\\path\\to\\repo", "--shared-daemon"]
+args = ["--workspace-root", "C:\\path\\to\\repo"]
 ```
 
 Then add the agent instructions from `docs/agent-instructions.md` to your repo's
@@ -240,10 +238,10 @@ retained telemetry count and does not restart its animation on unchanged refresh
 For manual development, the portal can still be run from the workspace with
 `dotnet run --project src/CodeNav.Portal/CodeNav.Portal.csproj -c Release`.
 
-The first process to acquire the writer lease builds the index in the background (a 10M-LOC repo
-takes a few minutes; the server answers `index_building` hints meanwhile). On Windows, followers
-attach once that writer has produced a compatible index; a missing, corrupt, or schema-stale index
-requires the writer rather than being repaired by a follower. The index lives in
+The shared daemon acquires the writer lease and builds the index in the background (a 10M-LOC repo
+takes a few minutes; the server answers `index_building` hints meanwhile). All ordinary MCP
+sessions reach that same owner. A missing, corrupt, or schema-stale index is repaired only by the
+daemon. The index lives in
 `<workspace>/.codenav/index.db` — add `.codenav/` to `.gitignore` — or point `--index-db`
 elsewhere. On macOS, or with a non-workspace-local destination, Phoenix uses the in-place
 compatibility rebuild path instead of staged publication. A custom destination is still owned by
@@ -267,9 +265,10 @@ index_worktree(path: "../review-1234")         # MCP, on the MAIN instance: seed
 ```
 
 That one-shot publisher holds the target worktree's writer mutex for the whole staged install and
-rewrites the stored workspace identity before publishing, so the sibling Phoenix accepts the result
-as its own and no follower can barge mid-install. A target worktree's Phoenix started while seeding
-is in progress attaches as a follower and stays one — restart it when it should take ownership.
+rewrites the stored workspace identity before publishing, so the sibling daemon accepts the result
+as its own and no competing writer can barge mid-install. If the target worktree is launched during
+that bounded install window, Phoenix reports unavailable until a relay can elect or join its daemon;
+it never serves through a different read-only topology.
 
 Platform policy: **Windows** reconciles with one targeted delta (git diff of
 `indexed_commit->HEAD` UNION git status dirt — no fresh-checkout sweep); **Linux** always
@@ -280,21 +279,21 @@ The review session then starts its own phoenix on the worktree — a **relative*
 `--workspace-root .` in a checked-in `.mcp.json` serves the main enlistment and every
 worktree identically, and the seeded index is queryable immediately. `worktrees` lists all
 worktrees with per-index status (schema, indexed commit, in-sync) — loop it for "refresh
-all". A worktree whose own Phoenix **writer** is running reports `worktree_index_locked`;
-refresh from that writer (`refresh_index`) instead. A follower may list worktrees, but its
-`index_worktree` call returns `index_writer_required`.
+all". A worktree whose own Phoenix daemon is running reports `worktree_index_locked`; refresh from
+that worktree's Phoenix session (`refresh_index`) instead.
 
 ## Server CLI
 
 ```text
 PhoenixCodeNav.Mcp.exe --workspace-root <dir> [--index-db <path>] [--rebuild]
-    [--shared-daemon | --standalone] [--keepalive] [--daemon-fallback-standalone]
+    [--standalone] [--keepalive]
 ```
 
-`--shared-daemon` is opt-in in v0.12.59. `--daemon-fallback-standalone` applies only to endpoint
-availability failures; identity, ownership, workspace, protocol, and schema refusals remain visible
-and fail closed. `--rebuild` is honored by the shared daemon or by the standalone process that
-acquires the writer lease. A legacy follower remains read-only and does not promote itself.
+The shared daemon is unconditional for ordinary launches. `--shared-daemon` remains accepted only
+as an unnecessary compatibility alias, and the former `--daemon-fallback-standalone` spelling is an
+inert compatibility no-op. `--standalone` is reserved for diagnostics and isolated tests; it never
+acts as a fallback and refuses to serve if it cannot own the writer lease. `--rebuild` is honored by
+the shared daemon or by an explicitly selected standalone writer.
 
 ## Development
 
@@ -303,7 +302,7 @@ dotnet test tests/CodeNav.Tests                                  # fast unit + c
 dotnet test tests/CodeNav.IndexTests                             # index + semantic functionality
 dotnet test tests/CodeNav.GitTests                               # Git/worktree manipulation
 dotnet test tests/CodeNav.WatcherTests                           # watcher timing
-dotnet test tests/CodeNav.LifecycleTests                         # leases, followers, process lifecycle
+dotnet test tests/CodeNav.LifecycleTests                         # leases, publication, process lifecycle
 dotnet test PhoenixCodeNav.sln                                   # complete solution suite
 pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1              # external Roslyn/F# MCP gate
 dotnet run --project src/CodeNav.WorkspaceGen -- --out C:/temp/acme-2k \

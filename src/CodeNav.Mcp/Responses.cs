@@ -408,10 +408,10 @@ internal sealed record Meta(
         if (h.AccessMode == IndexManager.FollowerAccessMode)
         {
             statusNote = h.RefreshIncompleteReason is null
-                ? "read-only follower — index-backed evidence reflects committed writer state; live source, Git, and semantic evidence may be newer; this process cannot observe the writer's pending queue"
+                ? "non-writer compatibility reader — index-backed evidence reflects committed writer state; live source, Git, and semantic evidence may be newer; this process cannot observe the writer's pending queue"
                 : h.RefreshIncompleteReason == IndexManager.RefreshSweepPendingCause
-                    ? "read-only follower — the writer's freshness convergence is pending; index-backed evidence reflects the last committed state and may lag recent workspace edits; only the writer can complete or retry the sweep"
-                    : "read-only follower — the writer reports incomplete source capture; index-backed evidence reflects the last complete committed state and cannot claim current source evidence or exact confidence";
+                    ? "non-writer compatibility reader — the writer's freshness convergence is pending; index-backed evidence reflects the last committed state and may lag recent workspace edits; only the writer can complete or retry the sweep"
+                    : "non-writer compatibility reader — the writer reports incomplete source capture; index-backed evidence reflects the last complete committed state and cannot claim current source evidence or exact confidence";
         }
         else if (status == "building")
         {

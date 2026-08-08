@@ -106,10 +106,11 @@ PhoenixCodeNav is **complementary, not a replacement for an editor**:
   explorer/reviewer sub-sessions — and exposes the *same* tools to all of them.
 - **Deterministic + compiler-exact** for C# code facts, with explicit confidence labels.
 - **Local, no cloud.** Nothing leaves the machine.
-- **Shared warm daemon.** With v0.12.59's opt-in `--shared-daemon`, one same-user process per
-  physical worktree owns the watcher, index, Roslyn workspace, and F# semantic state while each
-  agent keeps an independent MCP session. This avoids per-agent semantic cold starts and duplicate
-  background refresh processes.
+- **Shared warm daemon.** Since v0.12.60, every ordinary launch transparently joins or elects one
+  same-user process per physical worktree. It owns the watcher, index, Roslyn workspace, and F#
+  semantic state while each agent keeps an independent MCP session. No flag or environment opt-in
+  is required, so per-agent semantic cold starts and duplicate background refresh processes simply
+  do not occur.
 
 ### vs. other Roslyn/LSP MCP servers (Serena, roslyn-lens, RoslynMCP, …)
 

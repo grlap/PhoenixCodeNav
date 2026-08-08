@@ -5,16 +5,13 @@ namespace CodeNav.Mcp.Daemon;
 internal sealed class DaemonProxyFailureException : IOException
 {
     internal DaemonUnavailableFailure Failure { get; }
-    internal bool AvailabilityOnly { get; }
 
     internal DaemonProxyFailureException(
         DaemonUnavailableFailure failure,
-        bool availabilityOnly,
         Exception? inner = null)
         : base(failure.Detail, inner)
     {
         Failure = failure;
-        AvailabilityOnly = availabilityOnly;
     }
 }
 
@@ -28,7 +25,6 @@ internal sealed class DaemonProxy
     private readonly string? _indexDb;
     private readonly bool _rebuild;
     private readonly bool _keepAlive;
-    private readonly bool _standaloneFallback;
     private readonly TimeSpan? _idleLingerForTest;
     private readonly string _clientName;
 
@@ -37,7 +33,6 @@ internal sealed class DaemonProxy
         string? indexDb,
         bool rebuild,
         bool keepAlive,
-        bool standaloneFallback,
         string clientName,
         TimeSpan? idleLingerForTest = null)
     {
@@ -45,7 +40,6 @@ internal sealed class DaemonProxy
         _indexDb = indexDb;
         _rebuild = rebuild;
         _keepAlive = keepAlive;
-        _standaloneFallback = standaloneFallback;
         _clientName = clientName;
         _idleLingerForTest = idleLingerForTest;
     }
@@ -62,10 +56,6 @@ internal sealed class DaemonProxy
         }
         catch (DaemonProxyFailureException failure)
         {
-            if (ShouldUseStandaloneFallback(_standaloneFallback, failure.AvailabilityOnly))
-                return await McpApplication.RunStandaloneAsync(
-                    _endpoint.WorkspaceRoot, _indexDb, _rebuild, cancellationToken)
-                    .ConfigureAwait(false);
             return await UnavailableMcpShim.RunAsync(failure.Failure, cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -84,9 +74,6 @@ internal sealed class DaemonProxy
                 cancellationToken).ConfigureAwait(false);
         }
     }
-
-    internal static bool ShouldUseStandaloneFallback(bool enabled, bool availabilityOnly) =>
-        enabled && availabilityOnly;
 
     private async Task<Stream> ConnectOrStartAsync(CancellationToken cancellationToken)
     {
@@ -115,7 +102,6 @@ internal sealed class DaemonProxy
                 "Phoenix daemon endpoint authority could not be verified.",
                 "Inspect the current-user runtime directory and remove only the unsafe endpoint after verification.",
                 retryable: false,
-                availabilityOnly: false,
                 ex);
         }
 
@@ -191,9 +177,8 @@ internal sealed class DaemonProxy
                     throw Failure(
                         "daemon_launch_failed",
                         $"Phoenix daemon process could not be launched ({ex.GetType().Name}).",
-                        "Verify the deployed Phoenix executable and retry, or enable explicit standalone fallback for this availability failure.",
+                        "Verify the deployed Phoenix executable and retry the MCP connection.",
                         retryable: true,
-                        availabilityOnly: true,
                         ex);
                 }
                 try
@@ -212,9 +197,8 @@ internal sealed class DaemonProxy
                     throw Failure(
                         "daemon_launch_failed",
                         $"Phoenix daemon bootstrap failed ({ex.GetType().Name}).",
-                        "Verify the deployed Phoenix executable and retry, or enable explicit standalone fallback for this availability failure.",
+                        "Verify the deployed Phoenix executable and retry the MCP connection.",
                         retryable: true,
-                        availabilityOnly: true,
                         ex);
                 }
                 while (DateTime.UtcNow < deadline)
@@ -234,9 +218,8 @@ internal sealed class DaemonProxy
             throw Failure(
                 "daemon_startup_timeout",
                 "Phoenix shared daemon did not become ready within the startup deadline.",
-                "Retry the MCP connection or use explicitly enabled standalone fallback for an availability-only failure.",
-                retryable: true,
-                availabilityOnly: true);
+                "Retry the MCP connection and inspect Phoenix daemon discovery state.",
+                retryable: true);
         }
         finally
         {
@@ -246,70 +229,24 @@ internal sealed class DaemonProxy
 
     private async Task RetireOlderDaemonAsync(CancellationToken cancellationToken)
     {
-        DaemonDescriptorRecord? descriptor = DaemonDescriptor.TryRead(_endpoint);
-        await using Stream stream = await DaemonTransport.ConnectAsync(
-            _endpoint, ConnectTimeout, cancellationToken).ConfigureAwait(false);
-        DaemonHandshakeRequest request = DaemonProtocol.CreateRequest(_endpoint, _clientName);
-        using var handshake = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        handshake.CancelAfter(DaemonProtocol.HandshakeTimeout);
-        await DaemonProtocol.WriteRequestAsync(
-            stream, DaemonPreambleMode.RetireAndReplace, request, handshake.Token)
-            .ConfigureAwait(false);
-        DaemonHandshakeResponse? response = await DaemonProtocol.ReadResponseAsync(
-            stream, handshake.Token).ConfigureAwait(false);
-        ValidateResponse(request, response, allowOlderAcceptedResponse: true);
-        if (response is not { Accepted: true, Retiring: true })
-            throw Refusal(response!);
-
         using var takeover = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         takeover.CancelAfter(TakeoverTimeout);
-        if (descriptor is not null)
-        {
-            try
-            {
-                using Process process = Process.GetProcessById(descriptor.Pid);
-                await process.WaitForExitAsync(takeover.Token).ConfigureAwait(false);
-                return;
-            }
-            catch (ArgumentException)
-            {
-                return;
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw Failure(
-                    "daemon_takeover_timeout",
-                    "Older Phoenix daemon did not drain within the takeover deadline.",
-                    "Allow existing agent requests to finish, then reconnect; do not kill an unverified process.",
-                    retryable: true,
-                    availabilityOnly: false);
-            }
-        }
-
         try
         {
-            while (!takeover.IsCancellationRequested)
-            {
-                try
-                {
-                    await using Stream probe = await DaemonTransport.ConnectAsync(
-                        _endpoint, ConnectTimeout, takeover.Token).ConfigureAwait(false);
-                }
-                catch (DaemonEndpointUnavailableException)
-                {
-                    return;
-                }
-                await Task.Delay(100, takeover.Token).ConfigureAwait(false);
-            }
+            await DaemonRetirement.RetireOlderAsync(
+                _endpoint, _clientName, takeover.Token).ConfigureAwait(false);
+        }
+        catch (DaemonRetirementRefusedException ex)
+        {
+            throw Refusal(ex.Response);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             throw Failure(
                 "daemon_takeover_timeout",
-                "Older Phoenix daemon did not release its endpoint within the takeover deadline.",
+                "Older Phoenix daemon did not relinquish discovery authority within the takeover deadline.",
                 "Allow existing agent requests to finish, then reconnect; do not kill an unverified process.",
-                retryable: true,
-                availabilityOnly: false);
+                retryable: true);
         }
     }
 
@@ -386,9 +323,8 @@ internal sealed class DaemonProxy
             throw Failure(
                 "daemon_response_authority_failed",
                 "Phoenix daemon handshake response did not prove the requested authority.",
-                "Inspect the current-user endpoint; do not enable standalone fallback for an identity failure.",
-                retryable: false,
-                availabilityOnly: false);
+                "Inspect the current-user endpoint and reconnect after resolving the identity failure.",
+                retryable: false);
         if (response.Accepted && !allowOlderAcceptedResponse &&
             (!string.Equals(response.ToolVersion, BuildInfo.Version, StringComparison.Ordinal) ||
              !string.Equals(response.SchemaVersion, BuildInfo.IndexSchema, StringComparison.Ordinal)))
@@ -396,8 +332,7 @@ internal sealed class DaemonProxy
                 "daemon_response_version_mismatch",
                 "Phoenix daemon accepted an incompatible tool or schema version.",
                 "Restart Phoenix processes and reconnect.",
-                retryable: false,
-                availabilityOnly: false);
+                retryable: false);
     }
 
     private static DaemonProxyFailureException Refusal(DaemonHandshakeResponse response) =>
@@ -411,16 +346,13 @@ internal sealed class DaemonProxy
                 _ => "Resolve the reported daemon authority or compatibility condition, then reconnect.",
             },
             retryable: response.Cause is "daemon_older_than_client" or
-                "daemon_startup_timeout",
-            availabilityOnly: false);
+                "daemon_startup_timeout");
 
     private static DaemonProxyFailureException Failure(
         string cause,
         string detail,
         string recovery,
         bool retryable,
-        bool availabilityOnly,
         Exception? inner = null) =>
-        new(new DaemonUnavailableFailure(cause, detail, recovery, retryable),
-            availabilityOnly, inner);
+        new(new DaemonUnavailableFailure(cause, detail, recovery, retryable), inner);
 }
