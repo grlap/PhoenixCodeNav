@@ -1,0 +1,60 @@
+{
+  "name": "roslyn-e7680f",
+  "roslynCommit": "e7680f251b8fc52a0ba7108906c0e40ff3263a32",
+  "defaultWorkspace": "external/roslyn",
+  "indexRelativePath": ".codenav/index.db",
+  "counts": {
+    "projects": 351,
+    "solutions": 38,
+    "csFiles": 17098,
+    "fsFiles": 2,
+    "fsProjects": 1,
+    "symbols": 354342,
+    "orphanedFiles": 2222
+  },
+  "target": {
+    "name": "ICompilationFactoryService",
+    "arity": 0,
+    "path": "src/Workspaces/Core/Portable/Workspace/Host/CompilationFactory/ICompilationFactoryService.cs",
+    "line": 12,
+    "friendRelationshipConfidence": "indexed",
+    "friendRelationshipPartialReason": "project_model_unproven",
+    "exactReferences": 10,
+    "exactReferenceProjects": 1,
+    "indexedReferenceCandidates": 49,
+    "expectedImplementations": [
+      {
+        "name": "CSharpCompilationFactoryService",
+        "path": "src/Workspaces/CSharp/Portable/Workspace/LanguageServices/CSharpCompilationFactoryService.cs",
+        "line": 16,
+        "baseColumn": 57,
+        "project": "Microsoft.CodeAnalysis.CSharp.Workspaces"
+      },
+      {
+        "name": "TestCSharpCompilationFactoryServiceWithIncrementalGeneratorTracking",
+        "path": "src/Workspaces/CoreTest/Host/LanguageServices/TestCSharpCompilationFactoryServiceWithIncrementalGeneratorTracking.cs",
+        "line": 18,
+        "baseColumn": 93,
+        "project": "Microsoft.CodeAnalysis.Workspaces.UnitTests"
+      }
+    ]
+  },
+  "methodTarget": {
+    "name": "GetCompilationAsync",
+    "path": "src/Workspaces/Core/Portable/Workspace/Solution/SolutionCompilationState.RegularCompilationTracker.cs",
+    "line": 216,
+    "container": "RegularCompilationTracker"
+  },
+  "understandingTarget": {
+    "path": "src/Workspaces/Core/Portable/Workspace/Solution/SolutionCompilationState.WithFrozenSourceGeneratedDocumentsCompilationTracker.cs",
+    "propertyLine": 39,
+    "propertySignature": "public RegularCompilationTracker UnderlyingTracker",
+    "calleeName": "GetCompilationAsync",
+    "calleeLine": 123,
+    "calleeColumn": 58,
+    "calleeDefinitionPath": "src/Workspaces/Core/Portable/Workspace/Solution/SolutionCompilationState.RegularCompilationTracker.cs",
+    "calleeSignature": "public async Task<Compilation> GetCompilationAsync",
+    "followOnLine": 136,
+    "followOnText": "newCompilation = newCompilation.ReplaceSyntaxTree"
+  }
+}

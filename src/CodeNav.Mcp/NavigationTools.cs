@@ -1,0 +1,3122 @@
+using System.ComponentModel;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using CodeNav.Core.Indexing;
+using CodeNav.Core.Semantic;
+using ModelContextProtocol.Server;
+
+namespace CodeNav.Mcp;
+
+/// <summary>
+/// Owns: the MCP tool surface — argument handling, result shaping, budgets, and
+/// confidence/freshness metadata. Results carry the confidence they earn: "exact" for
+/// compiler-backed semantic answers, "indexed" for index/syntax-backed facts, and
+/// "heuristic" for naming/text inferences (implementations fallback, related_tests).
+/// Does not own: index building/queries (CodeNav.Core).
+/// </summary>
+[McpServerToolType]
+public sealed partial class NavigationTools
+{
+    internal const int CapabilityDynamicTextBytes = 1024;
+    internal const int CapabilityIdentityTextBytes = 96;
+    internal const int ExplicitPathInputLimit = 256;
+    internal const int PathListInputByteLimit = 64 * 1024;
+
+    private readonly IndexManager _manager;
+    private readonly SemanticService _semantic;
+    private readonly IOperationsPortalLauncher _operationsPortalLauncher;
+
+    internal string? TestOnlySemanticFailureReason { get; set; }
+
+    public NavigationTools(IndexManager manager, SemanticService semantic)
+        : this(manager, semantic, new OperationsPortalLauncher())
+    {
+    }
+
+    internal NavigationTools(
+        IndexManager manager,
+        SemanticService semantic,
+        IOperationsPortalLauncher operationsPortalLauncher)
+    {
+        _manager = manager;
+        _semantic = semantic;
+        _operationsPortalLauncher = operationsPortalLauncher;
+    }
+
+    private static readonly IReadOnlyList<string> TypeKinds =
+        IndexedSymbolKinds.TypeDeclarations;
+
+    // ---------------------------------------------------------------- capabilities / overview
+
+    [McpServerTool(Name = "server_capabilities")]
+    [Description("Reports supported languages, available tools, index status, and response budgets. Call this first if unsure what is available or whether the index is ready.")]
+    public string ServerCapabilities() => ServerCapabilitiesJson(_manager.Health(),
+        _semantic.FrameworkRefsAvailable);
+
+    internal static string ServerCapabilitiesForTest(IndexHealth health,
+        bool frameworkRefsAvailable = true) =>
+        ServerCapabilitiesJson(health, frameworkRefsAvailable);
+
+    internal static string ServerCapabilitiesUncompactedForTest(IndexHealth health,
+        bool frameworkRefsAvailable = true) =>
+        ServerCapabilitiesJson(health, frameworkRefsAvailable, applyBudget: false);
+
+    internal static string[] CapabilityFeatureIds(IndexHealth health)
+    {
+        using JsonDocument document = JsonDocument.Parse(
+            ServerCapabilitiesJson(health, frameworkRefsAvailable: true));
+        return document.RootElement
+            .GetProperty("features")
+            .EnumerateArray()
+            .Select(feature => feature.GetProperty("id").GetString())
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id!)
+            .ToArray();
+    }
+
+    private static string ServerCapabilitiesJson(IndexHealth h, bool frameworkRefsAvailable,
+        bool applyBudget = true)
+    {
+        string state = CapabilityText(h.State, CapabilityIdentityTextBytes,
+            out bool stateTruncated, out int? stateBytes)!;
+        string? indexVersion = CapabilityText(h.IndexVersion, CapabilityIdentityTextBytes,
+            out bool indexVersionTruncated, out int? indexVersionBytes);
+        string? indexedAtUtc = CapabilityText(h.IndexedAtUtc, CapabilityIdentityTextBytes,
+            out bool indexedAtUtcTruncated, out int? indexedAtUtcBytes);
+        string? lastRefreshUtc = CapabilityText(h.LastRefreshUtc, CapabilityIdentityTextBytes,
+            out bool lastRefreshUtcTruncated, out int? lastRefreshUtcBytes);
+        string workspaceRoot = Json.Utf8Prefix(h.WorkspaceRoot, CapabilityDynamicTextBytes,
+            out bool workspaceRootTruncated);
+        int? workspaceRootBytes = workspaceRootTruncated ? Json.Utf8Bytes(h.WorkspaceRoot) : null;
+        string? error = h.Error is null
+            ? null
+            : Json.Utf8Prefix(h.Error, CapabilityDynamicTextBytes, out _);
+        bool errorTruncated = h.Error is not null &&
+            Json.Utf8Bytes(h.Error) > CapabilityDynamicTextBytes;
+        int? errorBytes = errorTruncated ? Json.Utf8Bytes(h.Error!) : null;
+        bool incompletePathsTruncated = false;
+        string[]? incompletePaths = h.RefreshIncompletePaths?.Take(8)
+            .Select(path =>
+            {
+                string bounded = Json.Utf8Prefix(path, 512, out bool truncated);
+                incompletePathsTruncated |= truncated;
+                return bounded;
+            }).ToArray();
+        incompletePathsTruncated |= h.RefreshIncompletePathCount >
+            (incompletePaths?.Length ?? 0);
+
+        object envelope = new
+        {
+            server = "phoenixCodeNav",
+            version = BuildInfo.Version,
+            // Build identity so a caller can verify WHICH build is deployed. The old hardcoded version
+            // went stale at 0.1.0 across many feature batches; commit auto-tracks the actual build.
+            build = new { version = BuildInfo.Version, commit = BuildInfo.Commit, indexSchema = BuildInfo.IndexSchema },
+            runtime = new
+            {
+                indexMode = PhoenixRuntimeMode.IndexMode(h.AccessMode),
+                processMode = PhoenixRuntimeMode.Current.ToString().ToLowerInvariant(),
+                processId = Environment.ProcessId,
+            },
+            languages = new[] { "csharp", "fsharp", "markdown", "sql" },
+            languageLayers = new
+            {
+                csharp = new[] { "text", "syntax", "semantic" },
+                fsharp = new[] { "text", "syntax", "semantic", "projectGraph" },
+                markdown = new[] { "text" },
+                sql = new[] { "text" },
+            },
+            navigationLayers = new[] { "text", "syntax", "semantic" },
+            // Explicit capability manifest: lets a caller CONFIRM a feature is present without having to
+            // trigger its (often silent-when-clean) response fields — grep an id to verify a deploy.
+            features = new object[]
+            {
+                new { id = "capabilities-hard-budget", summary = "UTF-8 hardBytes is the ordinary response target; *Truncated/*Bytes and featuresCompacted/featureSummariesReturned disclose compaction; every singular feature id remains, while an indivisible complete semantic identity uses the separately declared measured exception" },
+                new { id = "review-ref-resolution", summary = "Hex-only branch/tag names, abbreviations, and object ids are Git-validated and peeled to full commits; repository-format-width objects retain object precedence and distinct short-hex ambiguity is refused" },
+                new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic; confidenceNote only when heuristic (tier meanings live in confidenceModel here); meta.statusNote explains refreshing/stale; meta.build stamps every result meta with version+commit" },
+                new { id = "hierarchy-ranking", summary = "implementations ranks concrete hits first; conditional likelyImplementation names the sole concrete hit and via identifies indirect base derivation. implementations wraps hit metadata; type_hierarchy returns flat symbols" },
+                new { id = "implementer-completeness", summary = "Member fallback exposes implementerCount/omittedImplementers. When identity is compiler-resolved but implementers are indexed, symbolConfidence exact and implementationsConfidence heuristic remain separate; type_hierarchy fallback returns heuristic base-list candidates without compiler-only bases/interfaces" },
+                new { id = "generic-arity-resolution", summary = "v0.11.8 implementations/type_hierarchy select by arity or symbolId; mixed-arity names refuse; syntax fallback is arity-exact" },
+                new { id = "friend-assembly-semantics", summary = "v0.11.9 models literal local SDK InternalsVisibleTo grants; friend-only results disclose project_model_unproven when imports, package build assets, or Directory.Build authority can change the grant" },
+                new { id = "fsharp-text-indexing", summary = "v0.12.0 F# FTS" },
+                new { id = "markdown-sql-text-indexing", summary = "v0.12.33 schema v19 indexes .md and .sql as text-only files for find_file, search_text, and indexed source fallback; no syntax or compiler semantics" },
+                new { id = "fsharp-project-graph", summary = "v0.12.0 .fsproj ownership/edges; no Roslyn" },
+                new { id = "fsharp-outline", summary = "v0.12.1 owned .fs/.fsi FCS outline" },
+                new { id = "fsharp-outline-parse-context-selection", summary = "v0.12.4 base/.Net project+TFM parse-context selection affects only F# parser options and #if symbols" },
+                new { id = "fsharp-outline-parse-context-budget", summary = "v0.12.4 max 64 project/TFM parse contexts with total/returned/truncated coverage; 64 KiB hard envelope" },
+                new { id = "fsharp-indexed-symbol-name-search", summary = "v0.12.52 schema v26 persists deterministic FCS syntax declarations plus parse and project-option coverage from .fs/.fsi files across indexed owner/TFM parse contexts; search_symbol supports F# kinds, namespace/path/generated filters, generic arity, orphan disclosure, paired signature/implementation rows, linked multi-owner files, and source/project-option delta convergence; actionably incomplete contexts are partial while ordinary SDK/import limits remain advisory coverage, .fsx-only scopes fail closed, and mixed script scopes disclose skipped text-only files" },
+                new { id = "fsharp-indexed-parse-context-budget", summary = "v0.12.55 schema v28 processes at most 64 deterministic owner/TFM parse contexts per .fs/.fsi file, reserves one context per valid compile owner while capacity remains, persists total/processed/truncated plus truncatedOwnerProjects coverage across cold and delta indexing, and makes affected search_symbol scopes partial with fsharp_parse_contexts_truncated" },
+                new { id = "fsharp-symbol-at-semantic", summary = "v0.12.5 FCS position resolution for one explicit physical .fsproj + TFM type-check context" },
+                new { id = "fsharp-definition-same-project", summary = "v0.12.5 FCS signature/implementation declarations within the selected physical F# project" },
+                new { id = "fsharp-type-check-context-selection", summary = "v0.12.5 ambiguous owner/TFM sets fail closed and expose bounded selected/available F# type-check contexts" },
+                new { id = "fsharp-semantic-snapshot", summary = "v0.12.5 immutable source/project snapshot from one pinned index epoch plus request-private snapshots of verified workspace HintPath binaries; exact-path opened-handle verification covers Windows and Linux, plus macOS since v0.12.56; bounded deadline, inputs, checker cache, and concurrency" },
+                new { id = "workspace-msbuild-config-indexing", summary = "schema v16 persists arbitrary workspace .props/.targets as config inputs for find_file/config_lookup and pinned bounded project evaluation" },
+                new { id = "fsharp-semantic-bounded-project-evaluation", summary = "v0.12.6 bounded simple properties before semantic items, conditions, Choose, and workspace-local .props imports feed FCS; unresolved SDK/toolchain/ambient inputs remain explicit; no targets/tasks, property functions, or project closure" },
+                new { id = "fsharp-semantic-directory-build-reference-evaluation", summary = "v0.12.8 nearest indexed ancestor Directory.Build.props/targets are evaluated around one F# project for bounded properties, conditions, and Reference Include/Remove item-list mutations; irrelevant chained targets are ignored while reference-affecting targets/tasks remain fail-closed" },
+                new { id = "fsharp-semantic-package-asset-closure", summary = "v0.12.56 active F# PackageReference identities, including conditional PackageVersion authority from the nearest indexed Directory.Packages.props, are matched since v0.12.67 as an exact case-insensitive explicit direct identity set to one already-restored project.assets.json target while well-formed SDK auto-referenced packages are validated separately; reachable transitive compile assets from trusted declared package folders are verified, bounded, copied into request-private immutable snapshots, and reverified after FCS; missing, stale, mismatched, changed, ambiguous, or unsafe closure fails explicitly without restore or MSBuild execution" },
+                new { id = "csharp-semantic-central-package-management", summary = "v0.12.57 C# semantic project loading resolves versionless PackageReference compiler inputs from unconditional literal PackageVersion entries in the nearest indexed Directory.Packages.props; centrally selected versions use exact global-cache directories and central authority participates in warm model identity, while shapes requiring MSBuild evaluation retain established unresolved-reference behavior without guessing or executing restore" },
+                new { id = "csharp-semantic-central-package-property-expansion", summary = "v0.12.58 C# central PackageVersion entries support bounded simple local-property expansion with assignment-time chaining and reassignment; project overrides, later imported property authority, unsupported expressions, and exceeded limits retain established unresolved-reference behavior" },
+                new { id = "shared-mcp-daemon", summary = "v0.12.59 shared daemon transport gives one current-user, physical-worktree index/watcher/Roslyn/FCS owner to multiple lightweight stdio MCP proxies over an authority-checked named pipe or Unix socket; exact tool/schema negotiation, typed unavailable shims, client-fair admission, cancellation isolation, and graceful replacement preserve honest failure" },
+                new { id = "shared-mcp-daemon-default", summary = "since v0.12.60 every ordinary Phoenix MCP launch transparently joins or elects the shared physical-worktree daemon with no flag or environment opt-in; --shared-daemon is a compatibility alias, --standalone is explicit diagnostics only, and failures never fall back to an alternate service topology" },
+                new { id = "shared-daemon-stable-unix-discovery", summary = "v0.12.61 Unix clients prefer one owner-verified /tmp endpoint independent of per-client XDG_RUNTIME_DIR/TMPDIR differences, probe already-existing legacy environment-derived endpoints for authenticated connection or frozen-preamble retirement during upgrade, and report explicit remediation when an older endpoint cannot be discovered" },
+                new { id = "shared-daemon-connection-dispatch", summary = "v0.12.62 independent per-connection dispatch prevents one synchronously busy MCP session from starving later frozen-preamble handshakes, while the bounded typed daemon_handshake_timeout cause reports an expired connection-admission handshake without absorbing retirement or restart cancellation" },
+                new { id = "shared-daemon-startup-diagnostics", summary = "v0.12.63 daemon startup relays one bounded private ready/refusal report through the internal bootstrap, shares exact owner-checked typed failures with concurrent proxies without respawn storms, ignores stale or corrupt advisory state, and transparently re-elects after safe shutdown without exposing daemon controls" },
+                new { id = "semantic-parallel-cold-start-loader", summary = "v0.12.9 C# semantic clusters prepare immutable project inputs concurrently through one bounded process scheduler, then commit one dependency-ordered Roslyn solution while preserving reload, cycle, and source-over-binary authority" },
+                new { id = "semantic-candidate-completeness-over-accounting", summary = "v0.12.12 aggregate semantic input accounting never omits an already-selected candidate project; bounded file capture, preparation concurrency, deadlines, and byte/managed-heap pressure retention remain the safety boundaries" },
+                new { id = "semantic-planning-attribution", summary = "v0.12.13 implementations/type_hierarchy semanticOp telemetry splits transitive-closure database query+row mapping, managed identity filtering, frontier bookkeeping, seed discovery, and scan-set planning with privacy-safe work counts and writer/follower accessMode" },
+                new { id = "indexed-base-type-edges", summary = "v0.12.14 schema v18 persists syntax-derived simple-name/arity base-list edges before display-signature truncation; implementations/type_hierarchy use indexed lookups instead of repeated leading-wildcard symbol scans while semantic verification preserves same-name collision honesty" },
+                new { id = "references-stage-attribution", summary = "v0.12.15 references semanticOp telemetry attributes direct-candidate/scan-set planning and splits post-resolution query wall into Roslyn FindReferences, syntax-root loading, usage classification, sample text, remaining processing, and privacy-safe work counts" },
+                new { id = "references-parallel-compilation-preparation", summary = "v0.12.16 exact references prepares the selected scan set's Roslyn compilations in dependency-first waves on the same pinned Solution through one bounded process-wide lane; queryStages exposes preparation, cache reuse, queueing, wave, and completeness counts" },
+                new { id = "references-document-scoped-search", summary = "v0.12.17 exact references narrows eligible symbols to a conservative document superset derived from the same leased live Solution; unsafe kinds and any planning uncertainty retain full-solution SymbolFinder authority, with mode/reason/count telemetry" },
+                new { id = "semantic-persistent-syntax-indexes", summary = "v0.12.18 assigns stable storage-only Solution/Project/Document identities so Roslyn can persist checksum-validated SyntaxTreeIndex data across MCP processes; source and project authority are unchanged, and documentScope exposes the project-wide alias-scan breadth" },
+                new { id = "references-compilation-critical-path-attribution", summary = "v0.12.19 compilationPreparation exposes summed slot-held compilation work, the slowest project, the current wave-barrier floor, and the measured dependency critical path so scheduling headroom is field-decidable without exposing project identities" },
+                new { id = "stack-safe-syntax-indexing", summary = "v0.12.20 C# declaration extraction uses an iterative depth-first walk so deeply nested generated types remain fully indexed on bounded-stack parallel workers" },
+                new { id = "references-buffered-document-scope-scan", summary = "v0.12.21 exact reference scoping scans large leased SourceText through pooled windows with streaming ValueText hazard detection, and parses candidate syntax roots for global-alias widening only after a conservative raw-token prefilter" },
+                new { id = "semantic-byte-governed-retention", summary = "v0.12.22 semantic project retention is governed by accounted input bytes and managed-heap pressure with hysteresis and strict safe-project LRU; multi-phase operations defer pressure eviction until the complete scan set is protected, and load telemetry exposes resident/eviction state" },
+                new { id = "references-process-cpu-attribution", summary = "v0.12.23 references semanticOp telemetry publishes process-wide CPU for cluster loading and compilation preparation alongside processor/lane capacity, while PhoenixCodeNav-Semantic EventPipe phase markers share the record correlation id for trace attribution" },
+                new { id = "index-raw-ordinal-symbol-batching", summary = "v0.12.24 full builds and delta refreshes persist C# symbols through cached exact-size 1..32 raw SQLite statements with ordinal binding, preserving stored output while removing managed parameter-name lookup and allocation" },
+                new { id = "index-raw-ordinal-file-batching", summary = "v0.12.35 file rows use client-assigned ids and cached raw ordinal SQLite statements; full C# builds persist exact batches of 1..32 while delta and structural writes use the same one-row path" },
+                new { id = "index-deferred-secondary-index-build", summary = "v0.12.35 cold builds bulk-load under primary and unique constraints, then create all nine query-facing secondary indexes inside the unpublished finalization transaction and report their measured cost" },
+                new { id = "index-private-staged-rebuild-publication", summary = "v0.12.36 supported workspace-local full rebuilds construct and finalize a pinned private database while the prior publication remains readable, then publish rebuilding only for bounded handle drain and anchored atomic install" },
+                new { id = "index-raw-ordinal-content-fts-batching", summary = "v0.12.37 introduced exact-width raw ordinal file_contents and FTS5 batching; v0.12.38 retains raw content batches while superseding cold FTS batches with one deferred rebuild, and live writes keep transactional content+FTS updates" },
+                new { id = "index-bounded-synchronous-csharp-build-handoff", summary = "v0.12.38 cold C# parsing hands prepared sources to the single writer through a bounded synchronous queue, eliminating sync-over-async ThreadPool starvation while retaining full-width writer batches" },
+                new { id = "index-deferred-fts-rebuild", summary = "v0.12.38 cold builds populate file_contents first, rebuild the external-content FTS5 index once during unpublished finalization, and retain transactional incremental FTS maintenance for live refreshes" },
+                new { id = "index-size-prioritized-csharp-build-scheduling", summary = "v0.12.39 cold builds schedule C# parsing by descending scanned byte size with an ordinal-path tie-breaker, overlapping giant Roslyn parses with ordinary parse-and-persist work instead of leaving a long final straggler tail" },
+                new { id = "index-abandoned-private-stage-reaping", summary = "v0.12.40 after validating stored workspace ownership, a newly elected Windows/Linux writer removes at most 256 identity-verified crash-orphaned private stage, publish-link, and SQLite sidecar artifacts through retained destination authority under a five-second discovery budget; active claimed stages, foreign publications, and unrelated files remain untouched" },
+                new { id = "linux-arm64-anchored-authority", summary = "v0.12.42 Linux ARM64 ABI mapping supplies architecture-correct O_DIRECTORY and O_NOFOLLOW flags for retained index publication, bounded Git/source capture, and Operations Portal traversal while every other supported Linux architecture keeps its kernel ABI mapping" },
+                new { id = "portal-directory-entry-nul-decoding", summary = "v0.12.42 Operations Portal directory traversal stops each bounded Unix directory-entry name at the first bounded NUL so record padding never becomes a file name" },
+                new { id = "operations-portal-jsonl-readonly", summary = "v0.12.26 the loopback Operations Portal tails bounded workspace JSONL and observes anchored index-file presence and size without opening SQLite; source gaps, retention, paging, and response budgets remain explicit" },
+                new { id = "operations-portal-live-build-status", summary = "v0.12.26 full builds emit bounded JSONL lifecycle progress plus one server identity/capability record per process so the local portal can show live phase, file, symbol, byte, version, schema, platform, and access-mode status" },
+                new { id = "operations-portal-mcp-launcher", summary = "v0.12.49 open_operations_portal explicitly starts or reuses the separately packaged loopback read-only portal, keeps child output away from MCP stdout, and returns the authenticated URL for the agent to show verbatim without opening a browser" },
+                new { id = "operations-portal-queryable-evidence", summary = "v0.12.50 the Operations Portal reports queryable only when the current observed index-file generation, a connected Phoenix process, and that process's successful retained query agree; changing the observed generation invalidates old query evidence, freshness remains unknown, and the workspace's retained operation count stays stable across unchanged refreshes" },
+                new { id = "operations-portal-deterministic-semantic-summary", summary = "v0.12.51 the multi-instance Operations Portal aggregates semantic state independently of instance ordering: unanimous warm, warming, cold, or unknown evidence remains exact, while differing states report mixed" },
+                new { id = "mcp-structured-argument-errors", summary = "v0.12.50 every registered MCP tool preserves its required JSON schema while missing or mistyped fields return a structured bad_request naming the tool, field, reason, and expected type so agents can self-correct" },
+                new { id = "implementations-semantic-retry-guidance", summary = "v0.12.50 transient implementations fallbacks caused by cluster_cold_load or semantic_timeout retain honest heuristic confidence and a machine-readable semantic cause while adding retryRecommended and retryHint; Phoenix does not retry automatically or raise the requested deadline" },
+                new { id = "search-symbol-malformed-query", summary = "v0.12.10 search_symbol rejects ToolSearch-style select: routing prefixes with malformed_query instead of returning a clean empty result; valid C# qualification and generic punctuation remain searchable" },
+                new { id = "search-symbol-filtered-existence", summary = "v0.12.30 first-page empty search_symbol results report existsUnfiltered plus active appliedFilters; declarations hidden by those filters also disclose their unfilteredKinds, while genuine absence remains a clean symbols:[] result with existsUnfiltered:false" },
+                new { id = "search-symbol-type-relevance", summary = "v0.12.30 exact-name type declarations receive a soft relevance preference over same-named members without filtering or omitting either result class" },
+                new { id = "indexed-path-suggestions", summary = "v0.12.31 outline/source_context not-found errors and first-page exact-path find_file misses may include a byte-budgeted pathSuggestions object with up to three pinned-index paths, exact total and truncation state; basename matches rank by preserved suffix then prefix and are never substituted" },
+                new { id = "source-context-range-alias", summary = "v0.12.32 source_context accepts range as a compatibility alias when canonical spans is omitted; conflicting simultaneous values return bad_request instead of applying silent precedence" },
+                new { id = "batch-outline-json-array-paths", summary = "v0.12.29 batch_outline accepts comma-separated paths or a serialized JSON string array; v0.12.44 applies the shared 64 KiB exact workspace-relative grammar, rejecting rooted, traversing, control-character, malformed, non-string, and over-12 inputs before lookup" },
+                new { id = "csharp-symbol-free-outline", summary = "v0.12.43 outline and batch_outline return normal indexed syntax envelopes with symbols:[] and file-level generated state for indexed declaration-free C# files" },
+                new { id = "refresh-review-json-array-paths", summary = "v0.12.44 refresh_index and review_pack accept comma-separated paths or serialized string arrays within a 64 KiB input bound, preserve comma-bearing JSON paths without wrapper leakage, reject non-relative, traversing, malformed, and over-limit items before lookup, and refuse more than 256 explicit paths" },
+                new { id = "refresh-input-retry", summary = "v0.12.7 unavailable regular-source captures roll back the complete delta transaction and retry initial or event-driven serialized requests after bounded 100/250/1000 ms delays; timer-initiated stale-index recovery uses its separately declared paced cadence" },
+                new { id = "refresh-sweep-publication-gating", summary = "v0.12.7 builds and refreshes persist a follower-visible refresh_sweep_pending marker before publication or row mutation and clear it only after the serialized convergence sweep commits" },
+                new { id = "refresh-incomplete-freshness", summary = "v0.12.7 exhausted source capture keeps index state stale, preserves the Git baseline, exposes a stable refreshIncompleteReason plus bounded paths, and widens the next request to a recovery sweep" },
+                new { id = "refresh-recovery-self-heal", summary = "v0.12.27 an index left stale by unavailable workspace input autonomously retries complete convergence sweeps with 5/10/30/60-second capped backoff; timer-initiated recovery sweeps make one capture attempt each, re-resolve pending Git baselines, and remain honestly stale until success" },
+                new { id = "oversized-source-coverage", summary = "v0.12.7 oversized regular sources are a distinct persistent outcome with explicit bounded coverage; they are not rapidly retried, cannot publish ready/current/exact evidence, and prevent strict worktree index installation" },
+                new { id = "fsharp-unsupported-language-boundary", summary = "F# references, callers/callees, implementations, hierarchy, and semantic dependency closure remain unsupported; indexed F# symbol-name search is supported" },
+                new { id = "review-fsharp-file-coverage", summary = "review_pack: F# changes in unsupportedLanguageFiles" },
+                new { id = "compiled-awareness", summary = "search_symbol orphaned; repo_overview.orphanedFiles; compiled ownership guides semantic resolution, impact, and context_pack" },
+                new { id = "git-awareness", summary = "v0.12.28 index tracks the workspace's indexed commit and branch; serialized HEAD snapshot acquisition, ordered recovery publication, rebuild-generation retirement, and execution-time diffs make same-commit attachment changes and rapid inverse transitions preserve final rows and attachment state, detached HEAD clears the indexed branch, unavailable recovery snapshots force older queued Git tuples to revalidate with only a resolved generation at or after the latest unavailable sample allowed to publish ready, and full rebuilds reject ordered recovery publications sampled for the replaced database. repo_overview.git reports indexed vs HEAD state and whether commits match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is logged, never silent" },
+                new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
+                new { id = "text-search", summary = "search_text: whole-word tokens, context, containingSymbol, precise/partial grading; bounded line-based .NET regex narrowed by FTS; filesTotal/budgetHit/timedOut disclose coverage. Zero hits probe elsewhere/didYouMean; suggestions are probed, never substituted, with path/line/owner samples" },
+                new { id = "reference-kinds", summary = "references (exact path): per-location execution, declaration, documentation, and conversion-operation kinds with a kinds breakdown, usageKinds filter (validated), and publicConsumersOnly (usages outside the symbol's declaring project); indexed fallback stays unclassified and says so" },
+                new { id = "symbol-handles", summary = "Reindex-detecting idx handles pin source_context, definition, references, impact, implementations, and type_hierarchy" },
+                new { id = "filter-honest-counts", summary = "references: totalReferences/totalCandidates, kinds, groups, and summary all honor includeTests (filtered BEFORE counting on both exact and indexed paths); linked multi-project files counted once; filtered summaries say 'test projects excluded' instead of a misleading '0 test'" },
+                new { id = "test-classification", summary = "isTest is REFERENCE-driven: test frameworks via packages OR binary <Reference> (nunit/xunit/MSTest, incl. non-standard names containing nunit.framework), plus compiled-[TestFixture]-attributes-on-graph-leaf promotion for custom-resolve builds where the framework never appears in the csproj. Name shapes are a narrow dotted-suffix fallback only — TestRoute-style names never classify. Classification broadened in schema v7 (reference signals can reclassify a large share of legacy test projects, so isTest cached from earlier schemas may differ); NAME-uniform across same-AssemblyName csproj pairs since v8" },
+                new { id = "bounded-source-reads", summary = "source_context streams only the requested spans from disk (never whole-file reads); contextLines clamped; zero/negative span starts clamp to line 1" },
+                new { id = "arity-exact-partials", summary = "partialFiles separate Foo and Foo<T> by syntax arity" },
+                new { id = "member-modifiers", summary = "outline/search_symbol/symbol_at/definition symbols carry 'modifiers' (static/sealed/abstract/virtual/override/new/readonly/const, omitted when none) — pick the right override site in deep hierarchies without opening files. 'partial' is DELIBERATELY not in this string: it has its own isPartial field on every symbol node (plus partialFiles cross-links on outline types). Members also carry 'accessors' ({get: 'public', set: 'private'}) — ONLY when an accessor's accessibility differs from the member's own, so a private setter is no longer invisible. Modifiers since schema v4; accessors since v9" },
+                new { id = "rebuild-hatch", summary = "refresh_index accepts force: 'auto'|'incremental' (delta refresh; hash-identical files skipped — never rebuilds an intact-looking index) or 'full' (delete the index and REBUILD FROM SCRATCH, pump-serialized, works even from state 'failed' — recovery re-attaches the file watcher and git tracking and clears the old error; watch index.progress). The in-band corruption-recovery hatch — no shell access needed" },
+                new { id = "deadline-honesty", summary = "Semantic tools return deadlineMs/elapsedMs. Mid-scan expiry keeps partial, totalIsLowerBound, and 'at least N'; cold load uses partialReason cluster_cold_load. references/implementations split clusterLoadMs/queryMs. Reference totals dedupe project+path+source-span+kind, preserving distinct same-line operations, expose solutionProjects, and retain outOfGraphCandidates" },
+                new { id = "assembly-ref-edges", summary = "legacy <Reference Include>+HintPath to an IN-WORKSPACE assembly counts as a project-graph edge (multi-staged builds that reference dlls from a common output folder, not projects) — dependents-closure candidate discovery, semantic cluster wiring, and project_graph all see it; semantic compilations bind such references to the SOURCE project (source-over-binary), so cross-project implementations/references resolve exactly. Assembly-name collisions (net-old/net-new csproj pairs) resolve to a name-level edge — the graph and the semantic workspace are name-keyed, so paired declarers keep all their consumer edges (schema v6+; edge recovery itself since v5). meta.indexSchema stamped on every response" },
+                new { id = "build-progress", summary = "while state=='building', server_capabilities.index.progress and index_building error bodies carry {phase: scanning|parsing_projects|indexing_files|finalizing, filesIndexed, filesTotal, elapsedMs} — monotonic counters, no fabricated percent; absent when ready, and background refreshes never show a cold-build bar. filesSkipped and projectsFailed appear only when >0 (efa); filesPerSecond + estimatedRemainingMs appear only during indexing_files once >=100 files over >=1s of that phase are measured (0tn); pendingProcessed is the monotonic applied-delta count paired with pendingChanges — both flat means a stuck pump (z4c)" },
+                new { id = "edge-provenance", summary = "Schema v10 edges distinguish projectReference from hintPathReference; project_graph exposes kind, dependency_path per-hop via, context_pack flags hint-path owners, and impact reports directDependentProjects viaHintPathOnly risk. Mixed paths keep one transitive count/note; dual wiring prefers project; orphan references use orphaned:true with no project" },
+                new { id = "review-pack", summary = "review_pack: ONE budget-bounded call from a changed set (validated-base Git diff union working-tree dirt, or explicit paths) to hunk-mapped symbols and per-symbol impact digests: symbolId handle, owner, directDependentProjects (+viaHintPathOnly), transitive count, publicApi, related_tests with signal, indexed reference candidates, and deterministic risks. Deleted .cs files get DELETION honesty from a read-only base blob: each former top-level type reports danglingCandidates. Everything is INDEXED confidence and says so (notes carry stable ids); no semantic resolution runs inside — escalate chosen symbols via references(symbolId, mode:'semantic'). baseRef accepts a sha or strict-charset ref name" },
+                new { id = "review-git-stdin-transport", summary = "v0.11.1 Git operand transport: review_pack resolves refs with cat-file --batch-check and reads base blobs with cat-file --batch; accepted dynamic ref names and paths travel on stdin, while only validated 4-64 ASCII-hex prefixes may use rev-parse --disambiguate=<hex>, preventing .cmd/.bat metacharacter reinterpretation" },
+                new { id = "review-diff-determinism", summary = "--raw -z --patch uses ordinal/C-quoted path identity; binary/mode/empty/type sections degrade whole-file; old/new hunk-coordinate overflow fails closed as malformed; stage-only unmerged gitlinks report unmerged; process/status failures never become partial success" },
+                new { id = "review-content-filter-refusal", summary = "v0.11.1 content-filter refusal: review_pack discovers configured clean/process drivers and evaluates tracked filter attributes without executing helpers; a path selecting an active driver returns git_filter_unsafe rather than running it or claiming complete coverage" },
+                new { id = "review-content-filter-overlay", summary = "v0.11.1 content-filter race boundary: every worktree comparison uses a private highest-precedence info/attributes overlay ending in * !filter, so no clean/process driver can become selectable after preflight, including a newly introduced driver" },
+                new { id = "review-submodule-coverage", summary = "v0.11.1 submodule boundary: parent review excludes dirty child worktrees and reports that boundary through coverage.submoduleWorktrees plus review.submodule_worktrees_excluded; changedSubmoduleLinks separately reports superproject gitlink pointer changes for child-root follow-up" },
+                new { id = "review-untracked-repository-coverage", summary = "v0.11.1 nested-repository boundary: parent review treats an untracked embedded Git worktree as an atomic excluded path without running child-local helpers, reports bounded coverage.untrackedRepositories, and emits review.untracked_repositories_excluded for child-root follow-up" },
+                new { id = "review-untracked-link-coverage", summary = "v0.11.2 untracked link boundary: Git-reported files reached through a symbolic link or junction are excluded before hashing or review aggregation, reported through bounded coverage.untrackedLinks, and emit review.untracked_links_excluded for target-root follow-up" },
+                new { id = "review-layered-change-refusal", summary = "v0.11.1 layered-change refusal: when independent staged and unstaged manifests contain the same path, review_pack returns git_layered_changes rather than presenting a final-worktree hunk map as coverage of both byte layers" },
+                new { id = "review-snapshot-consistency", summary = "Repeated bounded Git captures compare exact raw patch bytes with typed staged/unstaged/unmerged/untracked manifests; symlink payloads, gitlinks, modes, and tracked bytes must match; snapshot_changed becomes git_worktree_changed with no partial result from different worktree epochs" },
+                new { id = "review-live-evidence-revalidation", summary = "v0.12.45 review_pack revalidates every bounded live file digest and safe existence classification after aggregation, latches contradictory repeated observations, and recaptures only bounded untracked move-candidate bytes actually consumed; any mismatch fails closed without a partial result" },
+                new { id = "csharp-conversion-operator-indexing", summary = "v0.12.46 schema v21 indexes implicit and explicit C# conversion declarations as operator rows with target-bearing names, canonical declaration keys, modifiers, source order, and parent links" },
+                new { id = "csharp-conversion-semantic-handles", summary = "v0.12.48 schema v24 conversion idx handles pin semantic definitions and references with uncapped canonical declaration keys; fingerprints bind the existing per-file content hash to a deterministic syntax ordinal among declarations on the same source line, distinguishing same-file twins without follow-up queries, invalidating the file epoch conservatively without a per-symbol context digest, and rejecting older identities that cannot prove the current row" },
+                new { id = "references-candidate-file-cap-disclosure", summary = "v0.12.46 indexed references disclose the existing caller-selected maxFiles candidate-file bound through coverage, candidate_file_cap, references.candidate_file_cap, and lower-bound totals instead of presenting a scanned subset as complete" },
+                new { id = "csharp-conversion-usage-enumeration", summary = "v0.12.47 semantic references enumerate compiler-bound implicitConversion, explicitConversion, and checkedConversion sites across the selected dependent closure, including stacked, nullable-tuple, full C# compound-assignment, primary-constructor, foreach, deconstruction, and interface-dispatch carriers, so exact zero means no matching conversion was found in complete loaded coverage" },
+                new { id = "csharp-operator-semantic-handles", summary = "v0.12.47 regular and conversion operator idx handles pin definition/references with canonical syntax declaration keys, including checked and explicit-interface forms; indexed definition retains the resolved row, indexed/failed-auto references fail closed, and implementations/type_hierarchy reject operator handles instead of retargeting" },
+                new { id = "csharp-explicit-interface-operator-accessibility", summary = "v0.12.47 schema v23 persists explicit-interface regular operators as private so search, outline, and review_pack do not overstate public API" },
+                new { id = "semantic-indivisible-identity-completeness", summary = "v0.12.47 definition/references remove optional declaration-site lists with truthful declaration totals and stable note id semantic.declaration_sites_budget before preserving a complete indivisible compiler symbol identity above ordinary hardBytes; responseBudget then reports measured serializedBytes, exceeded:true, completeIdentity:true, and reason:indivisible_semantic_identity without identity truncation or rejection" },
+                new { id = "review-git-launcher-isolation", summary = "Only canonical absolute paths and trusted system cmd.exe launch Git; batch percent expansion is refused, and a missing or non-directory working directory fails before spawn" },
+                new { id = "review-git-transport-isolation", summary = "v0.11.2 Git transport isolation: the highest-precedence GIT_ALLOW_PROTOCOL denylist plus the protocol.allow=never fallback keep read-only plumbing local even when protocol-specific repository config attempts to enable a transport" },
+                new { id = "review-git-environment-isolation", summary = "v0.11.4 clears inherited repository/object/index selectors (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_ALTERNATE_OBJECT_DIRECTORIES) before discovery; the sandbox reinstates only validated paths" },
+                new { id = "review-workspace-path-domain", summary = "v0.11.2 workspace path domain: the safety sandbox binds Git's actual toplevel while --relative scopes every manifest and :./ blob lookup to the configured workspace" },
+                new { id = "unix-git-path-identity", summary = "v0.11.4 Unix literal backslashes, including a root-level leading literal backslash, retain file identity across scan, watcher, refresh, commit reconciliation, and review; Windows still treats backslash as a directory separator" },
+                new { id = "worktree-workspace-path-domain", summary = "v0.11.5 worktree path domain: NUL-framed porcelain roots carry the configured repository-subtree prefix into linked worktrees; host-sensitive identity preserves case-distinct Git paths, and invalid caller roots return structured errors" },
+                new { id = "review-dirt-provenance", summary = "v0.11.2 dirt provenance: ReviewDiff preserves true UntrackedFiles separately from staged and unstaged tracked dirt, so only genuinely untracked files are widened to whole-file evidence or counted as untracked" },
+                new { id = "review-budget-coverage", summary = "v0.11.2 review budget coverage: symbolsCoverage, changedCsFilesCoverage, changedProjectFilesCoverage, deletedFilesCoverage, and per-record former-type totals expose every cap; whole-envelope maxBytes trimming can reduce every optional list to zero without exceeding the accepted UTF-8 budget" },
+                new { id = "review-two-sided-diff-ranges", summary = "v0.11.2 two-sided diff ranges: DiffHunk retains old and new coordinates so deletion and replacement evidence identifies its coordinate side explicitly" },
+                new { id = "review-former-symbol-evidence", summary = "v0.11.2 former-symbol evidence: review_pack reparses bounded base blobs and reports formerSymbols for removed or renamed members, including members lost from modified relocations or deleted partial declarations; current declaration survivors are project-domain/advisory evidence rather than workspace-global proof" },
+                new { id = "review-reference-declaration-budget", summary = "Name-scoped former-reference exclusion is bounded; declarationExclusionBudgetHit plus review.reference_declaration_budget disclose lower-bound candidates" },
+                new { id = "review-declaration-identity", summary = "v0.11.5 review declaration identity (index schema v14) includes parameter types, ancestor generic arity, checked-vs-unchecked operators, and explicit-interface operator qualifiers; tuple labels are omitted while tuple types and nesting remain identity-bearing" },
+                new { id = "review-exact-move-evidence", summary = "v0.11.2 exact move evidence: movedFiles reports unique staged or unstaged .cs raw-byte relocations as exact_blob; untracked candidates are read through size/count-bounded anchored no-follow handles, while oversized or excess candidates conservatively remain uncorrelated" },
+                new { id = "review-normalized-move-evidence", summary = "v0.12.44 review_pack correlates a unique untracked C# worktree CRLF candidate whose normalized bytes match a stored LF blob as normalized_blob, never exact_blob; raw-byte identity remains preferred, each target is claimed at most once, and ambiguous candidates remain uncorrelated" },
+                new { id = "review-base-blob-recovery-honesty", summary = "v0.11.2 base-blob recovery honesty: per-file size plus cumulative character/attempt/time bounds appear in baseBlobRecoveryCoverage; batch-check rejects oversized blobs before content streaming, failures emit review.base_blob_unavailable, cumulative exhaustion emits review.base_blob_budget, and recoveryStatus/unmapped evidence omits unknown former-type totals instead of serializing false zero coverage" },
+                new { id = "review-namespace-analysis-budget", summary = "v0.11.2 namespace analysis budget: namespace-only classification loads indexed content only for uncovered ranges and stops at per-file plus cumulative character/file/time bounds; namespaceAnalysisCoverage and review.namespace_analysis_budget mark conservative file_level fallback" },
+                new { id = "review-project-shape-budget", summary = "Bounded no-follow XML caps project count, bytes, and time; projectOwnershipFallbackCoverage plus review.project_shape_budget disclose incomplete deleted-path proof" },
+                new { id = "review-project-glob-budget", summary = "Iterative project-ownership glob budget covers default-SDK checks and Include/Exclude; globBudgetHit plus review.project_glob_budget expose segment, operation, or deadline exhaustion and fail proof closed" },
+                new { id = "review-project-shape-completeness", summary = "Unevaluated imports/SDKs/conditions/expressions block deleted-path proof; projectOwnershipFallbackCoverage.evaluationIncomplete and review.project_shape_incomplete disclose it" },
+                new { id = "review-project-file-guidance", summary = "v0.12.41 changedProjectFiles reports every modified or deleted project, build, and solution input; review.project_files_changed counts only authoritative .csproj/.fsproj/.csproj.user/.fsproj.user/.shproj/.proj/.projitems/.props/.targets and Directory.Build.rsp/MSBuild.rsp inputs and warns that dependency, compile-set, or test-classification evidence may shift" },
+                new { id = "review-solution-metadata-guidance", summary = "v0.12.44 .sln/.slnx/.slnf changes remain visible in changedProjectFiles and emit review.solution_files_changed, while changedProjectFilesCoverage splits authoritative and solutionMetadata counts; solution metadata never invalidates exact-move, declaration-survivor, ownership, dependency, build, or symbol-resolution proof" },
+                new { id = "review-default-baseline-honesty", summary = "v0.11.4 bounded git_index_baseline_unavailable gives refresh_index or explicit baseRef guidance; caller-supplied invalid refs remain bad_request" },
+                new { id = "review-unmapped-change-coverage", summary = "v0.11.2 unmapped change coverage: namespace and file-level C# regions not fully covered by reviewable indexed symbols appear in bounded unmappedChanges records with explicit side, old/new coordinates, reason, and total/returned/truncated" },
+                new { id = "review-index-epoch-consistency", summary = "review_pack pins rows and response metadata to one stable SQLite read epoch; an overlapping refresh cannot mix old symbols with new ownership or health evidence" },
+                new { id = "review-per-hunk-type-mapping", summary = "Type/member suppression is evaluated per old/new hunk, so a type-header edit remains reviewable when a separate hunk touches one of its members" },
+                new { id = "stable-note-ids", summary = "diagnostic notes carry MACHINE-MATCHABLE stable ids (a0b): consumers match ids, not prose. review_pack notes are {id, text} natively; retrofitted additively elsewhere — references.noteId (zero_loading_gap), impact.transitiveNoteId (transitive_single_count), type_hierarchy.noteId (heuristic_fallback), search_text.noteId (did_you_mean | elsewhere_matches | absent_everywhere). Ids are the contract — prose may be reworded, ids may not; one id per CAUSE" },
+                new { id = "worktree-indexes", summary = "On Windows and Linux, worktrees lists anchored sibling status and index_worktree creates or refreshes a Git-validated target; macOS is unsupported for both operations" },
+                new { id = "index-write-destination-authority", summary = "IndexManager and direct IndexBuilder writes validate database/WAL/SHM/rollback-journal leaves and parents: Windows pins the full no-delete-share chain, Linux writes through a held directory fd, and macOS performs startup and per-open identity revalidation only" },
+                new { id = "worktree-index-platform-policy", summary = "Windows uses targeted indexed_commit-to-HEAD plus dirt reconciliation, Linux uses an anchored full sweep with usedFullSweep=true, and macOS returns unsupported_platform" },
+                new { id = "worktree-index-destination-isolation", summary = "Sibling SQLite work stays in private staging; an anchored no-follow destination atomically publishes the checkpointed database and refuses linked database, WAL, SHM, and rollback-journal paths without touching their targets" },
+                new { id = "worktree-index-lease", summary = "A cross-process ownership lease guards every writable Phoenix index lifetime; index_worktree returns worktree_index_locked while another Phoenix owns that target" },
+                new { id = "worktree-response-budget", summary = "worktrees may trim every item to zero, and index_worktree UTF-8-bounds reflected paths/details with truncation metadata before enforcing the complete hardBytes envelope" },
+                new { id = "single-workspace-writer-mutex", summary = "v0.12.34 one crash-recoverable identity-named mutex per workspace/worktree elects the sole watcher, refresh, rebuild, and mutation owner; cross-worktree acquisition is zero-wait" },
+                new { id = "index-destination-claim", summary = "v0.12.34 a crash-recoverable database claim binds --index-db to its physical workspace and publishes ready|rebuilding; follower double-checks prevent new SQLite opens from barging across replacement" },
+                new { id = "semantic-large-repo-budget", summary = "default all candidates; positive maxProjects bounds" },
+                new { id = "related-tests-signal", summary = "related_tests / impact / context_pack test groups carry 'signal' — the strongest usage shape among sampled mention lines: callSite > typeUsage > nameMention. A heuristic lead-strength label, not a compiler fact; omitted on naming-convention / project-reference groups and on an ungraded mention group — absent means UNGRADED, never nameMention. Samples carry the real mention line + text when located" },
+            },
+            tools = new[]
+            {
+                "server_capabilities", "repo_overview", "find_file", "search_text", "outline",
+                "source_context", "search_symbol", "symbol_at", "definition", "references",
+                "implementations", "callers", "callees", "type_hierarchy", "related_tests",
+                "dependency_path", "config_lookup", "batch_outline", "context_pack", "impact",
+                "project_graph", "projects_containing", "refresh_index",
+                "worktrees", "index_worktree", "review_pack", "open_operations_portal",
+            },
+            budgets = new
+            {
+                softBytes = Json.SoftBudgetBytes,
+                hardBytes = Json.HardBudgetBytes,
+                defaultLimit = 20,
+                indivisibleSemanticIdentity = "definition/references may exceed hardBytes only to preserve one complete compiler identity; responseBudget reports the measured exception",
+            },
+            confidenceModel = new
+            {
+                exact = "compiler-verified Roslyn semantic resolution",
+                indexed = "index/syntax-backed evidence, including bounded FCS compiler checks that remain partial — inspect partialReason and confirm source before edits",
+                heuristic = "naming/text inference — a lead, verify before relying on it",
+            },
+            semantic = new
+            {
+                engine = "Roslyn ad hoc for C#; bounded FCS for compile-owned .fs/.fsi",
+                frameworkRefsAvailable,
+                exactTools = new[] { "definition", "references", "implementations" },
+                exactToolsLanguage = "cs",
+                csharpExactTools = new[] { "definition", "references", "implementations" },
+                fsharpIndexedTools = new[] { "symbol_at", "definition" },
+                fsharpSyntaxIndexedTools = new[] { "search_symbol" },
+                note = "C# exact results are scoped to loaded candidate clusters. F# is compiler-checked but indexed/partial and limited to one proven physical project/TFM; restored package compile assets are snapshotted, project closure remains unsupported, and partial fields report bounded authority.",
+                fsharpSyntaxNote = "F# search_symbol is syntax-indexed across the available owner/TFM parse contexts, including orphaned .fs/.fsi files; it is not compiler-checked, reports actionable incomplete context coverage as partial, and keeps ordinary SDK/import limits advisory.",
+            },
+            index = new
+            {
+                state,
+                mode = h.AccessMode,
+                stateTruncated = stateTruncated ? true : (bool?)null,
+                stateBytes,
+                // Live build progress (bead two, field-requested): phase + monotonic counters +
+                // elapsedMs; filesTotal only once the scan knows it; absent unless building.
+                // No ETA/percent by design — see the BuildProgress doc for the honesty rationale.
+                progress = ProgressJson(h),
+                indexVersion,
+                indexVersionTruncated = indexVersionTruncated ? true : (bool?)null,
+                indexVersionBytes,
+                indexedAtUtc,
+                indexedAtUtcTruncated = indexedAtUtcTruncated ? true : (bool?)null,
+                indexedAtUtcBytes,
+                lastRefreshUtc,
+                lastRefreshUtcTruncated = lastRefreshUtcTruncated ? true : (bool?)null,
+                lastRefreshUtcBytes,
+                h.PendingChanges,
+                pendingChangesKnown = h.AccessMode == IndexManager.WriterAccessMode
+                    ? (bool?)null
+                    : false,
+                // z4c: the pair that turns 'refreshing' from a binary into movement — pending
+                // drains while processed climbs; both flat = a stuck pump, not a busy one.
+                pendingProcessed = h.PendingProcessed,
+                error,
+                errorTruncated = errorTruncated ? true : (bool?)null,
+                errorBytes,
+                refreshIncompleteReason = h.RefreshIncompleteReason,
+                incompleteSourcePaths = incompletePaths,
+                incompleteSourcePathCount = h.RefreshIncompleteReason is null
+                    ? (int?)null
+                    : h.RefreshIncompletePathCount,
+                incompleteSourcePathCountLowerBound =
+                    h.RefreshIncompleteReason is not null &&
+                    h.RefreshIncompletePathCountIsLowerBound
+                        ? true
+                        : (bool?)null,
+                incompleteSourcePathsTruncated = incompletePathsTruncated
+                    ? true
+                    : (bool?)null,
+                dbBytes = h.DbBytes,
+                workspaceRoot,
+                workspaceRootTruncated = workspaceRootTruncated ? true : (bool?)null,
+                workspaceRootBytes,
+            },
+        };
+        return applyBudget
+            ? Json.WithCapabilitiesBudget(envelope)
+            : Json.Serialize(envelope);
+    }
+
+    private static string? CapabilityText(string? value, int maxBytes,
+        out bool truncated, out int? originalBytes)
+    {
+        if (value is null)
+        {
+            truncated = false;
+            originalBytes = null;
+            return null;
+        }
+
+        string result = Json.Utf8Prefix(value, maxBytes, out truncated);
+        originalBytes = truncated ? Json.Utf8Bytes(value) : null;
+        return result;
+    }
+
+    [McpServerTool(Name = "repo_overview")]
+    [Description("Compact workspace map: project/solution/file/symbol counts, styles, target frameworks, and index freshness. Call before starting code work.")]
+    public string RepoOverview()
+    {
+        if (NotReady() is { } notReady) return notReady;
+        using var q = _manager.OpenQueries();
+        var stats = q.Overview();
+        var h = _manager.Health();
+
+        // Live HEAD lookup (occasional call — not in the per-response meta). When it differs
+        // from the indexed commit, a branch switch / pull is still reconciling; indexStatus
+        // already reports the transient lag. gitStatus is HONEST about failure (field: a silent
+        // absence after the hang guard fired left "why is headCommit empty?" undiagnosable):
+        // "ok" | "unavailable" (git absent / not a repo) | "timed_out" (git slow — the guard fired,
+        // not a hang; timeoutMs says how long it waited).
+        var (headCommit, gitStatus) = _manager.CurrentHeadCommitEx();
+        object? git = gitStatus == "unavailable" && h.IndexedCommit is null
+            ? null // never was a git workspace — omit the block entirely
+            : new
+            {
+                status = gitStatus,
+                timeoutMs = gitStatus == "timed_out" ? 10000 : (int?)null,
+                indexedCommit = h.IndexedCommit,
+                indexedBranch = h.IndexedBranch,
+                headCommit,
+                headMatchesIndex = h.RefreshIncompleteReason is null &&
+                    headCommit is not null && h.IndexedCommit is not null
+                    && string.Equals(headCommit, h.IndexedCommit, StringComparison.OrdinalIgnoreCase),
+            };
+
+        return Json.Serialize(new
+        {
+            workspaceRoot = h.WorkspaceRoot,
+            projects = new
+            {
+                total = stats.Projects,
+                csharp = stats.CSharpProjects,
+                fsharp = stats.FSharpProjects,
+                legacyStyle = stats.LegacyProjects,
+                sdkStyle = stats.SdkProjects,
+                test = stats.TestProjects,
+            },
+            solutions = stats.Solutions,
+            csFiles = stats.CsFiles,
+            fsFiles = stats.FsFiles,
+            mdFiles = stats.MarkdownFiles,
+            sqlFiles = stats.SqlFiles,
+            totalLines = stats.TotalLines,
+            symbols = stats.Symbols,
+            generatedFiles = stats.GeneratedFiles,
+            // C# plus compiled-form F# source (.fs/.fsi) in no project's compile set — code no
+            // project compiler consumes. F# scripts (.fsx) are intentionally excluded. The graph
+            // expands <Compile Include> globs and honors <Compile Remove>; residual gaps are shared
+            // .projitems, props-level globs, and ignored Conditions. Per C# symbol hit: orphaned.
+            orphanedFiles = stats.OrphanedFiles,
+            targetFrameworks = stats.TfmBreakdown,
+            // Vendored/generated directory globs detected in the index — pass to search_symbol /
+            // search_text excludePath (or firstPartyOnly) to drop third-party noise. [] when none.
+            suggestedExcludes = q.SuggestedExcludes(),
+            git,
+            meta = Meta.From(h, "indexed", "text"),
+        });
+    }
+
+    // ---------------------------------------------------------------- files / text
+
+    [McpServerTool(Name = "find_file")]
+    [Description("Find files by name or glob (e.g. 'InvoiceService.cs', '*Controller.cs', 'src/Billing/**/*.csproj'). A first-page exact-path miss may include pathSuggestions with up to three ranked pinned-index paths plus total/truncated coverage. Cheap path-only lookup; use search_symbol for code symbols.")]
+    public string FindFile(
+        [Description("File name or glob pattern. '*' matches any characters including '/'.")] string nameOrGlob,
+        [Description("Exclude paths matching this glob (e.g. '3rdparty/**' to drop vendored third-party files).")] string? excludePath = null,
+        [Description("Max results (default 20, max 100).")] int limit = 20,
+        [Description("Opaque cursor from a previous call to fetch the next page.")] string? cursor = null)
+    {
+        if (NotReady() is { } notReady) return notReady;
+        (limit, int offset, _) = Page(limit, cursor);
+        using var q = _manager.OpenQueries();
+        var excludes = excludePath is { Length: > 0 } ex ? new[] { ex } : null;
+        var files = q.FindFiles(nameOrGlob, limit + 1, excludes, offset);
+        bool hadMore = files.Count > limit;
+        if (hadMore) files.RemoveAt(files.Count - 1);
+        PathSuggestionResult suggestions = offset == 0 && files.Count == 0
+            ? q.SuggestFilePaths(nameOrGlob, excludePaths: excludes)
+            : new([], 0);
+
+        var meta = Meta.From(_manager.Health(), "indexed", "text");
+        // nextCursor resumes at offset + the count actually RETURNED: the byte-budget shrink drops the
+        // page tail (keeping a prefix), so a fixed offset+limit would skip the dropped items (bug e2q).
+        return Json.WithAuxiliaryListBudget(
+            files,
+            suggestions.Paths.ToList(),
+            (items, truncated, suggestionPaths, suggestionsBudgetTruncated) => new
+            {
+                files = items.Select(f => new
+                {
+                    f.Path,
+                    language = f.Language,
+                    sizeBytes = f.Size,
+                    lines = f.LineCount,
+                    f.IsGenerated,
+                }),
+                nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
+                truncated,
+                pathSuggestions = PathSuggestionsJson(
+                    suggestions.Total,
+                    suggestionPaths,
+                    suggestionsBudgetTruncated),
+                meta,
+            });
+    }
+
+    [McpServerTool(Name = "search_text")]
+    [Description("Ranked full-text search over indexed C# and F# source, Markdown, SQL, and project/solution/config files. WHOLE-WORD and token-based by default: 'Batch' does NOT match 'Batching'. For \\s / alternation / character classes set regex:true (.NET regex, line-based, scoped by pathGlob) — still not rust/ripgrep syntax; other file types need grep. Returns 'precise' hits (all query tokens on one line) by default; set partials='always' for weaker co-occurrence leads. Token mode grades at most 300 filtered candidate files and exposes filesScanned/filesAtLeast/partial when that cap is reached. Use context (or contextBefore/contextAfter) for surrounding lines, like grep -C/-B/-A. Best for literals, config keys, error messages, comments, documentation, and database scripts; only C#/F# participate in syntax or compiler semantics.")]
+    public string SearchText(
+        [Description("Text to find. Multi-word queries are AND-ed by token; a line with all tokens is 'precise'.")] string query,
+        [Description("Restrict to paths matching this glob (e.g. 'src/Billing/**').")] string? pathGlob = null,
+        [Description("Exclude paths matching this glob (e.g. '3rdparty/**' to drop vendored third-party source).")] string? excludePath = null,
+        [Description("Drop hits under known vendor/generated dir names (3rdparty, vendor, external, generated...) at ANY depth. Matches the per-hit noise flag; convenience over excludePath.")] bool firstPartyOnly = false,
+        [Description("Restrict to files compiled by this project name.")] string? project = null,
+        [Description("'all' (default), 'production' (exclude tests), or 'tests'.")] string scope = "all",
+        [Description("Restrict by file language: cs | fs | md | sql | csproj | fsproj | sln | config.")] string? lang = null,
+        [Description("Include generated files (default false).")] bool includeGenerated = false,
+        [Description("Weaker 'some query tokens co-occur, not all on one line' leads: 'never' (default — precise only), 'auto' (fill space precise did not), or 'always'. filesMatchedAcrossLines still flags files where all tokens co-occur across lines.")] string partials = "never",
+        [Description("Lines of context around each hit, like grep -C (0-20, default 0 = just the line). Applies both before and after.")] int context = 0,
+        [Description("Context lines BEFORE each hit (grep -B); overrides 'context' when set.")] int? contextBefore = null,
+        [Description("Context lines AFTER each hit (grep -A); overrides 'context' when set.")] int? contextAfter = null,
+        [Description("Treat 'query' as a .NET regex instead of tokens — NOT rust/ripgrep syntax. LINE-BASED: a pattern spanning multiple lines matches NOTHING. Case-sensitive; prefix (?i) for insensitive. Scope with pathGlob; ReDoS-guarded (per-match timeout + overall budget) with honest coverage (filesTotal/budgetHit/timedOut). Overrides whole-word/partials.")] bool regex = false,
+        [Description("Max hits (default 20, max 100).")] int limit = 20,
+        [Description("Opaque cursor from a previous call.")] string? cursor = null)
+    {
+        if (NotReady() is { } notReady) return notReady;
+        (limit, int offset, _) = Page(limit, cursor);
+        // Fail-safe: an unrecognized value falls back to the precise-only default, not the more
+        // permissive "auto" — a typo must not silently reintroduce the noisy partial bucket.
+        string mode = partials switch { "never" or "auto" or "always" => partials, _ => "never" };
+        int ctxBefore = Math.Clamp(contextBefore ?? context, 0, 20);
+        int ctxAfter = Math.Clamp(contextAfter ?? context, 0, 20);
+        using var q = _manager.OpenQueries();
+        if (regex)
+            return RegexResponse(q, query, pathGlob, excludePath, firstPartyOnly, project, scope, lang, includeGenerated, limit, offset, ctxBefore, ctxAfter);
+        var filter = new IndexQueries.TextFilter(
+            PathGlob: pathGlob,
+            Project: project,
+            IncludeGenerated: includeGenerated,
+            TestsOnly: scope switch { "tests" => true, "production" => false, _ => null },
+            Lang: lang,
+            ExcludePaths: BuildExcludes(excludePath, firstPartyOnly));
+        var result = q.SearchTextGraded(query, limit + 1, filter, maxCandidateFiles: 300, offset: offset, partialsMode: mode, ctxBefore: ctxBefore, ctxAfter: ctxAfter);
+        var hits = result.Hits;
+        bool hadMore = hits.Count > limit;
+        if (hadMore) hits.RemoveAt(hits.Count - 1);
+
+        // Only surface the file-level "tokens co-occur but not on one line" signal when the
+        // page shows no precise hits — that is exactly when it changes the caller's read.
+        bool anyPrecise = hits.Any(h => h.MatchKind == "precise");
+        var acrossLines = !anyPrecise && result.FilesMatchedAcrossLines.Count > 0
+            ? result.FilesMatchedAcrossLines.Take(10).ToList()
+            : null;
+
+        // Dead-end redirect (field evidence: an agent scoped pathGlob to the wrong dir, got a correct 0,
+        // and fell back to manually reading files). The index knows where matches actually are — one
+        // bounded unscoped probe turns "0 hits" into "0 HERE, but they exist THERE" or an honest
+        // "absent everywhere". Only on a first-page total dead end, so the probe costs nothing normally.
+        object? elsewhere = null;
+        object? didYouMean = null;
+        string? note = null;
+        string? noteId = null; // a0b: stable id for the CAUSE behind `note` (catalog: NoteIds)
+        // Token-VARIANT probe (field: searched 'Mode4', the code says 'Mode 4' -> 0 hits, agent fell
+        // back to grep). Probes the split (Mode4 -> "Mode 4") and joined ("Mode 4" -> Mode4) forms; a
+        // hit is SUGGESTED via didYouMean, never silently substituted. Called from EVERY zero-precise
+        // first-page branch — review showed the join direction is starved if gated to total dead ends
+        // only (common tokens co-occur across lines in any real repo, landing in the co-occur or
+        // partial-leads branches instead). Counts are hedged: the probe grades <=100 candidate files.
+        void ProbeVariants(bool replaceNote)
+        {
+            // Candidate order is a policy: token-FORM variants (Mode4 <-> "Mode 4") first —
+            // they preserve the caller's spelling — then SPELLING near-misses (1ly, field:
+            // didYouMean never fired on identifier typos because only form variants existed).
+            // Spelling candidates only for a single bare identifier-ish token: multi-token or
+            // punctuated queries aren't symbol names, and the vocabulary is the symbol index.
+            var candidates = new List<(string Variant, string Kind)>();
+            if (QueryVariants.SplitVariant(query) is { } split) candidates.Add((split, "tokenForm"));
+            if (QueryVariants.JoinVariant(query) is { } join) candidates.Add((join, "tokenForm"));
+            if (query.Length >= 4 && query.All(c => char.IsLetterOrDigit(c) || c == '_'))
+            {
+                candidates.AddRange(q.NearMissSymbolNames(query, 3).Select(n => (n, "spelling")));
+            }
+            foreach (var (variant, kind) in candidates)
+            {
+                var vp = q.SearchTextGraded(variant, 5, new IndexQueries.TextFilter(IncludeGenerated: true),
+                    maxCandidateFiles: 100, offset: 0, partialsMode: "never");
+                if (vp.TotalPrecise > 0)
+                {
+                    // Structured samples (dzi): the redirect used to drop exactly the owner
+                    // context main hits carry; samplePaths stays for compatibility.
+                    var sampleHits = vp.Hits.Take(3).ToList();
+                    var sampleOwners = OwningSymbols(q, sampleHits);
+                    didYouMean = new
+                    {
+                        query = variant,
+                        variantKind = kind, // 'tokenForm' (Mode4 <-> "Mode 4") | 'spelling' (edit distance 1, probed)
+                        preciseCount = vp.TotalPrecise,
+                        samplePaths = vp.Hits.Select(h => h.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToList(),
+                        samples = sampleHits.Select(h => new
+                        {
+                            path = h.FilePath,
+                            h.Line,
+                            containingSymbol = sampleOwners.TryGetValue((h.FilePath, h.Line), out var cs) ? cs : null,
+                        }),
+                    };
+                    string what = kind == "spelling"
+                        ? $"the near-miss identifier '{variant}' (edit distance 1, from the symbol index)"
+                        : $"the variant '{variant}'";
+                    string msg = $"{what} has at least {vp.TotalPrecise} precise line(s) in the probed candidates (see didYouMean) — retry with that query"
+                        + (vp.Hits.All(h => h.IsGenerated) ? " with includeGenerated:true (the probe hits are all in generated files)" : "") + ".";
+                    note = replaceNote ? $"No file contains all query tokens together, but {msg}" : $"{note} Also: {msg}";
+                    noteId = NoteIds.SearchDidYouMean; // the suggestion is the actionable cause now
+                    break;
+                }
+            }
+        }
+        if (result.TotalPrecise == 0 && result.TotalPartial == 0 && offset == 0)
+        {
+            bool scoped = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 } || firstPartyOnly
+                || project is not null || scope != "all" || lang is not null;
+            if (IndexQueries.FtsQuery(query).Length == 0)
+            {
+                // Pure punctuation/whitespace: the tokenizer sees nothing, so a probe is pointless.
+                note = "The query has no indexable tokens (letters/digits/underscore) — token search cannot match it. Use regex:true for punctuation patterns, or grep.";
+            }
+            else
+            {
+                var probe = q.SearchTextGraded(query, 5, new IndexQueries.TextFilter(IncludeGenerated: true),
+                    maxCandidateFiles: 100, offset: 0, partialsMode: "never");
+                if (probe.TotalPrecise > 0)
+                {
+                    // Structured samples (dzi): parity with main hits — the redirect used to
+                    // ship bare path strings, dropping the containingSymbol context that makes
+                    // a lead actionable. samplePaths stays for compatibility (their spec rows
+                    // reference it). The co-occur branch below keeps paths only — its evidence
+                    // is file-level (no line to anchor an owner on).
+                    var probeSamples = probe.Hits.Take(3).ToList();
+                    var probeOwners = OwningSymbols(q, probeSamples);
+                    elsewhere = new
+                    {
+                        preciseCount = probe.TotalPrecise,
+                        samplePaths = probe.Hits.Select(h => h.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToList(),
+                        samples = probeSamples.Select(h => new
+                        {
+                            path = h.FilePath,
+                            h.Line,
+                            containingSymbol = probeOwners.TryGetValue((h.FilePath, h.Line), out var cs) ? cs : null,
+                        }),
+                    };
+                    bool probeAllGenerated = probe.Hits.All(h => h.IsGenerated);
+                    // "Outside your filters" covers every filter, not just pathGlob: a samplePath INSIDE
+                    // the caller's glob means scope/lang/project/excludePath excluded it, not the glob.
+                    note = scoped
+                        ? $"0 hits within your filters, but at least {probe.TotalPrecise} precise line(s) exist outside them (see elsewhere.samplePaths; a sample inside your pathGlob means a different filter — scope/lang/project/excludePath — excluded it) — widen or relax filters."
+                          + (probeAllGenerated ? " The probe hits are all in generated files — pass includeGenerated:true." : "")
+                        : "The probe found matches only in generated files — pass includeGenerated:true.";
+                    noteId = NoteIds.SearchElsewhereMatches;
+                }
+                else if (probe.TotalPartial > 0)
+                {
+                    // The tokens DO co-occur, just never on one line (the probe's partial signal —
+                    // asserting "absent anywhere" here would be false; a precise line can also exist
+                    // below the probe's candidate cap, hence "in the probed candidates").
+                    elsewhere = new
+                    {
+                        coOccurringFiles = probe.FilesMatchedAcrossLines.Count,
+                        samplePaths = probe.FilesMatchedAcrossLines.Take(3).ToList(),
+                    };
+                    note = $"No single line in the probed candidates has all query tokens, but they co-occur across lines in {probe.FilesMatchedAcrossLines.Count} file(s) (see elsewhere.samplePaths) — drop a token or retry with partials:'always'{(scoped ? " without your filters" : "")}.";
+                    ProbeVariants(replaceNote: false); // a variant with PRECISE lines beats cross-line leads
+                }
+                else
+                {
+                    // Provably index-wide: an FTS AND over all files matched nothing (the inner LIMIT
+                    // truncates results, not the match), so no file holds all tokens together.
+                    note = "No file contains all query tokens together (whole-word: 'Batch' does not match 'Batching'). Check spelling, drop a token, try search_symbol match='substring' for C# identifiers, or grep for non-indexed file types.";
+                    noteId = NoteIds.SearchAbsentEverywhere; // ProbeVariants upgrades this to did_you_mean when a suggestion lands
+                    ProbeVariants(replaceNote: true);
+                }
+            }
+        }
+        else if (result.TotalPrecise == 0 && result.TotalPartial > 0 && mode == "never")
+        {
+            note = $"0 precise lines; {result.TotalPartial} weaker cross-line partial lead(s) exist — retry with partials:'always'.";
+            if (offset == 0) ProbeVariants(replaceNote: false);
+        }
+        else if (result.TotalPrecise >= 1000 && offset == 0)
+        {
+            note = $"Common term: {result.TotalPrecise} precise lines in the scanned candidate set — "
+                 + (pathGlob is { Length: > 0 } ? "narrow the glob further or add tokens to sharpen." : "scope with pathGlob or add tokens to sharpen.");
+        }
+
+        // Best-effort owning symbol per hit (feedback: jump from a text match to the owning
+        // method/type without a follow-up symbol_at). Only .cs files carry symbols.
+        var owners = OwningSymbols(q, hits);
+
+        var meta = Meta.From(_manager.Health(), "indexed", "text");
+        return Json.WithListBudget(hits, (items, truncated) => new
+        {
+            preciseCount = result.TotalPrecise,
+            partialCount = result.TotalPartial,
+            // Token grading is intentionally file-bounded after every caller filter has been
+            // applied. One look-ahead row makes a clipped candidate set observable; counts are
+            // lower bounds exactly when partialReason is present.
+            filesScanned = result.CandidateFilesScanned,
+            filesTotal = result.CandidateFilesTruncated
+                ? (int?)null
+                : result.CandidateFilesScanned,
+            filesAtLeast = result.CandidateFilesAtLeast,
+            budgetHit = result.CandidateFilesTruncated ? true : (bool?)null,
+            countsAreLowerBounds = result.CandidateFilesTruncated ? true : (bool?)null,
+            hits = items.Select(t => new
+            {
+                path = t.FilePath,
+                t.Line,
+                text = t.LineText,
+                before = t.Before, // surrounding lines — present only when context was requested
+                after = t.After,
+                t.IsGenerated,
+                matchKind = t.MatchKind,
+                matched = t.MatchKind == "partial" ? t.Matched : null, // tokens only meaningful on partials
+                containingSymbol = owners.TryGetValue((t.FilePath, t.Line), out var cs) ? cs : null,
+                noise = IndexQueries.IsVendorPath(t.FilePath) ? true : (bool?)null, // under a vendored/generated dir
+            }),
+            filesMatchedAcrossLines = acrossLines,
+            elsewhere, // dead-end redirect: where matches DO exist when the filtered result is empty
+            didYouMean, // dead-end token-form suggestion (Mode4 -> "Mode 4"); a suggestion, never a substitution
+            nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
+            truncated,
+            partial = result.CandidateFilesTruncated ? true : (bool?)null,
+            partialReason = result.CandidateFilesTruncated
+                ? "candidate_file_cap"
+                : null,
+            // Contextual, not verbatim (feedback: the fixed explainer was duplicated token waste; the
+            // whole-word/precise semantics live in the tool description). Present only when it changes
+            // the caller's next move: redirect, absent, partial-leads, or common-term steering.
+            note,
+            noteId, // a0b: stable id for the cause (only the cataloged causes carry one)
+            meta,
+        });
+    }
+
+    // Best-effort owning symbol per .cs hit — BATCHED (one grouped query per ~40 keys) instead of one
+    // InnermostSymbolAt point query per hit (9fr N+1: a full page issued up to ~100 queries).
+    private static Dictionary<(string Path, int Line), string> OwningSymbols(IndexQueries q, IEnumerable<TextHit> hits)
+    {
+        var keys = hits.Where(h => h.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            .Select(h => (h.FilePath, h.Line)).Distinct().ToList();
+        var owners = new Dictionary<(string, int), string>();
+        foreach (var (key, sym) in q.InnermostSymbolsAt(keys))
+            owners[key] = sym.Container is { Length: > 0 } c ? $"{c}.{sym.Name}" : sym.Name;
+        return owners;
+    }
+
+    // Regex mode for search_text (Batch B): .NET regex over indexed content, FTS-narrowed by required
+    // literals when possible, else a bounded scan; ReDoS-guarded. Mirrors the token response shape
+    // (context lines, containingSymbol, noise) so callers get one consistent hit format.
+    private string RegexResponse(IndexQueries q, string pattern, string? pathGlob, string? excludePath,
+        bool firstPartyOnly, string? project, string scope, string? lang, bool includeGenerated,
+        int limit, int offset, int ctxBefore, int ctxAfter)
+    {
+        var filter = new IndexQueries.TextFilter(
+            PathGlob: pathGlob, Project: project, IncludeGenerated: includeGenerated,
+            TestsOnly: scope switch { "tests" => true, "production" => false, _ => null },
+            Lang: lang, ExcludePaths: BuildExcludes(excludePath, firstPartyOnly));
+        var res = q.SearchRegex(pattern, filter, maxCandidateFiles: 300, offset, limit + 1, ctxBefore, ctxAfter);
+        if (res.Error is not null)
+            return Json.Serialize(new { error = "bad_request", detail = res.Error, meta = Meta.From(_manager.Health(), "indexed", "text") });
+
+        var hits = res.Hits;
+        bool hadMore = hits.Count > limit;
+        if (hadMore) hits.RemoveAt(hits.Count - 1);
+
+        // Owning symbol per .cs hit — parity with token search_text (feedback loved containingSymbol).
+        var owners = OwningSymbols(q, hits);
+
+        // Contextual note — only when it changes the caller's next move (timeout, clipped coverage, or
+        // a zero-hit that needs the line-based/case-sensitivity reminder). Silent on a clean success.
+        bool scoped = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 } || firstPartyOnly
+            || project is not null || scope != "all" || lang is not null;
+        bool coverageClipped = res.FilesTotal > res.FilesScanned;
+        string? note = res.TimedOut
+            ? "PARTIAL: the scan hit its time budget. Narrow with pathGlob or add a distinctive whole-word literal (e.g. \\bWord\\b) so FTS can pre-narrow."
+            : coverageClipped
+                ? $"PARTIAL coverage: scanned {res.FilesScanned} of {res.FilesTotal} candidate files (cap) — narrow with pathGlob or add a whole-word literal (\\bWord\\b) so FTS can pre-narrow."
+                : res.TotalMatches == 0
+                    ? ".NET regex is LINE-BASED — a pattern spanning multiple lines matches NOTHING — and case-sensitive without (?i)."
+                      + (scoped ? " The scan honored your filters; retry without them to check elsewhere." : "")
+                    : null;
+
+        var meta = Meta.From(_manager.Health(), "indexed", "text");
+        return Json.WithListBudget(hits, (items, truncated) => new
+        {
+            mode = "regex",
+            matchCount = res.TotalMatches,
+            filesScanned = res.FilesScanned,
+            // Coverage honesty: candidates in scope BEFORE the cap; budgetHit means coverage was clipped
+            // (cap or timeout), so "0 matches" or a small count is NOT proof of absence.
+            filesTotal = res.FilesTotal,
+            budgetHit = coverageClipped ? true : (bool?)null,
+            narrowed = res.Narrowed,                 // FTS-pre-narrowed by required literals, vs a full scan
+            narrowedOn = res.Literals,               // WHICH whole-token literals narrowed (null on a scan)
+            timedOut = res.TimedOut ? true : (bool?)null,
+            hits = items.Select(t => new
+            {
+                path = t.FilePath,
+                t.Line,
+                text = t.LineText,
+                before = t.Before,
+                after = t.After,
+                t.IsGenerated,
+                containingSymbol = owners.TryGetValue((t.FilePath, t.Line), out var cs) ? cs : null,
+                noise = IndexQueries.IsVendorPath(t.FilePath) ? true : (bool?)null,
+            }),
+            nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
+            truncated,
+            note,
+            meta,
+        });
+    }
+
+    // ---------------------------------------------------------------- outline / source
+
+    [McpServerTool(Name = "outline")]
+    [Description("Syntactic map of a file (namespaces, types, members with line spans) without reading the body. A file_not_indexed response may include pathSuggestions with up to three ranked pinned-index paths plus total/truncated coverage. ALWAYS call this before reading a large file, then fetch only needed spans via source_context. For F# files, selectedParseContext and availableParseContexts identify only the .fsproj/target-framework parser options used for #if and syntax; they do not select assemblies, builds, reference resolution, or semantic workspaces.")]
+    public string Outline(
+        [Description("Workspace-relative file path (forward slashes).")] string path,
+        [Description("1 = namespaces + types, 2 = + members (default), 3 = reserved (currently same as 2).")] int depth = 2)
+    {
+        if (NotReady() is { } notReady) return notReady;
+        string normPath = NormalizePath(path);
+        using var q = _manager.OpenQueries();
+        FileHit? file = q.FileByPath(normPath);
+        if (file is null)
+        {
+            PathSuggestionResult suggestions = q.SuggestFilePaths(normPath);
+            return Json.WithListBudget(
+                suggestions.Paths.ToList(),
+                (suggestionPaths, suggestionsBudgetTruncated) => new
+                {
+                    error = "file_not_indexed",
+                    path,
+                    pathSuggestions = PathSuggestionsJson(
+                        suggestions.Total,
+                        suggestionPaths,
+                        suggestionsBudgetTruncated),
+                    meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+                });
+        }
+        if (file.Language == "fs" &&
+            (Path.GetExtension(normPath).Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+             Path.GetExtension(normPath).Equals(".fsi", StringComparison.OrdinalIgnoreCase)))
+        {
+            return FSharpOutline(path, normPath, file, depth);
+        }
+        if (file.Language != "cs")
+        {
+            return UnsupportedLanguage(path, file.Language, "outline");
+        }
+        var rows = q.Outline(normPath);
+
+        var byId = rows.ToDictionary(r => r.Id);
+        var children = new Dictionary<long, List<SymbolHit>>();
+        var roots = new List<SymbolHit>();
+        foreach (var row in rows)
+        {
+            if (row.ParentId is { } pid && byId.ContainsKey(pid))
+            {
+                (children.TryGetValue(pid, out var list) ? list : children[pid] = new()).Add(row);
+            }
+            else
+            {
+                roots.Add(row);
+            }
+        }
+
+        // Memoized per type identity: BuildNested runs up to twice on budget degradation,
+        // and batch_outline multiplies calls — one lookup per unique partial type, total.
+        // Arity is part of the identity (szs): partial Foo and partial Foo<T> in the SAME file
+        // are different types with different partial-file sets — one cache slot each.
+        var partialCache = new Dictionary<(string Name, string? Ns, string Kind, string? Container, int Arity), List<string>>();
+
+        // includeMembers=false keeps only namespace/type nodes (the depth-1 view);
+        // true adds member leaves (methods, properties, ...) — the depth-2 view.
+        object Node(SymbolHit s, bool includeMembers)
+        {
+            List<object>? memberNodes = null;
+            if (children.TryGetValue(s.Id, out var kids))
+            {
+                var kept = kids
+                    .Where(k => includeMembers || TypeKinds.Contains(k.Kind) || k.Kind == "namespace")
+                    .Select(k => Node(k, includeMembers))
+                    .ToList();
+                if (kept.Count > 0) memberNodes = kept;
+            }
+            // Partial-type cross-links (feedback): the other files declaring this type,
+            // so a caller need not run definition(name) just to find them.
+            List<string>? partialFiles = null;
+            bool partialFilesMore = false;
+            if (s.IsPartial && TypeKinds.Contains(s.Kind))
+            {
+                var key = (s.Name, s.Ns, s.Kind, s.Container, s.Arity);
+                if (!partialCache.TryGetValue(key, out var others))
+                {
+                    // Arity-matched (szs): without it, outline(FooOfT.cs) listed partial class Foo's
+                    // files as Foo<T>'s "other halves" — navigation to the WRONG type's declarations.
+                    others = q.PartialDeclarationFiles(s.Name, s.Ns, s.Kind, s.Container, normPath, s.Arity); // up to 11
+                    partialCache[key] = others;
+                }
+                if (others.Count > 0)
+                {
+                    partialFilesMore = others.Count > 10;
+                    partialFiles = partialFilesMore ? others.Take(10).ToList() : others;
+                }
+            }
+            return new
+            {
+                s.Name,
+                s.Kind,
+                s.Signature,
+                s.Accessibility,
+                modifiers = s.Modifiers, // bt7: virtual/override/abstract/static/sealed..., omitted when none
+                accessors = AccessorsJson(s.Accessors), // hu7: {get, set} only when an accessor differs
+                s.StartLine,
+                s.EndLine,
+                isPartial = s.IsPartial ? true : (bool?)null,
+                partialFiles,
+                partialFilesTruncated = partialFilesMore ? true : (bool?)null,
+                attributes = s.AttrMarkers,
+                members = memberNodes,
+            };
+        }
+
+        var meta = Meta.From(_manager.Health(), "indexed", "syntax");
+        bool generated = file.IsGenerated;
+
+        string BuildNested(bool includeMembers, bool truncated) => Json.Serialize(new
+        {
+            path,
+            isGenerated = generated,
+            symbols = roots.Select(r => Node(r, includeMembers)).ToList(),
+            truncated,
+            meta,
+        });
+
+        // The nested tree lives under one namespace root, so trimming the top-level list
+        // cannot bound it. Degrade instead: requested depth -> types-only -> flat capped.
+        string nested = BuildNested(includeMembers: depth >= 2, truncated: false);
+        if (Json.Utf8Bytes(nested) <= Json.HardBudgetBytes) return nested;
+
+        if (depth >= 2)
+        {
+            string typesOnly = BuildNested(includeMembers: false, truncated: true);
+            if (Json.Utf8Bytes(typesOnly) <= Json.HardBudgetBytes) return typesOnly;
+        }
+
+        // Pathological (thousands of types in one file): flatten namespace/type nodes to
+        // a bounded row list and let the list budget converge.
+        var flat = rows
+            .Where(r => r.Kind == "namespace" || TypeKinds.Contains(r.Kind))
+            .Select(r => (object)new { r.Name, r.Kind, ns = r.Ns, r.StartLine, r.EndLine })
+            .ToList();
+        return Json.WithListBudget(flat, (items, _) => new
+        {
+            path,
+            isGenerated = generated,
+            symbols = items,
+            truncated = true,
+            note = "File has too many top-level declarations for a full outline; showing a bounded flat list.",
+            meta,
+        });
+    }
+
+    [McpServerTool(Name = "source_context")]
+    [Description("Bounded live source read around one or more line spans (the bridge from navigation results to actual code). A file_not_found response may include pathSuggestions with up to three ranked pinned-index paths plus total/truncated coverage. Use canonical spans from outline/definition/search results instead of reading whole files; range is accepted as a compatibility alias when spans is omitted.")]
+    public string SourceContext(
+        [Description("Workspace-relative file path. Optional when symbolId is given.")] string? path = null,
+        [Description("Spans as 'start-end' or 'line', comma-separated (e.g. '42-88,120'). Optional when symbolId is given (defaults to the symbol's own declaration span).")] string spans = "",
+        [Description("Extra context lines around each span (default 2).")] int contextLines = 2,
+        [Description("Byte budget for returned source (default 8192, max 65536).")] int maxBytes = 8192,
+        [Description("Show one symbol's source by handle instead of path+spans: 'idx:NNN' from a prior result. Overrides path/spans/range with the symbol's declaration span. Note: 'idx:' handles are index-local and change on reindex.")] string? symbolId = null,
+        [Description("Compatibility alias for spans. Use only when spans is omitted; conflicting simultaneous values return bad_request.")] string? range = null)
+    {
+        if (NotReady() is { } notReady) return notReady;
+        if (symbolId is { Length: > 0 })
+        {
+            var (hit, error) = ResolveSymbolIdHandle(symbolId);
+            if (error is not null) return error;
+            path = hit!.FilePath;
+            spans = $"{hit.StartLine}-{hit.EndLine}";
+        }
+        else if (!string.IsNullOrEmpty(range))
+        {
+            if (!string.IsNullOrEmpty(spans) && !string.Equals(spans, range, StringComparison.Ordinal))
+            {
+                return Json.Serialize(new
+                {
+                    error = "bad_request",
+                    detail = "Provide only one of 'spans' or its compatibility alias 'range', or make them identical.",
+                });
+            }
+            if (string.IsNullOrEmpty(spans)) spans = range;
+        }
+        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(spans))
+        {
+            return Json.Serialize(new
+            {
+                error = "bad_request",
+                detail = "Provide 'symbolId', or 'path' with 'spans' (compatibility alias: 'range').",
+            });
+        }
+        path = NormalizePath(path);
+        maxBytes = Math.Clamp(maxBytes, 256, Json.HardBudgetBytes);
+        // Clamped BEFORE it enters line arithmetic: an absurd contextLines (int.MaxValue) would
+        // overflow start/end math and defeat the bounded read below.
+        contextLines = Math.Clamp(contextLines, 0, 500);
+
+        // Parse the span specs BEFORE reading anything (gep): the requested spans bound how much
+        // of the file we ever materialize. Unparsable specs are skipped. Zero/negative starts are
+        // CLAMPED to line 1, not rejected — the old code accepted them ("0-10" rendered lines
+        // 1..12) and 0-based callers are common; rejecting would be a silent-empty (review).
+        var ranges = new List<(int Start, int End)>();
+        foreach (var spec in spans.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = spec.Split('-');
+            if (!int.TryParse(parts[0], out int start)) continue;
+            int end = parts.Length > 1 && int.TryParse(parts[1], out int e) ? e : start;
+            start = Math.Max(1, start);
+            end = Math.Max(1, end);
+            if (end < start) continue; // inverted range — yields nothing
+            ranges.Add((start, end));
+        }
+        // Long arithmetic: end near int.MaxValue plus context must saturate, not wrap negative.
+        int maxNeededLine = 0;
+        foreach (var r in ranges)
+            maxNeededLine = (int)Math.Min(int.MaxValue, Math.Max(maxNeededLine, r.End + (long)contextLines));
+
+        // Reject paths that escape the workspace root before touching the filesystem.
+        if (!CodeNav.Core.WorkspacePaths.TryResolveInside(_manager.WorkspaceRoot, path, out string full))
+        {
+            return Json.Serialize(new { error = "path_outside_workspace", path, meta = Meta.From(_manager.Health(), "indexed", "text") });
+        }
+
+        string freshness = "live";
+        // Live read is BOUNDED (gep): stream lines only up to the last requested line and stop —
+        // never File.ReadAllText, which materialized entire files (a multi-hundred-MB artifact in
+        // the workspace = one allocation spike per call) just to slice a few lines out.
+        // Skip paths reaching outside via a symlink/junction (target or any ancestor) so an
+        // in-workspace link cannot be followed to external content; fall through to the index.
+        IReadOnlyList<string>? lines = null;
+        PathSuggestionResult suggestions = new([], 0);
+        if (File.Exists(full) && !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(_manager.WorkspaceRoot, full))
+        {
+            lines = ReadLinesUpTo(full, maxNeededLine);
+        }
+        if (lines is null)
+        {
+            // Index fallback is keyed by relative path, so it can only ever return in-workspace
+            // content — a contained path that is simply not on disk. This path still materializes
+            // the stored content whole (no per-file size cap exists yet — rs7); the DoS-relevant
+            // vector was the LIVE read of arbitrary on-disk files, which is now bounded above.
+            using var q = _manager.OpenQueries();
+            string? content = q.ContentByPath(path);
+            if (content is not null) lines = content.Split('\n');
+            else suggestions = q.SuggestFilePaths(path);
+            freshness = "index";
+        }
+        if (lines is null)
+        {
+            return Json.WithListBudget(
+                suggestions.Paths.ToList(),
+                (suggestionPaths, suggestionsBudgetTruncated) => new
+                {
+                    error = "file_not_found",
+                    path,
+                    pathSuggestions = PathSuggestionsJson(
+                        suggestions.Total,
+                        suggestionPaths,
+                        suggestionsBudgetTruncated),
+                    meta = Meta.From(_manager.Health(), "indexed", "text"),
+                });
+        }
+
+        (List<object> Spans, bool Truncated) BuildSpans(long rawBudget)
+        {
+            var spanResults = new List<object>();
+            long budget = rawBudget;
+            bool truncated = false;
+            foreach (var (rawStart, rawEnd) in ranges)
+            {
+                int start = Math.Max(1, rawStart - contextLines);
+                int end = Math.Min(lines.Count, (int)Math.Min(int.MaxValue, rawEnd + (long)contextLines));
+
+                var numbered = new List<string>();
+                for (int i = start; i <= end; i++)
+                {
+                    string line = $"{i,5}| {lines[i - 1].TrimEnd('\r')}";
+                    int cost = Json.Utf8Bytes(line) + 1; // budget is a UTF-8 byte contract
+                    if (budget - cost < 0) { truncated = true; break; }
+                    budget -= cost;
+                    numbered.Add(line);
+                }
+                // Skip spans that yielded nothing (e.g. start past EOF) — no inverted ranges.
+                if (numbered.Count > 0)
+                    spanResults.Add(new { startLine = start, endLine = start + numbered.Count - 1, source = string.Join("\n", numbered) });
+                if (truncated) break;
+            }
+            return (spanResults, truncated);
+        }
+
+        string BuildResponse(long rawBudget)
+        {
+            var (spanResults, truncated) = BuildSpans(rawBudget);
+            // When JSON-escaping headroom forced rawBudget below the caller's maxBytes, "raise
+            // maxBytes" is unfollowable (they may already be at the max) — advise narrowing instead.
+            string? hint = !truncated ? null
+                : rawBudget < maxBytes
+                    ? $"cut at {rawBudget} bytes (escaping headroom below your maxBytes {maxBytes}) — narrow the spans"
+                    : maxBytes >= Json.HardBudgetBytes
+                        ? $"cut at {rawBudget} bytes (at the max) — narrow the spans"
+                        : $"cut at {rawBudget} bytes — raise maxBytes (max {Json.HardBudgetBytes}) or narrow the spans";
+            return Json.Serialize(new
+            {
+                path,
+                freshness,
+                spans = spanResults,
+                truncated,
+                hint,
+                meta = Meta.From(_manager.Health(), freshness == "live" ? "exact" : "indexed", "text"),
+            });
+        }
+
+        // Raw budget bounds the source bytes; JSON escaping still inflates, so shrink the raw
+        // budget until the SERIALIZED response fits the hard cap.
+        long effective = maxBytes;
+        string json = BuildResponse(effective);
+        while (Json.Utf8Bytes(json) > Json.HardBudgetBytes && effective > 256)
+        {
+            effective /= 2;
+            json = BuildResponse(effective);
+        }
+        return json;
+    }
+
+    /// <summary>Streams at most <paramref name="maxLines"/> lines from a file, then stops reading
+    /// (gep): the caller's spans bound the read, so a giant file costs only its requested prefix —
+    /// never a whole-file materialization. Returns null on IO/access failure (caller falls back to
+    /// index content). Line endings are normalized by ReadLine; the formatter's TrimEnd('\r') stays
+    /// correct for both this path and the index path's Split('\n').</summary>
+    private static List<string>? ReadLinesUpTo(string fullPath, int maxLines)
+    {
+        try
+        {
+            var list = new List<string>(Math.Min(maxLines, 4096));
+            using var sr = new StreamReader(fullPath);
+            string? line;
+            while (list.Count < maxLines && (line = sr.ReadLine()) is not null) list.Add(line);
+            return list;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    // ---------------------------------------------------------------- symbols
+
+    [McpServerTool(Name = "search_symbol")]
+    [Description("Find C# and F# declared symbols by name across the workspace (types, methods, properties, modules, functions, values, union cases...). Exact-name type declarations receive a soft relevance preference over same-named members. A first-page empty result remains successful and reports existsUnfiltered plus appliedFilters; when filters hid declarations, unfilteredKinds says what exists. C# plus F# .fs/.fsi path scopes are indexed; .fsx and other text-only languages are refused when exclusive and disclosed when mixed. Failed or truncated FCS parse contexts and unavailable/unevaluated F# project options make results explicitly partial and expose fsharpParseCoverage or fsharpProjectOptionCoverage; stored F# indexing processes at most 64 deterministic owner/TFM contexts per file, reserving one per valid compile owner while capacity remains, while ordinary SDK/import limitations remain advisory structured coverage rather than making every search partial. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored source). Hits carry an 'orphaned' flag (present only when true) for files in NO project's compile set — dead code the compiler never builds (Compile Include globs expanded, Compile Remove honored).")]
+    public string SearchSymbol(
+        [Description("Symbol name. Match behavior set by 'match'. Empty (or '*') with a 'namespace' or 'pathGlob' ENUMERATES that scope's symbols instead — kind-filterable, paged.")] string query = "",
+        [Description("Comma-separated kind filter. C#: class,interface,struct,record,record_struct,enum,delegate,method,constructor,property,field,event,enum_member. F#: namespace,module,class,interface,struct,record,union,type,exception,delegate,function,value,method,constructor,property,field,union_case,enum_member. Empty = all.")] string? kinds = null,
+        [Description("'auto' (exact, then prefix, then substring), 'exact', 'prefix', or 'substring'.")] string match = "auto",
+        [Description("Include symbols in generated files (default false).")] bool includeGenerated = false,
+        [Description("Restrict to file paths matching this glob (e.g. 'SOAPAPI/**'); a bare name matches at any depth.")] string? pathGlob = null,
+        [Description("Exclude file paths matching this glob (e.g. '3rdparty/**' to drop vendored third-party source).")] string? excludePath = null,
+        [Description("Drop hits under known vendor/generated dir names (3rdparty, vendor, external, generated...) at ANY depth. Matches the per-hit noise flag; convenience over excludePath. See repo_overview.suggestedExcludes for the dirs actually present.")] bool firstPartyOnly = false,
+        [Description("Restrict to a namespace subtree: the exact namespace or anything nested under it (e.g. 'ExactTarget.Integration'). Distinct from a containing type.")] string? @namespace = null,
+        [Description("Max results (default 20, max 100).")] int limit = 20,
+        [Description("Opaque cursor from a previous call.")] string? cursor = null)
+    {
+        if (NotReady() is { } notReady) return notReady;
+        query ??= "";
+        const string routingPrefix = "select:";
+        string trimmedQuery = query.TrimStart();
+        if (trimmedQuery.StartsWith(routingPrefix, StringComparison.OrdinalIgnoreCase) &&
+            (trimmedQuery.Length == routingPrefix.Length || trimmedQuery[routingPrefix.Length] != ':'))
+        {
+            return Json.Serialize(new
+            {
+                error = "malformed_query",
+                hint = "Remove the 'select:' routing prefix and pass only the symbol name.",
+                meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+            });
+        }
+        (limit, int offset, string? cursorMode) = Page(limit, cursor);
+        var kindList = SplitCsv(kinds);
+        using var q = _manager.OpenQueries();
+        var excludes = BuildExcludes(excludePath, firstPartyOnly);
+        if (pathGlob is { Length: > 0 } exactPath &&
+            exactPath.IndexOfAny(new[] { '*', '?', '[' }) < 0 &&
+            q.FileByPath(NormalizePath(exactPath)) is { } exactFile &&
+            (exactFile.Language is not ("cs" or "fs") || IsFSharpScriptPath(exactPath)))
+        {
+            return UnsupportedLanguage(exactPath,
+                IsFSharpScriptPath(exactPath) ? "fsx" : exactFile.Language,
+                "search_symbol");
+        }
+        List<string> scopeLanguages = pathGlob is { Length: > 0 }
+            ? q.SourceLanguagesForPathScope(pathGlob, excludes, includeGenerated)
+            : [];
+        List<string> unsupportedScopeLanguages = scopeLanguages
+            .Where(language =>
+                !language.Equals("cs", StringComparison.OrdinalIgnoreCase) &&
+                !language.Equals("fs", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        bool scopeHasSupportedLanguage = scopeLanguages.Any(language =>
+            language.Equals("cs", StringComparison.OrdinalIgnoreCase) ||
+            language.Equals("fs", StringComparison.OrdinalIgnoreCase));
+        if (pathGlob is { Length: > 0 } unsupportedScope && !scopeHasSupportedLanguage &&
+            unsupportedScopeLanguages.Count > 0)
+        {
+            return UnsupportedLanguage(unsupportedScope,
+                string.Join(',', unsupportedScopeLanguages), "search_symbol");
+        }
+        bool unsupportedLanguageFilesSkipped = scopeHasSupportedLanguage &&
+            unsupportedScopeLanguages.Count > 0;
+        FSharpParseCoverage fsharpParseCoverage = q.FSharpParseCoverageForScope(
+            pathGlob, excludes, includeGenerated);
+        bool fsharpParseIncomplete = fsharpParseCoverage.IsIncomplete;
+        string[] blockingOptionReasons = fsharpParseCoverage.OptionPartialReasons
+            .Where(reason => !reason.Equals("fsharp_project_options_imported",
+                StringComparison.Ordinal))
+            .ToArray();
+        var partialReasons = new List<string>();
+        if (fsharpParseCoverage.FailedFiles > 0)
+            partialReasons.Add("fsharp_parse_failed");
+        if (fsharpParseCoverage.TruncatedFiles > 0)
+            partialReasons.Add("fsharp_parse_contexts_truncated");
+        partialReasons.AddRange(blockingOptionReasons);
+        if (unsupportedLanguageFilesSkipped)
+            partialReasons.Add("unsupported_language_files_skipped");
+        partialReasons = partialReasons.Distinct(StringComparer.Ordinal).ToList();
+
+        List<SymbolHit> hits;
+        string effectiveMatch = match;
+        if (string.IsNullOrWhiteSpace(query) || query.Trim() == "*")
+        {
+            // Enumeration mode (field evidence: an agent passed kinds+namespace with no name expecting
+            // the namespace's classes, got a silent [] and had to guess a name). An empty name within a
+            // namespace/pathGlob scope lists that scope; without a scope it is an explicit error —
+            // a silent empty result is the one answer that helps nobody.
+            if (!(@namespace is { Length: > 0 } || pathGlob is { Length: > 0 }))
+            {
+                return Json.Serialize(new
+                {
+                    error = "bad_request",
+                    detail = "An empty name enumerates a scope — provide 'namespace' or 'pathGlob' (optionally 'kinds').",
+                    meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+                });
+            }
+            hits = q.SearchSymbols("", "prefix", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+            effectiveMatch = "enumerate";
+        }
+        else if (match == "auto" && cursorMode is "exact" or "prefix" or "substring")
+        {
+            // Continue the mode resolved on page 1. Re-running the exact->prefix->substring ladder on a
+            // later page fails: the fallback is gated to offset==0, so exact-at-offset returns [] and the
+            // page comes back empty, losing the prefix/substring results (bug cli).
+            effectiveMatch = cursorMode;
+            hits = q.SearchSymbols(query, cursorMode, kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+        }
+        else if (match == "auto")
+        {
+            hits = q.SearchSymbols(query, "exact", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+            effectiveMatch = "exact";
+            if (hits.Count == 0 && offset == 0)
+            {
+                hits = q.SearchSymbols(query, "prefix", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+                effectiveMatch = "prefix";
+            }
+            if (hits.Count == 0 && offset == 0)
+            {
+                hits = q.SearchSymbols(query, "substring", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+                effectiveMatch = "substring";
+            }
+        }
+        else
+        {
+            hits = q.SearchSymbols(query, match, kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+        }
+
+        // Flag hits in files that no project compiles — the "really compiled?" signal grep can't give
+        // (phoenix has the compile graph; 3tz expands Include globs + honors Remove). Additive ONLY:
+        // the hit is still returned and tagged orphaned:true, never hidden — residual gaps (shared
+        // .projitems, props globs, ignored Conditions) mean hiding could still bury live code.
+        if (hits.Count > 0)
+        {
+            var orphaned = q.OrphanedPaths(hits.Select(h => h.FilePath).ToList());
+            if (orphaned.Count > 0)
+                hits = hits.Select(h => orphaned.Contains(h.FilePath) ? h with { IsOrphaned = true } : h).ToList();
+        }
+
+        bool? existsUnfiltered = null;
+        List<string>? unfilteredKinds = null;
+        object? appliedFilters = null;
+        if (hits.Count == 0 && offset == 0 &&
+            !string.IsNullOrWhiteSpace(query) && query.Trim() != "*")
+        {
+            List<string> matchingKinds = q.UnfilteredSymbolKinds(query, effectiveMatch);
+            existsUnfiltered = matchingKinds.Count > 0;
+            unfilteredKinds = matchingKinds.Count > 0 ? matchingKinds : null;
+
+            bool hasAppliedFilters =
+                kindList is { Count: > 0 } ||
+                !includeGenerated ||
+                pathGlob is { Length: > 0 } ||
+                excludePath is { Length: > 0 } ||
+                firstPartyOnly ||
+                @namespace is { Length: > 0 };
+            if (hasAppliedFilters)
+            {
+                appliedFilters = new
+                {
+                    kinds = kindList is { Count: > 0 } ? string.Join(',', kindList) : null,
+                    includeGenerated = includeGenerated ? (bool?)null : false,
+                    pathGlob,
+                    excludePath,
+                    firstPartyOnly = firstPartyOnly ? true : (bool?)null,
+                    @namespace,
+                };
+            }
+        }
+
+        bool hadMore = hits.Count > limit;
+        if (hadMore) hits.RemoveAt(hits.Count - 1);
+
+        var meta = Meta.From(_manager.Health(), "indexed", "syntax");
+        return Json.WithListBudget(hits, (items, truncated) => new
+        {
+            matchMode = effectiveMatch,
+            symbols = items.Select(SymbolJson),
+            existsUnfiltered,
+            unfilteredKinds,
+            appliedFilters,
+            // Carry the resolved mode so a later page continues it (bug cli); resume at the returned
+            // count so a byte-budget shrink doesn't skip the dropped tail (bug e2q).
+            nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}:{effectiveMatch}" : null,
+            truncated,
+            partial = unsupportedLanguageFilesSkipped || fsharpParseIncomplete
+                ? true
+                : (bool?)null,
+            partialReason = partialReasons.Count > 0
+                ? string.Join("; ", partialReasons)
+                : null,
+            partialReasons = partialReasons.Count > 0 ? partialReasons : null,
+            fsharpParseCoverage = fsharpParseCoverage.FailedFiles > 0 ||
+                                  fsharpParseCoverage.TruncatedFiles > 0
+                ? new
+                {
+                    fsharpParseCoverage.FailedFiles,
+                    fsharpParseCoverage.PartialFailureFiles,
+                    fsharpParseCoverage.TotalFailureFiles,
+                    fsharpParseCoverage.TruncatedFiles,
+                    fsharpParseCoverage.FailedContexts,
+                    fsharpParseCoverage.TotalContexts,
+                    fsharpParseCoverage.ProcessedContexts,
+                    fsharpParseCoverage.TruncatedContexts,
+                    fsharpParseCoverage.TruncatedOwnerProjects,
+                }
+                : null,
+            fsharpProjectOptionCoverage = fsharpParseCoverage.ProjectOptionAffectedFiles > 0
+                ? new
+                {
+                    affectedFiles = fsharpParseCoverage.ProjectOptionAffectedFiles,
+                    projectFileContexts = fsharpParseCoverage.OptionProjectCount,
+                    failedProjectFileContexts = fsharpParseCoverage.FailedOptionProjects,
+                    partialProjectFileContexts = fsharpParseCoverage.PartialOptionProjects,
+                    reasons = fsharpParseCoverage.OptionPartialReasons,
+                    advisoryOnly = blockingOptionReasons.Length == 0 ? true : (bool?)null,
+                }
+                : null,
+            scopeLanguages = scopeLanguages.Count > 0 ? scopeLanguages : null,
+            unsupportedLanguages = unsupportedScopeLanguages.Count > 0
+                ? unsupportedScopeLanguages
+                : null,
+            // Steer the follow-up (feedback: nothing nudged toward references after a symbol
+            // hit). First page only — repeating it on cursored pages just burns budget.
+            hint = items.Count > 0 && cursor is null
+                ? "Next: source_context(path, 'startLine-endLine') for indexed source. C#: references(name) for usages or definition(name, includeBody:true). F#: definition(path+line+column) for compiler-backed declaration evidence."
+                : null,
+            meta,
+        });
+    }
+
+    [McpServerTool(Name = "symbol_at")]
+    [Description("Reverse lookup: given a file + line (from a stack trace, build error, diff hunk, or grep hit), returns the smallest containing symbol and its enclosing chain plus owning projects. F# uses an FCS type-check context; column is required when a line contains multiple symbol uses.")]
+    public string SymbolAt(
+        [Description("Workspace-relative file path.")] string path,
+        [Description("1-based line number.")] int line,
+        [Description("Optional 1-based column. Used for F# semantic resolution; required when several symbols occur on the line.")] int column = 0,
+        [Description("F# only: workspace-relative physical .fsproj path. Required with targetFramework when the file has more than one type-check context.")] string? projectPath = null,
+        [Description("F# only: exact target framework (for example net472 or net8.0). Required with projectPath when the file has more than one type-check context.")] string? targetFramework = null,
+        [Description("F# semantic resolution deadline in ms (default 10000, max 60000).")] int timeoutMs = 10000)
+    {
+        if (NotReady() is { } notReady) return notReady;
+        path = NormalizePath(path);
+        FileHit? indexedFile;
+        using (var languageQueries = _manager.OpenQueries())
+            indexedFile = languageQueries.FileByPath(path);
+        if (indexedFile is { Language: "fs" })
+            return FSharpSymbolAt(path, line, column, projectPath, targetFramework, timeoutMs);
+        if (indexedFile is { Language: not "cs" } unsupportedFile)
+        {
+            return UnsupportedLanguage(path, unsupportedFile.Language, "symbol_at");
+        }
+        using var q = _manager.OpenQueries();
+        var chain = q.SymbolAt(path, line);
+        var projects = q.ProjectsContaining(path);
+        return Json.Serialize(new
+        {
+            path,
+            line,
+            found = chain.Count > 0,
+            chain = chain.Select(SymbolJson),
+            owningProjects = projects.Select(p => new
+            {
+                p.Name,
+                p.Path,
+                p.Style,
+                language = p.Language,
+                p.IsTest,
+            }),
+            meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+        });
+    }
+
+    [McpServerTool(Name = "definition")]
+    [Description("Declaration site(s) for a symbol — all partial declarations included. Target by exact name (optionally 'container' to disambiguate) OR by position (path+line[,column]) from a usage site. C# tries compiler-exact resolution first and can fall back to the name index. F# semantic definition is position-only and returns declarations inside one selected physical .fsproj + TFM; it never falls back to an indexed F# guess. includeBody is C# only.")]
+    public string Definition(
+        [Description("Exact symbol name (case-insensitive). Optional when path+line given.")] string? name = null,
+        [Description("Optional containing type or namespace fragment to disambiguate.")] string? container = null,
+        [Description("Comma-separated kind filter (defaults to all kinds).")] string? kinds = null,
+        [Description("Workspace-relative file path of a usage or declaration site (position mode).")] string? path = null,
+        [Description("1-based line for position mode.")] int line = 0,
+        [Description("1-based column for position mode (optional).")] int column = 0,
+        [Description("'auto' (semantic first, indexed fallback), 'semantic', or 'indexed'.")] string mode = "auto",
+        [Description("Semantic resolution deadline in ms (default 10000).")] int timeoutMs = 10000,
+        [Description("Also return the primary declaration's source body (numbered lines, budget-bounded).")] bool includeBody = false,
+        [Description("Byte budget for the inline body (default 12288, max 16384).")] int bodyMaxBytes = 12288,
+        [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex; a documentationCommentId is not yet accepted here.")] string? symbolId = null,
+        [Description("F# position mode only: workspace-relative physical .fsproj path. Required with targetFramework when the file has more than one type-check context.")] string? projectPath = null,
+        [Description("F# position mode only: exact target framework. Required with projectPath when the file has more than one type-check context.")] string? targetFramework = null)
+    {
+        if (NotReady() is { } notReady) return notReady;
+        string? semanticDeclarationKey = null;
+        SymbolHit? resolvedHandleHit = null;
+        if (symbolId is { Length: > 0 })
+        {
+            var (hit, error) = ResolveSymbolIdHandle(symbolId);
+            if (error is not null) return error;
+            resolvedHandleHit = hit;
+            name = hit!.Name; path = hit.FilePath; line = hit.StartLine; column = 0;
+            semanticDeclarationKey = OperatorDeclarationKey(hit);
+            // The handle already disambiguated the symbol — caller kinds/container filters exist to
+            // narrow a bare name, so applying them here can only wrongly suppress the resolved hit.
+            kinds = null; container = null;
+        }
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            path = NormalizePath(path);
+            FileHit? indexedFile;
+            using (var languageQueries = _manager.OpenQueries())
+                indexedFile = languageQueries.FileByPath(path);
+            if (indexedFile is { Language: "fs" })
+            {
+                if (resolvedHandleHit is not null)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_semantic_position_required",
+                        operation = "definition",
+                        detail = "F# semantic definition requires an explicit path + line + column; idx handle resolution is not available yet.",
+                    });
+                }
+                if (line <= 0)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_semantic_position_required",
+                        operation = "definition",
+                        detail = "F# semantic definition requires path + line; bare-name and idx handle resolution are not available yet.",
+                    });
+                }
+                if (mode == "indexed")
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_indexed_symbols_unavailable",
+                        operation = "definition",
+                        detail = "F# definition is compiler-semantic only; use mode='auto' or mode='semantic'.",
+                    });
+                }
+                if (mode is not ("auto" or "semantic"))
+                    return Json.Serialize(new { error = "bad_request", detail = "mode must be 'auto', 'semantic', or 'indexed'." });
+                if (includeBody)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_definition_body_unavailable",
+                        operation = "definition",
+                        detail = "F# semantic definition does not inline a declaration body; use source_context on the returned declaration range.",
+                    });
+                }
+                return FSharpDefinition(path, line, column, projectPath, targetFramework,
+                    timeoutMs);
+            }
+        }
+        if (UnsupportedLanguageAtPath(path, "definition") is { } unsupportedLanguage)
+            return unsupportedLanguage;
+        if (name is null && (path is null || line <= 0))
+        {
+            return Json.Serialize(new { error = "bad_request", detail = "Provide 'symbolId', 'name', or 'path'+'line'." });
+        }
+
+        string? failReason = null;
+        if (mode is "auto" or "semantic")
+        {
+            int deadlineMs = Math.Clamp(timeoutMs, 500, 60000); // mirror DefinitionAsync's clamp (24n)
+            var swSem = System.Diagnostics.Stopwatch.StartNew();
+            var (target, hint) = ResolveSemanticTarget(name, container, kinds, path, line, column);
+            if (TestOnlySemanticFailureReason is { } forcedFailure)
+            {
+                failReason = forcedFailure;
+            }
+            else if (target is { } t)
+            {
+                var (decl, reason, _, semanticPartialReason) = _semantic
+                    .DefinitionAsync(t.Path, t.Line, t.Column, hint, timeoutMs,
+                        semanticDeclarationKey)
+                    .GetAwaiter().GetResult();
+                if (decl is not null)
+                {
+                    // Order declarations largest-span-first (partial stubs lose), path as the
+                    // deterministic tie-break — so the body's declaration (d0) is always the first
+                    // shown and never trimmed out of the displayed set.
+                    var ordered = decl.Declarations
+                        .OrderByDescending(d => d.EndLine - d.StartLine)
+                        .ThenBy(d => d.Path, StringComparer.Ordinal)
+                        .ToList();
+                    var d0 = ordered.FirstOrDefault();
+                    int totalDecls = ordered.Count;
+                    var shown = ordered.Take(MaxDeclarationSites).ToList();
+                    // Declarations serialized ONCE here (symbol omits them) and adaptively
+                    // byte-bounded via WithListBudget — the semantic path no longer bypasses the
+                    // central budget, so even a bodyless response with long paths stays under cap.
+                    string BuildSemantic(object? body) => Json.WithListBudget(shown, (items, listTrunc) => new
+                    {
+                        name = name ?? decl.SymbolDisplay,
+                        symbol = SemanticIdentityJson(decl),
+                        declarations = items.Select(d => new { d.Path, d.StartLine, d.EndLine }),
+                        declarationsTruncated = (listTrunc || totalDecls > MaxDeclarationSites) ? true : (bool?)null,
+                        body,
+                        partial = semanticPartialReason is not null ? true : (bool?)null,
+                        partialReason = semanticPartialReason,
+                        timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds }, // 24n
+                        meta = Meta.From(_manager.Health(),
+                            semanticPartialReason is not null ? "indexed" : "exact", "semantic"),
+                    });
+                    // Semantic spans come from live sources — pair them with live content.
+                    object? MakeSemanticBody(int budget) =>
+                        d0 is null ? null : BuildDeclarationBody(d0.Path, d0.StartLine, d0.EndLine, budget, preferLive: true);
+                    return Json.WithCompleteSemanticIdentity(
+                        SerializeBodyBounded(BuildSemantic,
+                            includeBody ? MakeSemanticBody(bodyMaxBytes) : null,
+                            MakeSemanticBody, bodyMaxBytes));
+                }
+                failReason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
+            }
+            else
+            {
+                failReason = "target_not_found_in_index";
+            }
+            if (mode == "semantic")
+            {
+                return Json.Serialize(new
+                {
+                    error = "semantic_unavailable",
+                    partialReason = failReason,
+                    hint = "Retry with mode='indexed' for name-index declarations.",
+                    timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds }, // 24n: was the deadline the cause?
+                    meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                });
+            }
+        }
+
+        // Indexed fallback (name required).
+        using var q = _manager.OpenQueries();
+        string lookupName = name ?? "";
+        if (lookupName.Length == 0 && path is not null)
+        {
+            var chain = q.SymbolAt(NormalizePath(path), line);
+            lookupName = chain.Count > 0 ? chain[0].Name : "";
+        }
+        var hits = resolvedHandleHit is not null
+            ? new List<SymbolHit> { resolvedHandleHit }
+            : q.SearchSymbols(lookupName, "exact", SplitCsv(kinds), 100,
+                includeGenerated: true, language: "cs");
+        if (container is { } c)
+        {
+            hits = hits.Where(h =>
+                (h.Container?.Contains(c, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (h.Ns?.Contains(c, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+        }
+
+        // Same primary-declaration rule as the semantic path: largest span first (partial
+        // stubs lose), path as the deterministic tie-break — so the two paths agree.
+        var primary = hits
+            .OrderByDescending(h => h.EndLine - h.StartLine)
+            .ThenBy(h => h.FilePath, StringComparer.Ordinal)
+            .FirstOrDefault();
+        var meta = Meta.From(_manager.Health(), "indexed", "syntax");
+        // Indexed spans come from the index — pair them with index content (consistent even
+        // when the working tree has drifted; freshness is reported on the body).
+        object? MakeBody(int budget) =>
+            primary is null ? null : BuildDeclarationBody(primary.FilePath, primary.StartLine, primary.EndLine, budget, preferLive: false);
+        string Build(object? body) => Json.WithListBudget(hits, (items, truncated) => new
+        {
+            name = lookupName,
+            declarations = items.Select(SymbolJson),
+            body,
+            partialReason = failReason,
+            hint = items.Count == 0
+                ? "No declaration found. Try search_symbol with match='substring', or the name may come from a package/generated source."
+                : null,
+            truncated,
+            meta,
+        });
+        return SerializeBodyBounded(Build, includeBody ? MakeBody(bodyMaxBytes) : null, MakeBody, bodyMaxBytes);
+    }
+
+    /// <summary>Numbered source for a declaration span, byte-bounded — what lets
+    /// definition(includeBody:true) replace a follow-up source_context call.
+    /// preferLive=true reads the working-tree file (the semantic path computed its spans from
+    /// live sources, so index content could mismatch them); preferLive=false uses index
+    /// content (the indexed path's spans come from the index, so that pairing is consistent).
+    /// Returns an { omitted, reason } object instead of null when no content is available.</summary>
+    internal object BuildDeclarationBody(string path, int startLine, int endLine, int maxBytes, bool preferLive) // internal for tests (trp)
+    {
+        maxBytes = Math.Clamp(maxBytes, 512, 16 * 1024);
+
+        string? content = null;
+        string freshness = "index";
+        if (preferLive
+            && CodeNav.Core.WorkspacePaths.TryResolveInside(_manager.WorkspaceRoot, path, out string full)
+            && File.Exists(full)
+            && !CodeNav.Core.WorkspacePaths.EscapesViaReparsePoint(_manager.WorkspaceRoot, full))
+        {
+            try
+            {
+                content = File.ReadAllText(full);
+                freshness = "live";
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* fall through to index content */ }
+        }
+        if (content is null)
+        {
+            using var q = _manager.OpenQueries();
+            content = q.ContentByPath(path);
+            freshness = "index";
+        }
+        if (content is null)
+        {
+            return new { omitted = true, reason = "content_unavailable", path };
+        }
+
+        var lines = content.Split('\n');
+        int start = Math.Max(1, startLine);
+        // Span beyond the (possibly stale) content: report it honestly instead of an inverted
+        // empty span (start past EOF is reachable when live spans are applied to shorter index content).
+        if (start > lines.Length)
+        {
+            return new { omitted = true, reason = "span_beyond_content", path, contentLines = lines.Length, freshness };
+        }
+        int end = Math.Min(lines.Length, Math.Max(endLine, start));
+        var numbered = new List<string>();
+        long budget = maxBytes;
+        bool truncated = false;
+        for (int i = start; i <= end; i++)
+        {
+            string lineText = $"{i,5}| {lines[i - 1].TrimEnd('\r')}";
+            int cost = Json.Utf8Bytes(lineText) + 1;
+            if (budget - cost < 0) { truncated = true; break; }
+            budget -= cost;
+            numbered.Add(lineText);
+        }
+        if (numbered.Count == 0)
+        {
+            // Even the first line overflowed the budget — nothing to show, but say so.
+            return new { omitted = true, reason = "first_line_exceeds_budget", path, freshness };
+        }
+        int lastIncluded = start + numbered.Count - 1;
+        return new
+        {
+            path,
+            startLine = start,
+            endLine = lastIncluded,
+            source = string.Join("\n", numbered),
+            truncated,
+            hint = truncated
+                ? $"body cut at line {lastIncluded} — source_context('{path}', '{lastIncluded + 1}-{end}', maxBytes: {Json.HardBudgetBytes}) resumes where this stopped"
+                : null,
+            freshness,
+        };
+    }
+
+    /// <summary>Re-serializes a body-carrying response until the ESCAPED payload fits the hard
+    /// budget, halving the body budget each pass and dropping the body as the last resort.
+    /// The line-loop budget counts raw chars; JSON escaping (quotes/backslashes) inflates, so
+    /// only measuring the serialized length makes the budget contract actually hold.</summary>
+    private static string SerializeBodyBounded(Func<object?, string> serialize, object? body, Func<int, object?> rebuildBody, int bodyMaxBytes)
+    {
+        string json = serialize(body);
+        int budget = Math.Clamp(bodyMaxBytes, 512, 16 * 1024); // seed matches BuildDeclarationBody's own clamp
+        while (Json.Utf8Bytes(json) > Json.HardBudgetBytes && body is not null)
+        {
+            budget /= 2;
+            body = budget >= 512 ? rebuildBody(budget) : null;
+            json = serialize(body);
+        }
+        return json;
+    }
+
+    [McpServerTool(Name = "implementations")]
+    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). Generic declarations may be selected by arity or symbolId; a bare name spanning multiple arities returns symbol_ambiguous. Operator symbolId handles are rejected as unsupported; use definition or references for them. A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to arity-aware base-list syntax matching (confidence 'heuristic', unranked). A transient cold-load or semantic timeout fallback exposes retryRecommended and retryHint without changing the requested deadline. For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead.")]
+    public string Implementations(
+        [Description("Interface/type/member name. Optional when path+line given.")] string? name = null,
+        [Description("Workspace-relative path of the declaration or a usage (position mode).")] string? path = null,
+        [Description("1-based line for position mode.")] int line = 0,
+        [Description("1-based column for position mode (optional).")] int column = 0,
+        [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
+        [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000,
+        [Description("Optional generic type-parameter count. Use 0 for a non-generic declaration, 1 for Foo<T>, etc. A bare name with multiple available arities is refused.")] int? arity = null,
+        [Description("Resolve by a search_symbol candidate's current idx: handle. Takes precedence over name, path+line, and arity. Operator handles return unsupported_symbol_kind.")] string? symbolId = null)
+    {
+        if (NotReady() is { } notReady) return notReady;
+        if (symbolId is not { Length: > 0 } &&
+            UnsupportedLanguageAtPath(path, "implementations") is { } unsupportedLanguage)
+            return unsupportedLanguage;
+        var (selection, selectionError) = ResolveArityTarget(
+            name, path, line, column, arity, symbolId, typeOnly: false);
+        if (selectionError is not null) return selectionError;
+        name = selection!.Name;
+        path = selection.Path;
+        line = selection.Line;
+        column = selection.Column;
+        arity = selection.Arity;
+        bool allowHeuristicFallback = selection.AllowHeuristicFallback;
+
+        string? failReason = null;
+        // dve (b): when the compiler RESOLVED the symbol but found no implementers, the fallback
+        // used to discard that exact identity and relabel EVERYTHING heuristic — keep it for
+        // mixed-section honesty (symbol exact, list heuristic), mirroring type_hierarchy's
+        // derivedConfidence split.
+        SemanticDeclaration? resolvedSymbol = null;
+        int deadlineMs = Math.Clamp(timeoutMs, 500, 120000); // mirror the service clamp (24n)
+        var swSem = System.Diagnostics.Stopwatch.StartNew();
+        var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column, arity);
+        if (target is { } t)
+        {
+            var (result, reason) = _semantic
+                .ImplementationsAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs, arity)
+                .GetAwaiter().GetResult();
+            resolvedSymbol = result?.Symbol;
+            if (result is { Implementations.Count: > 0 })
+            {
+                var impls = result.Implementations; // already ranked concrete-first by the semantic layer
+                int concreteCount = impls.Count(r => !r.Declaration.IsAbstract);
+                bool exhausted = result.DeadlineExhausted;
+                bool unsupportedLanguageSkipped = result.Coverage.SkippedProjects.Count > 0;
+                bool candidateBounded = result.SkippedCandidateProjects.Count > 0;
+                bool coverageGap = result.Coverage.LoadedProjects <
+                    result.Coverage.RequestedProjects;
+                bool loadIncomplete = result.Coverage.FailedProjects.Count > 0 ||
+                    (coverageGap && !candidateBounded && !unsupportedLanguageSkipped);
+                bool partial = exhausted || unsupportedLanguageSkipped || candidateBounded ||
+                    loadIncomplete || result.ProjectModelUnproven;
+                string? partialCause = SemanticCoverageReasons.Primary(result.Coverage,
+                    exhausted, candidateBounded,
+                    projectModelUnproven: result.ProjectModelUnproven);
+                var meta0 = Meta.From(_manager.Health(),
+                    unsupportedLanguageSkipped || loadIncomplete || result.ProjectModelUnproven
+                        ? "indexed"
+                        : "exact", "semantic");
+                long elapsedMs = swSem.ElapsedMilliseconds;
+                return Json.WithAuxiliaryListBudget(impls, result.SkippedCandidateProjects,
+                    (items, truncated, skippedItems, skippedTruncated) => new
+                    {
+                        symbol = SemanticSymbolJson(result.Symbol),
+                        implementations = items.Select(r => new
+                        {
+                            symbol = SemanticSymbolJson(r.Declaration),
+                            isAbstract = r.Declaration.IsAbstract ? true : (bool?)null, // omitted when concrete
+                            rank = r.Declaration.IsAbstract ? "abstract" : "concrete", // make the ranking legible to the model
+                            via = r.Via, // the base type that introduces the interface, when implemented indirectly
+                        }),
+                        concreteCount,
+                        // High-signal case: exactly one instantiable implementation is very likely THE
+                        // runtime type; anything else is abstract scaffolding. Never claimed when the
+                        // deadline cut the search short — the "one" may just be the one found in time.
+                        likelyImplementation = concreteCount == 1 && !partial
+                        ? impls.First(r => !r.Declaration.IsAbstract).Declaration.SymbolDisplay
+                        : null,
+                        coverage = CoverageJson(result.Coverage),
+                        skippedCandidateProjects = skippedItems.Count > 0
+                        ? skippedItems
+                        : null,
+                        skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
+                        ? result.SkippedCandidateProjects.Count
+                        : (int?)null,
+                        skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+                        partial = partial ? true : (bool?)null,
+                        partialReason = partialCause,
+                        retryRecommended = SemanticRetryRecommended(partialCause)
+                            ? true
+                            : (bool?)null,
+                        retryHint = SemanticRetryHint(partialCause),
+                        // t2b: where the budget went — cluster load+resolve vs the finder passes.
+                        timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
+                        truncated,
+                        hint = concreteCount == 1 && !partial
+                        ? "One concrete implementation — likely the runtime target. Ranked concrete-first; isAbstract/rank mark non-instantiable scaffolding."
+                        : null,
+                        meta = meta0,
+                    });
+            }
+            // Semantic RESOLVED the symbol but found no implementers, OR it could not resolve. Be
+            // honest about which: bounded coverage (raising maxProjects may help) vs genuinely none.
+            failReason = result is null ? ExpandReason(reason)
+                : SemanticCoverageReasons.Primary(result.Coverage,
+                    candidateProjectsSkipped: result.SkippedCandidateProjects.Count > 0,
+                    projectModelUnproven: result.ProjectModelUnproven)
+                  ?? "no_semantic_implementers";
+        }
+
+        // Heuristic fallback: types with a normalized direct base-head edge for the name — a
+        // naming guess, not a compiler fact, so it is labeled confidence 'heuristic'.
+        using var q = _manager.OpenQueries();
+        string lookupName = name ?? hint ?? "";
+        SymbolHit? targetSym = null;
+        // Position mode (path+line): resolve the cursor so the fallback has a name AND the target's
+        // kind + declaring type — the base-list heuristic only makes sense for a TYPE target.
+        if (path is not null)
+        {
+            string normalizedPath = NormalizePath(path);
+            var lineSymbols = q.SymbolsStartingAt(normalizedPath, line);
+            targetSym = lineSymbols.FirstOrDefault(hit =>
+                (lookupName.Length == 0 || string.Equals(hit.Name, lookupName, StringComparison.OrdinalIgnoreCase)) &&
+                (arity is null || hit.Arity == arity.Value));
+            var chain = q.SymbolAt(normalizedPath, line);
+            if (chain.Count > 0)
+            {
+                targetSym ??= chain[0];
+                if (lookupName.Length == 0) lookupName = targetSym.Name;
+            }
+        }
+        if (lookupName.Length == 0)
+        {
+            return Json.Serialize(new
+            {
+                error = "symbol_not_resolved",
+                partialReason = failReason,
+                retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+                retryHint = SemanticRetryHint(failReason),
+                meta = Meta.From(_manager.Health(), "heuristic", "syntax"),
+            });
+        }
+        targetSym ??= q.SearchSymbols(
+            lookupName, "exact", null, 1, arity: arity, language: "cs").FirstOrDefault();
+        int? fallbackArity = targetSym?.Arity ?? arity;
+        string? targetKind = targetSym?.Kind;
+        var meta = Meta.From(_manager.Health(), "heuristic", "syntax");
+
+        // The base-list heuristic is a TYPE operation. For a MEMBER target, scope to the declaring
+        // type's syntactic implementers and return the SAME-named member in each — not the type-only
+        // base-list sweep (pure noise), and not a bare empty when the members are actually there.
+        if (targetKind is not (null or "interface" or "class" or "struct" or "record" or "record_struct"))
+        {
+            List<SymbolHit> memberImpls = new();
+            int implementerCount = 0;
+            if (targetSym?.Container is { Length: > 0 } declType)
+            {
+                // Scope the member lookup to the implementer types by (namespace, type name) IDENTITY —
+                // so the query's cap bounds only genuine implementer members (not every same-simple-named
+                // type across all namespaces) and an unrelated type can't sneak in. ImplementationCandidates
+                // now matches normalized direct base-head identities, so a superstring interface
+                // (IFooBar) doesn't scope in.
+                var typeKeys = q.ImplementationCandidates(declType, 100)
+                    .Select(t => (t.Ns ?? "", t.Name))
+                    .ToList();
+                implementerCount = typeKeys.Count;
+                if (typeKeys.Count > 0)
+                    memberImpls = q.MembersNamedInTypes(lookupName, typeKeys, 100).Take(50).ToList();
+            }
+            if (memberImpls.Count > 0)
+            {
+                // Coverage transparency: an implementer that declares no such member (an interface impl
+                // without this override) is legitimately omitted — say how many, so the caller knows.
+                int matchedTypes = memberImpls.Select(m => (m.Ns ?? "", m.Container ?? "")).Distinct().Count();
+                int omitted = Math.Max(0, implementerCount - matchedTypes);
+                return Json.WithListBudget(memberImpls, (items, truncated) => new
+                {
+                    name = lookupName,
+                    declaringType = targetSym!.Container,
+                    // dve (b): same mixed-section honesty as the type fallback below.
+                    symbol = resolvedSymbol is not null ? SemanticSymbolJson(resolvedSymbol) : null,
+                    symbolConfidence = resolvedSymbol is not null ? "exact" : null,
+                    implementationsConfidence = resolvedSymbol is not null ? "heuristic" : null,
+                    implementerCount,
+                    omittedImplementers = omitted > 0 ? omitted : (int?)null,
+                    implementations = items.Select(SymbolJson),
+                    partialReason = "member_scoped_syntactic",
+                    semanticReason = failReason,
+                    retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+                    retryHint = SemanticRetryHint(failReason),
+                    note = $"Same-named members of the syntactic implementers of {targetSym!.Container} (confidence heuristic — compiler-exact override resolution found none, likely a type-twin identity mismatch)."
+                        + (omitted > 0 ? $" {omitted} of {implementerCount} implementer(s) declare no such member and were omitted." : "")
+                        + " Verify with source_context.",
+                    truncated = truncated || memberImpls.Count >= 50,
+                    meta,
+                });
+            }
+            // Nothing to scope to — honest empty + the recovery note. Policy reason, not the transient
+            // semantic one: the type-only heuristic won't help on retry.
+            return Json.Serialize(new
+            {
+                name = lookupName,
+                symbol = resolvedSymbol is not null ? SemanticSymbolJson(resolvedSymbol) : null,
+                symbolConfidence = resolvedSymbol is not null ? "exact" : null,
+                implementations = Array.Empty<object>(),
+                partialReason = "member_fallback_type_scoped",
+                semanticReason = failReason, // why the exact path returned nothing (context, not actionable)
+                retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+                retryHint = SemanticRetryHint(failReason),
+                note = "No compiler-exact member implementations in the loaded cluster (possibly a type-twin identity mismatch), and no same-named member found in the declaring type's implementers. Run implementations on the declaring interface/type, then read this member in each implementer.",
+                meta,
+            });
+        }
+
+        var heuristic = allowHeuristicFallback
+            ? q.ImplementationCandidates(lookupName, 50, fallbackArity)
+            : new List<SymbolHit>();
+        return Json.WithListBudget(heuristic, (items, truncated) => new
+        {
+            name = lookupName,
+            // dve (b): mixed-section honesty, mirroring type_hierarchy.derivedConfidence — the
+            // compiler-resolved identity survives into the fallback with its own confidence,
+            // instead of the whole payload flattening to one heuristic label. Both fields are
+            // omitted when the symbol itself never resolved (then meta's heuristic covers all).
+            symbol = resolvedSymbol is not null ? SemanticSymbolJson(resolvedSymbol) : null,
+            symbolConfidence = resolvedSymbol is not null ? "exact" : null,
+            implementationsConfidence = resolvedSymbol is not null ? "heuristic" : null,
+            implementations = items.Select(SymbolJson),
+            partialReason = failReason ?? "semantic_unavailable",
+            retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+            retryHint = SemanticRetryHint(failReason),
+            note = items.Count > 0 && failReason is "no_semantic_implementers" or "candidate_cluster_bounded"
+                // Field (lhg): the old "declared in more than one assembly / generated twin" wording
+                // went stale once compiled-awareness + assembly-ref edges landed — say what we now
+                // actually know and what to do about it.
+                ? "Compiler-exact resolution matched no implementers, but these types name it in their base list (confidence heuristic). Implementer projects were likely not loaded into the semantic cluster (raise maxProjects, or scope with pathGlob), or the implementers bind the name to a declaration outside the workspace. Verify with source_context."
+                : "Base-list name matches from the index (confidence heuristic) — verify with source_context.",
+            truncated = truncated || heuristic.Count >= 50, // count-capped even if the byte budget fit
+            meta,
+        });
+    }
+
+    [McpServerTool(Name = "references")]
+    [Description("Where a symbol is used across the workspace, grouped by project with counts and sample lines. mode='auto' tries compiler-exact references (target by position path+line, or by name) scoped to candidate projects, falling back to index candidates. Exact references are usage-kind classified (kinds breakdown: call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/implicitConversion/explicitConversion/checkedConversion/other) — filter with usageKinds (e.g. 'call' to skip doc mentions) or publicConsumersOnly for external callers. Pass pathGlob/excludePath to scope candidates (e.g. excludePath='3rdparty/**'); a path filter runs the indexed candidate path so counts reflect the filter. Call before changing behavior.")]
+    public string References(
+        [Description("Symbol name (whole-identifier). Optional when path+line given.")] string? name = null,
+        [Description("Workspace-relative path of a usage or declaration (position mode — most precise).")] string? path = null,
+        [Description("1-based line for position mode.")] int line = 0,
+        [Description("1-based column for position mode (optional).")] int column = 0,
+        [Description("'auto' (semantic first), 'semantic', or 'indexed' (fast candidates).")] string mode = "auto",
+        [Description("Include usages in test projects (default true).")] bool includeTests = true,
+        [Description("Include usages in generated files (default false).")] bool includeGenerated = false,
+        [Description("Comma-separated usage-kind filter — SEMANTIC (exact) path only: call, construction, typeMention, attribute, nameof, xmldoc, usingDirective, baseList, typeof, implicitConversion, explicitConversion, checkedConversion, other. Counts and groups honor it (e.g. 'call,construction' = real executions only).")] string? usageKinds = null,
+        [Description("Only usages OUTSIDE the symbol's own declaring PROJECT (project-scoped, NOT accessibility-scoped — the name is about API blast radius, not access modifiers). The external-consumer view; semantic path only.")] bool publicConsumersOnly = false,
+        [Description("Restrict candidate paths to this glob (supplying a path filter runs indexed candidates).")] string? pathGlob = null,
+        [Description("Exclude candidate paths matching this glob, e.g. '3rdparty/**' (supplying a path filter runs indexed candidates).")] string? excludePath = null,
+        [Description("Max candidate files scanned in indexed mode (default 500).")] int maxFiles = 500,
+        [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
+        [Description("Sample lines per project group (default 3).")] int samplesPerGroup = 3,
+        [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000,
+        [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex; a documentationCommentId is not yet accepted here.")] string? symbolId = null)
+    {
+        if (NotReady() is { } notReady) return notReady;
+        string? semanticDeclarationKey = null;
+        SymbolHit? resolvedHandleHit = null;
+        if (symbolId is { Length: > 0 })
+        {
+            var (hit, error) = ResolveSymbolIdHandle(symbolId);
+            if (error is not null) return error;
+            resolvedHandleHit = hit;
+            name = hit!.Name; path = hit.FilePath; line = hit.StartLine; column = 0;
+            semanticDeclarationKey = OperatorDeclarationKey(hit);
+        }
+        if (UnsupportedLanguageAtPath(path, "references") is { } unsupportedLanguage)
+            return unsupportedLanguage;
+        if (name is null && (path is null || line <= 0))
+        {
+            return Json.Serialize(new { error = "bad_request", detail = "Provide 'symbolId', 'name', or 'path'+'line'." });
+        }
+
+        // Path filters are honored precisely only on the indexed candidate path (semantic counts
+        // are project-level and cannot be re-derived per path), so a filter forces indexed mode.
+        bool hasPathFilter = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 };
+        if (resolvedHandleHit is { Kind: "operator" } &&
+            (mode == "indexed" || hasPathFilter))
+        {
+            return OperatorReferencesRequireSemantic(mode == "indexed"
+                ? "operator_handle_indexed_mode_unavailable"
+                : "operator_handle_path_filter_requires_indexed_mode");
+        }
+        string? failReason = hasPathFilter && mode != "indexed" ? "path_filter_ran_indexed_candidates" : null;
+        // Usage-kind buckets + external-consumers view are syntax/compiler facts — semantic path only.
+        var kindSet = SplitCsv(usageKinds) is { Count: > 0 } uk
+            ? new HashSet<string>(uk, StringComparer.OrdinalIgnoreCase)
+            : null;
+        if (kindSet is not null)
+        {
+            // Validate up front: a typo ('calls') silently filtering everything to zero would read as
+            // "dead code" at exact confidence — the silent-empty anti-pattern this codebase keeps killing.
+            var unknown = kindSet.Where(k => !SemanticReferenceKinds.All.Contains(k, StringComparer.OrdinalIgnoreCase)).ToList();
+            if (unknown.Count > 0)
+            {
+                return Json.Serialize(new
+                {
+                    error = "bad_request",
+                    detail = $"Unknown usageKinds value(s): {string.Join(", ", unknown)}. Valid: {string.Join(", ", SemanticReferenceKinds.All)}.",
+                    meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                });
+            }
+        }
+        if (mode is "auto" or "semantic" && !hasPathFilter)
+        {
+            // Deadline visibility (24n): every semantic response reports the effective deadline and
+            // how much of it was spent — "why is this partial / slow?" needs numbers, not guesses.
+            int deadlineMs = Math.Clamp(timeoutMs, 500, 120000);
+            var swSem = System.Diagnostics.Stopwatch.StartNew();
+            var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column);
+            if (TestOnlySemanticFailureReason is { } forcedFailure)
+            {
+                failReason = forcedFailure;
+            }
+            else if (target is { } t)
+            {
+                var (result, reason) = _semantic
+                    .ReferencesAsync(t.Path, t.Line, t.Column, hint, maxProjects,
+                        Math.Clamp(samplesPerGroup, 0, 10), timeoutMs, includeGenerated,
+                        kindSet, publicConsumersOnly, includeTests,
+                        semanticDeclarationKey)
+                    .GetAwaiter().GetResult();
+                if (result is not null)
+                {
+                    // includeTests is filtered INSIDE the semantic scan, before counting (wu1) —
+                    // so TotalLocations, KindCounts, Groups, and this summary all describe one set.
+                    var groups0 = result.Groups;
+                    int prod0 = groups0.Where(g => !g.IsTestProject).Sum(g => g.Count);
+                    int test0 = groups0.Where(g => g.IsTestProject).Sum(g => g.Count);
+                    // "0 test" would misread as "no test usages exist" when they were EXCLUDED.
+                    string mix0 = includeTests ? $"{prod0} production, {test0} test" : $"{prod0} production; test projects excluded";
+                    // Field 0.7.2 P2: an exact ZERO when the base-list index KNOWS implementers is
+                    // almost certainly a loading gap, not dead code — say so, actionably. (The
+                    // honesty posture says "0 is a fact", but here the tool holds contrary data.)
+                    // GUARDED (review): the note must not fire on FILTER-caused zeros — with
+                    // usageKinds:'call' the base-list namers it would cite are exactly the
+                    // baseList usages the filter excluded, and "raise maxProjects" cannot help.
+                    // Same for publicConsumersOnly/includeTests. And the advice is only honest
+                    // when coverage was actually BOUNDED (skipped/failed/under-loaded) — post-
+                    // seeds, an unfiltered zero with namers and full coverage shouldn't occur.
+                    string? referenceNote = null;
+                    string? referenceNoteId = null;
+                    bool conversionUsageEnumerationGap =
+                        result.ConversionUsageEnumerationIncomplete;
+                    if (conversionUsageEnumerationGap)
+                    {
+                        referenceNote = result.ProjectModelUnproven
+                            ? "Compiler reference enumeration does not currently prove user-defined conversion usage sites; totalReferences is incomplete, and project-model uncertainty prevents a directional count guarantee."
+                            : "Compiler reference enumeration does not currently prove user-defined conversion usage sites; totalReferences is a lower bound.";
+                        referenceNoteId = NoteIds.ReferencesConversionUsageEnumerationGap;
+                    }
+                    bool zeroUnfiltered = kindSet is null && !publicConsumersOnly && includeTests;
+                    bool coverageBounded = result.SkippedCandidateProjects.Count > 0
+                        || result.Coverage.FailedProjects.Count > 0
+                        || result.Coverage.LoadedProjects < result.Coverage.RequestedProjects;
+                    if (!conversionUsageEnumerationGap && result.TotalLocations == 0 &&
+                        zeroUnfiltered && coverageBounded)
+                    {
+                        using var qz = _manager.OpenQueries();
+                        string probeName = name ?? hint ?? "";
+                        int baseListNamers = probeName.Length > 0 ? qz.ImplementationCandidates(probeName, 5).Count : 0;
+                        if (baseListNamers > 0)
+                        {
+                            referenceNote = $"0 exact references, but {(baseListNamers >= 5 ? "5+" : baseListNamers.ToString())} indexed types name '{probeName}' in their base lists (see implementations) — coverage was bounded (see skipped/failed); raise maxProjects or scope with pathGlob.";
+                            referenceNoteId = NoteIds.ReferencesZeroLoadingGap;
+                        }
+                    }
+                    bool exhausted = result.DeadlineExhausted;
+                    bool unsupportedLanguageSkipped = result.Coverage.SkippedProjects.Count > 0;
+                    bool candidateProjectsSkipped = result.SkippedCandidateProjects.Count > 0;
+                    bool failedLoads = result.Coverage.FailedProjects.Count > 0;
+                    bool coverageIncomplete = result.Coverage.LoadedProjects <
+                        result.Coverage.RequestedProjects;
+                    bool outOfGraphCandidates = result.OutOfGraphCandidateCount > 0;
+                    // Omitted monotonic scope makes the modeled total a lower bound. Project-model
+                    // uncertainty is different: imported MSBuild authority can revoke a locally
+                    // modeled relationship, so candidates may include false positives and must
+                    // not be described as "at least N".
+                    bool monotonicScopeOmitted = exhausted || unsupportedLanguageSkipped ||
+                        candidateProjectsSkipped || failedLoads || coverageIncomplete ||
+                        outOfGraphCandidates || conversionUsageEnumerationGap;
+                    bool partial = monotonicScopeOmitted || result.ProjectModelUnproven;
+                    bool totalIsLowerBound = monotonicScopeOmitted &&
+                        !result.ProjectModelUnproven;
+                    string atLeast = totalIsLowerBound ? "at least " : "";
+                    bool indexedConfidence = partial;
+                    var meta0 = Meta.From(_manager.Health(),
+                        indexedConfidence ? "indexed" : "exact", "semantic");
+                    long elapsedMs = swSem.ElapsedMilliseconds;
+                    var partialReasons = new List<string>();
+                    if (conversionUsageEnumerationGap)
+                        partialReasons.Add(result.ProjectModelUnproven
+                            ? "conversion_usage_enumeration_gap: compiler reference enumeration does not currently prove user-defined conversion usage sites; count direction is unknown while the project model is unproven"
+                            : "conversion_usage_enumeration_gap: compiler reference enumeration does not currently prove user-defined conversion usage sites; counts are a lower bound");
+                    if (exhausted)
+                        partialReasons.Add($"semantic_timeout: deadline exhausted after {elapsedMs}ms of {deadlineMs}ms; counts cover the scanned portion only (raise timeoutMs)");
+                    if (unsupportedLanguageSkipped)
+                        partialReasons.Add($"unsupported_language_projects_skipped: {result.Coverage.SkippedProjects.Count} project(s) could contain additional references");
+                    if (candidateProjectsSkipped)
+                        partialReasons.Add($"candidate_cluster_bounded: skipped {result.SkippedCandidateProjects.Count} candidate project(s) (raise maxProjects)");
+                    if (failedLoads)
+                    {
+                        string failedCause = SemanticCoverageReasons.FailedProjects(result.Coverage)
+                            ?? "project_load_failed";
+                        partialReasons.Add($"{failedCause}: {result.Coverage.FailedProjects.Count} project(s) were not scanned");
+                    }
+                    if (coverageIncomplete && !unsupportedLanguageSkipped && !failedLoads)
+                        partialReasons.Add($"project_coverage_incomplete: loaded {result.Coverage.LoadedProjects} of {result.Coverage.RequestedProjects} requested projects");
+                    if (outOfGraphCandidates)
+                        partialReasons.Add($"out_of_graph_candidates: {result.OutOfGraphCandidateCount} textual candidate project(s) have no loadable dependency path");
+                    if (result.ProjectModelUnproven)
+                        partialReasons.Add("project_model_unproven");
+                    string? partialReason = partialReasons.Count > 0
+                        ? string.Join("; ", partialReasons)
+                        : null;
+                    string summary = conversionUsageEnumerationGap
+                        ? totalIsLowerBound
+                            ? $"User-defined conversion reference enumeration is incomplete; {result.TotalLocations} compiler-reported locations across {groups0.Count} projects ({mix0}) are a lower bound."
+                            : $"User-defined conversion reference enumeration is incomplete, and project-model uncertainty prevents a directional count guarantee; {result.TotalLocations} compiler-reported locations across {groups0.Count} projects ({mix0})."
+                        : $"{atLeast}{result.TotalLocations} {(indexedConfidence ? "compiler-resolved candidate" : "exact")} references across {groups0.Count} projects ({mix0}).";
+                    var boundedOutOfGraph = new List<(string Value, bool Truncated)>();
+                    foreach (string project in result.OutOfGraphCandidates ?? [])
+                    {
+                        string bounded = Json.JsonStringPrefix(project, 512,
+                            out bool identityTruncated);
+                        boundedOutOfGraph.Add((bounded, identityTruncated));
+                    }
+                    return Json.WithCompleteSemanticIdentity(
+                        Json.WithAuxiliaryListsBudget(groups0,
+                        result.SkippedCandidateProjects, boundedOutOfGraph,
+                        (items, truncated, skippedItems, skippedTruncated,
+                            outOfGraphItems, outOfGraphBudgetTruncated) => new
+                            {
+                                symbol = SemanticSymbolJson(result.Symbol),
+                                summary,
+                                totalReferences = result.TotalLocations,
+                                totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
+                                // HOW the symbol is used, e.g. {"call":20,"xmldoc":480} — the anti-"500 refs
+                                // that are mostly doc mentions" signal. Filter with usageKinds.
+                                kinds = result.KindCounts is { Count: > 0 } ? result.KindCounts : null,
+                                groupBy = "project",
+                                groups = items.Select(g => new
+                                {
+                                    project = g.Project,
+                                    isTest = g.IsTestProject,
+                                    count = g.Count,
+                                    samples = g.Samples.Select(s => new { s.Path, s.Line, text = s.LineText, kind = s.Kind }),
+                                }),
+                                coverage = CoverageJson(result.Coverage),
+                                partial,
+                                partialReason,
+                                skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
+                                skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
+                            ? result.SkippedCandidateProjects.Count
+                            : (int?)null,
+                                skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
+                                // kbn: unscanned projects that textually mention the symbol but have no
+                                // graph path to its declarer (plugins, config-wired consumers). Scope with
+                                // pathGlob or run indexed mode to see their candidate lines.
+                                outOfGraphCandidates = outOfGraphItems.Count > 0
+                            ? outOfGraphItems.Select(item => item.Value).ToList()
+                            : null,
+                                outOfGraphCandidateCount = result.OutOfGraphCandidateCount > 0
+                            ? result.OutOfGraphCandidateCount
+                            : (int?)null,
+                                outOfGraphCandidatesReturned = result.OutOfGraphCandidateCount > 0
+                            ? outOfGraphItems.Count
+                            : (int?)null,
+                                outOfGraphCandidatesTruncated = result.OutOfGraphCandidatesTruncated ||
+                                                        outOfGraphBudgetTruncated
+                            ? true
+                            : (bool?)null,
+                                outOfGraphCandidateItemsTruncated = outOfGraphItems.Any(item =>
+                                    item.Truncated)
+                            ? true
+                            : (bool?)null,
+                                note = referenceNote,
+                                noteId = referenceNoteId, // a0b: stable, machine-matchable cause
+                                                          // t2b: where the budget went — cluster load+resolve vs find+count.
+                                timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
+                                truncated,
+                                meta = meta0,
+                            }));
+                }
+                failReason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
+            }
+            else
+            {
+                failReason = "target_not_found_in_index";
+            }
+            if (mode == "semantic")
+            {
+                return Json.Serialize(new
+                {
+                    error = "semantic_unavailable",
+                    partialReason = failReason,
+                    hint = "Retry with mode='indexed' for fast text candidates.",
+                    timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds }, // 24n: was the deadline the cause?
+                    meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                });
+            }
+        }
+
+        if (resolvedHandleHit is { Kind: "operator" })
+            return OperatorReferencesRequireSemantic(failReason ?? "semantic_unavailable");
+
+        // Indexed fallback (name required — derive from position when missing).
+        using var q = _manager.OpenQueries();
+        if (string.IsNullOrEmpty(name) && path is not null)
+        {
+            var chain = q.SymbolAt(NormalizePath(path), line);
+            name = chain.Count > 0 ? chain[0].Name : name;
+        }
+        if (string.IsNullOrEmpty(name))
+        {
+            return Json.Serialize(new { error = "symbol_not_resolved", partialReason = failReason });
+        }
+        var excludes = excludePath is { Length: > 0 } ex ? new[] { ex } : null;
+        // includeTests is filtered INSIDE the candidate scan, before counting (wu1) — so `total`
+        // and the groups describe one set. Summing the filtered groups here instead was itself
+        // dishonest (review-reproduced): a file linked into TWO production projects appears in
+        // both groups, so the sum double-counted it and the "filtered" total EXCEEDED the real one.
+        IndexQueries.ReferenceCandidateResult candidates = q.ReferenceCandidates(
+            name, Math.Clamp(maxFiles, 10, 2000), Math.Clamp(samplesPerGroup, 0, 10), pathGlob, excludes, includeGenerated, includeTests);
+        int total = candidates.TotalHits;
+        int prod = candidates.ProdHits;
+        int test = candidates.TestHits;
+        List<ReferenceGroup> groups = candidates.Groups;
+        bool candidateFilesCapHit = candidates.CandidateFilesTruncated;
+        var indexedPartialReasons = new List<string>();
+        if (!string.IsNullOrEmpty(failReason)) indexedPartialReasons.Add(failReason);
+        if (candidateFilesCapHit)
+        {
+            indexedPartialReasons.Add(
+                $"candidate_file_cap: scanned {candidates.CandidateFilesScanned} candidate files; " +
+                $"at least {candidates.CandidateFilesAtLeast} matched (raise maxFiles)");
+        }
+        string? indexedPartialReason = indexedPartialReasons.Count > 0
+            ? string.Join("; ", indexedPartialReasons)
+            : null;
+
+        // prod/test are PHYSICAL splits of `total` (each file once — 0ok: the old per-group sums
+        // let "4 candidate lines (8 production)" appear when a file is linked into two projects).
+        string mix = includeTests ? $"{prod} production, {test} test" : $"{prod} production; test projects excluded";
+        var meta = Meta.From(_manager.Health(), "indexed", "text");
+        return Json.WithListBudget(groups, (items, truncated) => new
+        {
+            name,
+            partial = candidateFilesCapHit ? true : (bool?)null,
+            partialReason = indexedPartialReason,
+            summary = candidateFilesCapHit
+                ? $"At least {total} candidate reference lines across {groups.Count} returned project groups ({mix}); the indexed scan covered {candidates.CandidateFilesScanned} of at least {candidates.CandidateFilesAtLeast} matching files."
+                : $"{total} candidate reference lines across {groups.Count} projects ({mix}).",
+            totalCandidates = total,
+            totalIsLowerBound = candidateFilesCapHit ? true : (bool?)null,
+            coverage = new
+            {
+                candidateFilesScanned = candidates.CandidateFilesScanned,
+                candidateFilesTotal = candidateFilesCapHit
+                    ? (int?)null
+                    : candidates.CandidateFilesScanned,
+                candidateFilesAtLeast = candidates.CandidateFilesAtLeast,
+                candidateFileLimit = candidates.CandidateFileLimit,
+                candidateFilesCapHit = candidateFilesCapHit ? true : (bool?)null,
+            },
+            groupBy = "project",
+            groups = items.Select(g => new
+            {
+                project = GroupProject(g.Project),
+                orphaned = GroupOrphaned(g.Project),
+                isTest = g.IsTestProject,
+                count = g.Count,
+                samples = g.Samples.Select(s => new { path = s.FilePath, s.Line, text = s.LineText }),
+            }),
+            truncated,
+            note = "Candidates are whole-identifier text matches (confidence: indexed), not compiler-resolved references."
+                + (candidateFilesCapHit
+                    ? " The candidate-file scan reached maxFiles; counts are lower bounds."
+                    : "")
+                + (kindSet is not null || publicConsumersOnly
+                    ? " NOTE: usageKinds/publicConsumersOnly need compiler syntax and were NOT applied on this indexed path."
+                    : ""),
+            noteId = candidateFilesCapHit ? NoteIds.ReferencesCandidateFilesCap : null,
+            meta,
+        });
+    }
+
+    // ---------------------------------------------------------------- projects
+
+    [McpServerTool(Name = "project_graph")]
+    [Description("Project dependency edges around a project (upstream = dependents, downstream = dependencies). Use to understand ownership and blast radius before changes.")]
+    public string ProjectGraph(
+        [Description("Project name (e.g. 'Acme.Billing.Invoicing.Application').")] string project,
+        [Description("Traversal depth (default 2, max 5).")] int depth = 2,
+        [Description("'upstream', 'downstream', or 'both' (default).")] string direction = "both")
+    {
+        if (NotReady() is { } notReady) return notReady;
+        depth = Math.Clamp(depth, 1, 5);
+        using var q = _manager.OpenQueries();
+        List<ProjectRow> rootRows = q.ProjectsByName(project);
+        ProjectRow? root = rootRows.FirstOrDefault(row => row.Language == "cs") ??
+                           rootRows.FirstOrDefault();
+        if (root is null)
+        {
+            return Json.Serialize(new { error = "project_not_found", project, meta = Meta.From(_manager.Health(), "indexed", "text") });
+        }
+        var edges = q.ProjectGraph(root.Name, depth, direction);
+        var nodes = edges.SelectMany(e => new[] { e.FromProject, e.ToProject })
+            .Append(root.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        Dictionary<string, string> projectLanguages = q.ProjectLanguages(nodes);
+        string LanguageOf(string name) => projectLanguages.TryGetValue(name, out string? language)
+            ? language
+            : "unknown";
+
+        var meta = Meta.From(_manager.Health(), "indexed", "text");
+        return Json.WithListBudget(edges, (items, truncated) => new
+        {
+            root = new { root.Name, root.Path, root.Style, language = LanguageOf(root.Name), root.Tfms, root.IsTest },
+            direction,
+            depth,
+            nodeCount = nodes.Count,
+            // Edge provenance (bxw, schema v10): 'projectReference' = a real <ProjectReference>;
+            // 'hintPathReference' = recovered from <Reference>+HintPath / bare Include (the
+            // multi-staged build). kind was previously HARDCODED 'projectReference' for every
+            // edge — presenting binary couplings as source-graph ones.
+            edges = items.Select(e => new
+            {
+                from = e.FromProject,
+                fromLanguage = LanguageOf(e.FromProject),
+                to = e.ToProject,
+                toLanguage = LanguageOf(e.ToProject),
+                kind = EdgeKind(e.Kind),
+            }),
+            truncated,
+            meta,
+        });
+    }
+
+    [McpServerTool(Name = "projects_containing")]
+    [Description("All projects that compile a given file (multiple for linked/shared files). Needed before interpreting diagnostics or symbol identity for shared files.")]
+    public string ProjectsContaining(
+        [Description("Workspace-relative file path.")] string path)
+    {
+        if (NotReady() is { } notReady) return notReady;
+        using var q = _manager.OpenQueries();
+        var projects = q.ProjectsContaining(NormalizePath(path));
+        return Json.Serialize(new
+        {
+            path,
+            projects = projects.Select(p => new
+            {
+                p.Name,
+                p.Path,
+                p.Style,
+                language = p.Language,
+                p.Tfms,
+                p.IsTest,
+            }),
+            meta = Meta.From(_manager.Health(), "indexed", "text"),
+        });
+    }
+
+    // ---------------------------------------------------------------- maintenance
+
+    [McpServerTool(Name = "refresh_index")]
+    [Description("Queue an index refresh through the shared daemon. A diagnostics-only non-writer instance returns index_writer_required. force='auto'/'incremental': targeted paths or a change-detection sweep — hash-identical files are SKIPPED, so this never rebuilds an intact-looking index. force='full': the 'I know the db is wrong' hatch — delete the index and REBUILD FROM SCRATCH (works even from state 'failed'; watch server_capabilities.index.progress). Normally unnecessary — the daemon's file watcher keeps the index fresh.")]
+    public string RefreshIndex(
+        [Description("Optional EXACT workspace-relative paths as comma-separated text or a JSON-array string (maximum 256 paths and 64 KiB input) — no globs (a glob silently matches nothing). Rooted, traversing, malformed, or control-character paths return bad_request. Use '/' on Unix, where a single backslash remains a legal filename character; Windows accepts either separator. Ignored with force='full'.")] string? paths = null,
+        [Description("'auto' (default) / 'incremental': delta refresh, unchanged files skipped. 'full': rebuild from scratch — corruption/recovery hatch.")] string force = "auto")
+    {
+        // The two paths are EXPLICIT by contract (field: "calling refresh_index and hoping is
+        // not that" — a caller recovering from corruption needs a way in; the delta path's
+        // hash-skip makes it a no-op on untouched files by design).
+        if (force is not ("auto" or "incremental" or "full"))
+        {
+            return Json.Serialize(new
+            {
+                error = "bad_request",
+                detail = $"Unknown force value '{force}'. Valid: auto, incremental, full.",
+            });
+        }
+        if (_manager.IsFollower) return IndexWriterRequired();
+        if (force == "full")
+        {
+            if (!_manager.RequestFullRebuild())
+                return _manager.IsFollower ? IndexWriterRequired() : IndexMutationUnavailable();
+            return Json.Serialize(new
+            {
+                queued = true,
+                scope = "full rebuild from scratch",
+                hint = "The index is discarded and rebuilt; poll server_capabilities.index.progress (state 'building') until 'ready'.",
+                meta = Meta.From(_manager.Health(), "indexed", "text"),
+            });
+        }
+        List<string>? parsedPaths = null;
+        if (paths is not null &&
+            !TryParsePathList(paths, ExplicitPathInputLimit, out parsedPaths, out string? detail))
+        {
+            return Json.Serialize(new { error = "bad_request", detail });
+        }
+
+        // Normalize the host platform's separator to the forward-slash form stored by the index.
+        // On Unix a backslash is a legal filename character and must remain byte-for-byte distinct;
+        // on Windows this still accepts either slash style (bug 9h3).
+        var list = parsedPaths?.Select(NormalizePath).ToList();
+        if (!_manager.RequestRefresh(list?.Count > 0 ? list : null))
+            return _manager.IsFollower ? IndexWriterRequired() : IndexMutationUnavailable();
+        return Json.Serialize(new
+        {
+            queued = true,
+            scope = list?.Count > 0 ? $"{list.Count} paths" : "full sweep",
+            meta = Meta.From(_manager.Health(), "indexed", "text"),
+        });
+    }
+
+    private string IndexWriterRequired() => Json.Serialize(new
+    {
+        error = "index_writer_required",
+        detail = "This explicit Phoenix instance does not own the writer lease; use an ordinary shared-daemon session.",
+        meta = Meta.From(_manager.Health(), "indexed", "text"),
+    });
+
+    private string IndexMutationUnavailable() => NotReady() ?? Json.Serialize(new
+    {
+        error = "index_unavailable",
+        detail = "The index writer is not available to accept this operation.",
+        meta = Meta.From(_manager.Health(), "indexed", "text"),
+    });
+
+    // ---------------------------------------------------------------- helpers
+
+    /// <summary>
+    /// Turns a name- or position-target into a concrete (path, line, column) for the
+    /// semantic layer, using the index to locate the best declaration for name targets.
+    /// </summary>
+    private ((string Path, int Line, int? Column)? Target, string? NameHint) ResolveSemanticTarget(
+        string? name, string? container, string? kinds, string? path, int line, int column,
+        int? arity = null)
+    {
+        if (path is not null && line > 0)
+        {
+            return ((NormalizePath(path), line, column > 0 ? column : null), name);
+        }
+        if (name is null) return (null, null);
+
+        using var q = _manager.OpenQueries();
+        // includeGenerated: TRUE (review 4a): the LIVE twin of a dead declaration is typically the
+        // WSDL/codegen copy, which carries an <auto-generated> banner — excluding generated files
+        // here made the live twin invisible and the orphan gate below useless for the exact
+        // production case. The ORDER BY still ranks non-generated first, so picks only change when
+        // the non-generated candidates are dead.
+        var hits = q.SearchSymbols(
+            name, "exact", SplitCsv(kinds), 20, includeGenerated: true, arity: arity,
+            language: "cs");
+        if (container is { } c)
+        {
+            hits = hits.Where(h =>
+                (h.Container?.Contains(c, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (h.Ns?.Contains(c, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+        }
+        // NEVER target an uncompiled declaration (3tz, the dead-twin bug): a file no project compiles
+        // is in no compilation, so semantic resolution against it can only fail — while a LIVE twin of
+        // the same symbol (e.g. the WSDL-generated one) exists elsewhere. The old pick even preferred
+        // the dead twin: non-generated files sort first. Fall back to orphaned-only when there is no
+        // live declaration at all (then semantic fails honestly and the heuristic path takes over).
+        if (hits.Count > 0)
+        {
+            var orphaned = q.OrphanedPaths(hits.Select(h => h.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).ToList());
+            if (orphaned.Count > 0)
+            {
+                var live = hits.Where(h => !orphaned.Contains(h.FilePath)).ToList();
+                if (live.Count > 0) hits = live;
+            }
+        }
+        var best = hits
+            .OrderBy(h => h.Kind switch { "interface" => 0, "class" => 1, "struct" => 1, "enum" => 1, _ => 2 })
+            .FirstOrDefault();
+        if (best is null) return (null, name);
+        return ((best.FilePath, best.StartLine, null), name);
+    }
+
+    // Cap on declaration sites emitted for one symbol. A namespace or heavily-partial type can
+    // have hundreds of spans; this bounds the count for tools that serialize it via a plain
+    // Serialize (implementations/references/etc.). definition additionally routes its (single)
+    // declaration list through WithListBudget for a hard byte bound; this cap keeps the common
+    // case small and gives an early declarationsTruncated signal.
+    private const int MaxDeclarationSites = 20;
+
+    // Kept single-arg so method-group use (.Select(SemanticSymbolJson)) still binds.
+    private static object SemanticSymbolJson(SemanticDeclaration d) => SemanticSymbolCore(d, includeDeclarations: true);
+
+    // Identity without the declaration list — for definition, which renders declarations once
+    // in its own budgeted top-level array (avoids serializing the same sites twice).
+    private static object SemanticIdentityJson(SemanticDeclaration d) => SemanticSymbolCore(d, includeDeclarations: false);
+
+    private static object SemanticSymbolCore(SemanticDeclaration d, bool includeDeclarations)
+    {
+        var sites = includeDeclarations ? d.Declarations.Take(MaxDeclarationSites + 1).ToList() : null;
+        int returnedDeclarations = Math.Min(d.Declarations.Count, MaxDeclarationSites);
+        bool declarationSitesTruncated = includeDeclarations &&
+                                         d.Declarations.Count > MaxDeclarationSites;
+        return new
+        {
+            display = d.SymbolDisplay,
+            documentationCommentId = d.DocumentationCommentId,
+            d.Kind,
+            containingType = d.ContainingType,
+            ns = d.Namespace,
+            assembly = d.Assembly,
+            declarations = sites?.Take(MaxDeclarationSites).Select(s => new { s.Path, s.StartLine, s.EndLine, project = s.Project }),
+            declarationsTotal = includeDeclarations ? d.Declarations.Count : (int?)null,
+            declarationsReturned = includeDeclarations ? returnedDeclarations : (int?)null,
+            declarationsTruncated = declarationSitesTruncated
+                ? $"more than {MaxDeclarationSites} declaration sites — narrow the query or use references"
+                : (string?)null,
+            declarationsNoteId = declarationSitesTruncated
+                ? NoteIds.SemanticDeclarationSitesBudget
+                : null,
+        };
+    }
+
+    private const int CoverageIdentityJsonBytes = 256;
+
+    private static string CoverageIdentity(string value) =>
+        Json.JsonStringPrefix(value, CoverageIdentityJsonBytes, out _);
+
+    private static bool CoverageIdentityTruncated(string value)
+    {
+        _ = Json.JsonStringPrefix(value, CoverageIdentityJsonBytes, out bool truncated);
+        return truncated;
+    }
+
+    private static object CoverageJson(ClusterCoverage c)
+    {
+        var causeGroups = (c.FailedProjectCauses ??
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
+            .Where(pair => c.FailedProjects.Contains(pair.Key,
+                StringComparer.OrdinalIgnoreCase))
+            .GroupBy(pair => pair.Value, StringComparer.Ordinal)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .ToList();
+        var causeSample = causeGroups.Take(8).Select(group =>
+        {
+            List<string> projects = group.Select(pair => pair.Key)
+                .OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
+            return new
+            {
+                cause = group.Key,
+                projectCount = projects.Count,
+                projects = projects.Take(4).Select(CoverageIdentity).ToList(),
+                projectsTruncated = projects.Count > 4 ||
+                                    projects.Any(CoverageIdentityTruncated)
+                    ? true
+                    : (bool?)null,
+            };
+        }).ToList();
+        return new
+        {
+            loadedProjects = c.LoadedProjects,
+            requestedProjects = c.RequestedProjects,
+            // Field 0.7.0: SymbolFinder scans the WHOLE solution (including projects loaded by earlier
+            // calls), so hits can legitimately exceed the requested set — this makes that legible
+            // instead of "coverage 1/1 but 8 hits from 8 projects".
+            solutionProjects = c.SolutionProjects > 0 ? c.SolutionProjects : (int?)null,
+            skippedProjects = c.SkippedProjects.Count > 0
+                ? c.SkippedProjects.Take(8).Select(CoverageIdentity).ToList()
+                : null,
+            skippedProjectCount = c.SkippedProjects.Count > 0 ? c.SkippedProjects.Count : (int?)null,
+            skippedProjectsTruncated = c.SkippedProjects.Count > 8 ||
+                                       c.SkippedProjects.Any(CoverageIdentityTruncated)
+                ? true
+                : (bool?)null,
+            failedProjects = c.FailedProjects.Count > 0
+                ? c.FailedProjects.Take(8).Select(CoverageIdentity).ToList()
+                : null,
+            failedProjectCount = c.FailedProjects.Count > 0 ? c.FailedProjects.Count : (int?)null,
+            failedProjectsTruncated = c.FailedProjects.Count > 8 ||
+                                      c.FailedProjects.Any(CoverageIdentityTruncated)
+                ? true
+                : (bool?)null,
+            failedProjectCauses = causeSample.Count > 0 ? causeSample : null,
+            failedProjectCauseCount = causeGroups.Count > 0 ? causeGroups.Count : (int?)null,
+            failedProjectCausesTruncated = causeGroups.Count > 8 ? true : (bool?)null,
+            unprovenFriendAssemblyProjects = c.UnprovenFriendAssemblyProjects is { Count: > 0 } unproven
+                ? unproven.Take(8).Select(CoverageIdentity).ToList()
+                : null,
+            unprovenFriendAssemblyProjectCount = c.UnprovenFriendAssemblyProjects is { Count: > 0 }
+                ? c.UnprovenFriendAssemblyProjects.Count
+                : (int?)null,
+            unprovenFriendAssemblyProjectsTruncated = c.UnprovenFriendAssemblyProjects is { Count: > 0 } identities &&
+                                                       (identities.Count > 8 ||
+                                                        identities.Any(CoverageIdentityTruncated))
+                ? true
+                : (bool?)null,
+            frameworkRefsAvailable = c.FrameworkRefsAvailable,
+        };
+    }
+
+    private static bool IsFSharpScriptPath(string path) =>
+        Path.GetExtension(path).Equals(".fsx", StringComparison.OrdinalIgnoreCase);
+
+    private string UnsupportedLanguage(string path, string language, string operation)
+    {
+        bool compileOwnedFSharp = false;
+        string extension = Path.GetExtension(path);
+        if (language == "fs" &&
+            (extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+             extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase)))
+        {
+            using var queries = _manager.OpenQueries();
+            compileOwnedFSharp = queries.ProjectsContaining(path)
+                .Any(project => project.Language == "fs");
+        }
+        return UnsupportedLanguageForTest(_manager.Health(), path, language, operation,
+            compileOwnedFSharp);
+    }
+
+    internal static string UnsupportedLanguageForTest(IndexHealth health, string path,
+        string language, string operation, bool compileOwnedFSharp = false)
+    {
+        string extension = Path.GetExtension(path);
+        if (language == "fs" && extension.Equals(".fsx", StringComparison.OrdinalIgnoreCase))
+            language = "fsx";
+        bool fsharpSemanticEligible = language == "fs" && compileOwnedFSharp &&
+            (extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+             extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase));
+        bool fsharpSyntaxIndexed = language == "fs" &&
+            (extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+             extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase));
+        return Json.WithStringBudget(path, 4096, (boundedPath, pathTruncated) => new
+        {
+            error = "unsupported_language",
+            operation,
+            path = boundedPath,
+            pathTruncated = pathTruncated ? true : (bool?)null,
+            language,
+            supportedLanguages = operation is "symbol_at" or "definition" or "search_symbol"
+                ? new[] { "cs", "fs" }
+                : new[] { "cs" },
+            availableForFile = fsharpSemanticEligible
+                ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol", "outline", "symbol_at", "definition" }
+                : fsharpSyntaxIndexed
+                ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol" }
+                : new[] { "find_file", "search_text", "source_context", "projects_containing" },
+            detail = fsharpSemanticEligible
+                ? "F# supports text, project-graph navigation, FCS outlines, position-based symbol_at, and same-project definition for compile-owned .fs/.fsi files. Other compiler-semantic operations remain unavailable."
+                : language == "fsx"
+                    ? "F# script files are text-only; indexed F# declaration search covers .fs and .fsi project inputs."
+                    : language == "fs"
+                    ? "This F# file is not a compile-owned .fs/.fsi semantic input; syntax-indexed search_symbol plus text and project-graph navigation remain available."
+                    : $"The indexed language '{language}' supports text navigation only; C# syntax and compiler semantics are not available.",
+            meta = Meta.From(health, "indexed", "text"),
+        });
+    }
+
+    private string? UnsupportedLanguageAtPath(string? path, string operation)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        string normalized = NormalizePath(path);
+        using var q = _manager.OpenQueries();
+        return q.FileByPath(normalized) is { Language: not "cs" } file
+            ? UnsupportedLanguage(normalized, file.Language, operation)
+            : null;
+    }
+
+    /// <summary>Combines an explicit excludePath glob with firstPartyOnly's whole-segment vendor
+    /// globs into one exclude list (null when empty, so callers pass null for "no filter").
+    /// firstPartyOnly uses <see cref="IndexQueries.VendorExcludeGlobs"/> — a complete, scan-free
+    /// exclusion that matches exactly what the per-hit noise flag reports.</summary>
+    private static IReadOnlyList<string>? BuildExcludes(string? excludePath, bool firstPartyOnly)
+    {
+        var list = new List<string>();
+        if (excludePath is { Length: > 0 } ex) list.Add(ex);
+        if (firstPartyOnly) list.AddRange(IndexQueries.VendorExcludeGlobs());
+        return list.Count > 0 ? list.Distinct(StringComparer.OrdinalIgnoreCase).ToList() : null;
+    }
+
+    /// <summary>Resolves a symbolId handle to its indexed declaration row. Accepts the idx:NNN
+    /// handle (from any search_symbol / symbol_at / definition result) — index-local, so it changes
+    /// on reindex. A documentationCommentId is not yet accepted as an input handle. Returns the hit
+    /// on success, or an error-JSON string to hand straight back to the caller.</summary>
+    private (SymbolHit? Hit, string? Error) ResolveSymbolIdHandle(string symbolId)
+    {
+        // Handle shape: idx:<rowid>[~<fingerprint>]. The fingerprint is optional so a hand-typed
+        // idx:<rowid> still resolves (best-effort, unverified); emitted handles always carry it.
+        string body = symbolId.StartsWith("idx:", StringComparison.Ordinal) ? symbolId[4..] : "";
+        string? fp = null;
+        int tilde = body.IndexOf('~');
+        if (tilde >= 0) { fp = body[(tilde + 1)..]; body = body[..tilde]; }
+        if (body.Length == 0 || !long.TryParse(body, out long id))
+        {
+            return (null, Json.Serialize(new
+            {
+                error = "bad_request",
+                detail = "symbolId must be an 'idx:NNN' handle (from a prior search_symbol / symbol_at / definition result). A documentationCommentId (e.g. 'T:Ns.Type') is not yet accepted as input — use name, or path+line.",
+            }));
+        }
+        using var q = _manager.OpenQueries();
+        var hit = q.SymbolById(id);
+        if (hit is null)
+        {
+            return (null, Json.Serialize(new
+            {
+                error = "symbol_not_found",
+                detail = $"No indexed symbol with id {id}. 'idx:' handles are index-local — re-run search_symbol for a current handle.",
+            }));
+        }
+        if (fp is not null && !FingerprintMatches(hit, fp))
+        {
+            // The rowid still exists but now holds a DIFFERENT symbol (a reindex reused it). Refuse
+            // rather than return the wrong symbol as if the handle were exact.
+            return (null, Json.Serialize(new
+            {
+                error = "stale_handle",
+                detail = $"symbolId 'idx:{id}' now refers to a different symbol ({hit.Name}) — the index changed since the handle was issued. Re-run search_symbol for a current handle.",
+            }));
+        }
+        return (hit, null);
+    }
+
+    private static string? OperatorDeclarationKey(SymbolHit hit) =>
+        hit.Kind == "operator" && !string.IsNullOrEmpty(hit.DeclarationKey)
+            ? hit.DeclarationKey
+            : null;
+
+    private string OperatorReferencesRequireSemantic(string reason) => Json.Serialize(new
+    {
+        error = "semantic_required",
+        operation = "references",
+        kind = "operator",
+        partialReason = reason,
+        detail = "Operator idx handles require compiler-semantic references so the canonical declaration key remains pinned; indexed text candidates cannot distinguish overload identity.",
+        hint = "Retry without pathGlob/excludePath using mode='semantic' or mode='auto'.",
+        meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+    });
+
+    /// <summary>t2b: expand the cluster_cold_load token with inline advice at the moment of
+    /// confusion — the deadline died LOADING compilations (the first call after an index build
+    /// or cluster reload), and an immediate retry usually returns exact. The uniform
+    /// "semantic_timeout" sent agents raising timeoutMs (or distrusting the tool) when the fix
+    /// was simply to call again. Every other reason passes through untouched, and the token
+    /// stays the string's PREFIX so it remains machine-matchable.</summary>
+    internal static string? ExpandReason(string? reason) => // internal: token contract pinned by tests
+        reason == "cluster_cold_load"
+            ? "cluster_cold_load — the deadline expired while loading compilations (first call after an index build or cluster reload); an immediate retry usually returns exact"
+            : reason;
+
+    /// <summary>Transient semantic failures keep their established partialReason token while
+    /// carrying a separate machine-readable retry signal. A retry is advice, not an automatic
+    /// second invocation or a hidden deadline increase.</summary>
+    internal static bool SemanticRetryRecommended(string? reason) =>
+        reason is not null &&
+        (reason.StartsWith("cluster_cold_load", StringComparison.Ordinal) ||
+         reason.StartsWith("semantic_timeout", StringComparison.Ordinal));
+
+    internal static string? SemanticRetryHint(string? reason)
+    {
+        if (!SemanticRetryRecommended(reason)) return null;
+        return reason!.StartsWith("cluster_cold_load", StringComparison.Ordinal)
+            ? "Retry implementations once with the same arguments; the semantic cluster may now be warm and return exact results."
+            : "Retry implementations once with the same arguments; if it remains partial, narrow the target or explicitly choose a larger timeoutMs.";
+    }
+
+    /// <summary>Wire vocabulary for edge provenance (bxw): the stored kind ('project'/'assembly')
+    /// maps to 'projectReference'/'hintPathReference' — 'projectReference' predates provenance on
+    /// the wire (project_graph hardcoded it), so the common case keeps its established value.
+    /// Same tokens everywhere kind/via appears (project_graph, dependency_path, context_pack).</summary>
+    private static string EdgeKind(string storedKind) =>
+        storedKind == "assembly" ? "hintPathReference" : "projectReference";
+
+    /// <summary>Structured attribution for reference groups whose files sit in NO project's
+    /// compile set (bxw): the payload used to ship the magic display string "(no project)",
+    /// which callers had to know to string-match. Now the project field is null — which the
+    /// house serialization OMITS (WhenWritingNull) — and orphaned:true rides alongside as the
+    /// positive discriminator, the same 'orphaned' vocabulary search_symbol/repo_overview use.
+    /// Nullable bool so compiled rows stay clean (orphaned omitted too).</summary>
+    private static string? GroupProject(string project) =>
+        project == IndexQueries.NoProjectGroup ? null : project;
+
+    private static bool? GroupOrphaned(string project) =>
+        project == IndexQueries.NoProjectGroup ? true : null;
+
+    /// <summary>Stable, cross-process identity hash of a symbol row. v3 binds the declaration to
+    /// the file's existing content hash and deterministic syntax ordinal among declarations that
+    /// share a source line, so declarations with identical local display identity remain distinct
+    /// while any file edit invalidates its handles conservatively. The ordinal is projected in the
+    /// same read query as the symbol; this adds no column, binding, crypto, or allocation to every
+    /// symbol during indexing and keeps response shaping free of follow-up queries.</summary>
+    private static string Fingerprint(SymbolHit s)
+    {
+        string localIdentity = string.Join('\u001e', s.Ns ?? "", s.Container ?? "",
+            !string.IsNullOrEmpty(s.DeclarationKey) ? s.DeclarationKey : s.Signature);
+        string identity = string.Join('\u001f', s.Name, s.Kind,
+            s.Arity.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            s.StartLine.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            s.FilePath, s.FileHash.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            s.OrdinalOnLine.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            localIdentity);
+        return "v3-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
+    }
+
+    private static bool FingerprintMatches(SymbolHit s, string fingerprint)
+    {
+        if (fingerprint.StartsWith("v3-", StringComparison.Ordinal))
+            return string.Equals(fingerprint, Fingerprint(s), StringComparison.Ordinal);
+
+        // Older fingerprints cannot prove the current file epoch. Fail closed instead of silently
+        // accepting a row id that may have been reassigned by a rebuild or delta refresh.
+        return false;
+    }
+
+    private static object SymbolJson(SymbolHit s) => new
+    {
+        // idx:<rowid>~<identity fingerprint>. The fingerprint lets a rowid that delta refresh
+        // reused/reassigned be DETECTED on the way back in (stale_handle) rather than silently
+        // resolving to a different symbol — the id alone is not stable across reindex.
+        symbolId = $"idx:{s.Id}~{Fingerprint(s)}",
+        s.Name,
+        s.Kind,
+        s.Arity,
+        ns = s.Ns,
+        containingType = s.Container,
+        s.Signature,
+        s.Accessibility,
+        // Inheritance/lifetime modifiers (bt7): "virtual"/"override"/"abstract"/"static sealed"...
+        // Omitted when none — in deep hierarchies this picks the override site without opening files.
+        modifiers = s.Modifiers,
+        // Per-accessor accessibility (hu7): { get: "public", set: "private" } — ONLY when an
+        // accessor differs from the member's own accessibility (silent-when-nothing-to-say).
+        accessors = AccessorsJson(s.Accessors),
+        path = s.FilePath,
+        s.StartLine,
+        s.EndLine,
+        isPartial = s.IsPartial ? true : (bool?)null,
+        isGenerated = s.FileIsGenerated ? true : (bool?)null,
+        // Best-effort "this hit lives under a vendored/generated dir" signal (only present when
+        // true). Lets a caller spot third-party noise without firstPartyOnly, or excludePath it.
+        noise = IndexQueries.IsVendorPath(s.FilePath) ? true : (bool?)null,
+        // "No project compiles this file" (only present when true) — the compile-graph signal grep
+        // lacks. 3tz: Include globs expanded, Remove honored; residual gaps are shared .projitems,
+        // props-level globs, and ignored Conditions — near-proof, not absolute proof.
+        orphaned = s.IsOrphaned ? true : (bool?)null,
+        attributes = s.AttrMarkers,
+    };
+
+    /// <summary>Parses the stored "get=public;set=private" accessor split into a structured
+    /// object (hu7). Null (omitted) when the member's accessors are uniform.</summary>
+    private static Dictionary<string, string>? AccessorsJson(string? accessors)
+    {
+        if (accessors is null) return null;
+        var map = new Dictionary<string, string>();
+        foreach (var part in accessors.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            int eq = part.IndexOf('=');
+            if (eq > 0) map[part[..eq]] = part[(eq + 1)..];
+        }
+        return map.Count > 0 ? map : null;
+    }
+
+    private string? NotReady()
+    {
+        if (_manager.IsQueryable) return null;
+        var h = _manager.Health();
+        return Json.Serialize(new
+        {
+            error = h.State == "building" ? "index_building" : "index_unavailable",
+            state = h.State,
+            detail = h.Error,
+            // The progress struct rides IN the error (field: "otherwise callers still have to
+            // poll server_capabilities separately") — phase + monotonic counters + elapsed,
+            // filesTotal omitted until the scan knows it, no fabricated ETA/percent (bead two).
+            progress = ProgressJson(h),
+            hint = h.State == "building"
+                ? "The workspace index is still building (first run). Retry shortly; use shell tools meanwhile."
+                : "Index unavailable. Falling back to shell search is appropriate.",
+        });
+    }
+
+    /// <summary>Test seam: the shared progress emitter — the silent-when-zero (efa) and
+    /// gated-estimate (0tn) emission rules are pinned by tests through this.</summary>
+    internal static object? ProgressJsonForTest(IndexHealth h) => ProgressJson(h);
+
+    /// <summary>Build-progress envelope shared by server_capabilities.index and the
+    /// index_building error body — one shape everywhere; null (omitted) unless building.</summary>
+    private static object? ProgressJson(IndexHealth h)
+    {
+        if (h.Progress is not { } p) return null;
+        string phase = Json.Utf8Prefix(p.Phase, CapabilityDynamicTextBytes,
+            out bool phaseTruncated);
+        return new
+        {
+            phase,
+            phaseTruncated = phaseTruncated ? true : (bool?)null,
+            phaseBytes = phaseTruncated ? Json.Utf8Bytes(p.Phase) : (int?)null,
+            filesIndexed = p.FilesIndexed,
+            filesTotal = p.FilesTotal,
+            elapsedMs = p.ElapsedMs,
+            // efa: silent on a clean build — the counters exist to make a LOSSY build visible
+            // (skipped reads are absent from the index until a delta refresh retries them;
+            // failed csproj parses mean guessed compile sets), not to add noise to a good one.
+            filesSkipped = p.FilesSkipped > 0 ? p.FilesSkipped : (int?)null,
+            projectsFailed = p.ProjectsFailed > 0 ? p.ProjectsFailed : (int?)null,
+            // 0tn: DERIVED from the monotonic counters over the indexing_files phase's own
+            // clock, present only once measurable (>=100 files over >=1s) — labeled estimates
+            // that may fluctuate; still no percent field (derive % from the counters).
+            filesPerSecond = p.FilesPerSecond,
+            estimatedRemainingMs = p.EstimatedRemainingMs,
+        };
+    }
+
+    // Cursor is "o:<offset>" or, for a mode-carrying tool (search_symbol auto), "o:<offset>:<mode>".
+    private static (int Limit, int Offset, string? Mode) Page(int limit, string? cursor)
+    {
+        limit = Math.Clamp(limit, 1, 100);
+        int offset = 0;
+        string? mode = null;
+        if (cursor is not null && cursor.StartsWith("o:", StringComparison.Ordinal))
+        {
+            string rest = cursor[2..];
+            int colon = rest.IndexOf(':');
+            string offsetPart = colon < 0 ? rest : rest[..colon];
+            if (int.TryParse(offsetPart, out int parsed) && parsed > 0) offset = parsed;
+            if (colon >= 0 && colon + 1 < rest.Length) mode = rest[(colon + 1)..];
+        }
+        return (limit, offset, mode);
+    }
+
+    private static List<string>? SplitCsv(string? csv) =>
+        string.IsNullOrWhiteSpace(csv)
+            ? null
+            : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    internal static bool TryParsePathList(
+        string? value,
+        int maximumPaths,
+        out List<string> paths,
+        out string? detail)
+    {
+        paths = new List<string>();
+        detail = null;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            detail = "Provide 'paths'.";
+            return false;
+        }
+        if (System.Text.Encoding.UTF8.GetByteCount(value) > PathListInputByteLimit)
+        {
+            detail = $"paths accepts at most {PathListInputByteLimit} UTF-8 bytes.";
+            return false;
+        }
+
+        string trimmed = value.Trim();
+        if (trimmed[0] == '[')
+        {
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(trimmed);
+                if (document.RootElement.ValueKind != JsonValueKind.Array)
+                {
+                    detail = "paths must be comma-separated text or a JSON array of strings.";
+                    return false;
+                }
+
+                foreach (JsonElement item in document.RootElement.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.String)
+                    {
+                        detail = "Every JSON-array paths item must be a non-empty string.";
+                        return false;
+                    }
+                    if (!TryAddExplicitPath(item.GetString()!, maximumPaths, paths, out detail))
+                        return false;
+                }
+            }
+            catch (JsonException)
+            {
+                detail = "paths starts like a JSON array but is not a valid JSON array of strings.";
+                return false;
+            }
+        }
+        else if (trimmed[0] is '"' or '{')
+        {
+            detail = "paths must be comma-separated text or a JSON array of strings.";
+            return false;
+        }
+        else
+        {
+            int start = 0;
+            while (start <= value.Length)
+            {
+                int comma = value.IndexOf(',', start);
+                ReadOnlySpan<char> item = comma < 0
+                    ? value.AsSpan(start)
+                    : value.AsSpan(start, comma - start);
+                item = item.Trim();
+                if (item.IsEmpty)
+                {
+                    detail = "Every comma-separated paths item must be non-empty.";
+                    return false;
+                }
+                if (!TryAddExplicitPath(item.ToString(), maximumPaths, paths, out detail))
+                    return false;
+                if (comma < 0) break;
+                start = comma + 1;
+            }
+        }
+
+        if (paths.Count == 0)
+        {
+            detail = "Provide 'paths'.";
+            return false;
+        }
+
+        return true;
+
+        static bool TryAddExplicitPath(
+            string path,
+            int maximumPaths,
+            List<string> parsed,
+            out string? failure)
+        {
+            failure = null;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                failure = "Every paths item must be a non-empty string.";
+                return false;
+            }
+            if (parsed.Count >= maximumPaths)
+            {
+                failure = $"paths accepts at most {maximumPaths} entries.";
+                return false;
+            }
+            if (!IsExactWorkspaceRelativePath(path, OperatingSystem.IsWindows()))
+            {
+                failure = $"paths item '{SafePathForError(path)}' must be an exact workspace-relative path without traversal or control characters.";
+                return false;
+            }
+            parsed.Add(path);
+            return true;
+        }
+
+        static string SafePathForError(string path)
+        {
+            const int limit = 96;
+            string safe = new(path.Take(limit)
+                .Select(character => char.IsControl(character) ? '\uFFFD' : character)
+                .ToArray());
+            return path.Length > limit ? safe + "…" : safe;
+        }
+    }
+
+    internal static bool IsExactWorkspaceRelativePath(string path, bool windowsPathRules)
+    {
+        if (string.IsNullOrWhiteSpace(path) || path[0] == '/' ||
+            path.StartsWith("\\\\", StringComparison.Ordinal) ||
+            (path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':') ||
+            (windowsPathRules && path.Contains(':', StringComparison.Ordinal)))
+        {
+            return false;
+        }
+        if (path.Any(char.IsControl)) return false;
+
+        int segmentStart = 0;
+        for (int index = 0; index <= path.Length; index++)
+        {
+            bool boundary = index == path.Length || path[index] == '/' ||
+                (windowsPathRules && path[index] == '\\');
+            if (!boundary) continue;
+            ReadOnlySpan<char> segment = path.AsSpan(segmentStart, index - segmentStart);
+            if (segment.IsEmpty || segment.SequenceEqual(".") || segment.SequenceEqual(".."))
+                return false;
+            segmentStart = index + 1;
+        }
+        return true;
+    }
+
+    internal static object? PathSuggestionsJson(
+        int total,
+        IReadOnlyList<string> paths,
+        bool budgetTruncated)
+    {
+        if (total <= 0) return null;
+        return new
+        {
+            paths,
+            total,
+            truncated = budgetTruncated || paths.Count < total,
+        };
+    }
+
+    private static string NormalizePath(string path) => CodeNav.Core.WorkspacePaths.Normalize(path);
+}

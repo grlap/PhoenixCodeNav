@@ -1,0 +1,93 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodeNav.Core\CodeNav.Core.csproj" />
+    <ProjectReference Include="..\CodeNav.Portal\CodeNav.Portal.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false"
+                      PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
+    <PackageReference Include="ModelContextProtocol" Version="1.4.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <AssemblyName>PhoenixCodeNav.Mcp</AssemblyName>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- The production single-file contract test publishes win-x64 without restoring. Ensure the
+         ordinary repository restore gate prepares that RID instead of letting the test contact
+         package sources or mutate project.assets.json mid-suite. -->
+    <RuntimeIdentifiers Condition="$([MSBuild]::IsOSPlatform('Windows'))">win-x64</RuntimeIdentifiers>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- The .NET SDK's source-control integration appends "+<git-sha>" to AssemblyInformationalVersion
+         when built with a .git present; BuildInfo.Commit reads it back to report WHICH build is running
+         (=> "unknown" in a git-less build). Explicit so a future default flip can't silently drop the
+         deploy-verification stamp. Preferred over a custom git shell-out (no stderr/quoting pitfalls). -->
+    <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeNav.Tests" />
+    <InternalsVisibleTo Include="CodeNav.IndexTests" />
+    <InternalsVisibleTo Include="CodeNav.GitTests" />
+    <InternalsVisibleTo Include="CodeNav.LifecycleTests" />
+  </ItemGroup>
+
+  <!-- Stage 2A needs a physical FSharp.Core reference asset at runtime. Keep this one managed
+       dependency beside a single-file executable while the rest of the application stays bundled. -->
+  <Target Name="KeepFSharpCoreBesideSingleFile"
+          BeforeTargets="_ComputeFilesToBundle"
+          Condition="'$(PublishSingleFile)' == 'true'">
+    <ItemGroup>
+      <_FSharpCoreSingleFileSidecar Include="@(ResolvedFileToPublish)"
+                                     Condition="'%(ResolvedFileToPublish.FileName)%(ResolvedFileToPublish.Extension)' == 'FSharp.Core.dll'" />
+      <ResolvedFileToPublish Update="@(ResolvedFileToPublish)"
+                             Condition="'%(ResolvedFileToPublish.FileName)%(ResolvedFileToPublish.Extension)' == 'FSharp.Core.dll'">
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+    <Error Condition="'@(_FSharpCoreSingleFileSidecar->Count())' != '1'"
+           Text="A single-file Phoenix publish requires exactly one adjacent FSharp.Core.dll reference sidecar." />
+  </Target>
+
+  <!-- The portal deliberately remains a separate process. Stage its complete apphost and web
+       assets beside ordinary builds so the MCP tool never depends on a source checkout or
+       `dotnet run`. -->
+  <Target Name="StageOperationsPortalCompanion"
+          AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_OperationsPortalBuildFile
+          Include="$(MSBuildProjectDirectory)/../CodeNav.Portal/bin/$(Configuration)/$(TargetFramework)/**/*"
+          Exclude="$(MSBuildProjectDirectory)/../CodeNav.Portal/bin/$(Configuration)/$(TargetFramework)/publish/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_OperationsPortalBuildFile)"
+          DestinationFiles="@(_OperationsPortalBuildFile->'$(TargetDir)portal/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CleanOperationsPortalCompanion"
+          BeforeTargets="Clean"
+          Condition="'$(TargetDir)' != ''">
+    <RemoveDir Directories="$(TargetDir)portal" />
+  </Target>
+
+  <!-- Publishing the MCP is the install boundary. Publish the companion for the same target/RID
+       into a stable subdirectory; open_operations_portal launches only this packaged apphost. -->
+  <Target Name="PublishOperationsPortalCompanion"
+          AfterTargets="Publish"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <_OperationsPortalPublishDir>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(PublishDir)', 'portal'))/</_OperationsPortalPublishDir>
+    </PropertyGroup>
+    <MSBuild Projects="$(MSBuildProjectDirectory)/../CodeNav.Portal/CodeNav.Portal.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);PublishSingleFile=$(PublishSingleFile);EnableCompressionInSingleFile=$(EnableCompressionInSingleFile);IncludeNativeLibrariesForSelfExtract=$(IncludeNativeLibrariesForSelfExtract);PublishDir=$(_OperationsPortalPublishDir)" />
+  </Target>
+
+</Project>

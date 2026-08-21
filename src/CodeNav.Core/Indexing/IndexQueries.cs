@@ -1,0 +1,3683 @@
+using Microsoft.Data.Sqlite;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+
+namespace CodeNav.Core.Indexing;
+
+public sealed record SymbolHit(
+    long Id, string Kind, string Name, string? Ns, string? Container, string Signature,
+    string Accessibility, int StartLine, int EndLine, bool IsPartial, string? AttrMarkers,
+    string FilePath, bool FileIsGenerated, long? ParentId, bool IsOrphaned = false,
+    int Arity = 0,               // generic type-parameter count — Foo and Foo<T> are DIFFERENT types (szs)
+    string? Modifiers = null,    // "static sealed abstract virtual override new readonly const" subset (bt7)
+    string? Accessors = null,    // "get=public;set=private" only when an accessor differs (hu7)
+    string? DeclarationKey = null,
+    long FileHash = 0,           // existing per-file content hash; v24 handle epoch identity
+    long OrdinalOnLine = 0);     // deterministic syntax order among declarations sharing StartLine
+
+/// <summary>Canonical syntax-index kinds that represent type declarations.</summary>
+public static class IndexedSymbolKinds
+{
+    public static IReadOnlyList<string> TypeDeclarations { get; } = Array.AsReadOnly(
+        new[] { "class", "interface", "struct", "record", "record_struct", "enum", "delegate",
+            "union", "type", "exception" });
+
+    internal static string TypeDeclarationsSql { get; } = string.Join(
+        ',',
+        TypeDeclarations.Select(static kind => $"'{kind}'"));
+}
+
+public sealed record FileHit(long Id, string Path, long Size, int LineCount, bool IsGenerated,
+    string Language = "cs");
+
+public sealed record FSharpParseCoverage(
+    int FailedFiles,
+    int PartialFailureFiles,
+    int TotalFailureFiles,
+    int TruncatedFiles,
+    int FailedContexts,
+    int TotalContexts,
+    int ProcessedContexts,
+    int TruncatedContexts,
+    int TruncatedOwnerProjects,
+    int ProjectOptionAffectedFiles,
+    int OptionProjectCount,
+    int FailedOptionProjects,
+    int PartialOptionProjects,
+    IReadOnlyList<string> OptionPartialReasons)
+{
+    public bool IsIncomplete => FailedFiles > 0 || TruncatedFiles > 0 ||
+        FailedOptionProjects > 0 ||
+        OptionPartialReasons.Any(reason =>
+            !reason.Equals("fsharp_project_options_imported", StringComparison.Ordinal));
+}
+
+public sealed record PathSuggestionResult(IReadOnlyList<string> Paths, int Total);
+
+public sealed record DirectoryBuildAuthorityPaths(
+    string? PropsPath,
+    string? TargetsPath,
+    bool PropsPathAmbiguous = false,
+    bool TargetsPathAmbiguous = false)
+{
+    public bool HasAny => PropsPath is not null || TargetsPath is not null;
+    public bool HasAmbiguity => PropsPathAmbiguous || TargetsPathAmbiguous;
+    public bool HasPotentialAuthority => HasAny || HasAmbiguity;
+}
+
+public sealed record DirectoryPackagesAuthorityPath(
+    string? Path,
+    bool PathAmbiguous = false)
+{
+    public bool HasPotentialAuthority => Path is not null || PathAmbiguous;
+}
+
+/// <summary>A whole-token FTS candidate attributed to one physical project row. Keeping the
+/// physical path/language here prevents an unsupported F# owner from being silently replaced by
+/// a same-logical-name C# project during semantic scan-set construction.</summary>
+public sealed record SemanticTextCandidateProject(
+    long ProjectId, string Project, string ProjectPath, string Language, int FileCount);
+
+/// <summary>Per-call attribution for the transitive implementation-closure walk. Database time
+/// includes command execution plus row materialization. Managed-filter time is retained as a
+/// telemetry compatibility field and is zero on the normalized v18 edge path; the remaining time
+/// is bounded frontier/deduplication bookkeeping. Counts disclose work volume without exposing
+/// symbol names or paths.</summary>
+public sealed record ImplementationClosureStats(
+    double TotalMs,
+    double DbQueryAndMapMs,
+    double ManagedFilterMs,
+    double OtherMs,
+    int DbQueries,
+    int RowsReturned,
+    int FrontierExpansions,
+    int Matches,
+    bool Capped);
+
+/// <summary>Per-call stats vehicle filled even when cancellation or a query failure interrupts
+/// the closure walk, so degraded semantic operations retain attribution for completed work.</summary>
+public sealed class ImplementationClosureStatsBox
+{
+    public ImplementationClosureStats? Stats { get; internal set; }
+}
+
+public sealed record TextHit(
+    string FilePath, int Line, string LineText, bool IsGenerated,
+    string MatchKind = "precise", IReadOnlyList<string>? Matched = null,
+    IReadOnlyList<string>? Before = null, IReadOnlyList<string>? After = null);
+
+/// <summary>
+/// Graded text-search result. Hits are ordered precise-first (contiguous phrase before
+/// scattered), then token-covering partials. Counts reflect every graded candidate before
+/// paging; <see cref="CandidateFilesTruncated"/> makes them observable lower bounds when the
+/// candidate-file budget clips the filtered FTS set. FilesMatchedAcrossLines are files where
+/// every query token occurs but never on a single line (the file-level co-occurrence signal).
+/// </summary>
+public sealed record TextSearchResult(
+    List<TextHit> Hits, int TotalPrecise, int TotalPartial, List<string> FilesMatchedAcrossLines,
+    int CandidateFilesScanned = 0, int CandidateFilesAtLeast = 0,
+    bool CandidateFilesTruncated = false);
+
+public sealed record ProjectRow(long Id, string Path, string Name, string Style, string Tfms,
+    bool IsTest, string LoadStatus, string Language = "cs");
+
+public sealed record GraphEdge(string FromProject, string ToProject,
+    string Kind = "project"); // 'project' | 'assembly' — edge provenance (bxw, schema v10)
+
+/// <summary>A direct physical project edge used only by the C# semantic workspace. Unlike the
+/// public logical-name graph, this retains both project paths and languages so an edge to an F#
+/// row cannot be silently substituted with a same-named C# project.</summary>
+public sealed record SemanticProjectEdge(
+    long FromId, string FromPath, string FromProject, string FromLanguage,
+    long ToId, string ToPath, string ToProject, string ToLanguage,
+    string Kind = "project");
+
+public sealed record DirectoryBuildSemanticAuthority(
+    bool HasPotentialAuthority,
+    string Identity,
+    bool HasPotentialTargetsAuthority = false);
+
+/// <summary>The nearest indexed central-package authority and the exact indexed content that
+/// produced its model identity. Content is null when the structural snapshot was unavailable;
+/// callers must then fail closed rather than consulting the mutable live file.</summary>
+public sealed record DirectoryPackagesSemanticAuthority(
+    bool HasPotentialAuthority,
+    string Identity,
+    string? Path = null,
+    string? Content = null,
+    bool PathAmbiguous = false);
+
+public sealed record ReferenceGroup(string Project, bool IsTestProject, int Count, List<TextHit> Samples);
+
+public sealed record OverviewStats(
+    long CsFiles, long FsFiles, long MarkdownFiles, long SqlFiles,
+    long TotalLines, long Symbols, long Projects,
+    long CSharpProjects, long FSharpProjects, long LegacyProjects,
+    long SdkProjects, long TestProjects, long Solutions, long GeneratedFiles, long OrphanedFiles,
+    string TfmBreakdown, string? IndexVersion, string? IndexedAtUtc);
+
+internal sealed record IndexMetadataSnapshot(
+    string? SchemaVersion,
+    string? WorkspaceRoot,
+    string? IndexVersion,
+    string? IndexedAtUtc,
+    string? LastRefreshUtc,
+    string? IndexedCommit,
+    string? IndexedBranch,
+    string? RefreshIncompleteReason,
+    IReadOnlyList<string>? RefreshIncompletePaths,
+    int RefreshIncompletePathCount,
+    bool RefreshIncompletePathCountIsLowerBound = false);
+
+/// <summary>
+/// Owns: read-side queries over the persisted index (one read-only connection, pooled for the
+/// writer process and deliberately nonpooled for followers). Does not own: writes (IndexStore) or result budgeting/
+/// shaping for MCP responses (M2 tool layer).
+/// </summary>
+public sealed partial class IndexQueries : IDisposable
+{
+    private const int CandidateDiscoveryBatchSize = 512;
+    private const int DeclarationOffsetParseLimit = 128;
+    private const int DeclarationOffsetPerFileCharLimit = 512 * 1024;
+    private const int DeclarationOffsetCumulativeCharLimit = 4 * 1024 * 1024;
+    private const int DeclarationOffsetPerFileByteLimit = 2 * 1024 * 1024;
+    private const int DeclarationOffsetCumulativeByteLimit = 8 * 1024 * 1024;
+    private readonly SqliteConnection _conn;
+    private readonly SqliteTransaction? _readSnapshot;
+    private readonly Action<string>? _afterQueryForTest;
+    private readonly Action<string>? _beforeQueryForTest;
+    private Action? _releasePublicationLease;
+    private readonly Dictionary<(string Path, string Name),
+        (byte[] ContentHash, List<(int Start, int End)> Offsets)>
+        _declarationOffsets = new();
+    private int _declarationOffsetParses;
+    private int _declarationOffsetChars;
+    private int _declarationOffsetBytes;
+
+    public IndexQueries(string dbPath) : this(dbPath, pinReadSnapshot: false)
+    {
+    }
+
+    /// <summary>Single source of truth for the read connection string (kae). The pooled-variant
+    /// enumeration in <see cref="ClearPoolsFor"/> derives from this same builder, so a new
+    /// variant cannot silently escape scoped pool clearing.
+    /// DataSource is canonicalized with Path.GetFullPath because pools are keyed by the EXACT
+    /// connection string: a reader opened via one spelling of a path (test-composed backslashes)
+    /// and a clear issued via another (git-reported forward slashes for the same worktree db)
+    /// would otherwise address DIFFERENT pools — the parked handle survives and the next atomic
+    /// install fails with 'the staged index could not be atomically installed' (caught by
+    /// Batch41's worktree seed/reconcile test when kae first scoped the clears). Same-file paths
+    /// that differ only by character CASE, 8.3 short names, or directory-link aliases are NOT
+    /// unified — no current caller produces those (every spelling derives from one composed
+    /// string, and the product refuses reparse-point index destinations).</summary>
+    internal static string ReadConnectionString(string dbPath, bool pinReadSnapshot, bool pooling)
+    {
+        // Shared-cache table locks would prevent the WAL writer from refreshing tables while a
+        // long-lived review read transaction is open. Use a private pager cache for that one
+        // snapshot; ordinary short queries retain the pooled shared-cache behavior.
+        return new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.GetFullPath(dbPath),
+            Mode = SqliteOpenMode.ReadOnly,
+            // A follower lives in a different process from the writer. Its idle pooled native
+            // handle cannot be cleared by the writer before a destructive rebuild on Windows,
+            // so follower reads use private, genuinely short-lived connections.
+            Pooling = pooling,
+            Cache = pinReadSnapshot || !pooling
+                ? SqliteCacheMode.Private
+                : SqliteCacheMode.Shared,
+        }.ToString();
+    }
+
+    /// <summary>Releases THIS database's idle pooled reader handles without touching any other
+    /// database's pool (kae). The process-global SqliteConnection.ClearAllPools() it replaces
+    /// could invalidate a SIBLING database's pooled connection at the rent boundary — observed
+    /// as ObjectDisposedException on the SQLitePCL handle mid-query under parallel tests (rqek).
+    /// Pools are keyed by connection string, so clearing both pooled read variants of this path
+    /// is complete: the writer, meta probes, snapshot copies, and follower reads are
+    /// Pooling=false by design and own no pool entries.</summary>
+    public static void ClearPoolsFor(string dbPath)
+    {
+        foreach (bool pinReadSnapshot in new[] { false, true })
+        {
+            using var poolKeyCarrier = new SqliteConnection(
+                ReadConnectionString(dbPath, pinReadSnapshot, pooling: true));
+            SqliteConnection.ClearPool(poolKeyCarrier);
+        }
+    }
+
+    internal IndexQueries(string dbPath, bool pinReadSnapshot,
+        Action<string>? afterQueryForTest = null, Action<string>? beforeQueryForTest = null,
+        bool pooling = true, CancellationToken cancellationToken = default,
+        Action? releasePublicationLease = null)
+    {
+        _conn = new SqliteConnection(ReadConnectionString(dbPath, pinReadSnapshot, pooling));
+        _afterQueryForTest = afterQueryForTest;
+        _beforeQueryForTest = beforeQueryForTest;
+        _releasePublicationLease = releasePublicationLease;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _conn.Open();
+            cancellationToken.ThrowIfCancellationRequested();
+            if (pinReadSnapshot)
+            {
+                // A deferred WAL read transaction allows the refresh writer to keep committing while
+                // every query on this connection continues to see one immutable database snapshot.
+                // SQLite does not pin that snapshot until the first read, so establish it here before
+                // IndexManager validates the surrounding refresh epoch.
+                _readSnapshot = _conn.BeginTransaction(deferred: true);
+                using var pin = CreateCommand();
+                pin.CommandText = "SELECT value FROM meta WHERE key='schema_version'";
+                using CancellationTokenRegistration registration = cancellationToken.Register(
+                    static state =>
+                    {
+                        try { ((SqliteCommand)state!).Cancel(); } catch { }
+                    }, pin);
+                _beforeQueryForTest?.Invoke(pin.CommandText);
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    _ = pin.ExecuteScalar();
+                }
+                catch (SqliteException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException(cancellationToken);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+        }
+        catch
+        {
+            // A failed constructor cannot be disposed by its caller. Release both the partially
+            // pinned transaction and connection before any outer ownership lease can unwind.
+            try { _readSnapshot?.Dispose(); }
+            finally
+            {
+                try { _conn.Dispose(); }
+                finally
+                {
+                    Interlocked.Exchange(ref _releasePublicationLease, null)?.Invoke();
+                }
+            }
+            throw;
+        }
+    }
+
+    /// <summary>Reads the persisted index identity through this connection (and therefore through
+    /// the same pinned transaction when this is a review snapshot). Followers use this instead of
+    /// a writer-process cache, which cannot observe another process's refresh epoch.</summary>
+    internal IndexMetadataSnapshot ReadMetadata(CancellationToken cancellationToken = default)
+    {
+        const string sql =
+            "SELECT key, value FROM meta WHERE key IN " +
+            "('schema_version','workspace_root','index_version','indexed_at_utc'," +
+            "'last_refresh_utc','indexed_commit','indexed_branch'," +
+            "'refresh_incomplete_reason','refresh_incomplete_paths'," +
+            "'refresh_incomplete_path_count','refresh_incomplete_path_count_lower_bound')";
+        Dictionary<string, string> values = QueryCancellable(sql,
+                reader => (Key: reader.GetString(0), Value: reader.GetString(1)),
+                cancellationToken)
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        string[]? incompletePaths = null;
+        if (values.GetValueOrDefault("refresh_incomplete_paths") is { } pathsJson)
+        {
+            try
+            {
+                incompletePaths = System.Text.Json.JsonSerializer.Deserialize<string[]>(pathsJson)?
+                    .Take(32).ToArray();
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                incompletePaths = null;
+            }
+        }
+        int incompletePathCount = int.TryParse(
+            values.GetValueOrDefault("refresh_incomplete_path_count"), out int parsedCount)
+            ? Math.Max(parsedCount, incompletePaths?.Length ?? 0)
+            : incompletePaths?.Length ?? 0;
+        return new IndexMetadataSnapshot(
+            values.GetValueOrDefault("schema_version"),
+            values.GetValueOrDefault("workspace_root"),
+            values.GetValueOrDefault("index_version"),
+            values.GetValueOrDefault("indexed_at_utc"),
+            values.GetValueOrDefault("last_refresh_utc"),
+            values.GetValueOrDefault("indexed_commit"),
+            values.GetValueOrDefault("indexed_branch"),
+            values.GetValueOrDefault("refresh_incomplete_reason"),
+            incompletePaths,
+            incompletePathCount,
+            string.Equals(values.GetValueOrDefault(
+                    "refresh_incomplete_path_count_lower_bound"), "1",
+                StringComparison.Ordinal));
+    }
+
+    // ---------------------------------------------------------------- find_file
+
+    public List<FileHit> FindFiles(string nameOrGlob, int limit,
+        IReadOnlyList<string>? excludePaths = null, int offset = 0)
+    {
+        // An empty include is "nothing to find" → no match (matching the pre-filter behavior).
+        // Without this, AppendPathFilter would add no include predicate and the query would
+        // collapse to WHERE 1=1 (a full-table listing), not the empty result callers expect.
+        if (string.IsNullOrEmpty(nameOrGlob)) return new();
+        // Include (nameOrGlob) and exclude share the same glob semantics as search_symbol via
+        // AppendPathFilter — a bare name matches at any depth (root included), a '/'-glob anchors.
+        var args = new List<(string, object)> { ("$lim", limit), ("$off", offset) };
+        var where = new System.Text.StringBuilder("WHERE 1=1");
+        AppendPathFilter(where, args, nameOrGlob, excludePaths);
+
+        return Query(
+            $"""
+            SELECT f.id, f.path, f.size, f.line_count, f.is_generated, f.lang FROM files f
+            {where}
+            ORDER BY f.is_generated, length(f.path), f.path LIMIT $lim OFFSET $off
+            """,
+            r => new FileHit(r.GetInt64(0), r.GetString(1), r.GetInt64(2), r.GetInt32(3),
+                r.GetBoolean(4), r.GetString(5)),
+            args.ToArray());
+    }
+
+    /// <summary>Suggests indexed workspace-relative paths for an exact path that did not resolve.
+    /// Candidates must share the requested basename; longest matching path-segment suffix wins, so
+    /// an omitted middle directory ranks above an unrelated same-name file. This is navigation
+    /// recovery only: callers still fail the original exact lookup and never substitute a result.</summary>
+    public PathSuggestionResult SuggestFilePaths(string requestedPath, int limit = 3,
+        IReadOnlyList<string>? excludePaths = null)
+    {
+        if (limit <= 0 || string.IsNullOrWhiteSpace(requestedPath) ||
+            requestedPath.IndexOfAny(['*', '?']) >= 0)
+        {
+            return new([], 0);
+        }
+
+        string normalized = WorkspacePaths.Normalize(requestedPath);
+        string basename = Path.GetFileName(normalized);
+        if (string.IsNullOrWhiteSpace(basename)) return new([], 0);
+
+        var args = new List<(string, object)>
+        {
+            ("$basename", basename),
+            ("$nestedBasename", $"%/{EscapeLike(basename)}"),
+        };
+        var where = new System.Text.StringBuilder(
+            "WHERE (f.path = $basename COLLATE NOCASE " +
+            "OR f.path LIKE $nestedBasename ESCAPE '\\')");
+        AppendPathFilter(where, args, null, excludePaths);
+
+        string[] requestedSegments = normalized.Split(
+            '/',
+            StringSplitOptions.RemoveEmptyEntries);
+
+        // The current schema has no basename column, so complete discovery still scans the path
+        // index (tracked by PhoenixCodeNav-tsgp). Keep only the globally best N rows while reading:
+        // common basenames must not allocate or sort a workspace-sized managed candidate list.
+        var best = new List<RankedPathSuggestion>(limit + 1);
+        int total = 0;
+        string sql = $"SELECT f.path FROM files f {where}";
+        using var command = CreateCommand();
+        command.CommandText = sql;
+        foreach (var (name, value) in args) command.Parameters.AddWithValue(name, value);
+        _beforeQueryForTest?.Invoke(sql);
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                total++;
+                best.Add(RankPathSuggestion(reader.GetString(0), requestedSegments));
+                best.Sort(ComparePathSuggestions);
+                if (best.Count > limit) best.RemoveAt(best.Count - 1);
+            }
+        }
+        _afterQueryForTest?.Invoke(sql);
+
+        return new(best.Select(static candidate => candidate.Path).ToArray(), total);
+    }
+
+    private readonly record struct RankedPathSuggestion(
+        string Path,
+        int CommonSuffix,
+        int CommonPrefix,
+        int SegmentDelta);
+
+    private static RankedPathSuggestion RankPathSuggestion(
+        string candidate,
+        IReadOnlyList<string> requestedSegments)
+    {
+        string[] candidateSegments = candidate.Split(
+            '/',
+            StringSplitOptions.RemoveEmptyEntries);
+        int commonSuffix = 0;
+        while (commonSuffix < candidateSegments.Length &&
+               commonSuffix < requestedSegments.Count &&
+               candidateSegments[^(commonSuffix + 1)].Equals(
+                   requestedSegments[^(commonSuffix + 1)],
+                   StringComparison.OrdinalIgnoreCase))
+        {
+            commonSuffix++;
+        }
+
+        int commonPrefix = 0;
+        while (commonPrefix < candidateSegments.Length &&
+               commonPrefix < requestedSegments.Count &&
+               candidateSegments[commonPrefix].Equals(
+                   requestedSegments[commonPrefix],
+                   StringComparison.OrdinalIgnoreCase))
+        {
+            commonPrefix++;
+        }
+
+        return new(
+            candidate,
+            commonSuffix,
+            commonPrefix,
+            Math.Abs(candidateSegments.Length - requestedSegments.Count));
+    }
+
+    private static int ComparePathSuggestions(
+        RankedPathSuggestion left,
+        RankedPathSuggestion right)
+    {
+        int comparison = right.CommonSuffix.CompareTo(left.CommonSuffix);
+        if (comparison != 0) return comparison;
+        comparison = right.CommonPrefix.CompareTo(left.CommonPrefix);
+        if (comparison != 0) return comparison;
+        comparison = left.SegmentDelta.CompareTo(right.SegmentDelta);
+        if (comparison != 0) return comparison;
+        comparison = left.Path.Length.CompareTo(right.Path.Length);
+        return comparison != 0
+            ? comparison
+            : StringComparer.Ordinal.Compare(left.Path, right.Path);
+    }
+
+    /// <summary>Source languages present in an explicit path scope, using the exact same glob and
+    /// exclude semantics as symbol search. Project/config rows are intentionally excluded: this
+    /// describes source/text coverage, not every structural file that happens to share a
+    /// directory.</summary>
+    public List<string> SourceLanguagesForPathScope(string pathGlob,
+        IReadOnlyList<string>? excludePaths = null, bool includeGenerated = false)
+    {
+        if (string.IsNullOrEmpty(pathGlob)) return [];
+        var args = new List<(string, object)>();
+        var where = new System.Text.StringBuilder(
+            "WHERE f.lang IN ('cs', 'fs', 'md', 'sql')");
+        if (!includeGenerated) where.Append(" AND f.is_generated = 0");
+        AppendPathFilter(where, args, pathGlob, excludePaths);
+        return Query(
+            $"""
+            SELECT DISTINCT CASE
+              WHEN f.lang = 'fs' AND f.path LIKE '%.fsx' THEN 'fsx'
+              ELSE f.lang
+            END AS scope_lang
+            FROM files f {where}
+            ORDER BY scope_lang
+            """,
+            reader => reader.GetString(0),
+            args.ToArray());
+    }
+
+    /// <summary>Aggregated FCS syntax-parse gaps inside the same file scope used by symbol search.
+    /// Only affected files contribute context counts. Failure buckets partition processed contexts;
+    /// truncated contexts are reported separately so unprocessed authority is never called a total
+    /// parse failure.</summary>
+    public FSharpParseCoverage FSharpParseCoverageForScope(string? pathGlob,
+        IReadOnlyList<string>? excludePaths = null, bool includeGenerated = false)
+    {
+        var args = new List<(string, object)>();
+        var where = new System.Text.StringBuilder("WHERE (coverage.failed_contexts > 0 OR " +
+            "coverage.truncated_contexts > 0 OR " +
+            "coverage.option_failed_projects > 0 OR coverage.option_partial_projects > 0)");
+        if (!includeGenerated) where.Append(" AND f.is_generated = 0");
+        AppendPathFilter(where, args, pathGlob, excludePaths);
+        var aggregate = Query(
+            $"""
+            SELECT
+              COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 THEN 1 ELSE 0 END), 0),
+              COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 AND
+                                     (coverage.failed_contexts < coverage.processed_contexts OR
+                                      coverage.truncated_contexts > 0)
+                                THEN 1 ELSE 0 END), 0),
+              COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 AND
+                                     coverage.failed_contexts = coverage.processed_contexts AND
+                                     coverage.truncated_contexts = 0
+                                THEN 1 ELSE 0 END), 0),
+              COALESCE(SUM(CASE WHEN coverage.truncated_contexts > 0 THEN 1 ELSE 0 END), 0),
+              COALESCE(SUM(coverage.failed_contexts), 0),
+              COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 OR
+                                     coverage.truncated_contexts > 0
+                                THEN coverage.total_contexts ELSE 0 END), 0),
+              COALESCE(SUM(CASE WHEN coverage.failed_contexts > 0 OR
+                                     coverage.truncated_contexts > 0
+                                THEN coverage.processed_contexts ELSE 0 END), 0),
+              COALESCE(SUM(coverage.truncated_contexts), 0),
+              COALESCE(SUM(coverage.truncated_owner_projects), 0),
+              COALESCE(SUM(CASE WHEN coverage.option_failed_projects > 0 OR
+                                     coverage.option_partial_projects > 0
+                                THEN 1 ELSE 0 END), 0),
+              COALESCE(SUM(coverage.option_project_count), 0),
+              COALESCE(SUM(coverage.option_failed_projects), 0),
+              COALESCE(SUM(coverage.option_partial_projects), 0),
+              COALESCE(GROUP_CONCAT(DISTINCT
+                  NULLIF(coverage.option_partial_reasons, '')), '')
+            FROM fsharp_parse_coverage coverage
+            JOIN files f ON f.id = coverage.file_id
+            {where}
+            """,
+            reader => (
+                Coverage: new FSharpParseCoverage(
+                    reader.GetInt32(0),
+                    reader.GetInt32(1),
+                    reader.GetInt32(2),
+                    reader.GetInt32(3),
+                    reader.GetInt32(4),
+                    reader.GetInt32(5),
+                    reader.GetInt32(6),
+                    reader.GetInt32(7),
+                    reader.GetInt32(8),
+                    reader.GetInt32(9),
+                    reader.GetInt32(10),
+                    reader.GetInt32(11),
+                    reader.GetInt32(12),
+                    []),
+                Reasons: reader.GetString(13)), args.ToArray()).Single();
+        var optionReasons = aggregate.Reasons.Split([';', ','],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal).OrderBy(reason => reason, StringComparer.Ordinal)
+            .ToArray();
+        return aggregate.Coverage with { OptionPartialReasons = optionReasons };
+    }
+
+    // ---------------------------------------------------------------- search_text
+
+    public sealed record TextFilter(
+        string? PathGlob = null,
+        string? Project = null,
+        bool IncludeGenerated = false,
+        bool? TestsOnly = null,          // null = both, true = tests only, false = production only
+        string? Lang = null,
+        IReadOnlyList<string>? ExcludePaths = null);
+
+    /// <summary>Convenience overload returning just the graded hits (auto partials mode).</summary>
+    public List<TextHit> SearchText(string query, int limit, TextFilter? filter = null,
+        int maxCandidateFiles = 200, int offset = 0)
+        => SearchTextGraded(query, limit, filter, maxCandidateFiles, offset, "auto").Hits;
+
+    /// <summary>
+    /// Full-text search that grades each returned line: <c>precise</c> = the line contains
+    /// ALL query tokens (contiguous phrase ranked before scattered), <c>partial</c> = the
+    /// line covers only some tokens (token-covering, at most one line per otherwise-unmatched
+    /// token). There is no silent single-token substitution. partialsMode: "auto" (default —
+    /// partials only fill space precise did not), "never", or "always".
+    /// </summary>
+    public TextSearchResult SearchTextGraded(string query, int limit, TextFilter? filter,
+        int maxCandidateFiles, int offset, string partialsMode, int ctxBefore = 0, int ctxAfter = 0)
+    {
+        string fts = FtsQuery(query);
+        if (fts.Length == 0) return new TextSearchResult(new(), 0, 0, new());
+        filter ??= new TextFilter();
+
+        int candidateBudget = Math.Max(1, maxCandidateFiles);
+        var args = new List<(string, object)> { ("$q", fts) };
+        var where = new System.Text.StringBuilder("WHERE fts_content MATCH $q");
+
+        if (!filter.IncludeGenerated) where.Append(" AND f.is_generated = 0");
+        // Shared path predicate — same glob semantics as search_symbol/find_file (bare
+        // names match at any depth, workspace-root files included).
+        AppendPathFilter(where, args, filter.PathGlob, filter.ExcludePaths);
+        if (filter.Lang is { } lang)
+        {
+            where.Append(" AND f.lang = $lang");
+            args.Add(("$lang", lang));
+        }
+        if (filter.Project is { } proj)
+        {
+            where.Append(
+                " AND EXISTS (SELECT 1 FROM compile_items ci JOIN projects p ON p.id = ci.project_id" +
+                " WHERE ci.file_id = f.id AND p.name = $proj COLLATE NOCASE)");
+            args.Add(("$proj", proj));
+        }
+        else if (filter.TestsOnly is { } testsOnly)
+        {
+            if (testsOnly)
+            {
+                where.Append(
+                    " AND (f.has_test_attrs = 1 OR EXISTS (SELECT 1 FROM compile_items ci" +
+                    " JOIN projects p ON p.id = ci.project_id" +
+                    " WHERE ci.file_id = f.id AND p.is_test = 1))");
+            }
+            else
+            {
+                // Preserve the former LEFT JOIN semantics for a source shared by test and
+                // production projects: a production owner is sufficient to include it.
+                where.Append(
+                    " AND f.has_test_attrs = 0 AND (" +
+                    "NOT EXISTS (SELECT 1 FROM compile_items ci WHERE ci.file_id = f.id)" +
+                    " OR EXISTS (SELECT 1 FROM compile_items ci" +
+                    " JOIN projects p ON p.id = ci.project_id" +
+                    " WHERE ci.file_id = f.id AND p.is_test = 0))");
+            }
+        }
+
+        // Filter BEFORE the candidate cap. The former global top-N CTE let unrelated languages
+        // and paths crowd every in-scope row out, turning a bounded optimization into a false
+        // filtered zero. Fetch one extra row so the cap is observable without a second full FTS
+        // count query. bm25() remains directly over the MATCH query; MATERIALIZED prevents the
+        // planner from flattening it into the outer context.
+        args.Add(("$candidateLim", candidateBudget + 1));
+        var candidates = Query(
+            $"""
+            WITH m AS MATERIALIZED (
+                SELECT f.id AS fid, f.path, f.is_generated, bm25(fts_content) AS rank
+                FROM fts_content
+                JOIN files f ON f.id = fts_content.rowid
+                {where}
+                ORDER BY f.is_generated, rank
+                LIMIT $candidateLim
+            )
+            SELECT fid, path, is_generated
+            FROM m
+            ORDER BY is_generated, rank
+            """,
+            r => (Id: r.GetInt64(0), Path: r.GetString(1), Gen: r.GetBoolean(2)),
+            args.ToArray());
+        bool candidateFilesTruncated = candidates.Count > candidateBudget;
+        if (candidateFilesTruncated)
+            candidates.RemoveRange(candidateBudget, candidates.Count - candidateBudget);
+        int candidateFilesAtLeast = candidateFilesTruncated
+            ? candidateBudget + 1
+            : candidates.Count;
+
+        // Distinct query tokens, preserving order (case-insensitive).
+        var distinctTokens = new List<string>();
+        var seenTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in Tokenize(query))
+        {
+            if (seenTokens.Add(t)) distinctTokens.Add(t);
+        }
+        string rawQuery = query.Trim();
+
+        var precise = new List<TextHit>();
+        var partial = new List<TextHit>();
+        var filesAcross = new List<string>();
+        foreach (var c in candidates)
+        {
+            string? content = ContentById(c.Id);
+            if (content is null) continue;
+            var (filePrecise, filePartial) = GradeFile(c.Path, content, c.Gen, distinctTokens, rawQuery, ctxBefore, ctxAfter);
+            precise.AddRange(filePrecise);
+            if (filePrecise.Count == 0 && filePartial.Count > 0)
+            {
+                partial.AddRange(filePartial);
+                filesAcross.Add(c.Path);
+            }
+        }
+
+        bool includePartials = partialsMode switch
+        {
+            "never" => false,
+            "always" => true,
+            _ => precise.Count < offset + limit, // auto: only when precise did not fill through this page
+        };
+        var ordered = includePartials ? precise.Concat(partial).ToList() : precise;
+        var page = ordered.Skip(offset).Take(limit).ToList();
+        return new TextSearchResult(page, precise.Count, partial.Count, filesAcross,
+            candidates.Count, candidateFilesAtLeast, candidateFilesTruncated);
+    }
+
+    /// <summary>
+    /// Grades one file's lines against the query tokens. Returns precise lines (all tokens,
+    /// contiguous phrase first) OR — only when the file has no precise line — token-covering
+    /// partial lines (one per otherwise-unmatched token). A file contributes to exactly one tier.
+    /// </summary>
+    private static (List<TextHit> Precise, List<TextHit> Partial) GradeFile(
+        string path, string content, bool gen, IReadOnlyList<string> tokens, string rawQuery,
+        int ctxBefore, int ctxAfter)
+    {
+        var lines = content.Split('\n');
+        // A newline-terminated file yields a trailing "" element; drop it so a context window near EOF
+        // does not emit a spurious blank line. Every real line's index is unchanged (only the final "").
+        if (lines.Length > 1 && lines[^1].Length == 0) lines = lines[..^1];
+        bool multi = tokens.Count > 1;
+        var phrase = new List<TextHit>();
+        var scattered = new List<TextHit>();
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i];
+            bool all = true;
+            foreach (var t in tokens)
+            {
+                // Whole-token match (identifier-bounded), matching the FTS tokenizer that
+                // selected this file — so 'Order' does NOT satisfy the token inside 'OrderId'.
+                if (!ContainsWholeToken(line, t)) { all = false; break; }
+            }
+            if (!all) continue;
+            bool isPhrase = multi && line.IndexOf(rawQuery, StringComparison.OrdinalIgnoreCase) >= 0;
+            var (before, after) = ContextSlice(lines, i, ctxBefore, ctxAfter);
+            (isPhrase ? phrase : scattered).Add(new TextHit(path, i + 1, Snippet(line), gen, "precise", null, before, after));
+        }
+
+        if (phrase.Count + scattered.Count > 0)
+        {
+            phrase.AddRange(scattered); // contiguous-phrase precise ranked before scattered precise
+            return (phrase, new List<TextHit>());
+        }
+
+        // No precise line. For multi-token queries, surface where each token lives (one line
+        // per otherwise-unmatched token) so the caller sees the co-occurrence spread.
+        var partial = new List<TextHit>();
+        if (multi)
+        {
+            var covered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < lines.Length && covered.Count < tokens.Count; i++)
+            {
+                string line = lines[i];
+                List<string>? here = null;
+                foreach (var t in tokens)
+                {
+                    if (!covered.Contains(t) && ContainsWholeToken(line, t))
+                    {
+                        (here ??= new()).Add(t);
+                    }
+                }
+                if (here is not null)
+                {
+                    foreach (var t in here) covered.Add(t);
+                    var (before, after) = ContextSlice(lines, i, ctxBefore, ctxAfter);
+                    partial.Add(new TextHit(path, i + 1, Snippet(line), gen, "partial", here, before, after));
+                }
+            }
+        }
+        return (new List<TextHit>(), partial);
+    }
+
+    /// <summary>True if <paramref name="token"/> occurs in <paramref name="line"/> as a whole
+    /// identifier token (bounded by non-identifier characters), case-insensitive — matching the
+    /// FTS tokenizer so grading agrees with candidacy.</summary>
+    private static bool ContainsWholeToken(string line, string token)
+    {
+        int idx = 0;
+        while ((idx = line.IndexOf(token, idx, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            bool leftOk = idx == 0 || !IsIdentChar(line[idx - 1]);
+            int end = idx + token.Length;
+            bool rightOk = end >= line.Length || !IsIdentChar(line[end]);
+            if (leftOk && rightOk) return true;
+            idx = end;
+        }
+        return false;
+    }
+
+    private static bool IsIdentChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+    // ---------------------------------------------------------------- symbols
+
+    public List<SymbolHit> SearchSymbols(string query, string mode, IReadOnlyList<string>? kinds, int limit,
+        bool includeGenerated = false, int offset = 0,
+        string? pathGlob = null, IReadOnlyList<string>? excludePaths = null, string? ns = null,
+        int? arity = null, string? language = null)
+    {
+        string esc = EscapeLike(query);
+        string pattern = mode switch
+        {
+            "exact" => esc,
+            "prefix" => esc + "%",
+            _ => "%" + esc + "%",
+        };
+
+        var args = new List<(string, object)>
+        {
+            ("$pat", pattern), ("$q", query), ("$pre", esc + "%"), ("$lim", limit), ("$off", offset),
+        };
+        var where = new System.Text.StringBuilder("WHERE s.name LIKE $pat ESCAPE '\\'");
+        string kindFilter = KindFilter(kinds);
+        if (kindFilter.Length > 0) where.Append(' ').Append(kindFilter);
+        if (!includeGenerated) where.Append(" AND f.is_generated = 0");
+        if (!string.IsNullOrEmpty(language))
+        {
+            where.Append(" AND f.lang = $language");
+            args.Add(("$language", language));
+        }
+        if (arity is { } requestedArity)
+        {
+            where.Append(" AND s.arity = $arity");
+            args.Add(("$arity", requestedArity));
+        }
+        AppendPathFilter(where, args, pathGlob, excludePaths);
+        if (ns is { Length: > 0 } nsFilter)
+        {
+            // Namespace subtree: the exact namespace OR anything nested under it.
+            where.Append(" AND (s.ns = $ns COLLATE NOCASE OR s.ns LIKE $nsp ESCAPE '\\')");
+            args.Add(("$ns", nsFilter));
+            args.Add(("$nsp", EscapeLike(nsFilter) + ".%"));
+        }
+
+        return Query(
+            $"""
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            {where}
+            ORDER BY
+              CASE WHEN s.name = $q COLLATE NOCASE THEN 0
+                   WHEN s.name LIKE $pre ESCAPE '\' THEN 1 ELSE 2 END,
+              CASE WHEN s.name = $q COLLATE NOCASE
+                         AND s.kind IN ({IndexedSymbolKinds.TypeDeclarationsSql})
+                   THEN 0
+                   WHEN s.name = $q COLLATE NOCASE THEN 1
+                   ELSE 2 END,
+              f.is_generated, length(s.name), s.name, f.path, s.id
+            LIMIT $lim OFFSET $off
+            """,
+            ReadSymbol,
+            args.ToArray());
+    }
+
+    /// <summary>Distinct declaration kinds matching only the requested name semantics. This is
+    /// deliberately unfiltered by generated/path/namespace/kind policy: <c>search_symbol</c>
+    /// uses it after a first-page miss to distinguish genuine absence from a declaration hidden
+    /// by the active filters. The result has at most one row per indexed kind.</summary>
+    public List<string> UnfilteredSymbolKinds(string query, string mode)
+    {
+        string esc = EscapeLike(query);
+        string pattern = mode switch
+        {
+            "exact" => esc,
+            "prefix" => esc + "%",
+            _ => "%" + esc + "%",
+        };
+        return Query(
+            $"""
+            SELECT DISTINCT s.kind
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE s.name LIKE $pat ESCAPE '\'
+            ORDER BY
+              CASE WHEN s.kind IN ({IndexedSymbolKinds.TypeDeclarationsSql})
+                   THEN 0 ELSE 1 END,
+              s.kind
+            """,
+            r => r.GetString(0),
+            ("$pat", pattern));
+    }
+
+    /// <summary>Distinct generic arities for exact-name declarations. This is syntax-index
+    /// authority, not FTS evidence; callers use it to refuse a bare name that would merge
+    /// <c>Foo</c>, <c>Foo&lt;T&gt;</c>, and <c>Foo&lt;T1,T2&gt;</c>.</summary>
+    public List<int> SymbolArities(string name, IReadOnlyList<string>? kinds = null)
+    {
+        if (string.IsNullOrEmpty(name)) return new();
+        string kindFilter = KindFilter(kinds);
+        return Query(
+            $"""
+            SELECT DISTINCT s.arity
+            FROM symbols s
+            WHERE s.name = $n COLLATE NOCASE {kindFilter}
+            ORDER BY s.arity
+            """,
+            r => r.GetInt32(0),
+            ("$n", name));
+    }
+
+    /// <summary>Declarations whose indexed start line exactly matches a source position.
+    /// Unlike <see cref="SymbolAt"/>, this returns sibling declarations on the same line so
+    /// callers can distinguish same-simple-name generic arities without guessing.</summary>
+    public List<SymbolHit> SymbolsStartingAt(string filePath, int line)
+    {
+        return Query(
+            """
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE f.path = $p AND s.start_line = $l
+            ORDER BY s.id
+            """,
+            ReadSymbol,
+            ("$p", filePath), ("$l", line));
+    }
+
+    public List<SymbolHit> Outline(string filePath)
+    {
+        return Query(
+            """
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE f.path = $p
+            ORDER BY s.start_line, s.end_line DESC
+            """,
+            ReadSymbol, ("$p", filePath));
+    }
+
+    /// <summary>91u: symbols in one file whose span intersects ANY of the given 1-based
+    /// inclusive line ranges — the server-side hunk-to-symbol mapping for review_pack (the
+    /// index already stores spans, so this is one query instead of N symbol_at calls).
+    /// Returns EVERY intersecting symbol (types and members); the caller applies the
+    /// innermost policy via ParentId. Ranges beyond 64 are IGNORED by this method (SQL
+    /// parameter economy) — callers MUST substitute a whole-file range before calling when
+    /// their set exceeds 64, as review_pack does (review F2: the old wording claimed a
+    /// fallback nobody implemented, and tail hunks were silently dropped).</summary>
+    public List<SymbolHit> SymbolsIntersecting(string filePath, IReadOnlyList<(int Start, int End)> ranges)
+    {
+        if (ranges.Count == 0) return new();
+        var args = new List<(string, object)> { ("$p", filePath) };
+        var predicates = new List<string>();
+        int i = 0;
+        foreach (var (start, end) in ranges.Take(64))
+        {
+            predicates.Add($"(s.start_line <= $e{i} AND s.end_line >= $s{i})");
+            args.Add(($"$s{i}", start));
+            args.Add(($"$e{i}", end));
+            i++;
+        }
+        return Query(
+            $"""
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE f.path = $p AND ({string.Join(" OR ", predicates)})
+            ORDER BY s.start_line, s.end_line DESC
+            """,
+            ReadSymbol, args.ToArray());
+    }
+
+    public List<SymbolHit> SymbolAt(string filePath, int line)
+    {
+        // Smallest containing symbol plus its ancestor chain, innermost first.
+        var chain = new List<SymbolHit>();
+        var innermost = InnermostSymbolAt(filePath, line);
+        if (innermost is null) return chain;
+        chain.Add(innermost);
+        long? parent = innermost.ParentId;
+        int guard = 0;
+        while (parent is { } pid && guard++ < 16)
+        {
+            var next = Query(
+                """
+                SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                       (SELECT COUNT(*) - 1 FROM symbols preceding
+                        WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+                FROM symbols s JOIN files f ON f.id = s.file_id
+                WHERE s.id = $id
+                """,
+                ReadSymbol,
+                ("$id", pid));
+            if (next.Count == 0) break;
+            chain.Add(next[0]);
+            parent = next[0].ParentId;
+        }
+        return chain;
+    }
+
+    /// <summary>Fetches a single symbol row by its indexed id — the backing of the <c>idx:NNN</c>
+    /// symbolId handle. Null when no such row exists (ids are index-local and change on reindex).</summary>
+    public SymbolHit? SymbolById(long id)
+    {
+        var hits = Query(
+            """
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE s.id = $id
+            """,
+            ReadSymbol, ("$id", id));
+        return hits.Count > 0 ? hits[0] : null;
+    }
+
+    /// <summary>Innermost symbol containing the line — the single-query flavor of
+    /// <see cref="SymbolAt"/> (no ancestor walk), cheap enough to decorate search hits.</summary>
+    public SymbolHit? InnermostSymbolAt(string filePath, int line)
+    {
+        var hits = Query(
+            """
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE f.path = $p AND s.start_line <= $l AND s.end_line >= $l
+            ORDER BY (s.end_line - s.start_line), s.start_line DESC
+            LIMIT 1
+            """,
+            ReadSymbol,
+            ("$p", filePath), ("$l", line));
+        return hits.Count > 0 ? hits[0] : null;
+    }
+
+    /// <summary>Innermost enclosing symbol per (path, line), batched: search_text decorated up to a
+    /// full page (~100 hits) with one InnermostSymbolAt point query EACH — this replaces the N+1 with
+    /// chunked grouped queries and an in-memory innermost pick (smallest span, then latest start,
+    /// mirroring InnermostSymbolAt's ORDER BY). Keys absent from the result had no enclosing symbol.</summary>
+    public Dictionary<(string Path, int Line), SymbolHit> InnermostSymbolsAt(
+        IReadOnlyCollection<(string Path, int Line)> keys)
+    {
+        var result = new Dictionary<(string, int), SymbolHit>();
+        if (keys.Count == 0) return result;
+        var best = new Dictionary<(string, int), (int Span, int Start)>();
+        foreach (var chunk in keys.Distinct().Chunk(40))
+        {
+            var args = new List<(string, object)>();
+            var clauses = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                clauses.Add($"(f.path = $p{i} AND s.start_line <= $l{i} AND s.end_line >= $l{i})");
+                args.Add(($"$p{i}", chunk[i].Path));
+                args.Add(($"$l{i}", chunk[i].Line));
+            }
+            var rows = Query(
+                $"""
+                SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                       (SELECT COUNT(*) - 1 FROM symbols preceding
+                        WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+                FROM symbols s JOIN files f ON f.id = s.file_id
+                WHERE {string.Join(" OR ", clauses)}
+                """,
+                ReadSymbol, args.ToArray());
+            foreach (var sym in rows)
+            {
+                // One row can enclose several requested lines of the same file. Ordinal, not
+                // IgnoreCase: the SQL matched f.path = $p with BINARY comparison, so a case-twin path
+                // (possible on a case-sensitive FS) must not cross-attribute here (review finding).
+                foreach (var (path, lineNo) in chunk)
+                {
+                    if (!string.Equals(path, sym.FilePath, StringComparison.Ordinal)) continue;
+                    if (sym.StartLine > lineNo || sym.EndLine < lineNo) continue;
+                    int span = sym.EndLine - sym.StartLine;
+                    var key = (path, lineNo);
+                    if (!best.TryGetValue(key, out var b) || span < b.Span || (span == b.Span && sym.StartLine > b.Start))
+                    {
+                        best[key] = (span, sym.StartLine);
+                        result[key] = sym;
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Other files containing a PARTIAL declaration of the same type identity
+    /// (name + arity + kind + namespace + containing type) — the partial-type cross-links for an
+    /// outline. is_partial=1 keeps an unrelated same-name non-partial type (legal in another
+    /// project) out; the container match keeps same-name nested types apart; the arity match keeps
+    /// generic-arity SIBLINGS apart — <c>partial class Foo</c> and <c>partial class Foo&lt;T&gt;</c>
+    /// are different types whose partial halves live in different file sets (szs). Best-effort:
+    /// identity does not include project. Returns up to 11 so the caller can detect (and mark)
+    /// the &gt;10 case rather than silently capping.</summary>
+    public List<string> PartialDeclarationFiles(string name, string? ns, string kind, string? container, string excludePath, int arity = 0)
+    {
+        return Query(
+            """
+            SELECT DISTINCT f.path
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE s.name = $n AND s.kind = $k AND s.is_partial = 1
+              AND s.arity = $a
+              AND COALESCE(s.ns, '') = COALESCE($ns, '')
+              AND COALESCE(s.container, '') = COALESCE($c, '')
+              AND f.path <> $p
+            ORDER BY f.path
+            LIMIT 11
+            """,
+            r => r.GetString(0),
+            ("$n", name), ("$k", kind), ("$ns", (object?)ns ?? DBNull.Value),
+            ("$c", (object?)container ?? DBNull.Value), ("$p", excludePath), ("$a", arity));
+    }
+
+    // ---------------------------------------------------------------- reference candidates
+
+    /// <summary>Group key for candidate files in NO project's compile set (orphaned copies).
+    /// A dictionary key internally — the MCP layer translates it to a structured row
+    /// (project: null, orphaned: true) instead of shipping a magic display string (bxw).</summary>
+    public const string NoProjectGroup = "(no project)";
+
+    /// <summary>Result of the indexed reference scan. TotalHits/ProdHits/TestHits are PHYSICAL
+    /// line counts (each file counted once — a file linked into several projects is not repeated;
+    /// it lands in ProdHits when ANY surviving owner is a production project, else TestHits), so
+    /// ProdHits + TestHits == TotalHits always. Group counts are per-project ATTRIBUTIONS and can
+    /// sum higher than TotalHits for linked files (0ok: the summary previously printed those
+    /// attribution sums next to the physical total — "4 lines (8 production)").</summary>
+    public sealed record ReferenceCandidateResult(int TotalHits, int ProdHits, int TestHits,
+        List<ReferenceGroup> Groups)
+    {
+        public bool CandidateFilesTruncated { get; init; }
+        public int CandidateFilesScanned { get; init; }
+        public int CandidateFilesAtLeast { get; init; }
+        public int CandidateFileLimit { get; init; }
+        public bool DeclarationExclusionBudgetHit { get; init; }
+        public bool DeclarationExclusionApplied { get; init; }
+        public int DeclarationFilesParsed { get; init; }
+        public int DeclarationFileParseLimit { get; init; }
+        public int DeclarationCharsParsed { get; init; }
+        public int DeclarationCharLimit { get; init; }
+        public int DeclarationPerFileCharLimit { get; init; }
+        public int DeclarationBytesParsed { get; init; }
+        public int DeclarationByteLimit { get; init; }
+        public int DeclarationPerFileByteLimit { get; init; }
+    }
+
+    public ReferenceCandidateResult ReferenceCandidates(
+        string symbolName, int maxCandidateFiles = 500, int samplesPerProject = 3,
+        string? pathGlob = null, IReadOnlyList<string>? excludePaths = null, bool includeGenerated = true,
+        bool includeTests = true,
+        IReadOnlyList<(string Path, int StartLine, int EndLine)>? excludeSpans = null,
+        IReadOnlyList<(string Path, int StartOffset, int EndOffset)>? excludeOffsets = null,
+        bool excludeDeclarations = false)
+    {
+        int boundedCandidateFiles = Math.Max(0, maxCandidateFiles);
+        int queryCandidateFiles = boundedCandidateFiles == int.MaxValue
+            ? int.MaxValue
+            : boundedCandidateFiles + 1;
+        var args = new List<(string, object)>
+        {
+            ("$q", $"\"{symbolName.Replace("\"", "")}\""), ("$lim", queryCandidateFiles),
+        };
+        // Same include/exclude glob semantics as search_symbol; lets references drop vendored
+        // third-party candidate files precisely (counts reflect the filtered set).
+        var where = new System.Text.StringBuilder("WHERE fts_content MATCH $q");
+        AppendPathFilter(where, args, pathGlob, excludePaths);
+        // Drop generated files from candidacy so COUNTS (not just samples) honor includeGenerated (bug wi3).
+        if (!includeGenerated) where.Append(" AND f.is_generated = 0");
+        var candidates = Query(
+            $"""
+            SELECT f.id, f.path, f.is_generated, f.size FROM fts_content
+            JOIN files f ON f.id = fts_content.rowid
+            {where}
+            ORDER BY f.is_generated, bm25(fts_content)
+            LIMIT $lim
+            """,
+            r => (Id: r.GetInt64(0), Path: r.GetString(1), Gen: r.GetBoolean(2),
+                Size: r.GetInt64(3)),
+            args.ToArray());
+        bool candidateFilesTruncated = candidates.Count > boundedCandidateFiles;
+        int candidateFilesAtLeast = candidateFilesTruncated
+            ? boundedCandidateFiles + 1
+            : candidates.Count;
+        if (candidateFilesTruncated)
+            candidates = candidates.Take(boundedCandidateFiles).ToList();
+        int candidateFilesScanned = 0;
+        bool declarationExclusionBudgetHit = false;
+        var excludedSpanMap = excludeSpans?
+            .GroupBy(span => span.Path, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key,
+                group => group.Select(span => (span.StartLine, span.EndLine)).ToList(),
+                StringComparer.Ordinal);
+        var excludedOffsetMap = excludeOffsets?
+            .GroupBy(span => span.Path, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key,
+                group => group.Select(span => (span.StartOffset, span.EndOffset)).ToList(),
+                StringComparer.Ordinal);
+
+        // Resolve project ownership for all candidate files in one query per batch.
+        var fileProjects = FileProjects(candidates.Select(c => c.Id).ToList());
+
+        int total = 0, prodTotal = 0, testTotal = 0;
+        var groups = new Dictionary<string, (bool IsTest, int Count, List<TextHit> Samples)>();
+        foreach (var c in candidates)
+        {
+            // includeTests filters OWNERS before counting (wu1): a file owned only by test
+            // projects contributes nothing (its lines leave `total` too); a file shared between
+            // production and test projects keeps its production attribution and is counted ONCE
+            // in `total` — summing the per-project group counts instead would double-count files
+            // legacy projects link into several compile sets (review-reproduced).
+            var owners = fileProjects.TryGetValue(c.Id, out var list) ? list : new List<(string, bool)> { (NoProjectGroup, false) };
+            if (!includeTests) owners = owners.Where(o => !o.Item2).ToList();
+            if (owners.Count == 0) continue;
+
+            bool declarationCandidate = excludeDeclarations &&
+                                        c.Path.EndsWith(".cs",
+                                            StringComparison.OrdinalIgnoreCase);
+            if (declarationCandidate && c.Size > DeclarationOffsetPerFileByteLimit)
+            {
+                declarationExclusionBudgetHit = true;
+                break;
+            }
+            string? content = declarationCandidate
+                ? ContentByIdBounded(c.Id, DeclarationOffsetPerFileCharLimit)
+                : ContentById(c.Id);
+            if (content is null)
+            {
+                if (declarationCandidate)
+                {
+                    declarationExclusionBudgetHit = true;
+                    break;
+                }
+                continue;
+            }
+            List<(int StartOffset, int EndOffset)>? excludedOffsetsForFile = null;
+            excludedOffsetMap?.TryGetValue(c.Path, out excludedOffsetsForFile);
+            IReadOnlyList<(int StartOffset, int EndOffset)>? effectiveExcludedOffsets =
+                excludedOffsetsForFile;
+            if (declarationCandidate)
+            {
+                byte[] contentHash = SHA256.HashData(
+                    MemoryMarshal.AsBytes(content.AsSpan()));
+                var cacheKey = (c.Path, symbolName);
+                if (!_declarationOffsets.TryGetValue(cacheKey, out var cachedDeclarations) ||
+                    !cachedDeclarations.ContentHash.AsSpan().SequenceEqual(contentHash))
+                {
+                    int contentBytes = System.Text.Encoding.UTF8.GetByteCount(content);
+                    if (_declarationOffsetParses >= DeclarationOffsetParseLimit ||
+                        content.Length > DeclarationOffsetPerFileCharLimit ||
+                        content.Length > DeclarationOffsetCumulativeCharLimit -
+                        _declarationOffsetChars ||
+                        contentBytes > DeclarationOffsetPerFileByteLimit ||
+                        contentBytes > DeclarationOffsetCumulativeByteLimit -
+                        _declarationOffsetBytes)
+                    {
+                        declarationExclusionBudgetHit = true;
+                        break;
+                    }
+                    cachedDeclarations = (contentHash,
+                        SyntaxIndexer.DeclarationIdentifierOffsets(content, symbolName));
+                    _declarationOffsets[cacheKey] = cachedDeclarations;
+                    _declarationOffsetParses++;
+                    _declarationOffsetChars += content.Length;
+                    _declarationOffsetBytes += contentBytes;
+                }
+                if (cachedDeclarations.Offsets.Count > 0)
+                {
+                    effectiveExcludedOffsets = excludedOffsetsForFile is null
+                        ? cachedDeclarations.Offsets
+                        : excludedOffsetsForFile.Concat(cachedDeclarations.Offsets).ToList();
+                }
+            }
+            candidateFilesScanned++;
+            var spans = LocateTokenLineSpans(content, symbolName, effectiveExcludedOffsets);
+            if (excludedSpanMap is not null && excludedSpanMap.TryGetValue(c.Path,
+                    out List<(int StartLine, int EndLine)>? excludedRanges))
+            {
+                spans = spans.Where(span => !excludedRanges.Any(range =>
+                        range.StartLine <= span.Line && span.Line <= range.EndLine))
+                    .ToList();
+            }
+            if (spans.Count == 0) continue;
+
+            foreach (var (project, isTest) in owners)
+            {
+                if (!groups.TryGetValue(project, out var g)) g = (isTest, 0, new List<TextHit>());
+                g.Count += spans.Count;
+                foreach (var (ln, s, e) in spans.Take(Math.Max(0, samplesPerProject - g.Samples.Count)))
+                {
+                    g.Samples.Add(new TextHit(c.Path, ln, Snippet(content[s..e]), c.Gen));
+                }
+                groups[project] = g;
+            }
+            total += spans.Count;
+            // Physical prod/test split, counted once per file like `total` (0ok): production when
+            // ANY surviving owner is production ((no project) counts as production, matching the
+            // group display), else test-only. Keeps prod + test == total in the summary.
+            if (owners.Any(o => !o.Item2)) prodTotal += spans.Count;
+            else testTotal += spans.Count;
+        }
+
+        var ordered = groups
+            .Select(kv => new ReferenceGroup(kv.Key, kv.Value.IsTest, kv.Value.Count, kv.Value.Samples))
+            .OrderByDescending(g => g.Count)
+            .ToList();
+        return new ReferenceCandidateResult(total, prodTotal, testTotal, ordered)
+        {
+            // These are independent coverage causes. The candidate-file cap describes only the
+            // SQL result-set limit; declaration exclusion has its own explicit budget flag below.
+            // Conflating them made review.reference_candidates_cap fire for a parser/content
+            // budget and gave one response two contradictory explanations for the same shortfall.
+            CandidateFilesTruncated = candidateFilesTruncated,
+            CandidateFilesScanned = candidateFilesScanned,
+            CandidateFilesAtLeast = candidateFilesAtLeast,
+            CandidateFileLimit = boundedCandidateFiles,
+            DeclarationExclusionBudgetHit = declarationExclusionBudgetHit,
+            DeclarationExclusionApplied = excludeDeclarations,
+            DeclarationFilesParsed = _declarationOffsetParses,
+            DeclarationFileParseLimit = DeclarationOffsetParseLimit,
+            DeclarationCharsParsed = _declarationOffsetChars,
+            DeclarationCharLimit = DeclarationOffsetCumulativeCharLimit,
+            DeclarationPerFileCharLimit = DeclarationOffsetPerFileCharLimit,
+            DeclarationBytesParsed = _declarationOffsetBytes,
+            DeclarationByteLimit = DeclarationOffsetCumulativeByteLimit,
+            DeclarationPerFileByteLimit = DeclarationOffsetPerFileByteLimit,
+        };
+    }
+
+    // ---------------------------------------------------------------- projects
+
+    public ProjectRow? ProjectByName(string name)
+    {
+        var rows = Query(
+            "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects WHERE name = $n COLLATE NOCASE ORDER BY path LIMIT 1",
+            ReadProject, ("$n", name));
+        return rows.Count > 0 ? rows[0] : null;
+    }
+
+    /// <summary>All physical project rows sharing a logical assembly/project name. The semantic
+    /// layer uses this to prefer a real C# row without losing the established name-level identity
+    /// used for paired target-framework projects.</summary>
+    public List<ProjectRow> ProjectsByName(string name) => Query(
+        "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects " +
+        "WHERE name = $n COLLATE NOCASE ORDER BY path",
+        ReadProject, ("$n", name));
+
+    /// <summary>All physical rows for many logical project names in bounded grouped queries.</summary>
+    public Dictionary<string, List<ProjectRow>> ProjectsByNames(
+        IReadOnlyCollection<string> projectNames,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<string, List<ProjectRow>>(StringComparer.OrdinalIgnoreCase);
+        foreach (string[] chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(200))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$n{i}");
+                args.Add(($"$n{i}", chunk[i]));
+            }
+            foreach (ProjectRow row in QueryCancellable(
+                         "SELECT id, path, name, style, tfms, is_test, load_status, lang " +
+                         $"FROM projects WHERE name COLLATE NOCASE IN ({string.Join(",", parameters)}) " +
+                         "ORDER BY name, path",
+                         ReadProject, cancellationToken, args.ToArray()))
+            {
+                if (!result.TryGetValue(row.Name, out List<ProjectRow>? rows))
+                    result[row.Name] = rows = [];
+                rows.Add(row);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Language summary for only the requested logical project names. A logical name
+    /// backed by both C# and F# physical projects is reported as mixed instead of whichever row
+    /// happened to be read first.</summary>
+    public Dictionary<string, string> ProjectLanguages(IReadOnlyCollection<string> projectNames)
+    {
+        var languages = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (string[] chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(200))
+        {
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$n{i}");
+                args.Add(($"$n{i}", chunk[i]));
+            }
+            foreach (var row in Query(
+                         $"SELECT name, lang FROM projects WHERE name COLLATE NOCASE IN ({string.Join(",", parameters)}) ORDER BY name, lang",
+                         reader => (Name: reader.GetString(0), Language: reader.GetString(1)),
+                         args.ToArray()))
+            {
+                if (!languages.TryGetValue(row.Name, out HashSet<string>? set))
+                {
+                    set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    languages[row.Name] = set;
+                }
+                set.Add(row.Language);
+            }
+        }
+
+        return languages.ToDictionary(pair => pair.Key,
+            pair => pair.Value.Count == 1 ? pair.Value.Single() : "mixed",
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    public List<ProjectRow> AllProjects() => Query(
+        "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects ORDER BY path, name",
+        ReadProject);
+
+    public List<ProjectRow> AllProjects(int limit) => Query(
+        "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects " +
+        "ORDER BY path, name LIMIT $lim",
+        ReadProject, ("$lim", Math.Max(0, limit)));
+
+    /// <summary>Current declarations matching source identity while deliberately ignoring the
+    /// signature. Type base-list/signature edits do not change declaration identity, and generated
+    /// declarations remain eligible. The caller supplies a bound and can probe one extra row when
+    /// it needs truncation honesty.</summary>
+    public List<SymbolHit> SymbolsByDeclarationIdentity(string kind, string name, string? ns,
+        string? container, int arity, int limit)
+    {
+        return Query(
+            """
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path,
+                   f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE s.kind = $kind COLLATE BINARY AND s.name = $name COLLATE BINARY
+              AND ((s.ns IS NULL AND $ns IS NULL) OR s.ns = $ns COLLATE BINARY)
+              AND ((s.container IS NULL AND $container IS NULL) OR
+                   s.container = $container COLLATE BINARY)
+              AND s.arity = $arity
+            ORDER BY f.path, s.start_line
+            LIMIT $limit
+            """,
+            ReadSymbol, ("$kind", kind), ("$name", name), ("$ns", ns ?? (object)DBNull.Value),
+            ("$container", container ?? (object)DBNull.Value), ("$arity", arity),
+            ("$limit", Math.Clamp(limit, 1, 10_000)));
+    }
+
+    public List<ProjectRow> ProjectsContaining(string filePath)
+    {
+        return Query(
+            """
+            SELECT p.id, p.path, p.name, p.style, p.tfms, p.is_test, p.load_status, p.lang
+            FROM compile_items ci
+            JOIN files f ON f.id = ci.file_id
+            JOIN projects p ON p.id = ci.project_id
+            WHERE f.path = $p
+            ORDER BY p.name
+            """,
+            ReadProject, ("$p", filePath));
+    }
+
+    public List<GraphEdge> ProjectGraph(string projectName, int depth, string direction)
+    {
+        // Depth-1 fast path: the semantic cluster load calls this once per project (TopoOrder +
+        // per-project references), and the general path below loads the ENTIRE edge table each call —
+        // O(edges) per project, O(projects x edges) per cluster. One indexed WHERE instead. Result-set
+        // parity with the BFS below (review-hardened): an unknown direction returns EMPTY (the BFS's
+        // guards match nothing), and 'both' emits downstream edges then upstream edges via UNION ALL —
+        // the BFS's deterministic order, which callers truncate on (.Take / list budget).
+        if (depth == 1)
+        {
+            const string select = """
+                SELECT pf.name, pt.name, r.kind FROM project_refs r
+                JOIN projects pf ON pf.id = r.from_id
+                JOIN projects pt ON pt.id = r.to_id
+                """;
+            string? sql = direction switch
+            {
+                "downstream" => $"{select} WHERE pf.name = $n COLLATE NOCASE",
+                "upstream" => $"{select} WHERE pt.name = $n COLLATE NOCASE",
+                "both" => $"{select} WHERE pf.name = $n COLLATE NOCASE UNION ALL {select} WHERE pt.name = $n COLLATE NOCASE",
+                _ => null,
+            };
+            if (sql is null) return new List<GraphEdge>();
+            return Query(sql,
+                r => new GraphEdge(r.GetString(0), r.GetString(1), r.GetString(2)),
+                ("$n", projectName));
+        }
+
+        var edges = Query(
+            """
+            SELECT pf.name, pt.name, r.kind FROM project_refs r
+            JOIN projects pf ON pf.id = r.from_id
+            JOIN projects pt ON pt.id = r.to_id
+            """,
+            r => new GraphEdge(r.GetString(0), r.GetString(1), r.GetString(2)));
+
+        var downstream = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase); // project -> deps
+        var upstream = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);   // project -> dependents
+        // Edge provenance survives the BFS (bxw): result edges are reconstructed from the
+        // adjacency maps, so kind must be re-attached from the loaded edge set. The BFS is
+        // NAME-keyed by construction (depth 1 is row-granular: a same-AssemblyName pair can
+        // surface one edge per ROW, each with its own kind) — so a mixed-kind name pair takes
+        // here, same as EdgeKindMap: 'project' wins (any real
+        // ProjectReference row means the coupling carries refactors; review F2 — plain
+        // last-writer rode the JOIN's planner-dependent row order and could flip a recovered
+        // coupling invisible at the tool's default depth). Keys are case-folded (review F4:
+        // the adjacency maps and the depth-1 SQL are case-insensitive, and the BFS root node
+        // carries the CALLER's casing — an unfolded lookup missed and defaulted first hops).
+        var kinds = new Dictionary<(string, string), string>();
+        foreach (var e in edges)
+        {
+            (downstream.TryGetValue(e.FromProject, out var d) ? d : downstream[e.FromProject] = new()).Add(e.ToProject);
+            (upstream.TryGetValue(e.ToProject, out var u) ? u : upstream[e.ToProject] = new()).Add(e.FromProject);
+            var key = (e.FromProject.ToLowerInvariant(), e.ToProject.ToLowerInvariant());
+            if (!kinds.TryGetValue(key, out var existing) || existing != "project")
+            {
+                kinds[key] = e.Kind;
+            }
+        }
+        string KindOf(string from, string to) =>
+            kinds.TryGetValue((from.ToLowerInvariant(), to.ToLowerInvariant()), out var k) ? k : "project";
+
+        var result = new List<GraphEdge>();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { projectName };
+        var frontier = new Queue<(string Node, int Depth)>();
+        frontier.Enqueue((projectName, 0));
+
+        while (frontier.Count > 0)
+        {
+            var (node, d) = frontier.Dequeue();
+            if (d >= depth) continue;
+            if (direction is "downstream" or "both" && downstream.TryGetValue(node, out var deps))
+            {
+                foreach (var dep in deps)
+                {
+                    result.Add(new GraphEdge(node, dep, KindOf(node, dep)));
+                    if (visited.Add(dep)) frontier.Enqueue((dep, d + 1));
+                }
+            }
+            if (direction is "upstream" or "both" && upstream.TryGetValue(node, out var dependents))
+            {
+                foreach (var dependent in dependents)
+                {
+                    result.Add(new GraphEdge(dependent, node, KindOf(dependent, node)));
+                    if (visited.Add(dependent)) frontier.Enqueue((dependent, d + 1));
+                }
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Direct downstream edges from every physical C# row sharing a logical project
+    /// name. Target language/path remain physical facts. This deliberately does not replace the
+    /// public language-neutral graph: Roslyn wiring is the only consumer that must exclude F#
+    /// targets while preserving established same-name C# unions.</summary>
+    public List<SemanticProjectEdge> SemanticProjectEdges(string projectName,
+        CancellationToken cancellationToken = default) =>
+        SemanticProjectEdges([projectName], cancellationToken);
+
+    /// <summary>Batched form used by coverage reporting so physical unsupported targets are read
+    /// from the current index epoch on every request rather than cached in a warm Roslyn project.</summary>
+    public List<SemanticProjectEdge> SemanticProjectEdges(
+        IReadOnlyCollection<string> projectNames,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new List<SemanticProjectEdge>();
+        foreach (string[] chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(200))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$n{i}");
+                args.Add(($"$n{i}", chunk[i]));
+            }
+            result.AddRange(QueryCancellable(
+                $"""
+                SELECT pf.id, pf.path, pf.name, pf.lang,
+                       pt.id, pt.path, pt.name, pt.lang, r.kind
+                FROM project_refs r
+                JOIN projects pf ON pf.id = r.from_id
+                JOIN projects pt ON pt.id = r.to_id
+                WHERE pf.name COLLATE NOCASE IN ({string.Join(",", parameters)})
+                  AND pf.lang = 'cs'
+                ORDER BY pf.path, pt.path, r.kind
+                """,
+                reader => new SemanticProjectEdge(
+                    reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
+                    reader.GetString(3), reader.GetInt64(4), reader.GetString(5),
+                    reader.GetString(6), reader.GetString(7), reader.GetString(8)),
+                cancellationToken, args.ToArray()));
+        }
+        return result;
+    }
+
+    /// <summary>Supported C# physical reachability for a whole semantic load. Logical-name graph
+    /// closure is insufficient here: a C# consumer may point at an F# row whose assembly name
+    /// collides with a loaded C# row, and wiring that namesake would give Roslyn a dependency the
+    /// real project does not have. One cancellable recursive query replaces a traversal per newly
+    /// loaded project.</summary>
+    public Dictionary<string, HashSet<string>> SemanticCSharpReachability(
+        IReadOnlyCollection<string> fromProjects,
+        IReadOnlyCollection<string> toProjects,
+        CancellationToken cancellationToken = default)
+    {
+        string[] from = fromProjects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        string[] to = toProjects.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var result = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        if (from.Length == 0 || to.Length == 0) return result;
+
+        var args = new List<(string, object)>();
+        var fromParameters = new string[from.Length];
+        var toParameters = new string[to.Length];
+        for (int i = 0; i < from.Length; i++)
+        {
+            fromParameters[i] = $"$from{i}";
+            args.Add((fromParameters[i], from[i]));
+        }
+        for (int i = 0; i < to.Length; i++)
+        {
+            toParameters[i] = $"$to{i}";
+            args.Add((toParameters[i], to[i]));
+        }
+
+        var rows = QueryCoreCancellable(_readSnapshot,
+            $"""
+            WITH RECURSIVE roots(root_name, id) AS (
+              SELECT p.name, p.id
+              FROM projects p
+              WHERE p.name COLLATE NOCASE IN ({string.Join(",", fromParameters)})
+                AND p.lang = 'cs'
+            ), reachable(root_name, id) AS (
+              SELECT root_name, id FROM roots
+              UNION
+              SELECT current.root_name, pt.id
+              FROM reachable current
+              JOIN project_refs r ON r.from_id = current.id
+              JOIN projects pt ON pt.id = r.to_id
+              WHERE pt.lang = 'cs'
+            )
+            SELECT DISTINCT current.root_name, target.name
+            FROM reachable current
+            JOIN projects target ON target.id = current.id
+            WHERE target.name COLLATE NOCASE IN ({string.Join(",", toParameters)})
+            ORDER BY current.root_name, target.name
+            """,
+            reader => (From: reader.GetString(0), To: reader.GetString(1)),
+            cancellationToken, args.ToArray());
+        foreach (var row in rows)
+        {
+            if (!result.TryGetValue(row.From, out HashSet<string>? targets))
+                result[row.From] = targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            targets.Add(row.To);
+        }
+        return result;
+    }
+
+    public bool HasSemanticCSharpPath(string fromProject, string toProject,
+        CancellationToken cancellationToken = default) =>
+        SemanticCSharpReachability([fromProject], [toProject], cancellationToken)
+            .TryGetValue(fromProject, out HashSet<string>? targets) && targets.Contains(toProject);
+
+    // ---------------------------------------------------------------- semantic-layer support
+
+    /// <summary>Members named <paramref name="memberName"/> declared in one of the given types,
+    /// identified by (namespace, container) PAIRS — so the <c>LIMIT</c> bounds only genuine matches
+    /// (not every same-container-named type across all namespaces) and a hot member name can't get
+    /// lost behind the cap. Empty on empty inputs.</summary>
+    public List<SymbolHit> MembersNamedInTypes(string memberName, IReadOnlyCollection<(string Ns, string Container)> types, int limit)
+    {
+        if (string.IsNullOrEmpty(memberName) || types.Count == 0) return new();
+        var args = new List<(string, object)> { ("$m", memberName), ("$lim", limit) };
+        var clauses = new List<string>();
+        int i = 0;
+        foreach (var (ns, container) in types.Distinct())
+        {
+            if (string.IsNullOrEmpty(container)) continue;
+            string n = $"$n{i}", c = $"$c{i}";
+            i++;
+            clauses.Add($"(COALESCE(s.ns, '') = {n} AND s.container = {c})");
+            args.Add((n, ns ?? ""));
+            args.Add((c, container));
+        }
+        if (clauses.Count == 0) return new();
+        return Query(
+            $"""
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+            FROM symbols s JOIN files f ON f.id = s.file_id
+            WHERE s.name = $m COLLATE NOCASE AND ({string.Join(" OR ", clauses)})
+            ORDER BY f.is_generated, f.path
+            LIMIT $lim
+            """,
+            ReadSymbol, args.ToArray());
+    }
+
+    /// <summary>Types that name the given simple identity as the head of a direct base-list
+    /// entry (heuristic implementations). Qualification is deliberately over-inclusive; semantic
+    /// verification decides which same-name declaration the edge actually binds to.</summary>
+    public List<SymbolHit> ImplementationCandidates(string name, int limit, int? targetArity = null)
+    {
+        if (string.IsNullOrEmpty(name) || limit <= 0) return new();
+        if (targetArity is { } arity)
+        {
+            return Query(
+                """
+                SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                       s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                       (SELECT COUNT(*) - 1 FROM symbols preceding
+                        WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+                FROM type_base_edges e
+                JOIN symbols s ON s.id = e.derived_symbol_id
+                JOIN files f ON f.id = s.file_id
+                WHERE e.base_name = $n AND e.base_arity = $arity
+                  AND s.kind IN ('class','struct','record','record_struct')
+                ORDER BY f.is_generated, s.name, f.path, s.id
+                LIMIT $lim
+                """,
+                ReadSymbol, ("$n", name), ("$arity", arity), ("$lim", limit));
+        }
+
+        // A declaration can mention the same simple name at several arities or through several
+        // qualifications. The edge PK deduplicates one arity; this projection preserves the old
+        // one-symbol result when the caller intentionally asks for every arity.
+        return Query(
+            """
+            SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+                   s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+                   (SELECT COUNT(*) - 1 FROM symbols preceding
+                    WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+            FROM (
+                SELECT DISTINCT derived_symbol_id
+                FROM type_base_edges
+                WHERE base_name = $n
+            ) e
+            JOIN symbols s ON s.id = e.derived_symbol_id
+            JOIN files f ON f.id = s.file_id
+            WHERE s.kind IN ('class','struct','record','record_struct')
+            ORDER BY f.is_generated, s.name, f.path, s.id
+            LIMIT $lim
+            """,
+            ReadSymbol, ("$n", name), ("$lim", limit));
+    }
+
+    /// <summary>jj1q: the full SYNTACTIC subtype closure of a type — every type whose base
+    /// list transitively reaches <paramref name="rootName"/> (A→B→C→D chains of any depth;
+    /// interfaces included so class-via-derived-interface implementers stay reachable).
+    /// Whole-token + arity-checked per hop. Callers run a SEMANTIC verification pass over the
+    /// result (same-name collisions across namespaces enter the closure by design and must be
+    /// pruned there — syntax narrows, semantics verifies). <paramref name="capped"/> reports
+    /// an aborted walk on pathological fan-out: callers MUST fall back to the exhaustive
+    /// compiler search then — a truncated closure must never ship as an exact answer.</summary>
+    public List<SymbolHit> TransitiveImplementationClosure(
+        string rootName, int? rootArity, out bool capped,
+        int maxTypes = 2000, CancellationToken cancellationToken = default,
+        ImplementationClosureStatsBox? statsBox = null)
+    {
+        long totalStarted = statsBox is null
+            ? 0
+            : System.Diagnostics.Stopwatch.GetTimestamp();
+        var attribution = statsBox is null ? null : new ImplementationClosureAccumulator();
+        int frontierExpansions = 0;
+        capped = false;
+        var results = new List<SymbolHit>();
+        try
+        {
+            if (string.IsNullOrEmpty(rootName)) return results;
+            var visitedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var frontier = new Queue<(string Name, int? Arity)>();
+            frontier.Enqueue((rootName, rootArity));
+            visitedNames.Add($"{rootName}`{rootArity?.ToString() ?? "?"}");
+            while (frontier.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var (name, arity) = frontier.Dequeue();
+                frontierExpansions++;
+                foreach (var hit in BaseListMentions(name, arity, maxTypes + 1,
+                             cancellationToken, attribution))
+                {
+                    if (results.Count >= maxTypes)
+                    {
+                        capped = true;
+                        return results;
+                    }
+                    results.Add(hit);
+                    // Retain every physical edge candidate for compiler verification. Indexed
+                    // declaration/container identities intentionally are not complete semantic
+                    // identities (for example Outer and Outer<T> share the stored container
+                    // text), so pre-verification deduplication can create false-exact omissions.
+                    // visitedNames only prevents re-walking the same simple name/arity frontier.
+                    if (visitedNames.Add($"{hit.Name}`{hit.Arity}"))
+                    {
+                        frontier.Enqueue((hit.Name, hit.Arity));
+                    }
+                }
+            }
+            return results;
+        }
+        finally
+        {
+            if (statsBox is not null && attribution is not null)
+            {
+                double totalMs = System.Diagnostics.Stopwatch
+                    .GetElapsedTime(totalStarted).TotalMilliseconds;
+                double dbMs = TicksToMilliseconds(attribution.DbQueryAndMapTicks);
+                const double filterMs = 0;
+                statsBox.Stats = new ImplementationClosureStats(
+                    totalMs,
+                    dbMs,
+                    filterMs,
+                    Math.Max(0, totalMs - dbMs - filterMs),
+                    attribution.DbQueries,
+                    attribution.RowsReturned,
+                    frontierExpansions,
+                    results.Count,
+                    capped);
+            }
+        }
+    }
+
+    private sealed class ImplementationClosureAccumulator
+    {
+        public long DbQueryAndMapTicks;
+        public int DbQueries;
+        public int RowsReturned;
+    }
+
+    private static double TicksToMilliseconds(long ticks) =>
+        ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
+    internal const string BaseListMentionsExactSql = """
+        SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+               s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+               (SELECT COUNT(*) - 1 FROM symbols preceding
+                WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+        FROM type_base_edges e
+        JOIN symbols s ON s.id = e.derived_symbol_id
+        JOIN files f ON f.id = s.file_id
+        WHERE e.base_name = $n AND e.base_arity = $arity
+          AND e.derived_symbol_id > $after
+          AND s.kind IN ('class','struct','record','record_struct','interface')
+        ORDER BY e.derived_symbol_id
+        LIMIT $lim
+        """;
+
+    private const string BaseListMentionsAnyAritySql = """
+        SELECT s.id, s.kind, s.name, s.ns, s.container, s.signature, s.accessibility,
+               s.start_line, s.end_line, s.is_partial, s.attr_markers, f.path, f.is_generated, s.parent_id, s.arity, s.modifiers, s.accessors, s.declaration_key, f.hash,
+               (SELECT COUNT(*) - 1 FROM symbols preceding
+                WHERE preceding.file_id = s.file_id AND preceding.start_line = s.start_line AND preceding.id <= s.id)
+        FROM (
+            SELECT DISTINCT derived_symbol_id
+            FROM type_base_edges
+            WHERE base_name = $n AND derived_symbol_id > $after
+        ) e
+        JOIN symbols s ON s.id = e.derived_symbol_id
+        JOIN files f ON f.id = s.file_id
+        WHERE s.kind IN ('class','struct','record','record_struct','interface')
+        ORDER BY e.derived_symbol_id
+        LIMIT $lim
+        """;
+
+    /// <summary>All type declarations (interfaces INCLUDED — unlike the heuristic
+    /// ImplementationCandidates, which serves a tool that only lists instantiable-ish kinds)
+    /// whose base list names <paramref name="name"/> as a whole identifier token with the
+    /// given arity. Pages until exhausted or <paramref name="cap"/>.</summary>
+    private List<SymbolHit> BaseListMentions(string name, int? targetArity, int cap,
+        CancellationToken cancellationToken,
+        ImplementationClosureAccumulator? attribution = null)
+    {
+        if (string.IsNullOrEmpty(name) || cap <= 0) return new();
+        var matches = new List<SymbolHit>();
+        long afterSymbolId = 0;
+        const int page = 512;
+        while (matches.Count < cap)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            List<SymbolHit> rows;
+            int pageLimit = Math.Min(page, cap - matches.Count);
+            long dbStarted = attribution is null
+                ? 0
+                : System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                rows = targetArity is { } arity
+                    ? Query(BaseListMentionsExactSql, ReadSymbol,
+                        ("$n", name), ("$arity", arity),
+                        ("$after", afterSymbolId), ("$lim", pageLimit))
+                    : Query(BaseListMentionsAnyAritySql, ReadSymbol,
+                        ("$n", name), ("$after", afterSymbolId), ("$lim", pageLimit));
+            }
+            finally
+            {
+                if (attribution is not null)
+                {
+                    attribution.DbQueries++;
+                    attribution.DbQueryAndMapTicks +=
+                        System.Diagnostics.Stopwatch.GetTimestamp() - dbStarted;
+                }
+            }
+            if (attribution is not null) attribution.RowsReturned += rows.Count;
+            if (rows.Count == 0) break;
+            matches.AddRange(rows);
+            afterSymbolId = rows[^1].Id;
+            if (rows.Count < pageLimit) break;
+        }
+        return matches;
+    }
+
+    /// <summary>
+    /// Every project containing a type whose direct base-list head has the simple identity
+    /// <paramref name="name"/>. Semantic cluster discovery must enumerate projects before applying its
+    /// caller-selected project budget; a symbol-hit cap here would silently make maxProjects lie.
+    /// </summary>
+    public List<string> ImplementationCandidateProjects(
+        string name, CancellationToken cancellationToken = default,
+        bool includeGenerated = true, bool includeTests = true)
+    {
+        if (string.IsNullOrEmpty(name)) return new();
+        var projects = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        long afterSymbolId = 0;
+        using var ownedSnapshot = _readSnapshot is null ? _conn.BeginTransaction(deferred: true) : null;
+        SqliteTransaction snapshot = ownedSnapshot ?? _readSnapshot!;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var batch = QueryCoreCancellable(snapshot,
+                """
+                WITH matching_symbols AS (
+                    SELECT DISTINCT e.derived_symbol_id AS id, s.file_id
+                    FROM type_base_edges e
+                    JOIN symbols s ON s.id = e.derived_symbol_id
+                    WHERE e.base_name = $n
+                      AND s.kind IN ('class','struct','record','record_struct')
+                )
+                SELECT DISTINCT c.id, p.name, f.is_generated, p.is_test
+                FROM (
+                    SELECT id, file_id
+                    FROM matching_symbols
+                    WHERE id > $after
+                    ORDER BY id
+                    LIMIT $batch
+                ) c
+                JOIN files f ON f.id = c.file_id
+                LEFT JOIN compile_items ci ON ci.file_id = c.file_id
+                LEFT JOIN projects p ON p.id = ci.project_id
+                ORDER BY c.id, p.name COLLATE NOCASE
+                """,
+                r => (Id: r.GetInt64(0),
+                    Project: r.IsDBNull(1) ? null : r.GetString(1),
+                    IsGenerated: r.GetBoolean(2),
+                    IsTest: r.IsDBNull(3) ? (bool?)null : r.GetBoolean(3)),
+                cancellationToken,
+                ("$n", name), ("$after", afterSymbolId),
+                ("$batch", CandidateDiscoveryBatchSize));
+            if (batch.Count == 0) break;
+            afterSymbolId = batch[^1].Id;
+            foreach (var candidate in batch)
+            {
+                if (!includeGenerated && candidate.IsGenerated) continue;
+                if (!includeTests && candidate.IsTest is true) continue;
+                if (candidate.Project is not null && seen.Add(candidate.Project))
+                {
+                    projects.Add(candidate.Project);
+                }
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (batch.Select(candidate => candidate.Id).Distinct().Count() < CandidateDiscoveryBatchSize)
+                break;
+        }
+        return projects;
+    }
+
+    /// <summary>Project name → is-test flag for the whole workspace (small). An optional
+    /// physical-language scope keeps Roslyn consumers from folding a same-name F# row into the
+    /// C# assembly. Without a scope, duplicate names are OR-reduced deterministically.</summary>
+    public Dictionary<string, bool> AllProjectTestFlags(string? language = null)
+    {
+        var map = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        var rows = language is null
+            ? Query("SELECT name, is_test FROM projects",
+                r => (Name: r.GetString(0), IsTest: r.GetBoolean(1)))
+            : Query("SELECT name, is_test FROM projects WHERE lang = $lang",
+                r => (Name: r.GetString(0), IsTest: r.GetBoolean(1)),
+                ("$lang", language));
+        foreach (var (name, isTest) in rows)
+        {
+            map[name] = isTest || (map.TryGetValue(name, out bool current) && current);
+        }
+        return map;
+    }
+
+    /// <summary>Project name → whether every physical project row with that logical name is a
+    /// test project. This is the conservative name-keyed filter for mixed-language scan plans:
+    /// a production C# project must not be hidden by a same-name F# test project.</summary>
+    public Dictionary<string, bool> AllProjectTestOnlyFlags()
+    {
+        var map = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, isTest) in Query(
+                     "SELECT name, is_test FROM projects",
+                     r => (Name: r.GetString(0), IsTest: r.GetBoolean(1))))
+        {
+            map[name] = isTest && (!map.TryGetValue(name, out bool current) || current);
+        }
+        return map;
+    }
+
+    /// <summary>File paths compiled by a project, ordered. DISTINCT is load-bearing (field P1,
+    /// 0.7.2): monorepos carry same-AssemblyName csproj PAIRS (net-old/net-new multi-targets both
+    /// named X) — the name join matches BOTH project rows, so without DISTINCT every shared file
+    /// came back twice, the semantic workspace created duplicate documents in one adhoc project,
+    /// and every reference site in those files was counted twice within its group.</summary>
+    public List<string> ProjectFiles(string projectName)
+    {
+        return Query(
+            """
+            SELECT DISTINCT f.path FROM compile_items ci
+            JOIN projects p ON p.id = ci.project_id
+            JOIN files f ON f.id = ci.file_id
+            WHERE p.name = $n COLLATE NOCASE AND f.lang = 'cs'
+            ORDER BY f.path
+            """,
+            r => r.GetString(0), ("$n", projectName));
+    }
+
+    /// <summary>Ordered compiled C# inputs plus their indexed byte sizes. Semantic cold-start
+    /// planning uses the size as a conservative, snapshot-pinned accounting input before any live
+    /// file is opened. Keeping the path and size in one query also avoids a point lookup per file.</summary>
+    public List<(string Path, long Size)> ProjectFilesWithSizes(string projectName,
+        CancellationToken cancellationToken = default)
+    {
+        return QueryCancellable(
+            """
+            SELECT DISTINCT f.path, f.size FROM compile_items ci
+            JOIN projects p ON p.id = ci.project_id
+            JOIN files f ON f.id = ci.file_id
+            WHERE p.name = $n COLLATE NOCASE AND f.lang = 'cs'
+            ORDER BY f.path
+            """,
+            r => (r.GetString(0), r.GetInt64(1)), cancellationToken, ("$n", projectName));
+    }
+
+    /// <summary>Batched compiled-input descriptors for semantic cold-start planning.</summary>
+    public Dictionary<string, List<(string Path, long Size)>> ProjectFilesWithSizes(
+        IReadOnlyCollection<string> projectNames,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<string, List<(string, long)>>(StringComparer.OrdinalIgnoreCase);
+        foreach (string[] chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(200))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$n{i}");
+                args.Add(($"$n{i}", chunk[i]));
+            }
+            foreach (var row in QueryCancellable(
+                         $"""
+                         SELECT DISTINCT p.name, f.path, f.size FROM compile_items ci
+                         JOIN projects p ON p.id = ci.project_id
+                         JOIN files f ON f.id = ci.file_id
+                         WHERE p.name COLLATE NOCASE IN ({string.Join(",", parameters)})
+                           AND f.lang = 'cs'
+                         ORDER BY p.name, f.path
+                         """,
+                         reader => (Name: reader.GetString(0), Path: reader.GetString(1),
+                             Size: reader.GetInt64(2)), cancellationToken, args.ToArray()))
+            {
+                if (!result.TryGetValue(row.Name, out List<(string, long)>? files))
+                    result[row.Name] = files = [];
+                files.Add((row.Path, row.Size));
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Conservative retained-byte charge for the project/file/edge descriptors that a
+    /// cold-start plan will materialize. The aggregate query itself returns one tiny row per chunk,
+    /// allowing byte ownership to be accounted before any workspace-sized descriptor collection exists.</summary>
+    public long SemanticPlanningDescriptorBytes(IReadOnlyCollection<string> projectNames,
+        CancellationToken cancellationToken = default)
+    {
+        long bytes = 0;
+        foreach (string[] chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(180))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$n{i}");
+                args.Add(($"$n{i}", chunk[i]));
+            }
+            var totals = QueryCancellable(
+                $"""
+                WITH wanted_projects AS (
+                    SELECT id, path, name, style, tfms, load_status, lang
+                    FROM projects
+                    WHERE name COLLATE NOCASE IN ({string.Join(",", parameters)})
+                ), compiled AS (
+                    SELECT p.name, f.path
+                    FROM compile_items ci
+                    JOIN wanted_projects p ON p.id = ci.project_id
+                    JOIN files f ON f.id = ci.file_id
+                    WHERE f.lang = 'cs'
+                ), edges AS (
+                    SELECT pf.path AS from_path, pf.name AS from_name,
+                           pt.path AS to_path, pt.name AS to_name, r.kind
+                    FROM project_refs r
+                    JOIN wanted_projects pf ON pf.id = r.from_id
+                    JOIN projects pt ON pt.id = r.to_id
+                    WHERE pf.lang = 'cs'
+                )
+                SELECT
+                    (SELECT COUNT(*) FROM wanted_projects),
+                    (SELECT COALESCE(SUM(length(path) + length(name) + length(style) +
+                                         length(tfms) + length(load_status) + length(lang)), 0)
+                       FROM wanted_projects),
+                    (SELECT COUNT(*) FROM compiled),
+                    (SELECT COALESCE(SUM(length(path) + length(name)), 0) FROM compiled),
+                    (SELECT COUNT(*) FROM edges),
+                    (SELECT COALESCE(SUM(length(from_path) + length(from_name) +
+                                         length(to_path) + length(to_name) + length(kind)), 0)
+                       FROM edges),
+                    (SELECT COALESCE(SUM(2 *
+                        ((length(path) - length(replace(path, '/', ''))) + 1)), 0)
+                       FROM wanted_projects),
+                    (SELECT COALESCE(SUM(2 *
+                        ((length(path) - length(replace(path, '/', ''))) + 1) *
+                        (length(path) + 32)), 0)
+                       FROM wanted_projects)
+                """,
+                reader => (ProjectCount: reader.GetInt64(0), ProjectChars: reader.GetInt64(1),
+                    FileCount: reader.GetInt64(2), FileChars: reader.GetInt64(3),
+                    EdgeCount: reader.GetInt64(4), EdgeChars: reader.GetInt64(5),
+                    AuthorityCandidateCount: reader.GetInt64(6),
+                    AuthorityCandidateChars: reader.GetInt64(7)),
+                cancellationToken, args.ToArray()).Single();
+            try
+            {
+                bytes = checked(bytes +
+                    totals.ProjectCount * 4096 + totals.ProjectChars * sizeof(char) +
+                    totals.FileCount * 512 + totals.FileChars * sizeof(char) +
+                    totals.EdgeCount * 768 + totals.EdgeChars * sizeof(char) +
+                    totals.AuthorityCandidateCount * 128 +
+                    totals.AuthorityCandidateChars * sizeof(char));
+            }
+            catch (OverflowException)
+            {
+                return long.MaxValue;
+            }
+        }
+        return Math.Max(4096, bytes);
+    }
+
+    /// <summary>Returns the nearest indexed Directory.Build.props and Directory.Build.targets
+    /// applicable to a project. Each filename is searched independently, matching MSBuild's
+    /// ancestor discovery rule. The lookup uses only the pinned index: Unix is case-sensitive;
+    /// Windows accepts one unambiguous host-case match and otherwise fails closed.</summary>
+    public DirectoryBuildAuthorityPaths ApplicableDirectoryBuildAuthority(string projectPath)
+        => ApplicableDirectoryBuildAuthority(projectPath, OperatingSystem.IsWindows());
+
+    internal DirectoryBuildAuthorityPaths ApplicableDirectoryBuildAuthority(
+        string projectPath, bool useWindowsPathPolicy)
+    {
+        projectPath = WorkspacePaths.Normalize(projectPath);
+        int slash = projectPath.LastIndexOf('/');
+        string directory = slash < 0 ? "" : projectPath[..slash];
+        var candidates = new List<(string Props, string Targets)>();
+        while (true)
+        {
+            string prefix = directory.Length == 0 ? "" : directory + "/";
+            candidates.Add((prefix + "Directory.Build.props",
+                prefix + "Directory.Build.targets"));
+            if (directory.Length == 0) break;
+            int parentSlash = directory.LastIndexOf('/');
+            directory = parentSlash < 0 ? "" : directory[..parentSlash];
+        }
+
+        var indexedPaths = new List<string>();
+        foreach (string[] chunk in candidates
+                     .SelectMany(candidate => new[] { candidate.Props, candidate.Targets })
+                     .Chunk(200))
+        {
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$p{i}");
+                args.Add(($"$p{i}", chunk[i]));
+            }
+            string lhs = useWindowsPathPolicy ? "path COLLATE NOCASE" : "path";
+            indexedPaths.AddRange(Query(
+                $"SELECT path FROM files WHERE {lhs} IN ({string.Join(",", parameters)})",
+                r => r.GetString(0), args.ToArray()));
+        }
+
+        (string? Path, bool Ambiguous) Resolve(string candidate)
+        {
+            string? exact = indexedPaths.FirstOrDefault(path =>
+                path.Equals(candidate, StringComparison.Ordinal));
+            if (exact is not null) return (exact, false);
+            if (!useWindowsPathPolicy) return (null, false);
+
+            string[] matches = indexedPaths
+                .Where(path => path.Equals(candidate, StringComparison.OrdinalIgnoreCase))
+                .Take(2)
+                .ToArray();
+            return matches.Length switch
+            {
+                0 => (null, false),
+                1 => (matches[0], false),
+                _ => (null, true),
+            };
+        }
+
+        string? props = null;
+        string? targets = null;
+        bool propsComplete = false;
+        bool targetsComplete = false;
+        bool propsAmbiguous = false;
+        bool targetsAmbiguous = false;
+        foreach ((string propsCandidate, string targetsCandidate) in candidates)
+        {
+            if (!propsComplete)
+            {
+                (props, propsAmbiguous) = Resolve(propsCandidate);
+                propsComplete = props is not null || propsAmbiguous;
+            }
+            if (!targetsComplete)
+            {
+                (targets, targetsAmbiguous) = Resolve(targetsCandidate);
+                targetsComplete = targets is not null || targetsAmbiguous;
+            }
+            if (propsComplete && targetsComplete) break;
+        }
+        return new(props, targets, propsAmbiguous, targetsAmbiguous);
+    }
+
+    /// <summary>Returns the nearest indexed Directory.Packages.props applicable to a project,
+    /// matching NuGet central package management's single-file ancestor discovery rule. The
+    /// lookup uses only the pinned index and fails closed on ambiguous Windows host-case matches.</summary>
+    public DirectoryPackagesAuthorityPath ApplicableDirectoryPackagesAuthority(
+        string projectPath) => ApplicableDirectoryPackagesAuthority(projectPath,
+        OperatingSystem.IsWindows());
+
+    internal DirectoryPackagesAuthorityPath ApplicableDirectoryPackagesAuthority(
+        string projectPath, bool useWindowsPathPolicy)
+    {
+        projectPath = WorkspacePaths.Normalize(projectPath);
+        int slash = projectPath.LastIndexOf('/');
+        string directory = slash < 0 ? "" : projectPath[..slash];
+        var candidates = new List<string>();
+        while (true)
+        {
+            string prefix = directory.Length == 0 ? "" : directory + "/";
+            candidates.Add(prefix + "Directory.Packages.props");
+            if (directory.Length == 0) break;
+            int parentSlash = directory.LastIndexOf('/');
+            directory = parentSlash < 0 ? "" : directory[..parentSlash];
+        }
+
+        var indexedPaths = new List<string>();
+        foreach (string[] chunk in candidates.Chunk(200))
+        {
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$p{i}");
+                args.Add(($"$p{i}", chunk[i]));
+            }
+            string lhs = useWindowsPathPolicy ? "path COLLATE NOCASE" : "path";
+            indexedPaths.AddRange(Query(
+                $"SELECT path FROM files WHERE {lhs} IN ({string.Join(",", parameters)})",
+                reader => reader.GetString(0), args.ToArray()));
+        }
+
+        foreach (string candidate in candidates)
+        {
+            string? exact = indexedPaths.FirstOrDefault(path =>
+                path.Equals(candidate, StringComparison.Ordinal));
+            if (exact is not null) return new(exact);
+            if (!useWindowsPathPolicy) continue;
+            string[] matches = indexedPaths
+                .Where(path => path.Equals(candidate, StringComparison.OrdinalIgnoreCase))
+                .Take(2)
+                .ToArray();
+            if (matches.Length == 1) return new(matches[0]);
+            if (matches.Length > 1) return new(null, PathAmbiguous: true);
+        }
+        return new(null);
+    }
+
+    /// <summary>Whether either applicable Directory.Build file exists in the pinned index.</summary>
+    public bool HasApplicableDirectoryBuildAuthority(string projectPath)
+    {
+        DirectoryBuildAuthorityPaths authority = ApplicableDirectoryBuildAuthority(projectPath);
+        return authority.HasPotentialAuthority;
+    }
+
+    /// <summary>Batched form of <see cref="HasApplicableDirectoryBuildAuthority"/>. All possible
+    /// ancestor authority paths are probed together; a Windows case ambiguity remains potential
+    /// authority and therefore still forces the semantic evaluator to fail closed.</summary>
+    public HashSet<string> ProjectsWithApplicableDirectoryBuildAuthority(
+        IReadOnlyCollection<ProjectRow> projects,
+        CancellationToken cancellationToken = default) =>
+        ProjectDirectoryBuildSemanticAuthorities(projects, cancellationToken)
+            .Where(pair => pair.Value.HasPotentialAuthority)
+            .Select(pair => pair.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Potential authority plus a targeted identity for the two nearest applicable
+    /// Directory.Build files. This lets semantic commit reject relevant model changes without
+    /// invalidating a cold load for an unrelated workspace refresh.</summary>
+    public Dictionary<string, DirectoryBuildSemanticAuthority>
+        ProjectDirectoryBuildSemanticAuthorities(IReadOnlyCollection<ProjectRow> projects,
+            CancellationToken cancellationToken = default)
+    {
+        bool windows = OperatingSystem.IsWindows();
+        var candidatesByProject = new Dictionary<string, List<string>>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (ProjectRow project in projects)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string projectPath = WorkspacePaths.Normalize(project.Path);
+            int slash = projectPath.LastIndexOf('/');
+            string directory = slash < 0 ? "" : projectPath[..slash];
+            var candidates = new List<string>();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string prefix = directory.Length == 0 ? "" : directory + "/";
+                candidates.Add(prefix + "Directory.Build.props");
+                candidates.Add(prefix + "Directory.Build.targets");
+                if (directory.Length == 0) break;
+                int parentSlash = directory.LastIndexOf('/');
+                directory = parentSlash < 0 ? "" : directory[..parentSlash];
+            }
+            candidatesByProject[project.Name] = candidates;
+        }
+
+        var indexed = new List<(string Path, long Hash)>();
+        foreach (string[] chunk in candidatesByProject.Values.SelectMany(value => value)
+                     .Distinct(windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+                     .Chunk(300))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$p{i}");
+                args.Add(($"$p{i}", chunk[i]));
+            }
+            string lhs = windows ? "path COLLATE NOCASE" : "path";
+            indexed.AddRange(QueryCancellable(
+                $"SELECT path, hash FROM files WHERE {lhs} IN ({string.Join(",", parameters)})",
+                reader => (reader.GetString(0), reader.GetInt64(1)), cancellationToken,
+                args.ToArray()));
+        }
+
+        var exact = indexed.ToDictionary(row => row.Path, row => row.Hash,
+            StringComparer.Ordinal);
+        Dictionary<string, List<(string Path, long Hash)>>? aliases = windows
+            ? indexed.GroupBy(row => row.Path, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.ToList(),
+                    StringComparer.OrdinalIgnoreCase)
+            : null;
+        var result = new Dictionary<string, DirectoryBuildSemanticAuthority>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach ((string name, List<string> candidates) in candidatesByProject)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            (string? Path, long Hash, bool Ambiguous) Resolve(string candidate)
+            {
+                if (exact.TryGetValue(candidate, out long hash))
+                    return (candidate, hash, false);
+                if (aliases is null || !aliases.TryGetValue(candidate, out var matches))
+                    return (null, 0, false);
+                return matches.Count switch
+                {
+                    1 => (matches[0].Path, matches[0].Hash, false),
+                    _ => (null, 0, true),
+                };
+            }
+
+            (string? Path, long Hash, bool Ambiguous) Nearest(int offset)
+            {
+                for (int i = offset; i < candidates.Count; i += 2)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var resolved = Resolve(candidates[i]);
+                    if (resolved.Path is not null || resolved.Ambiguous) return resolved;
+                }
+                return (null, 0, false);
+            }
+
+            var props = Nearest(0);
+            var targets = Nearest(1);
+            bool potential = props.Path is not null || props.Ambiguous ||
+                             targets.Path is not null || targets.Ambiguous;
+            string identity = string.Join('\u001e',
+                props.Ambiguous ? "props:ambiguous" : $"props:{props.Path}:{props.Hash}",
+                targets.Ambiguous ? "targets:ambiguous" :
+                    $"targets:{targets.Path}:{targets.Hash}");
+            result[name] = new DirectoryBuildSemanticAuthority(
+                potential,
+                identity,
+                targets.Path is not null || targets.Ambiguous);
+        }
+        return result;
+    }
+
+    /// <summary>Nearest indexed Directory.Packages.props authority plus its targeted identity and
+    /// bounded indexed content. The batched lookup lets warm C# semantic workspaces notice central
+    /// version changes without broad workspace invalidation or live-filesystem authority.</summary>
+    public Dictionary<string, DirectoryPackagesSemanticAuthority>
+        ProjectDirectoryPackagesSemanticAuthorities(IReadOnlyCollection<ProjectRow> projects,
+            CancellationToken cancellationToken = default)
+    {
+        bool windows = OperatingSystem.IsWindows();
+        var candidatesByProject = new Dictionary<string, List<string>>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (ProjectRow project in projects)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string projectPath = WorkspacePaths.Normalize(project.Path);
+            int slash = projectPath.LastIndexOf('/');
+            string directory = slash < 0 ? "" : projectPath[..slash];
+            var candidates = new List<string>();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string prefix = directory.Length == 0 ? "" : directory + "/";
+                candidates.Add(prefix + "Directory.Packages.props");
+                if (directory.Length == 0) break;
+                int parentSlash = directory.LastIndexOf('/');
+                directory = parentSlash < 0 ? "" : directory[..parentSlash];
+            }
+            candidatesByProject[project.Name] = candidates;
+        }
+
+        var indexed = new List<(string Path, long Hash, string? Content)>();
+        foreach (string[] chunk in candidatesByProject.Values.SelectMany(value => value)
+                     .Distinct(windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+                     .Chunk(300))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                parameters.Add($"$p{i}");
+                args.Add(($"$p{i}", chunk[i]));
+            }
+            args.Add(("$max", IndexBuilder.MaxStructuralFileBytes));
+            string lhs = windows ? "f.path COLLATE NOCASE" : "f.path";
+            indexed.AddRange(QueryCancellable(
+                $"SELECT f.path, f.hash, " +
+                $"CASE WHEN f.size <= $max AND length(c.content) <= $max THEN c.content END " +
+                $"FROM files f LEFT JOIN file_contents c ON c.file_id = f.id " +
+                $"WHERE {lhs} IN ({string.Join(",", parameters)})",
+                reader => (reader.GetString(0), reader.GetInt64(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2)), cancellationToken,
+                args.ToArray()));
+        }
+
+        var exact = indexed.ToDictionary(row => row.Path, row => row,
+            StringComparer.Ordinal);
+        Dictionary<string, List<(string Path, long Hash, string? Content)>>? aliases = windows
+            ? indexed.GroupBy(row => row.Path, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.ToList(),
+                    StringComparer.OrdinalIgnoreCase)
+            : null;
+        var result = new Dictionary<string, DirectoryPackagesSemanticAuthority>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach ((string name, List<string> candidates) in candidatesByProject)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            (string? Path, long Hash, string? Content, bool Ambiguous) resolved =
+                (null, 0, null, false);
+            foreach (string candidate in candidates)
+            {
+                if (exact.TryGetValue(candidate, out var row))
+                {
+                    resolved = (row.Path, row.Hash, row.Content, false);
+                    break;
+                }
+                if (aliases is null || !aliases.TryGetValue(candidate, out var matches))
+                    continue;
+                resolved = matches.Count switch
+                {
+                    1 => (matches[0].Path, matches[0].Hash, matches[0].Content, false),
+                    _ => (null, 0, null, true),
+                };
+                break;
+            }
+
+            string identity = resolved.Ambiguous
+                ? "packages:ambiguous"
+                : $"packages:{resolved.Path}:{resolved.Hash}";
+            result[name] = new DirectoryPackagesSemanticAuthority(
+                resolved.Path is not null || resolved.Ambiguous,
+                identity,
+                resolved.Path,
+                resolved.Content,
+                resolved.Ambiguous);
+        }
+        return result;
+    }
+
+    /// <summary>Fingerprints for MANY projects in one grouped query. Includes each project file
+    /// and associated packages.config because both contribute semantic compiler inputs (for
+    /// example generated IVT attributes and package metadata references).
+    /// The warm-cache check in
+    /// EnsureLoadedAsync ran ProjectFingerprint once per already-loaded project on EVERY semantic
+    /// call — dozens to hundreds of point queries per references/implementations invocation (dz3).</summary>
+    public Dictionary<string, (long FileCount, long HashSum)> ProjectFingerprints(
+        IReadOnlyCollection<string> projectNames,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<string, (long, long)>(StringComparer.OrdinalIgnoreCase);
+        if (projectNames.Count == 0) return result;
+        foreach (var chunk in projectNames.Distinct(StringComparer.OrdinalIgnoreCase).Chunk(200))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var ph = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                ph.Add($"$n{i}");
+                args.Add(($"$n{i}", chunk[i]));
+            }
+            foreach (var row in QueryCancellable(
+                $"""
+                SELECT input.name, COUNT(*),
+                       SUM(input.hash & 4294967295),
+                       SUM((input.hash >> 32) & 4294967295)
+                FROM (
+                    SELECT p.name, f.hash FROM compile_items ci
+                    JOIN projects p ON p.id = ci.project_id
+                    JOIN files f ON f.id = ci.file_id
+                    WHERE p.name COLLATE NOCASE IN ({string.Join(",", ph)}) AND f.lang = 'cs'
+                    UNION ALL
+                    SELECT p.name, f.hash FROM projects p
+                    JOIN files f ON f.path = p.path
+                    WHERE p.name COLLATE NOCASE IN ({string.Join(",", ph)})
+                    UNION ALL
+                    SELECT p.name, f.hash FROM projects p
+                    JOIN files f ON f.path =
+                        rtrim(p.path, replace(p.path, '/', '')) || 'packages.config'
+                    WHERE p.name COLLATE NOCASE IN ({string.Join(",", ph)})
+                ) input
+                GROUP BY input.name COLLATE NOCASE -- must union case-variant names exactly like the single
+                                               -- query's '= $n COLLATE NOCASE', or the warm check and
+                                               -- the load-time fingerprint permanently disagree and the
+                                               -- project reloads on EVERY semantic call (review repro)
+                """,
+                r => (Name: r.GetString(0), Count: r.GetInt64(1),
+                    LowSum: r.GetInt64(2), HighSum: r.GetInt64(3)), cancellationToken,
+                args.ToArray()))
+            {
+                result[row.Name] = (row.Count, CombineFingerprintSums(row.LowSum, row.HighSum));
+            }
+        }
+        return result; // names with no compiled files are simply absent => caller defaults to (0, 0)
+    }
+
+    /// <summary>Cheap change fingerprint for a project's compiled files, project model, and
+    /// associated packages.config metadata input.</summary>
+    public (long FileCount, long HashSum) ProjectFingerprint(string projectName)
+    {
+        var rows = Query(
+            """
+            SELECT COUNT(*),
+                   COALESCE(SUM(input.hash & 4294967295), 0),
+                   COALESCE(SUM((input.hash >> 32) & 4294967295), 0)
+            FROM (
+                SELECT f.hash FROM compile_items ci
+                JOIN projects p ON p.id = ci.project_id
+                JOIN files f ON f.id = ci.file_id
+                WHERE p.name = $n COLLATE NOCASE AND f.lang = 'cs'
+                UNION ALL
+                SELECT f.hash FROM projects p
+                JOIN files f ON f.path = p.path
+                WHERE p.name = $n COLLATE NOCASE
+                UNION ALL
+                SELECT f.hash FROM projects p
+                JOIN files f ON f.path =
+                    rtrim(p.path, replace(p.path, '/', '')) || 'packages.config'
+                WHERE p.name = $n COLLATE NOCASE
+            ) input
+            """,
+            r => (Count: r.GetInt64(0), LowSum: r.GetInt64(1), HighSum: r.GetInt64(2)),
+            ("$n", projectName));
+        return rows.Count > 0
+            ? (rows[0].Count, CombineFingerprintSums(rows[0].LowSum, rows[0].HighSum))
+            : (0, 0);
+    }
+
+    private static long CombineFingerprintSums(long lowSum, long highSum) =>
+        unchecked((lowSum * 397) ^ highSum);
+
+    /// <summary>
+    /// Every project whose files textually contain the identifier (FTS whole-token candidates),
+    /// ordered by match volume. Project selection is bounded later by the caller's maxProjects;
+    /// truncating matching files before this GROUP BY silently hid projects in large repositories.
+    /// Reference filters apply before per-project ranking so excluded test/generated-only matches
+    /// cannot consume a candidate budget or become false skipped/out-of-graph coverage.
+    /// </summary>
+    public List<SemanticTextCandidateProject> CandidateProjectsForName(
+        string name, CancellationToken cancellationToken = default,
+        bool includeGenerated = true, bool includeTests = true)
+    {
+        if (string.IsNullOrEmpty(name)) return new();
+        var counts = new Dictionary<long, (string Project, string Path, string Language, int Count)>();
+        long afterFileId = 0;
+        using var ownedSnapshot = _readSnapshot is null ? _conn.BeginTransaction(deferred: true) : null;
+        SqliteTransaction snapshot = ownedSnapshot ?? _readSnapshot!;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var batch = QueryCoreCancellable(snapshot,
+                """
+                SELECT DISTINCT m.fid, p.id, p.name, p.path, p.lang,
+                                f.is_generated, p.is_test
+                FROM (
+                    SELECT rowid AS fid
+                    FROM fts_content
+                    WHERE fts_content MATCH $q AND rowid > $after
+                    ORDER BY rowid
+                    LIMIT $batch
+                ) m
+                JOIN files f ON f.id = m.fid
+                LEFT JOIN compile_items ci ON ci.file_id = m.fid
+                LEFT JOIN projects p ON p.id = ci.project_id
+                ORDER BY m.fid, p.path
+                """,
+                r => (FileId: r.GetInt64(0),
+                    ProjectId: r.IsDBNull(1) ? (long?)null : r.GetInt64(1),
+                    Project: r.IsDBNull(2) ? null : r.GetString(2),
+                    ProjectPath: r.IsDBNull(3) ? null : r.GetString(3),
+                    Language: r.IsDBNull(4) ? null : r.GetString(4),
+                    IsGenerated: r.GetBoolean(5),
+                    IsTest: r.IsDBNull(6) ? (bool?)null : r.GetBoolean(6)),
+                cancellationToken,
+                ("$q", $"\"{name.Replace("\"", "")}\""), ("$after", afterFileId),
+                ("$batch", CandidateDiscoveryBatchSize));
+            if (batch.Count == 0) break;
+            afterFileId = batch[^1].FileId;
+            long currentFileId = -1;
+            var projectsForFile = new HashSet<long>();
+            foreach (var match in batch)
+            {
+                if (match.FileId != currentFileId)
+                {
+                    currentFileId = match.FileId;
+                    projectsForFile.Clear();
+                }
+                if (!includeGenerated && match.IsGenerated) continue;
+                if (!includeTests && match.IsTest is true) continue;
+                if (match.ProjectId is { } projectId && match.Project is not null &&
+                    match.ProjectPath is not null && match.Language is not null &&
+                    projectsForFile.Add(projectId))
+                {
+                    if (counts.TryGetValue(projectId, out var existing))
+                        counts[projectId] = existing with { Count = existing.Count + 1 };
+                    else
+                        counts[projectId] = (match.Project, match.ProjectPath, match.Language, 1);
+                }
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (batch.Select(match => match.FileId).Distinct().Count() < CandidateDiscoveryBatchSize)
+                break;
+        }
+        return counts.Select(entry => new SemanticTextCandidateProject(
+                entry.Key, entry.Value.Project, entry.Value.Path, entry.Value.Language,
+                entry.Value.Count))
+            .OrderByDescending(entry => entry.FileCount)
+            .ThenBy(entry => entry.Project, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(entry => entry.ProjectPath, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>All transitive dependency project names (downstream closure), targets included.</summary>
+    public HashSet<string> DependencyClosure(IEnumerable<string> projectNames)
+    {
+        var edges = ProjectGraphEdges();
+        var closure = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var stack = new Stack<string>(projectNames);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            if (!closure.Add(node)) continue;
+            if (edges.Downstream.TryGetValue(node, out var deps))
+            {
+                foreach (var d in deps) stack.Push(d);
+            }
+        }
+        return closure;
+    }
+
+    /// <summary>All transitive dependent project names (upstream closure), target excluded.</summary>
+    public HashSet<string> DependentClosure(string projectName)
+    {
+        var edges = ProjectGraphEdges();
+        var closure = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var stack = new Stack<string>();
+        stack.Push(projectName);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            if (edges.Upstream.TryGetValue(node, out var dependents))
+            {
+                foreach (var d in dependents)
+                {
+                    if (closure.Add(d)) stack.Push(d);
+                }
+            }
+        }
+        return closure;
+    }
+
+    /// <summary>Edge-kind lookup keyed by (fromName, toName), case-insensitive keys folded to
+    /// lower — annotates dependency_path hops with provenance (bxw): 'project' vs 'assembly'.
+    /// A pair connected via both twin rows keeps 'project' precedence (first-writer insert).</summary>
+    public Dictionary<(string From, string To), string> EdgeKindMap()
+    {
+        var map = new Dictionary<(string, string), string>();
+        foreach (var (from, to, kind) in Query(
+            """
+            SELECT pf.name, pt.name, r.kind FROM project_refs r
+            JOIN projects pf ON pf.id = r.from_id
+            JOIN projects pt ON pt.id = r.to_id
+            """,
+            r => (From: r.GetString(0), To: r.GetString(1), Kind: r.GetString(2))))
+        {
+            var key = (from.ToLowerInvariant(), to.ToLowerInvariant());
+            // Same-name pair rows can carry both kinds for one NAME-level edge — 'project' wins
+            // (an explicit ProjectReference is the stronger provenance claim). The conditional is
+            // load-bearing: plain last-writer would ride the JOIN's planner-dependent row order.
+            if (!map.TryGetValue(key, out var existing) || existing != "project")
+            {
+                map[key] = kind;
+            }
+        }
+        return map;
+    }
+
+    /// <summary>Shortest dependency paths (project references) from one project to another.</summary>
+    public List<List<string>> DependencyPaths(string fromProject, string toProject, int maxPaths = 3)
+    {
+        // 46p: the old implementation was a FIFO BFS of materialized path copies — on a wide
+        // lattice it enumerated EVERY equal-length partial path before the first result could
+        // stop it (~width^layers: a 17-layer 3-wide synthetic graph took 69 seconds and GB-scale
+        // allocations). Two phases instead, no partial-path materialization:
+        //   1. Reverse BFS from the TARGET gives distTo[n] = hops from n to the target — O(V+E).
+        //   2. DFS from the source following ONLY strictly-descending edges
+        //      (distTo[dep] == distTo[node] - 1): every step provably lies on a shortest path,
+        //      so there are no dead ends and enumeration costs O(maxPaths × pathLength).
+        // Contract preserved: shortest-length paths only, up to maxPaths, name lists,
+        // fromProject == toProject yields the single-node path. One deliberate change: a
+        // same-AssemblyName pair's duplicate name-level edges previously emitted DUPLICATE
+        // identical paths — neighbors are now deduped per node, so paths are distinct.
+        var (downstream, upstream) = ProjectGraphEdges();
+        var results = new List<List<string>>();
+
+        var distTo = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { [toProject] = 0 };
+        var queue = new Queue<string>();
+        queue.Enqueue(toProject);
+        while (queue.Count > 0)
+        {
+            string node = queue.Dequeue();
+            if (!upstream.TryGetValue(node, out var preds)) continue;
+            foreach (var pred in preds)
+            {
+                if (distTo.ContainsKey(pred)) continue;
+                distTo[pred] = distTo[node] + 1;
+                queue.Enqueue(pred);
+            }
+        }
+        if (!distTo.ContainsKey(fromProject)) return results; // unreachable (or unknown) — found:false
+
+        var path = new List<string> { fromProject };
+        Walk(fromProject);
+        return results;
+
+        void Walk(string node)
+        {
+            if (results.Count >= maxPaths) return;
+            if (distTo[node] == 0) // the target (covers fromProject == toProject as [from])
+            {
+                results.Add(new List<string>(path));
+                return;
+            }
+            if (!downstream.TryGetValue(node, out var deps)) return; // cannot happen: distTo > 0 implies an edge
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // pair-row dup edges → one path
+            foreach (var dep in deps)
+            {
+                if (results.Count >= maxPaths) return;
+                if (!distTo.TryGetValue(dep, out int d) || d != distTo[node] - 1) continue; // off the shortest DAG
+                if (!seen.Add(dep)) continue;
+                path.Add(dep);
+                Walk(dep);
+                path.RemoveAt(path.Count - 1);
+            }
+        }
+    }
+
+    /// <summary>Signal (49k) grades the STRONGEST usage shape found in the group's sampled
+    /// mention lines: "callSite" ('Name(' — invocation or construction), "typeUsage"
+    /// ('new Name' / ': Name' / 'Name&lt;' / '&lt;Name' / 'Name.'), "nameMention" (comments,
+    /// strings, usings — the field's complaint: a test whose only link is a string literal
+    /// ranked identically to one that CALLS the symbol). Null for the non-mention reasons
+    /// (naming convention / project reference), whose Reason already carries the tier — and
+    /// for a mention group whose ordinal line scan missed the FTS match (case/tokenizer
+    /// nuances), so ABSENCE of Signal is "ungraded", never a graded nameMention.
+    /// Text-shape heuristics on purpose — related_tests is a heuristic-confidence tool.</summary>
+    public sealed record RelatedTestGroup(string TestProject, string Reason, int MatchingFiles, List<TextHit> Samples,
+        string? Signal = null);
+
+    /// <summary>
+    /// Likely tests for a symbol: test files naming it (FTS), test classes following the
+    /// {Name}Tests convention, and test projects referencing the owning project.
+    /// </summary>
+    public List<RelatedTestGroup> RelatedTests(string symbolName, string? owningProject, int maxGroups = 10)
+    {
+        var groups = new Dictionary<string, RelatedTestGroup>(StringComparer.OrdinalIgnoreCase);
+
+        // 1. Test files that mention the symbol (strongest signal).
+        var candidates = Query(
+            """
+            WITH m AS MATERIALIZED (
+                SELECT rowid AS fid FROM fts_content WHERE fts_content MATCH $q LIMIT 2000
+            )
+            SELECT p.name, f.path, f.is_generated, f.id, COUNT(*) OVER (PARTITION BY p.name) FROM m
+            JOIN files f ON f.id = m.fid
+            JOIN compile_items ci ON ci.file_id = m.fid
+            JOIN projects p ON p.id = ci.project_id
+            WHERE p.is_test = 1
+            ORDER BY p.name, f.path
+            """,
+            r => (Project: r.GetString(0), Path: r.GetString(1), Gen: r.GetBoolean(2), Id: r.GetInt64(3), Count: r.GetInt32(4)),
+            ("$q", $"\"{symbolName.Replace("\"", "")}\""));
+        foreach (var c in candidates)
+        {
+            if (!groups.TryGetValue(c.Project, out var g))
+            {
+                groups[c.Project] = g = new RelatedTestGroup(c.Project, "references symbol name", c.Count, new List<TextHit>());
+            }
+            if (g.Samples.Count >= 3) continue;
+            // 49k: locate the mention LINES (samples used to ship a placeholder line 1 with
+            // empty text) and grade the strongest usage shape — the group keeps its max tier
+            // across the sampled files. Bounded: content is fetched only for the <=3 sample
+            // files per group, and <=20 located lines are graded per file.
+            string? content = ContentById(c.Id);
+            var spans = content is null
+                ? new List<(int Line, int Start, int End)>()
+                : LocateTokenLineSpans(content, symbolName);
+            if (spans.Count == 0)
+            {
+                // FTS matched but the whole-token line scan did not (tokenizer nuances) —
+                // keep the file visible the old way rather than dropping the evidence.
+                g.Samples.Add(new TextHit(c.Path, 1, "", c.Gen));
+                continue;
+            }
+            foreach (var (ln, s, e) in spans.Take(3 - g.Samples.Count))
+            {
+                g.Samples.Add(new TextHit(c.Path, ln, Snippet(content![s..e]), c.Gen));
+            }
+            int tier = SignalTierOf(g.Signal);
+            foreach (var (_, s, e) in spans.Take(20))
+            {
+                tier = Math.Max(tier, UsageTier(content!, s, e, symbolName));
+                if (tier >= 3) break;
+            }
+            groups[c.Project] = g with { Signal = SignalName(tier) }; // Samples list is shared
+        }
+
+        // 2. {Name}Tests naming convention.
+        foreach (var hit in SearchSymbols(symbolName + "Tests", "exact", new[] { "class" },
+                     10, includeGenerated: false, language: "cs"))
+        {
+            foreach (var owner in ProjectsContaining(hit.FilePath).Where(p => p.IsTest))
+            {
+                if (!groups.ContainsKey(owner.Name))
+                {
+                    groups[owner.Name] = new RelatedTestGroup(owner.Name, "naming convention", 1,
+                        new List<TextHit> { new(hit.FilePath, hit.StartLine, hit.Signature, false) });
+                }
+            }
+        }
+
+        // 3. Test projects that reference the owning project (weakest signal).
+        if (owningProject is not null)
+        {
+            var testFlags = AllProjectTestFlags();
+            foreach (var dependent in DependentClosure(owningProject))
+            {
+                if (groups.Count >= maxGroups) break;
+                if (testFlags.TryGetValue(dependent, out bool isTest) && isTest && !groups.ContainsKey(dependent))
+                {
+                    groups[dependent] = new RelatedTestGroup(dependent, "references owning project", 0, new List<TextHit>());
+                }
+            }
+        }
+
+        return groups.Values
+            .OrderBy(g => g.Reason switch { "references symbol name" => 0, "naming convention" => 1, _ => 2 })
+            .ThenByDescending(g => g.MatchingFiles)
+            .Take(maxGroups)
+            .ToList();
+    }
+
+    private (Dictionary<string, List<string>> Downstream, Dictionary<string, List<string>> Upstream) ProjectGraphEdges()
+    {
+        var edges = Query(
+            """
+            SELECT pf.name, pt.name FROM project_refs r
+            JOIN projects pf ON pf.id = r.from_id
+            JOIN projects pt ON pt.id = r.to_id
+            """,
+            r => (From: r.GetString(0), To: r.GetString(1)));
+        var down = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var up = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var e in edges)
+        {
+            (down.TryGetValue(e.From, out var d) ? d : down[e.From] = new()).Add(e.To);
+            (up.TryGetValue(e.To, out var u) ? u : up[e.To] = new()).Add(e.From);
+        }
+        return (down, up);
+    }
+
+    // ---------------------------------------------------------------- misc
+
+    /// <summary>Of the given workspace-relative paths, the subset in NO project's compile set — the
+    /// "is this file really compiled?" signal (the compile graph grep lacks). Since 3tz the graph
+    /// expands &lt;Compile Include&gt; wildcard globs (legacy wildcard projects are owned), honors
+    /// &lt;Compile Remove&gt; (an excluded-from-compilation file is correctly orphaned — the dead-twin
+    /// case) and EnableDefaultCompileItems. Remaining best-effort gaps: shared projects
+    /// (.shproj/.projitems), Directory.Build.props/.targets compile globs, and Condition attributes
+    /// (ignored — over-inclusive). A project that fails to PARSE glob-attributes its whole subtree,
+    /// so dead code under it will NOT appear. Still a syntactic signal, not a compiler fact — never
+    /// hide results on it; absence is not absolute proof a file compiles.</summary>
+    public HashSet<string> OrphanedPaths(IReadOnlyCollection<string> paths)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        if (paths.Count == 0) return result;
+        foreach (var chunk in paths.Distinct(StringComparer.Ordinal).Chunk(400))
+        {
+            var args = new List<(string, object)>();
+            var placeholders = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                string p = $"$p{i}";
+                placeholders.Add(p);
+                args.Add((p, chunk[i]));
+            }
+            foreach (var path in Query(
+                $"""
+                SELECT f.path FROM files f
+                WHERE f.path IN ({string.Join(",", placeholders)})
+                  AND NOT EXISTS (SELECT 1 FROM compile_items ci WHERE ci.file_id = f.id)
+                """,
+                r => r.GetString(0), args.ToArray()))
+            {
+                result.Add(path);
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Workspace-relative paths of files flagged generated (is_generated=1), for callers that
+    /// must exclude generated code from results (case-insensitive, matching the index's path handling).</summary>
+    public HashSet<string> GeneratedPaths()
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in Query("SELECT path FROM files WHERE is_generated = 1", r => r.GetString(0)))
+            set.Add(p);
+        return set;
+    }
+
+    public string? ContentByPath(string filePath)
+    {
+        var rows = Query(
+            "SELECT c.content FROM file_contents c JOIN files f ON f.id = c.file_id WHERE f.path = $p",
+            r => r.GetString(0), ("$p", filePath));
+        return rows.Count > 0 ? rows[0] : null;
+    }
+
+    public FileHit? FileByPath(string filePath)
+    {
+        var rows = Query(
+            "SELECT id, path, size, line_count, is_generated, lang FROM files WHERE path = $p",
+            r => new FileHit(r.GetInt64(0), r.GetString(1), r.GetInt64(2), r.GetInt32(3),
+                r.GetBoolean(4), r.GetString(5)), ("$p", filePath));
+        return rows.Count > 0 ? rows[0] : null;
+    }
+
+    /// <summary>Returns indexed sizes for the exact workspace-relative paths supplied. Callers
+    /// that also consult the live filesystem can use a missing entry as a zero lower bound.</summary>
+    public Dictionary<string, long> FileSizesByExactPath(IReadOnlyCollection<string> filePaths,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (string[] chunk in filePaths.Distinct(StringComparer.Ordinal).Chunk(400))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var placeholders = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                string parameter = $"$p{i}";
+                placeholders.Add(parameter);
+                args.Add((parameter, chunk[i]));
+            }
+
+            foreach ((string path, long size) in QueryCancellable(
+                $"SELECT path, size FROM files WHERE path IN ({string.Join(",", placeholders)})",
+                row => (row.GetString(0), row.GetInt64(1)), cancellationToken, args.ToArray()))
+            {
+                result[path] = size;
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Looks up a pinned-index path using this host's repository path policy without
+    /// consulting the mutable live filesystem. Exact lookup is universal; Windows additionally
+    /// permits one unambiguous ASCII-case-equivalent indexed path. Non-ASCII aliases that SQLite's
+    /// bounded NOCASE index cannot prove fail closed.</summary>
+    public FileHit? FileByPathForHost(string filePath)
+    {
+        FileHit? exact = FileByPath(filePath);
+        if (exact is not null || !OperatingSystem.IsWindows()) return exact;
+
+        var rows = Query(
+            "SELECT id, path, size, line_count, is_generated, lang FROM files " +
+            "WHERE path = $p COLLATE NOCASE LIMIT 2",
+            r => new FileHit(r.GetInt64(0), r.GetString(1), r.GetInt64(2), r.GetInt32(3),
+                r.GetBoolean(4), r.GetString(5)), ("$p", filePath));
+        FileHit[] matches = rows
+            .Where(row => WorkspacePaths.FileSystemPathComparer.Equals(row.Path, filePath))
+            .Take(2)
+            .ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
+    public string? ContentByPathBounded(string filePath, int maxChars)
+        => ContentByPathBounded(filePath, maxChars, CancellationToken.None);
+
+    public string? ContentByPathBounded(string filePath, int maxChars,
+        CancellationToken cancellationToken)
+    {
+        if (maxChars < 0) return null;
+        var rows = QueryCoreCancellable(_readSnapshot,
+            "SELECT CASE WHEN length(c.content) <= $max THEN c.content END " +
+            "FROM file_contents c JOIN files f ON f.id = c.file_id WHERE f.path = $p",
+            r => r.IsDBNull(0) ? null : r.GetString(0), cancellationToken,
+            ("$p", filePath), ("$max", maxChars));
+        return rows.Count > 0 ? rows[0] : null;
+    }
+
+    public OverviewStats Overview()
+    {
+        long Scalar(string sql)
+        {
+            using var cmd = CreateCommand();
+            cmd.CommandText = sql;
+            return (long)(cmd.ExecuteScalar() ?? 0L);
+        }
+
+        string tfms = string.Join(", ", Query(
+            "SELECT tfms || ' x' || COUNT(*) FROM projects GROUP BY tfms ORDER BY COUNT(*) DESC LIMIT 6",
+            r => r.GetString(0)));
+
+        string? version = MetaValue("index_version");
+        string? at = MetaValue("indexed_at_utc");
+
+        return new OverviewStats(
+            CsFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='cs'"),
+            FsFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='fs'"),
+            MarkdownFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='md'"),
+            SqlFiles: Scalar("SELECT COUNT(*) FROM files WHERE lang='sql'"),
+            TotalLines: Scalar("SELECT COALESCE(SUM(line_count),0) FROM files WHERE lang IN ('cs','fs')"),
+            Symbols: Scalar("SELECT COUNT(*) FROM symbols"),
+            Projects: Scalar("SELECT COUNT(*) FROM projects"),
+            CSharpProjects: Scalar("SELECT COUNT(*) FROM projects WHERE lang='cs'"),
+            FSharpProjects: Scalar("SELECT COUNT(*) FROM projects WHERE lang='fs'"),
+            LegacyProjects: Scalar("SELECT COUNT(*) FROM projects WHERE style='legacy'"),
+            SdkProjects: Scalar("SELECT COUNT(*) FROM projects WHERE style='sdk'"),
+            TestProjects: Scalar("SELECT COUNT(*) FROM projects WHERE is_test=1"),
+            Solutions: Scalar("SELECT COUNT(*) FROM solutions"),
+            GeneratedFiles: Scalar("SELECT COUNT(*) FROM files WHERE is_generated=1"),
+            // Indexed C# and compiled-form F# source (.fs/.fsi) in no project's compile set —
+            // the "really compiled?" count. F# scripts are intentionally outside project compile
+            // sets, so .fsx is source/search evidence but never an orphan (see OrphanedPaths for
+            // the exact C# symbol semantics and remaining shared/props/Condition gaps).
+            OrphanedFiles: Scalar("SELECT COUNT(*) FROM files WHERE (lang='cs' OR (lang='fs' AND lower(path) NOT LIKE '%.fsx')) AND NOT EXISTS (SELECT 1 FROM compile_items ci WHERE ci.file_id = files.id)"),
+            TfmBreakdown: tfms,
+            IndexVersion: version,
+            IndexedAtUtc: at);
+    }
+
+    private string? MetaValue(string key)
+    {
+        using var cmd = CreateCommand();
+        cmd.CommandText = "SELECT value FROM meta WHERE key=$k";
+        cmd.Parameters.AddWithValue("$k", key);
+        return cmd.ExecuteScalar() as string;
+    }
+
+    // ---------------------------------------------------------------- internals
+
+    private Dictionary<long, List<(string Project, bool IsTest)>> FileProjects(List<long> fileIds)
+    {
+        var map = new Dictionary<long, List<(string, bool)>>();
+        if (fileIds.Count == 0) return map;
+        // Chunk to keep parameter counts sane.
+        foreach (var chunk in fileIds.Chunk(400))
+        {
+            string inList = string.Join(",", chunk);
+            var rows = Query(
+                $"""
+                SELECT ci.file_id, p.name, p.is_test FROM compile_items ci
+                JOIN projects p ON p.id = ci.project_id
+                WHERE ci.file_id IN ({inList})
+                """,
+                r => (FileId: r.GetInt64(0), Name: r.GetString(1), IsTest: r.GetBoolean(2)));
+            foreach (var row in rows)
+            {
+                (map.TryGetValue(row.FileId, out var list) ? list : map[row.FileId] = new()).Add((row.Name, row.IsTest));
+            }
+        }
+        return map;
+    }
+
+    private string? ContentById(long fileId)
+    {
+        using var cmd = CreateCommand();
+        cmd.CommandText = "SELECT content FROM file_contents WHERE file_id = $id";
+        cmd.Parameters.AddWithValue("$id", fileId);
+        return cmd.ExecuteScalar() as string;
+    }
+
+    private string? ContentByIdBounded(long fileId, int maxChars)
+    {
+        using var cmd = CreateCommand();
+        cmd.CommandText = "SELECT CASE WHEN length(content) <= $max THEN content END " +
+                          "FROM file_contents WHERE file_id = $id";
+        cmd.Parameters.AddWithValue("$id", fileId);
+        cmd.Parameters.AddWithValue("$max", maxChars);
+        return cmd.ExecuteScalar() as string;
+    }
+
+    private static SymbolHit ReadSymbol(SqliteDataReader r) => new(
+        r.GetInt64(0), r.GetString(1), r.GetString(2),
+        r.IsDBNull(3) ? null : r.GetString(3),
+        r.IsDBNull(4) ? null : r.GetString(4),
+        r.GetString(5), r.GetString(6), r.GetInt32(7), r.GetInt32(8),
+        r.GetBoolean(9), r.IsDBNull(10) ? null : r.GetString(10),
+        r.GetString(11), r.GetBoolean(12),
+        r.FieldCount > 13 && !r.IsDBNull(13) ? r.GetInt64(13) : null,
+        Arity: r.FieldCount > 14 && !r.IsDBNull(14) ? r.GetInt32(14) : 0,
+        Modifiers: r.FieldCount > 15 && !r.IsDBNull(15) ? r.GetString(15) : null,
+        Accessors: r.FieldCount > 16 && !r.IsDBNull(16) ? r.GetString(16) : null,
+        DeclarationKey: r.FieldCount > 17 && !r.IsDBNull(17) ? r.GetString(17) : null,
+        FileHash: r.FieldCount > 18 && !r.IsDBNull(18) ? r.GetInt64(18) : 0,
+        OrdinalOnLine: r.FieldCount > 19 && !r.IsDBNull(19) ? r.GetInt64(19) : 0);
+
+    private static ProjectRow ReadProject(SqliteDataReader r) => new(
+        r.GetInt64(0), r.GetString(1), r.GetString(2), r.GetString(3),
+        r.GetString(4), r.GetBoolean(5), r.GetString(6), r.GetString(7));
+
+    private List<T> Query<T>(string sql, Func<SqliteDataReader, T> map, params (string, object)[] args) =>
+        QueryCore(_readSnapshot, sql, map, args);
+
+    private List<T> QueryCancellable<T>(string sql, Func<SqliteDataReader, T> map,
+        CancellationToken cancellationToken, params (string, object)[] args) =>
+        QueryCoreCancellable(_readSnapshot, sql, map, cancellationToken, args);
+
+    private List<T> QueryCore<T>(SqliteTransaction? transaction, string sql,
+        Func<SqliteDataReader, T> map, params (string, object)[] args)
+        => QueryCoreCancellable(transaction, sql, map, CancellationToken.None, args);
+
+    private List<T> QueryCoreCancellable<T>(SqliteTransaction? transaction, string sql,
+        Func<SqliteDataReader, T> map, CancellationToken cancellationToken,
+        params (string, object)[] args)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = sql;
+        foreach (var (k, v) in args) cmd.Parameters.AddWithValue(k, v);
+        var list = new List<T>();
+        using CancellationTokenRegistration registration = cancellationToken.Register(
+            static state =>
+            {
+                try { ((SqliteCommand)state!).Cancel(); } catch { }
+            }, cmd);
+        _beforeQueryForTest?.Invoke(sql);
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                list.Add(map(reader));
+            }
+        }
+        catch (SqliteException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        _afterQueryForTest?.Invoke(sql);
+        return list;
+    }
+
+    private SqliteCommand CreateCommand()
+    {
+        SqliteCommand cmd = _conn.CreateCommand();
+        cmd.Transaction = _readSnapshot;
+        return cmd;
+    }
+
+    private static string KindFilter(IReadOnlyList<string>? kinds)
+    {
+        if (kinds is null || kinds.Count == 0) return "";
+        // Whitelisted kind tokens only — safe to inline.
+        var safe = kinds.Where(k => k.All(c => char.IsLetter(c) || c == '_')).Select(k => $"'{k}'");
+        return $"AND s.kind IN ({string.Join(",", safe)})";
+    }
+
+    private static string EscapeLike(string s) =>
+        s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+
+    private static string GlobToLike(string glob)
+    {
+        var sb = new System.Text.StringBuilder(glob.Length + 8);
+        foreach (char c in glob)
+        {
+            switch (c)
+            {
+                case '*': sb.Append('%'); break;
+                case '?': sb.Append('_'); break;
+                case '%': sb.Append("\\%"); break;
+                case '_': sb.Append("\\_"); break;
+                case '\\': sb.Append("\\\\"); break;
+                default: sb.Append(c); break;
+            }
+        }
+        // No %%->% collapse: '%%' matches identically to '%' in LIKE (so '**' stays correct),
+        // and collapsing is escaping-blind — it would merge a wildcard onto an escaped literal '\%'.
+        return sb.ToString();
+    }
+
+    /// <summary>Appends include (<paramref name="pathGlob"/>) and exclude (<paramref name="excludePaths"/>)
+    /// path predicates onto a WHERE builder over <c>f.path</c>. A glob containing '/' is matched against
+    /// the workspace-relative path as-is; a bare glob (no '/') is matched starting at any path-segment
+    /// boundary, root included — note '*'/'?' cross '/' in LIKE, so a wildcarded bare glob can span
+    /// directory segments, not just the file name. The bare form is OR-ed in (and De Morgan'd for
+    /// exclude) the way FindFiles does. Each exclude glob is a whole AND-ed <c>NOT LIKE</c> (a path is
+    /// dropped if it matches ANY exclude). Binds $incPath/$incBare for the include and $ex{n}p/$ex{n}b
+    /// per exclude, so a single query must not rebind those.</summary>
+    private static void AppendPathFilter(System.Text.StringBuilder where, List<(string, object)> args,
+        string? pathGlob, IReadOnlyList<string>? excludePaths)
+    {
+        if (pathGlob is { Length: > 0 } inc)
+        {
+            // A leading "**/" means "at any depth, INCLUDING zero" — so root-level files must match.
+            // GlobToLike alone turns it into "%%/..." which requires a leading segment, silently
+            // excluding root files (bug 6yk); match the remainder both at root and at any depth, the
+            // same OR form the bare-glob (no-'/') case uses.
+            if (inc.StartsWith("**/", StringComparison.Ordinal))
+            {
+                string rest = GlobToLike(inc[3..]);
+                where.Append(" AND (f.path LIKE $incPath ESCAPE '\\' OR f.path LIKE $incBare ESCAPE '\\')");
+                args.Add(("$incPath", $"%/{rest}"));
+                args.Add(("$incBare", rest));
+            }
+            else if (inc.Contains('/'))
+            {
+                where.Append(" AND f.path LIKE $incPath ESCAPE '\\'");
+                args.Add(("$incPath", GlobToLike(inc)));
+            }
+            else
+            {
+                string like = GlobToLike(inc);
+                where.Append(" AND (f.path LIKE $incPath ESCAPE '\\' OR f.path LIKE $incBare ESCAPE '\\')");
+                args.Add(("$incPath", $"%/{like}"));
+                args.Add(("$incBare", like));
+            }
+        }
+        if (excludePaths is null) return;
+        int n = 0;
+        foreach (var raw in excludePaths)
+        {
+            if (string.IsNullOrEmpty(raw)) continue;
+            string pPath = $"$ex{n}p", pBare = $"$ex{n}b"; // distinct binds per exclude
+            n++;
+            // Symmetric to the include side (bug 6yk mirror): a leading "**/" exclude must also drop
+            // root-level matches, or e.g. "**/gen/**" fails to exclude a root-level "gen/...".
+            if (raw.StartsWith("**/", StringComparison.Ordinal))
+            {
+                string rest = GlobToLike(raw[3..]);
+                where.Append($" AND f.path NOT LIKE {pPath} ESCAPE '\\' AND f.path NOT LIKE {pBare} ESCAPE '\\'");
+                args.Add((pPath, $"%/{rest}"));
+                args.Add((pBare, rest));
+            }
+            else if (raw.Contains('/'))
+            {
+                where.Append($" AND f.path NOT LIKE {pPath} ESCAPE '\\'");
+                args.Add((pPath, GlobToLike(raw)));
+            }
+            else
+            {
+                string like = GlobToLike(raw);
+                where.Append($" AND f.path NOT LIKE {pPath} ESCAPE '\\' AND f.path NOT LIKE {pBare} ESCAPE '\\'");
+                args.Add((pPath, $"%/{like}"));
+                args.Add((pBare, like));
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- vendor / first-party
+
+    // Directory names that mark checked-in third-party or generated source that IS in the index.
+    // Matched as a whole path segment (case-insensitive), at any depth. Deliberately conservative —
+    // path-based, not a namespace heuristic — and surfaced (not silently applied) so callers can see
+    // them. Intentionally disjoint from WorkspaceScanner.DefaultExcludedDirs (bin/obj/packages/
+    // node_modules/...): those are never indexed at all, so listing them here would be dead weight —
+    // this set is exactly the vendored/generated dirs that survive the scan and become noise.
+    private static readonly string[] VendorSegments =
+    {
+        "3rdparty", "thirdparty", "third-party", "third_party",
+        "vendor", "vendored", "external", "externals", "generated",
+    };
+
+    /// <summary>Exclude globs for the checked-in vendor/generated directories actually present in
+    /// the index (e.g. "3rdparty/**", "src/vendor/**") — the repo_overview discovery hint. The
+    /// vendor-segment test is pushed into SQL so ALL paths are considered (not a sampled window),
+    /// yet only vendor paths come back to walk. Ordinal-sorted; the 50-cap bounds only pathological
+    /// output. Empty when none are present. (firstPartyOnly does NOT use this — it excludes vendor
+    /// segments directly via <see cref="VendorExcludeGlobs"/>, so it never depends on this scan.)</summary>
+    public List<string> SuggestedExcludes()
+    {
+        // Whole-segment match per marker: at the path start ("marker/…") or after a slash
+        // ("…/marker/…"). EscapeLike neutralizes the '_' in markers like third_party (LIKE wildcard).
+        var clauses = new List<string>();
+        var args = new List<(string, object)>();
+        for (int i = 0; i < VendorSegments.Length; i++)
+        {
+            string esc = EscapeLike(VendorSegments[i]);
+            string a = $"$va{i}", b = $"$vb{i}";
+            clauses.Add($"f.path LIKE {a} ESCAPE '\\' OR f.path LIKE {b} ESCAPE '\\'");
+            args.Add((a, esc + "/%"));    // marker at path start
+            args.Add((b, $"%/{esc}/%"));  // marker after a slash
+        }
+        var dirs = Query(
+            $"SELECT f.path FROM files f WHERE {string.Join(" OR ", clauses)} ORDER BY f.path",
+            r => r.GetString(0), args.ToArray());
+
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in dirs)
+        {
+            var segs = path.Split('/');
+            for (int i = 0; i < segs.Length - 1; i++) // exclude the file name (last segment)
+            {
+                if (Array.Exists(VendorSegments, v => string.Equals(v, segs[i], StringComparison.OrdinalIgnoreCase)))
+                {
+                    found.Add(string.Join('/', segs.Take(i + 1)) + "/**");
+                    break; // shallowest vendor dir on this path is enough
+                }
+            }
+            if (found.Count >= 50) break; // bound the set
+        }
+        return found.OrderBy(s => s, StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>Whole-segment exclude globs for the known vendor/generated directory names, at any
+    /// depth — two per marker: "<c>name/**</c>" (workspace root) and "<c>**/name/**</c>" (nested).
+    /// Powers firstPartyOnly: a complete, scan-free exclusion that matches exactly the paths
+    /// <see cref="IsVendorPath"/> flags as noise, so the two signals never diverge.</summary>
+    public static IReadOnlyList<string> VendorExcludeGlobs()
+    {
+        var globs = new List<string>(VendorSegments.Length * 2);
+        foreach (var seg in VendorSegments)
+        {
+            globs.Add(seg + "/**");         // marker directory at the workspace root
+            globs.Add("**/" + seg + "/**"); // marker directory at any depth
+        }
+        return globs;
+    }
+
+    /// <summary>True if any directory segment of the path (excluding the file name) is a known
+    /// vendor/generated marker — the per-hit "noise" signal. Segment-exact, case-insensitive,
+    /// at any depth. Best-effort and purely path-based, matching <see cref="VendorSegments"/>.</summary>
+    public static bool IsVendorPath(string path)
+    {
+        var segs = path.Split('/');
+        for (int i = 0; i < segs.Length - 1; i++) // skip the file name (last segment)
+        {
+            foreach (var v in VendorSegments)
+            {
+                if (string.Equals(v, segs[i], StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Splits a query into index tokens (letter/digit/underscore runs), matching the FTS tokenizer.</summary>
+    public static List<string> Tokenize(string query)
+    {
+        var tokens = new List<string>();
+        var current = new System.Text.StringBuilder();
+        foreach (char c in query)
+        {
+            if (char.IsLetterOrDigit(c) || c == '_')
+            {
+                current.Append(c);
+            }
+            else if (current.Length > 0)
+            {
+                tokens.Add(current.ToString());
+                current.Clear();
+            }
+        }
+        if (current.Length > 0) tokens.Add(current.ToString());
+        return tokens;
+    }
+
+    /// <summary>Builds an FTS5 query: each token quoted, implicit AND.</summary>
+    public static string FtsQuery(string query) =>
+        string.Join(" ", Tokenize(query).Select(t => $"\"{t}\""));
+
+    /// <summary>Lines (1-based) where the name occurs as a whole identifier token, with each line's
+    /// char span in <paramref name="content"/> — one entry per matching line, first match wins.
+    /// Single pass with NO per-line allocation: the old Split('\n') materialized every line of every
+    /// candidate file (~2x the content's allocation, up to 2000 files per references call); snippets
+    /// are now substringed lazily by the caller for sampled lines only. '\n'/'\r' are not identifier
+    /// chars, so boundary checks against the raw content match the old per-line semantics exactly.</summary>
+    private static List<(int Line, int Start, int End)> LocateTokenLineSpans(string content,
+        string name, IReadOnlyList<(int StartOffset, int EndOffset)>? excludedOffsets = null)
+    {
+        var result = new List<(int, int, int)>();
+        // A name containing '\n' could never match a Split('\n') line in the old implementation — and
+        // here a match STARTING with '\n' would make idx = lineEnd a no-progress infinite loop
+        // (review-reproduced via references(name:"\nGuard"), which FTS does not reject). Reject it.
+        if (name.Length == 0 || name.Contains('\n')) return result;
+        int line = 1, lineStart = 0;
+        int idx = 0;
+        while ((idx = content.IndexOf(name, idx, StringComparison.Ordinal)) >= 0)
+        {
+            // Advance the line cursor to the match (IndexOf positions are non-decreasing).
+            while (true)
+            {
+                int nl = content.IndexOf('\n', lineStart);
+                if (nl < 0 || nl >= idx) break;
+                lineStart = nl + 1;
+                line++;
+            }
+            bool leftOk = idx == 0 || !IsIdentChar(content[idx - 1]);
+            int end = idx + name.Length;
+            bool rightOk = end >= content.Length || !IsIdentChar(content[end]);
+            bool excluded = excludedOffsets?.Any(range =>
+                range.StartOffset <= idx && end <= range.EndOffset) == true;
+            if (leftOk && rightOk && !excluded)
+            {
+                int lineEnd = content.IndexOf('\n', idx);
+                if (lineEnd < 0) lineEnd = content.Length;
+                result.Add((line, lineStart, lineEnd));
+                idx = lineEnd; // once per line: skip the rest of this line
+            }
+            else
+            {
+                idx = end;
+            }
+        }
+        return result;
+    }
+
+    private static string Snippet(string line)
+    {
+        string t = line.TrimEnd('\r').TrimEnd();
+        return t.Length <= 240 ? t : t[..240] + "…";
+    }
+
+    /// <summary>49k: grade ONE line slice by the strongest whole-token usage shape of the name
+    /// in it — 3 'Name(' (invocation/construction: something EXECUTES), 2 type usage
+    /// ('new Name' / ': Name' / 'Name&lt;' / '&lt;Name' via preceding '&lt;' / 'Name.'), 1 bare
+    /// mention (string literals, comments, usings). Text shapes on purpose: related_tests is a
+    /// heuristic tool, and the tier is a lead-strength label, never a compiler fact.</summary>
+    private static int UsageTier(string content, int lineStart, int lineEnd, string name)
+    {
+        int best = 1;
+        int idx = lineStart;
+        while (best < 3 && idx < lineEnd
+               && (idx = content.IndexOf(name, idx, StringComparison.Ordinal)) >= 0 && idx < lineEnd)
+        {
+            int end = idx + name.Length;
+            bool word = (idx == 0 || !IsIdentChar(content[idx - 1]))
+                        && (end >= content.Length || !IsIdentChar(content[end]));
+            if (!word) { idx = end; continue; }
+
+            int tier = 1;
+            int i = end;
+            while (i < lineEnd && content[i] is ' ' or '\t') i++;
+            if (i < lineEnd && content[i] == '(') tier = 3;
+            else if (i < lineEnd && content[i] is '<' or '.') tier = 2;
+            else
+            {
+                int j = idx - 1;
+                while (j >= lineStart && content[j] is ' ' or '\t') j--;
+                // '.' before = a QUALIFIED reference (Ns.Name / obj.Name) — at least type/member
+                // usage even when the after-char is neutral (e.g. List<LibNs.Zeta> ends in '>').
+                if (j >= lineStart && content[j] is ':' or '<' or '.') tier = 2;
+                else if (j - 2 >= lineStart && content[j] == 'w' && content[j - 1] == 'e' && content[j - 2] == 'n'
+                         && (j - 3 < lineStart || !IsIdentChar(content[j - 3]))) tier = 2; // 'new Name'
+            }
+            if (tier > best) best = tier;
+            idx = end;
+        }
+        return best;
+    }
+
+    private static string SignalName(int tier) => tier switch { 3 => "callSite", 2 => "typeUsage", _ => "nameMention" };
+
+    /// <summary>1ly: single-token SPELLING suggestions — distinct symbol names within Damerau
+    /// edit distance 1 of the token (one substitution, adjacent transposition, insertion, or
+    /// deletion; case-insensitive), anchored on the case-folded FIRST character so the scan
+    /// rides idx_symbols_name (NOCASE) instead of walking the table. Ordered by declaration
+    /// count (most-declared first) so the caller probes the likeliest names. The caller PROBES
+    /// every candidate before suggesting — nothing unverified reaches the wire. Accepted
+    /// limitations, documented rather than papered over: first-character typos are missed (a
+    /// full-alphabet fan-out or table scan is not worth a heuristic suggestion), and tokens
+    /// under 4 chars are refused (their ED-1 neighborhoods are noise).</summary>
+    public List<string> NearMissSymbolNames(string token, int maxCandidates = 3)
+    {
+        if (token.Length < 4 || token.Length > 128) return new();
+        char first = token[0];
+        if (first >= char.MaxValue) return new();
+        var rows = Query(
+            """
+            SELECT name, COUNT(*) FROM symbols
+            WHERE name >= $lo COLLATE NOCASE AND name < $hi COLLATE NOCASE
+              AND LENGTH(name) BETWEEN $l1 AND $l2
+            GROUP BY name
+            LIMIT 20000
+            """,
+            r => (Name: r.GetString(0), Count: r.GetInt32(1)),
+            ("$lo", first.ToString()), ("$hi", ((char)(first + 1)).ToString()),
+            ("$l1", token.Length - 1), ("$l2", token.Length + 1));
+        return rows
+            .Where(r => WithinDamerauDistance1(token, r.Name))
+            .OrderByDescending(r => r.Count)
+            .ThenBy(r => r.Name, StringComparer.Ordinal)
+            .Select(r => r.Name)
+            .Distinct(StringComparer.OrdinalIgnoreCase) // case-twins probe identically (FTS is nocase)
+            .Take(maxCandidates)
+            .ToList();
+    }
+
+    /// <summary>Damerau-Levenshtein distance EXACTLY 1, case-insensitive: one substitution,
+    /// one adjacent transposition, or one insertion/deletion. Identical-ignoring-case returns
+    /// false — that is not a suggestion, and FTS is case-insensitive anyway.</summary>
+    private static bool WithinDamerauDistance1(string a, string b)
+    {
+        int la = a.Length, lb = b.Length;
+        if (Math.Abs(la - lb) > 1) return false;
+        static char F(char c) => char.ToLowerInvariant(c);
+        if (la == lb)
+        {
+            int i = 0;
+            while (i < la && F(a[i]) == F(b[i])) i++;
+            if (i == la) return false; // identical (nocase)
+            // One substitution: the rest matches.
+            bool substitution = true;
+            for (int k = i + 1; k < la; k++) { if (F(a[k]) != F(b[k])) { substitution = false; break; } }
+            if (substitution) return true;
+            // One adjacent transposition: swapped pair, then the rest matches.
+            if (i + 1 < la && F(a[i]) == F(b[i + 1]) && F(a[i + 1]) == F(b[i]))
+            {
+                for (int k = i + 2; k < la; k++) { if (F(a[k]) != F(b[k])) return false; }
+                return true;
+            }
+            return false;
+        }
+        // Lengths differ by one: one insertion/deletion — walk with a single skip in the longer.
+        string s = la < lb ? a : b, l = la < lb ? b : a;
+        int si = 0, li = 0;
+        bool skipped = false;
+        while (si < s.Length && li < l.Length)
+        {
+            if (F(s[si]) == F(l[li])) { si++; li++; continue; }
+            if (skipped) return false;
+            skipped = true;
+            li++; // skip one char of the longer
+        }
+        return true; // trailing longer char (if any) is the single skip
+    }
+
+    private static int SignalTierOf(string? signal) => signal switch { "callSite" => 3, "typeUsage" => 2, "nameMention" => 1, _ => 0 };
+
+    /// <summary>Lines immediately before/after a 0-based hit line (grep -B/-A), snippet-trimmed and
+    /// clamped to file bounds. Returns (null, null) — omitted from the response — when no context is
+    /// requested or at a file edge. Each side is byte-bounded (nearest lines first) so a single
+    /// context-heavy hit — e.g. multi-byte/CJK comment blocks — cannot breach the response hard-byte
+    /// budget, which floors at one item and so cannot shed a lone hit's context.</summary>
+    internal static (IReadOnlyList<string>? Before, IReadOnlyList<string>? After) ContextSlice(
+        string[] lines, int lineIdx, int before, int after)
+    {
+        const int bytesPerSide = 4 * 1024;
+        List<string>? b = null, a = null;
+        int start = Math.Max(0, lineIdx - before);
+        if (before > 0 && start < lineIdx)
+        {
+            b = new List<string>();
+            int bytes = 0;
+            for (int j = lineIdx - 1; j >= start && bytes < bytesPerSide; j--) // nearest-first; truncation drops the farthest
+            {
+                string s = Snippet(lines[j]);
+                bytes += System.Text.Encoding.UTF8.GetByteCount(s);
+                b.Insert(0, s);
+            }
+        }
+        int end = Math.Min(lines.Length - 1, lineIdx + after);
+        if (after > 0 && end > lineIdx)
+        {
+            a = new List<string>();
+            int bytes = 0;
+            for (int j = lineIdx + 1; j <= end && bytes < bytesPerSide; j++)
+            {
+                string s = Snippet(lines[j]);
+                bytes += System.Text.Encoding.UTF8.GetByteCount(s);
+                a.Add(s);
+            }
+        }
+        return (b, a);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            try { _readSnapshot?.Dispose(); }
+            finally { _conn.Dispose(); }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _releasePublicationLease, null)?.Invoke();
+        }
+    }
+}

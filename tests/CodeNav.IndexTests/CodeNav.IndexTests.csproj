@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>CodeNav.IndexTests</AssemblyName>
+    <RootNamespace>CodeNav.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CodeNav.Core\CodeNav.Core.csproj" />
+    <ProjectReference Include="..\..\src\CodeNav.Mcp\CodeNav.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\CodeNav.Portal\CodeNav.Portal.csproj" />
+    <ProjectReference Include="..\..\src\CodeNav.WorkspaceGen\CodeNav.WorkspaceGen.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\TestSupport\SemanticRetry.cs" Link="TestSupport\SemanticRetry.cs" />
+    <Compile Include="..\TestSupport\TestTelemetryBroker.cs" Link="TestSupport\TestTelemetryBroker.cs" />
+    <Compile Include="..\TestSupport\TestWorkspaceCleanup.cs" Link="TestSupport\TestWorkspaceCleanup.cs" />
+    <Compile Include="..\TestSupport\IndexManagerTestSupport.cs" Link="TestSupport\IndexManagerTestSupport.cs" />
+    <Compile Include="..\TestSupport\ProcessHeavyTestIsolation.cs" Link="TestSupport\ProcessHeavyTestIsolation.cs" />
+  </ItemGroup>
+
+</Project>

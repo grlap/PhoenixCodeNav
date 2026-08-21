@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "PhoenixCodeNav",
+  "project_id": "479a3e77-4dc6-4d39-b0fc-29834d24f4af"
+}

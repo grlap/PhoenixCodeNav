@@ -1,0 +1,7 @@
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)../Directory.Build.props" />
+
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX')) and '$(RunSettingsFilePath)' == ''">
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory)macos.runsettings</RunSettingsFilePath>
+  </PropertyGroup>
+</Project>

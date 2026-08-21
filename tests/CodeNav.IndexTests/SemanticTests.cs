@@ -1,0 +1,216 @@
+using System.Text.Json;
+using CodeNav.Core.Indexing;
+using CodeNav.Core.Semantic;
+using CodeNav.Mcp;
+
+namespace CodeNav.Tests;
+
+[Collection(SharedIndexCollection.Name)]
+public class SemanticTests
+{
+    private readonly IndexManager _manager;
+    private readonly SemanticService _semantic;
+
+    public SemanticTests(SharedIndexFixture fx)
+    {
+        _manager = fx.SharedManager;
+        _semantic = fx.SharedSemantic;
+    }
+
+    [Fact]
+    public void FrameworkReferenceAssembliesAreFound()
+    {
+        Assert.True(_semantic.FrameworkRefsAvailable,
+            "net472 reference assemblies not found — semantic tests need a targeting pack, " +
+            "the NuGet reference-assemblies package, or an installed .NET Framework runtime");
+    }
+
+    [Fact]
+    public async Task DefinitionFromUsagePositionResolvesExactly()
+    {
+        // Find a real Guard.NotNull call site (raw substring match excludes the declaration).
+        using var q = _manager.OpenQueries();
+        var hit = q.SearchText("Guard.NotNull", 5).First();
+        int column = hit.LineText.IndexOf("NotNull", StringComparison.Ordinal) + 1;
+        // LineText is trimmed for display — recompute column against the real line.
+        string content = q.ContentByPath(hit.FilePath)!;
+        string realLine = content.Split('\n')[hit.Line - 1];
+        column = realLine.IndexOf("NotNull", StringComparison.Ordinal) + 1;
+
+        var (decl, reason, _, _) = await _semantic.DefinitionAsync(
+            hit.FilePath, hit.Line, column, null, 30000);
+
+        Assert.True(decl is not null, $"semantic definition failed: {reason}");
+        Assert.Equal("M:Acme.Platform.Common.Guard.NotNull(System.Object,System.String)", decl!.DocumentationCommentId);
+        Assert.Single(decl.Declarations);
+        Assert.EndsWith("Guard.cs", decl.Declarations[0].Path);
+    }
+
+    [Fact]
+    public async Task ReferencesForInterfaceAreCompilerExactAndCrossProject()
+    {
+        // Pick an interface that has an implementation (application impl classes reference it).
+        using var q = _manager.OpenQueries();
+        var iface = q.SearchSymbols("IClock", "exact", new[] { "interface" }, 1).Single();
+
+        var (result, reason) = await _semantic.ReferencesAsync(
+            iface.FilePath, iface.StartLine, null, "IClock", maxProjects: 30, samplesPerGroup: 2, timeoutMs: 60000);
+
+        Assert.True(result is not null, $"semantic references failed: {reason}");
+        Assert.True(result!.TotalLocations > 0, "expected at least one exact reference to IClock");
+        Assert.Equal("T:Acme.Platform.Common.IClock", result.Symbol.DocumentationCommentId);
+        // SystemClock implements IClock in the same project; consumers may exist elsewhere.
+        Assert.Contains(result.Groups, g => g.Project == "Acme.Platform.Common");
+        Assert.All(result.Groups.SelectMany(g => g.Samples), s => Assert.Contains("IClock", s.LineText));
+    }
+
+    [Fact]
+    public async Task ImplementationsFindConcreteClasses()
+    {
+        using var q = _manager.OpenQueries();
+        var iface = q.SearchSymbols("IClock", "exact", new[] { "interface" }, 1).Single();
+
+        // n7ly (late sweep): raw service call - retry TRANSIENT failure reasons only
+        // (snapshot epoch instability / cold warm-up under parallel suite load); a
+        // deterministic wrong answer still fails every attempt.
+        SemanticImplementations? result = null;
+        string? reason = null;
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            (result, reason) = await _semantic.ImplementationsAsync(
+                iface.FilePath, iface.StartLine, null, "IClock", maxProjects: 30, timeoutMs: 60000);
+            if (result is not null ||
+                reason is not ("index_snapshot_unavailable" or "cluster_cold_load"))
+            {
+                break;
+            }
+            await Task.Delay(200);
+        }
+
+        Assert.True(result is not null, $"semantic implementations failed: {reason}");
+        Assert.Contains(result!.Implementations, i => i.Declaration.SymbolDisplay.EndsWith("SystemClock"));
+
+        // Hierarchy ranking: concrete (instantiable) leaves are ordered before abstract scaffolding.
+        var abstractFlags = result.Implementations.Select(i => i.Declaration.IsAbstract).ToList();
+        Assert.Equal(abstractFlags.OrderBy(a => a).ToList(), abstractFlags);
+        var systemClock = result.Implementations.First(i => i.Declaration.SymbolDisplay.EndsWith("SystemClock"));
+        Assert.False(systemClock.Declaration.IsAbstract);
+    }
+
+    [Fact]
+    public void ImplementationsToolRanksConcreteFirstAndFlagsLikelyTarget()
+    {
+        var tools = new NavigationTools(_manager, _semantic);
+        if (!_semantic.FrameworkRefsAvailable) return; // review C2: deterministic env skip (fast), retry handles transients
+        var json = SemanticRetry.ParseExactWithRetry( // n7ly sweep: retries transient degrades
+            () => tools.Implementations(name: "IClock", timeoutMs: 60000));
+
+        var impls = json.GetProperty("implementations").EnumerateArray().ToList();
+        Assert.NotEmpty(impls);
+        // Concrete-first: no concrete implementation may appear after an abstract one.
+        bool sawAbstract = false;
+        foreach (var i in impls)
+        {
+            bool isAbstract = i.TryGetProperty("isAbstract", out var a) && a.GetBoolean();
+            if (isAbstract) sawAbstract = true;
+            else Assert.False(sawAbstract, "a concrete implementation appeared after an abstract one");
+        }
+        // The fixture's IClock has a single concrete implementation (SystemClock) → flagged as likely.
+        if (json.GetProperty("concreteCount").GetInt32() == 1)
+        {
+            Assert.EndsWith("SystemClock", json.GetProperty("likelyImplementation").GetString());
+        }
+    }
+
+    // Coverage fix: an interface the index syntactically knows is implemented must never come back
+    // empty — either semantic covered the implementers (seeded), or the tool falls back to the
+    // index base-list implementers rather than returning an empty list.
+    [Fact]
+    public void ImplementationsDoesNotReturnEmptyWhenIndexKnowsImplementers()
+    {
+        using var q = _manager.OpenQueries();
+        var iface = q.SearchSymbols("I", "prefix", new[] { "interface" }, 100)
+            .FirstOrDefault(i => q.ImplementationCandidates(i.Name, 5).Count > 0);
+        Assert.True(iface is not null, "fixture has no interface with base-list implementers to exercise the case");
+
+        var tools = new NavigationTools(_manager, _semantic);
+        var json = JsonDocument.Parse(tools.Implementations(name: iface!.Name, timeoutMs: 60000)).RootElement;
+        Assert.True(json.GetProperty("implementations").GetArrayLength() > 0,
+            $"implementations({iface.Name}) was empty despite indexed base-list implementers");
+    }
+
+    // Parity: type_hierarchy must not report a bare exact derivedOrImplementing:[] for an interface
+    // the index knows is implemented — exact (semantic) or the heuristic fallback, but not empty.
+    [Fact]
+    public void TypeHierarchyDerivedNotEmptyWhenIndexKnowsImplementers()
+    {
+        using var q = _manager.OpenQueries();
+        var iface = q.SearchSymbols("I", "prefix", new[] { "interface" }, 100)
+            .FirstOrDefault(i => q.ImplementationCandidates(i.Name, 5).Count > 0);
+        Assert.True(iface is not null, "fixture has no interface with base-list implementers");
+
+        var tools = new NavigationTools(_manager, _semantic);
+        var json = JsonDocument.Parse(tools.TypeHierarchy(name: iface!.Name, timeoutMs: 60000)).RootElement;
+        if (!json.TryGetProperty("error", out _))
+            Assert.True(json.GetProperty("derivedOrImplementing").GetArrayLength() > 0,
+                $"type_hierarchy({iface.Name}).derivedOrImplementing was empty despite indexed implementers");
+    }
+
+    // Guards the implementations empty-name fallback (position mode with no resolvable name): an
+    // empty name must not collapse the base-list LIKE into the '%: %' catch-all matching every type.
+    [Fact]
+    public void ImplementationCandidatesRejectsEmptyName()
+    {
+        using var q = _manager.OpenQueries();
+        Assert.Empty(q.ImplementationCandidates("", 50));
+        Assert.NotEmpty(q.ImplementationCandidates("IClock", 50)); // a real interface still matches
+    }
+
+    // The scoped member lookup that backs member-mode implementations: scoped by (namespace, type)
+    // identity so a hot member name isn't lost behind the cap and a same-named type in another
+    // namespace can't leak in.
+    [Fact]
+    public void MembersNamedInTypesScopesByTypeIdentity()
+    {
+        using var q = _manager.OpenQueries();
+        var guard = q.SearchSymbols("Guard", "exact", new[] { "class" }, 1).Single();
+        string ns = guard.Ns ?? "";
+        Assert.Contains(q.MembersNamedInTypes("NotNull", new[] { (ns, "Guard") }, 50),
+            s => s.Container == "Guard" && s.Name == "NotNull");
+        Assert.Empty(q.MembersNamedInTypes("NotNull", System.Array.Empty<(string, string)>(), 50)); // no types
+        Assert.Empty(q.MembersNamedInTypes("", new[] { (ns, "Guard") }, 50));                        // no name
+        Assert.Empty(q.MembersNamedInTypes("NotNull", new[] { ("No.Such.Namespace", "Guard") }, 50)); // wrong ns
+    }
+
+    // The base-list heuristic is a TYPE operation; on a MEMBER target the fallback must not sweep in
+    // every type whose base list merely contains the member name (was "worse than useless" noise).
+    [Fact]
+    public void ImplementationsOnAMethodDoesNotSweepTypesByName()
+    {
+        var tools = new NavigationTools(_manager, _semantic);
+        // Guard.NotNull is a static method with no overrides → the tool falls back; a member fallback
+        // must return empty (not a name-swept type list).
+        var json = JsonDocument.Parse(tools.Implementations(name: "NotNull", timeoutMs: 30000)).RootElement;
+        if (json.GetProperty("meta").GetProperty("confidence").GetString() == "heuristic")
+            Assert.Equal(0, json.GetProperty("implementations").GetArrayLength());
+    }
+
+    [Fact]
+    public void ReferencesToolFallsBackToIndexedWhenAskedFor()
+    {
+        var tools = new NavigationTools(_manager, _semantic);
+        var json = JsonDocument.Parse(tools.References(name: "Guard", mode: "indexed", maxFiles: 100)).RootElement;
+        Assert.Equal("indexed", json.GetProperty("meta").GetProperty("confidence").GetString());
+        Assert.True(json.GetProperty("totalCandidates").GetInt32() > 0);
+    }
+
+    [Fact]
+    public void DefinitionToolSemanticPathProducesExactConfidence()
+    {
+        var tools = new NavigationTools(_manager, _semantic);
+        var json = SemanticRetry.ParseExactWithRetry(() => tools.Definition(name: "Guard", timeoutMs: 60000)); // n7ly: ride out transient degrades
+        Assert.Equal("exact", json.GetProperty("meta").GetProperty("confidence").GetString());
+        Assert.Equal("T:Acme.Platform.Common.Guard",
+            json.GetProperty("symbol").GetProperty("documentationCommentId").GetString());
+    }
+}
