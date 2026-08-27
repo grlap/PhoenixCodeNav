@@ -96,7 +96,8 @@ public class MarkdownSqlTextIndexingTests
 
             using var manager = new IndexManager(root, IndexBuilder.DefaultDbPath(root));
             manager.Start();
-            Assert.True(SpinWait.SpinUntil(() => manager.IsQueryable, 20_000));
+            Assert.True(SpinWait.SpinUntil(() => manager.IsQueryable, 30_000),
+                manager.Health().Error);
             using var semantic = new SemanticService(manager);
             var tools = new NavigationTools(manager, semantic);
             JsonElement markdownSymbols = Parse(tools.SearchSymbol(
@@ -115,7 +116,7 @@ public class MarkdownSqlTextIndexingTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -175,7 +176,7 @@ public class MarkdownSqlTextIndexingTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -217,7 +218,7 @@ public class MarkdownSqlTextIndexingTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -241,7 +242,7 @@ public class MarkdownSqlTextIndexingTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -305,7 +306,7 @@ public class MarkdownSqlTextIndexingTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 }

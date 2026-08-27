@@ -210,8 +210,14 @@ public class Batch42TestsPart3
                 coverage.GetProperty("solutionMetadata").GetInt32());
             Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
                 note.GetProperty("id").GetString() == "review.project_files_changed");
-            Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
-                note.GetProperty("id").GetString() == "review.solution_files_changed");
+            JsonElement solutionNote = Assert.Single(pack.GetProperty("notes")
+                .EnumerateArray(), note => note.GetProperty("id").GetString() ==
+                    "review.solution_files_changed");
+            Assert.DoesNotContain("excluded from deletedFiles and former-symbol expansion",
+                solutionNote.GetProperty("text").GetString());
+            Assert.DoesNotContain(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() ==
+                    "review.deleted_solution_metadata_scope");
         }
         finally { Cleanup(root); }
     }
@@ -260,8 +266,14 @@ public class Batch42TestsPart3
             Assert.False(pack.TryGetProperty("deletedFiles", out _));
             Assert.Contains(pack.GetProperty("changedProjectFiles").EnumerateArray(),
                 path => path.GetString() == solutionPath);
-            Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
-                note.GetProperty("id").GetString() == "review.solution_files_changed");
+            JsonElement solutionNote = Assert.Single(pack.GetProperty("notes")
+                .EnumerateArray(), note => note.GetProperty("id").GetString() ==
+                    "review.solution_files_changed");
+            Assert.DoesNotContain("excluded from deletedFiles and former-symbol expansion",
+                solutionNote.GetProperty("text").GetString());
+            Assert.DoesNotContain(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() ==
+                    "review.deleted_solution_metadata_scope");
             Assert.DoesNotContain(pack.GetProperty("notes").EnumerateArray(), note =>
                 note.GetProperty("id").GetString() == "review.project_files_changed");
         }
@@ -318,16 +330,26 @@ public class Batch42TestsPart3
                 .EnumerateArray().Select(path => path.GetString()!).ToArray();
             Assert.Equal(expectedSolutions, actualSolutions);
             JsonElement coverage = pack.GetProperty("changedProjectFilesCoverage");
-            Assert.Equal(0, coverage.GetProperty("authoritative").GetInt32());
+            Assert.True(coverage.GetProperty("authoritative").GetInt32() == 0,
+                pack.GetRawText());
             Assert.Equal(9, coverage.GetProperty("solutionMetadata").GetInt32());
             Assert.Contains(pack.GetProperty("movedFiles").GetProperty("items")
                 .EnumerateArray(), move =>
                 move.GetProperty("from").GetString() == moveSource &&
                 move.GetProperty("to").GetString() == moveTarget);
-            Assert.Equal(0, pack.GetProperty("changedFiles").GetProperty("deleted").GetInt32());
+            // changedFiles is the complete Git inventory: the three deleted solution files still
+            // count here. Only deletedFiles/former-symbol expansion uses the sourceDeleted subset,
+            // which is why no deletedFiles envelope follows despite deleted == 3.
+            JsonElement changedFiles = pack.GetProperty("changedFiles");
+            Assert.Equal(10, changedFiles.GetProperty("total").GetInt32());
+            Assert.Equal(3, changedFiles.GetProperty("deleted").GetInt32());
+            Assert.Equal(9, changedFiles.GetProperty("projectFiles").GetInt32());
             Assert.False(pack.TryGetProperty("deletedFiles", out _));
-            Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
-                note.GetProperty("id").GetString() == "review.solution_files_changed");
+            JsonElement deletionScopeNote = Assert.Single(pack.GetProperty("notes")
+                .EnumerateArray(), note => note.GetProperty("id").GetString() ==
+                    "review.deleted_solution_metadata_scope");
+            Assert.Contains("excluded from deletedFiles and former-symbol expansion",
+                deletionScopeNote.GetProperty("text").GetString());
             Assert.DoesNotContain(pack.GetProperty("notes").EnumerateArray(), note =>
                 note.GetProperty("id").GetString() == "review.project_files_changed");
         }
@@ -389,6 +411,9 @@ public class Batch42TestsPart3
                 note.GetProperty("id").GetString() == "review.project_files_changed");
             Assert.Contains(pack.GetProperty("notes").EnumerateArray(), note =>
                 note.GetProperty("id").GetString() == "review.solution_files_changed");
+            Assert.DoesNotContain(pack.GetProperty("notes").EnumerateArray(), note =>
+                note.GetProperty("id").GetString() ==
+                    "review.deleted_solution_metadata_scope");
         }
         finally { Cleanup(root); }
     }

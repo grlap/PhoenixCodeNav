@@ -253,6 +253,37 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                 .GetProperty("indivisibleSemanticIdentity").GetString());
     }
 
+    [Fact]
+    public void CapabilitiesPreserveStartupRebuildEvidenceAfterReadiness()
+    {
+        var health = new IndexHealth("ready", "epoch-29", "indexed", "refreshed", 0,
+            null, 123, "C:/workspace", "index.db",
+            StartupBuildReason: "startup_incompatible", StartupPriorSchema: "28");
+        JsonElement index = Parse(
+            NavigationTools.ServerCapabilitiesUncompactedForTest(health))
+            .GetProperty("index");
+
+        Assert.Equal("startup_incompatible",
+            index.GetProperty("startupBuildReason").GetString());
+        Assert.False(index.TryGetProperty("startupBuildReasonTruncated", out _));
+        Assert.False(index.TryGetProperty("startupBuildReasonBytes", out _));
+        Assert.Equal("28", index.GetProperty("startupPriorSchema").GetString());
+        Assert.False(index.TryGetProperty("startupPriorSchemaTruncated", out _));
+        Assert.False(index.TryGetProperty("startupPriorSchemaBytes", out _));
+
+        var ordinaryReuse = new IndexHealth("ready", "epoch-29", "indexed", "reused", 0,
+            null, 123, "C:/workspace", "index.db");
+        JsonElement ordinaryIndex = Parse(
+            NavigationTools.ServerCapabilitiesUncompactedForTest(ordinaryReuse))
+            .GetProperty("index");
+        Assert.False(ordinaryIndex.TryGetProperty("startupBuildReason", out _));
+        Assert.False(ordinaryIndex.TryGetProperty("startupBuildReasonTruncated", out _));
+        Assert.False(ordinaryIndex.TryGetProperty("startupBuildReasonBytes", out _));
+        Assert.False(ordinaryIndex.TryGetProperty("startupPriorSchema", out _));
+        Assert.False(ordinaryIndex.TryGetProperty("startupPriorSchemaTruncated", out _));
+        Assert.False(ordinaryIndex.TryGetProperty("startupPriorSchemaBytes", out _));
+    }
+
     // The features manifest lets a caller CONFIRM a capability without triggering its silent-when-clean
     // response fields — the exact verification the field agent couldn't do from a bare response.
     [Fact]
@@ -295,6 +326,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("semantic-planning-attribution", ids);
         Assert.Contains("indexed-base-type-edges", ids);
         Assert.Contains("references-stage-attribution", ids);
+        Assert.Contains("references-deterministic-samples", ids);
         Assert.Contains("references-parallel-compilation-preparation", ids);
         Assert.Contains("references-document-scoped-search", ids);
         Assert.Contains("semantic-persistent-syntax-indexes", ids);
@@ -304,6 +336,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("csharp-conversion-semantic-handles", ids);
         Assert.Contains("references-candidate-file-cap-disclosure", ids);
         Assert.Contains("csharp-conversion-usage-enumeration", ids);
+        Assert.Contains("csharp-foreach-conversion-operator-kind", ids);
         Assert.Contains("csharp-operator-semantic-handles", ids);
         Assert.Contains("csharp-explicit-interface-operator-accessibility", ids);
         Assert.Contains("semantic-indivisible-identity-completeness", ids);
@@ -314,6 +347,10 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("index-raw-ordinal-file-batching", ids);
         Assert.Contains("index-deferred-secondary-index-build", ids);
         Assert.Contains("index-private-staged-rebuild-publication", ids);
+        Assert.Contains("index-live-recovery-sidecar-publication-boundary", ids);
+        Assert.Contains("index-schema-29-fsharp-output-rebuild", ids);
+        Assert.Contains("index-startup-rebuild-evidence", ids);
+        Assert.Contains("review-deleted-solution-metadata-counts", ids);
         Assert.Contains("index-raw-ordinal-content-fts-batching", ids);
         Assert.Contains("index-bounded-synchronous-csharp-build-handoff", ids);
         Assert.Contains("index-deferred-fts-rebuild", ids);
@@ -349,7 +386,17 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-operator-indexing"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-semantic-handles"));
         Assert.Equal(1, idList.Count(id => id == "references-candidate-file-cap-disclosure"));
+        Assert.Equal(1, idList.Count(id => id == "references-deterministic-samples"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-usage-enumeration"));
+        Assert.Equal(1, idList.Count(id => id == "csharp-foreach-conversion-operator-kind"));
+        Assert.Equal(1, idList.Count(id => id ==
+            "index-live-recovery-sidecar-publication-boundary"));
+        Assert.Equal(1, idList.Count(id => id ==
+            "index-schema-29-fsharp-output-rebuild"));
+        Assert.Equal(1, idList.Count(id => id ==
+            "index-startup-rebuild-evidence"));
+        Assert.Equal(1, idList.Count(id => id ==
+            "review-deleted-solution-metadata-counts"));
         Assert.Equal(1, idList.Count(id => id == "csharp-operator-semantic-handles"));
         Assert.Equal(1, idList.Count(id => id ==
             "csharp-explicit-interface-operator-accessibility"));
@@ -764,6 +811,33 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("deconstruction", conversionUsages);
         Assert.Contains("interface-dispatch carriers", conversionUsages);
         Assert.Contains("exact zero", conversionUsages);
+        string foreachConversionKind = Summary("csharp-foreach-conversion-operator-kind");
+        Assert.Contains("v0.12.68", foreachConversionKind);
+        Assert.Contains("explicit, implicit, and checked operators", foreachConversionKind);
+        Assert.Contains("retain their distinct usage classification", foreachConversionKind);
+
+        string deterministicSamples = Summary("references-deterministic-samples");
+        Assert.Contains("unique by path, line, and usage kind", deterministicSamples);
+        Assert.Contains("multiple source spans with the same path/line/kind share one sample",
+            deterministicSamples);
+        Assert.Contains("canonical per-group project spelling", deterministicSamples);
+        Assert.Contains("sampleCoverage", deterministicSamples);
+        Assert.Contains("post-response-budget", deterministicSamples);
+        Assert.Contains("separate deadline, other text-loss, or byte-budget causes",
+            deterministicSamples);
+        Assert.Contains("v0.12.68", deterministicSamples);
+        Assert.Contains("completed reference scans", deterministicSamples);
+        Assert.Contains("ordinal path, line, and usage-kind order", deterministicSamples);
+        Assert.Contains("equal-count project groups in ordinal project order",
+            deterministicSamples);
+        Assert.Contains("read source text only for that final bounded set", deterministicSamples);
+        Assert.Contains("queryStages.samplesRead meaning", deterministicSamples);
+        Assert.Contains("public sample cap remain unchanged", deterministicSamples);
+
+        string stableNoteIds = Summary("stable-note-ids");
+        Assert.Contains("references.sampleCoverage.reasons[].noteId", stableNoteIds);
+        Assert.Contains("samples_deadline | samples_trimmed | samples_byte_budget",
+            stableNoteIds);
 
         string deadlineHonesty = Summary("deadline-honesty");
         Assert.Contains("project+path+source-span+kind", deadlineHonesty);
@@ -888,6 +962,23 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("review.solution_files_changed", solutionMetadata);
         Assert.Contains("never invalidates exact-move, declaration-survivor, ownership, dependency, build, or symbol-resolution proof",
             solutionMetadata);
+        string deletedSolutionMetadata = Summary("review-deleted-solution-metadata-counts");
+        Assert.Contains("v0.12.68", deletedSolutionMetadata);
+        Assert.Contains(".sln/.slnx/.slnf", deletedSolutionMetadata);
+        Assert.Contains("changedFiles totals", deletedSolutionMetadata);
+        Assert.Contains("source-deletion expansion", deletedSolutionMetadata);
+        Assert.Contains("review.deleted_solution_metadata_scope", deletedSolutionMetadata);
+        string fsharpSchemaRebuild = Summary("index-schema-29-fsharp-output-rebuild");
+        Assert.Contains("v0.12.68", fsharpSchemaRebuild);
+        Assert.Contains("schema v29", fsharpSchemaRebuild);
+        Assert.Contains("schema-28 indexes", fsharpSchemaRebuild);
+        Assert.Contains("stored symbol and orphan-classification drift", fsharpSchemaRebuild);
+        Assert.Contains("ordinary reuse", fsharpSchemaRebuild);
+        string startupRebuildEvidence = Summary("index-startup-rebuild-evidence");
+        Assert.Contains("v0.12.68", startupRebuildEvidence);
+        Assert.Contains("startupBuildReason", startupRebuildEvidence);
+        Assert.Contains("startupPriorSchema", startupRebuildEvidence);
+        Assert.Contains("existing-index migration or recovery", startupRebuildEvidence);
         string defaultBaseline = Summary("review-default-baseline-honesty");
         Assert.Contains("bounded git_index_baseline_unavailable", defaultBaseline);
         Assert.Contains("refresh_index", defaultBaseline);

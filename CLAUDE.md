@@ -72,12 +72,20 @@ The loop, in order — no step skipped or reordered:
 1. Implement.
 2. Add focused regression or contract tests for changed behavior. Tests must exercise the
    decisive behavior and assertions, not merely prove that the code does not throw.
-3. `dotnet build` at **0 warnings**; `dotnet test` green; and
+3. `dotnet build` at **0 warnings**; `dotnet test` green;
    `pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1` green against the pinned Roslyn/F#
-   submodules and reusable indexes. Missing external prerequisites or any integration-harness
-   failure block check-in. Known solution-test flake:
+   submodules; and `node ./website/verify.mjs` green. The MCP harness bootstraps missing reusable
+   indexes through normal MCP startup and reuses existing indexes. A reused baseline mismatch
+   (overview counts plus the Roslyn reference-authority canary) gets one in-band
+   full rebuild to capture before/after evidence, but that gate run still fails; only a later
+   run against the repaired matching fixture may pass. A fresh mismatch, missing external prerequisite, or integration failure
+   block check-in. Known solution-test flake:
    `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` (watcher timing) — if it fires
    in a full run, verify it passes isolated and note it.
+   The complete suite requires directory-link support: NTFS junction creation on Windows
+   (ordinary non-elevated NTFS is sufficient; Developer Mode is not required) and directory
+   symbolic links on Unix. Failure of either prerequisite is infrastructure failure, never a
+   silent green containment result.
 4. **Adversarial subagent review of the full uncommitted implementation diff**, with empirical
    reproduction required for findings. Critical/High findings → fix → verification round with
    the same reviewer. Medium/Low findings → reconcile in Beads; they do not block check-in.

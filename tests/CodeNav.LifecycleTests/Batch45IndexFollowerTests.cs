@@ -448,7 +448,12 @@ public sealed class Batch45IndexFollowerTests
                 Assert.Equal("unavailable", follower.AccessMode);
                 Assert.False(follower.IsFollower);
                 Assert.False(follower.IsQueryable);
-                Assert.Contains("verify", follower.Health().Error ?? "",
+                // Stale-test repair: IndexManager's established health text says the owner claim
+                // "could not be verified"; the old "verify" substring did not match that contract.
+                // The visible history is a single squashed Init commit, so the introducing commit
+                // cannot be named; the current fail-closed product message is the authority and
+                // this is an assertion repair, not a product-text change.
+                Assert.Contains("could not be verified", follower.Health().Error ?? "",
                     StringComparison.OrdinalIgnoreCase);
             }
 
@@ -1188,7 +1193,7 @@ public sealed class Batch45IndexFollowerTests
     }
 
     [Fact]
-    public void SupportedHostPrivateStageFailureKeepsThePriorPublication()
+    public async Task SupportedHostPrivateStageFailureKeepsThePriorPublication()
     {
         if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
 
@@ -1197,6 +1202,10 @@ public sealed class Batch45IndexFollowerTests
         string database = IndexBuilder.DefaultDbPath(root);
         using var completed = new ManualResetEventSlim(false);
         IndexHealth? completedHealth = null;
+        IndexQueries? pinnedWalReader = null;
+        bool stageKeptNamedWal = false;
+        bool stageFreshQuerySawWalSymbol = false;
+        Exception? stageFreshQueryFailure = null;
         try
         {
             WriteWorkspace(root);
@@ -1205,8 +1214,43 @@ public sealed class Batch45IndexFollowerTests
             writer.Start();
             Assert.True(WaitUntil(() => writer.IsQueryable, 20_000), writer.Health().Error);
             string oldVersion = writer.Health().IndexVersion!;
+            if (OperatingSystem.IsLinux())
+            {
+                // Pin the pre-refresh read mark so the new declaration remains WAL-backed. A
+                // fresh path-open during private staging must still attach to that named WAL.
+                pinnedWalReader = new IndexQueries(database,
+                    pinReadSnapshot: true, pooling: false);
+                Assert.Single(pinnedWalReader.SearchSymbols("Alpha45", "exact", null, 2));
+                const string walPath = "WalBackedBeta45.cs";
+                File.WriteAllText(Path.Combine(root, walPath),
+                    "namespace Batch45; public class WalBackedBeta45 { }");
+                Assert.True(writer.RequestRefreshForTest([walPath], out Task refreshCompleted));
+                await refreshCompleted.WaitAsync(TimeSpan.FromSeconds(20));
+                using (IndexQueries liveQueries = writer.OpenQueries())
+                    Assert.Single(liveQueries.SearchSymbols(
+                        "WalBackedBeta45", "exact", null, 2));
+                Assert.True(File.Exists(database + "-wal"),
+                    "WAL-backed setup did not retain the named recovery file");
+            }
             writer.FullRebuildPrivateStageReadyForTest = _ =>
+            {
+                if (OperatingSystem.IsLinux())
+                {
+                    stageKeptNamedWal = File.Exists(database + "-wal");
+                    try
+                    {
+                        using var fresh = new IndexQueries(database,
+                            pinReadSnapshot: false, pooling: false);
+                        stageFreshQuerySawWalSymbol = fresh.SearchSymbols(
+                            "WalBackedBeta45", "exact", null, 2).Count == 1;
+                    }
+                    catch (Exception ex)
+                    {
+                        stageFreshQueryFailure = ex;
+                    }
+                }
                 throw new InvalidOperationException("decisive staged-build failure");
+            };
             writer.FullRebuildCompletedForTest = () =>
             {
                 completedHealth = writer.Health();
@@ -1224,6 +1268,18 @@ public sealed class Batch45IndexFollowerTests
             Assert.Contains("previous index remains available", completedHealth.Error);
             using (IndexQueries oldQueries = writer.OpenQueries())
                 Assert.Single(oldQueries.SearchSymbols("Alpha45", "exact", null, 2));
+            if (OperatingSystem.IsLinux())
+            {
+                Assert.True(stageKeptNamedWal,
+                    "private staging removed the live publication WAL before the boundary");
+                Assert.Null(stageFreshQueryFailure);
+                Assert.True(stageFreshQuerySawWalSymbol,
+                    "a fresh path-open during private staging lost WAL-backed state");
+                using var restoredFresh = new IndexQueries(database,
+                    pinReadSnapshot: false, pooling: false);
+                Assert.Single(restoredFresh.SearchSymbols(
+                    "WalBackedBeta45", "exact", null, 2));
+            }
             Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(
                     Path.GetDirectoryName(database)!),
                 path => Path.GetFileName(path).StartsWith(
@@ -1231,7 +1287,11 @@ public sealed class Batch45IndexFollowerTests
                         Path.GetFileName(path).StartsWith(
                             ".phoenix-publish-", StringComparison.Ordinal));
         }
-        finally { Cleanup(root); }
+        finally
+        {
+            pinnedWalReader?.Dispose();
+            Cleanup(root);
+        }
     }
 
     [Fact]
@@ -2279,7 +2339,7 @@ public sealed class Batch45IndexFollowerTests
     }
 
     [Fact]
-    public void WindowsFollowerKeepsServingCommittedStateAcrossWriterExitAndSuccessorRebuild()
+    public async Task WindowsFollowerKeepsServingCommittedStateAcrossWriterExitAndSuccessorRebuild()
     {
         if (!OperatingSystem.IsWindows()) return;
 
@@ -2290,6 +2350,7 @@ public sealed class Batch45IndexFollowerTests
         Task<string>? childStderr = null;
         IndexManager? follower = null;
         IndexManager? successor = null;
+        SemanticService? followerSemantic = null;
         try
         {
             WriteWorkspace(root);
@@ -2308,11 +2369,14 @@ public sealed class Batch45IndexFollowerTests
 
             follower = new IndexManager(root, database);
             follower.Start();
-            Assert.True(WaitUntil(() => follower.IsQueryable || follower.State == "failed", 20_000));
+            Assert.True(WaitUntil(() => follower.IsQueryable || child.HasExited, 20_000));
+            Assert.False(child.HasExited,
+                $"child Phoenix exited before publishing a queryable index: " +
+                CompletedText(childStderr));
             Assert.True(follower.IsQueryable, follower.Health().Error);
             Assert.False(follower.IsWriter);
             Assert.Equal("follower", follower.AccessMode);
-            using var followerSemantic = new SemanticService(follower);
+            followerSemantic = new SemanticService(follower);
             var followerTools = new NavigationTools(follower, followerSemantic);
             Assert.True(HasSymbol(followerTools, "Alpha45"));
 
@@ -2357,6 +2421,7 @@ public sealed class Batch45IndexFollowerTests
         }
         finally
         {
+            followerSemantic?.Dispose();
             successor?.Dispose();
             follower?.Dispose();
             if (child is { HasExited: false })
@@ -2364,6 +2429,10 @@ public sealed class Batch45IndexFollowerTests
                 try { child.Kill(entireProcessTree: true); } catch { }
                 try { child.WaitForExit(10_000); } catch { }
             }
+            if (childStdout is not null)
+                try { await childStdout; } catch { }
+            if (childStderr is not null)
+                try { await childStderr; } catch { }
             child?.Dispose();
             GC.KeepAlive(childStdout);
             GC.KeepAlive(childStderr);
@@ -2468,6 +2537,9 @@ public sealed class Batch45IndexFollowerTests
         start.ArgumentList.Add(workspaceRoot);
         start.ArgumentList.Add("--index-db");
         start.ArgumentList.Add(dbPath);
+        // Keep this lifecycle fixture process-local so killing it deterministically releases the
+        // only ownership lease instead of leaving a shared daemon outside the process tree.
+        start.ArgumentList.Add("--standalone");
         return Process.Start(start) ??
             throw new InvalidOperationException("could not start child Phoenix process");
     }
@@ -2576,23 +2648,6 @@ public sealed class Batch45IndexFollowerTests
 
     private static void Cleanup(string root)
     {
-        TestWorkspaceCleanup.ClearIndexPools(root);
-        for (int attempt = 0; attempt < 20; attempt++)
-        {
-            if (!Directory.Exists(root)) return;
-            try
-            {
-                Directory.Delete(root, recursive: true);
-                return;
-            }
-            catch (Exception ex) when (attempt < 19 &&
-                                       ex is IOException or UnauthorizedAccessException)
-            {
-                Thread.Sleep(50);
-            }
-        }
-
-        if (Directory.Exists(root))
-            Directory.Delete(root, recursive: true);
+        TestWorkspaceCleanup.DeleteWorkspace(root);
     }
 }

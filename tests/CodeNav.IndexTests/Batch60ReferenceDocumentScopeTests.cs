@@ -12,6 +12,50 @@ namespace CodeNav.Tests;
 public sealed class Batch60ReferenceDocumentScopeTests
 {
     [Fact]
+    public void ReferenceSamplesRetainTheSameBoundedSetAcrossEnumerationOrders()
+    {
+        SemanticLocation[] candidates =
+        [
+            new("Z.cs", 3, "z3", "Consumers", false, "call"),
+            new("A.cs", 8, "a8", "Consumers", false, "typeMention"),
+            new("A.cs", 2, "a2", "Consumers", false, "call"),
+            new("A.cs", 2, "a2", "Consumers", false, "call"),
+            new("A.cs", 2, "a2", "Consumers", false, "call"),
+            new("M.cs", 5, "m5", "Consumers", false, "typeof"),
+            new("A.cs", 2, "a2", "Consumers", false, "baseList"),
+            new("B.cs", 1, "b1", "Consumers", false, "call"),
+        ];
+
+        static string[] Retain(IEnumerable<SemanticLocation> source)
+        {
+            var retained = new List<SemanticLocation>();
+            foreach (SemanticLocation candidate in source)
+            {
+                _ = SemanticService.TryRetainDeterministicReferenceSample(retained,
+                    candidate.Path, candidate.Line, candidate.LineText, candidate.Project,
+                    candidate.IsTestProject, candidate.Kind, limit: 4, out _);
+            }
+            return retained.Select(sample =>
+                    $"{sample.Path}:{sample.Line}:{sample.Kind}:{sample.LineText}")
+                .ToArray();
+        }
+
+        string[] forward = Retain(candidates);
+        string[] reverse = Retain(candidates.Reverse());
+
+        Assert.Equal(forward, reverse);
+        Assert.Equal(forward.Length, forward.Distinct(StringComparer.Ordinal).Count());
+        Assert.Single(forward, sample => sample == "A.cs:2:call:a2");
+        Assert.Equal(
+        [
+            "A.cs:2:baseList:a2",
+            "A.cs:2:call:a2",
+            "A.cs:8:typeMention:a8",
+            "B.cs:1:call:b1",
+        ], forward);
+    }
+
+    [Fact]
     public async Task SemanticReferencesPreserveTheFullAuthorityContract()
     {
         string root = Directory.CreateTempSubdirectory("codenav-60-integration").FullName;
@@ -21,6 +65,12 @@ public sealed class Batch60ReferenceDocumentScopeTests
                 "namespace N;\npublic interface ITarget { }\n");
             WriteProject(root, "Consumers", "Declarations",
                 "namespace C; class Use { N.ITarget value; }\n");
+            File.WriteAllText(Path.Combine(root, "Consumers", "ZUse.cs"),
+                "namespace C; class ZUse { N.ITarget value; }\n");
+            File.WriteAllText(Path.Combine(root, "Consumers", "AUse.cs"),
+                "namespace C; class AUse { N.ITarget value; }\n");
+            File.WriteAllText(Path.Combine(root, "Consumers", "MUse.cs"),
+                "namespace C; class MUse { N.ITarget value; }\n");
             File.WriteAllText(Path.Combine(root, "Consumers", "Noise.cs"),
                 string.Join(Environment.NewLine,
                     Enumerable.Range(0, 12).Select(index => $"class Noise{index} {{ }}")));
@@ -38,24 +88,48 @@ public sealed class Batch60ReferenceDocumentScopeTests
                 ["interface"], 10));
 
             semantic.TestOnlyForceFullSolutionReferences = true;
-            var (full, fullReason) = await semantic.ReferencesAsync(target.FilePath,
-                target.StartLine, null, "ITarget", maxProjects: 0, samplesPerGroup: 5,
-                timeoutMs: 60_000);
-            Assert.NotNull(full);
+            var (full, fullReason) = await ReferencesWithRetryAsync(() =>
+                semantic.ReferencesAsync(target.FilePath, target.StartLine, null, "ITarget",
+                    maxProjects: 0, samplesPerGroup: 3, timeoutMs: 60_000));
+            Assert.True(full is not null, fullReason);
             Assert.Null(fullReason);
 
             semantic.TestOnlyForceFullSolutionReferences = false;
-            var (scoped, scopedReason) = await semantic.ReferencesAsync(target.FilePath,
-                target.StartLine, null, "ITarget", maxProjects: 0, samplesPerGroup: 5,
-                timeoutMs: 60_000);
-            Assert.NotNull(scoped);
+            var (scoped, scopedReason) = await ReferencesWithRetryAsync(() =>
+                semantic.ReferencesAsync(target.FilePath, target.StartLine, null, "ITarget",
+                    maxProjects: 0, samplesPerGroup: 3, timeoutMs: 60_000));
+            Assert.True(scoped is not null, scopedReason);
             Assert.Null(scopedReason);
             Assert.Equal(CanonicalResult(full!), CanonicalResult(scoped!));
+
+            int maximumRetainedSampleTrees = 0;
+            semantic.TestOnlyReferenceSampleTreeCountChanged = count =>
+                maximumRetainedSampleTrees = Math.Max(maximumRetainedSampleTrees, count);
+            semantic.TestOnlyReverseReferenceSites = true;
+            var (reversed, reversedReason) = await ReferencesWithRetryAsync(() =>
+                semantic.ReferencesAsync(target.FilePath, target.StartLine, null, "ITarget",
+                    maxProjects: 0, samplesPerGroup: 3, timeoutMs: 60_000));
+            Assert.True(reversed is not null, reversedReason);
+            Assert.Null(reversedReason);
+            Assert.Equal(CanonicalResult(scoped!), CanonicalResult(reversed!));
+            SemanticRefGroup consumerSamples = Assert.Single(reversed!.Groups,
+                group => group.Project == "Consumers");
+            Assert.Equal(3, consumerSamples.Samples.Count);
+            Assert.Equal(
+                ["Consumers/AUse.cs", "Consumers/Consumers.cs", "Consumers/MUse.cs"],
+                consumerSamples.Samples.Select(sample => sample.Path).ToArray());
+            Assert.True(maximumRetainedSampleTrees <= reversed.Groups.Sum(group =>
+                group.Samples.Count),
+                $"Auxiliary sample-tree retention reached {maximumRetainedSampleTrees} " +
+                "entries for a smaller final bounded sample set.");
 
             string telemetryLine = manager.Telemetry.Snapshot().Last(line =>
                 line.Contains("\"tool\":\"references\"", StringComparison.Ordinal) &&
                 line.Contains("\"result\":\"exact\"", StringComparison.Ordinal));
             using var telemetry = System.Text.Json.JsonDocument.Parse(telemetryLine);
+            Assert.Equal(reversed.Groups.Sum(group => group.Samples.Count),
+                telemetry.RootElement.GetProperty("queryStages")
+                    .GetProperty("samplesRead").GetInt32());
             var documentScope = telemetry.RootElement.GetProperty("queryStages")
                 .GetProperty("documentScope");
             Assert.Equal("documentScoped", documentScope.GetProperty("mode").GetString());
@@ -69,6 +143,74 @@ public sealed class Batch60ReferenceDocumentScopeTests
         }
         finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
     }
+
+    [Fact]
+    public async Task SemanticReferencesMergeCaseVariantProjectNamesWithoutLosingSamples()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-60-project-case").FullName;
+        try
+        {
+            WriteProject(root, "Declarations", null,
+                "namespace N;\npublic interface ITarget { }\n");
+            WriteNamedProject(root, "Upper", "Consumers", "Declarations",
+                "namespace Upper; class Use { N.ITarget value; }\n");
+            WriteNamedProject(root, "Lower", "consumers", "Declarations",
+                "namespace Lower; class Use { N.ITarget value; }\n");
+            WriteNamedProject(root, "Zed", "Zed", "Declarations",
+                "namespace Zed; class Use { N.ITarget first;\nN.ITarget second; }\n");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            using var semantic = new SemanticService(manager);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000));
+            if (!semantic.FrameworkRefsAvailable) return;
+
+            using var queries = manager.OpenQueries();
+            SymbolHit target = Assert.Single(queries.SearchSymbols("ITarget", "exact",
+                ["interface"], 10));
+
+            var (result, reason) = await ReferencesWithRetryAsync(() =>
+                semantic.ReferencesAsync(target.FilePath, target.StartLine, null, "ITarget",
+                    maxProjects: 0, samplesPerGroup: 5, timeoutMs: 60_000));
+
+            Assert.True(result is not null, reason);
+            Assert.Null(reason);
+            SemanticRefGroup consumers = Assert.Single(result!.Groups, group =>
+                string.Equals(group.Project, "Consumers", StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(2, consumers.Count);
+            Assert.Equal(2, consumers.Samples.Count);
+            Assert.All(consumers.Samples, sample =>
+                Assert.Equal(consumers.Project, sample.Project));
+            Assert.Equal("Consumers", consumers.Project);
+            Assert.Equal(["Consumers", "Zed"],
+                result.Groups.Select(group => group.Project).ToArray());
+
+            semantic.TestOnlyReverseReferenceSites = true;
+            var (reversed, reversedReason) = await ReferencesWithRetryAsync(() =>
+                semantic.ReferencesAsync(target.FilePath, target.StartLine, null, "ITarget",
+                    maxProjects: 0, samplesPerGroup: 5, timeoutMs: 60_000));
+
+            Assert.True(reversed is not null, reversedReason);
+            Assert.Null(reversedReason);
+            Assert.Equal(CanonicalResult(result), CanonicalResult(reversed!));
+            Assert.Equal(result.Groups.Select(group => group.Project),
+                reversed.Groups.Select(group => group.Project));
+        }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
+    }
+
+    /// <summary>The snapshot gate deliberately returns index_snapshot_unavailable when a
+    /// refresh crosses snapshot creation. Exercise the shared documented immediate-retry
+    /// contract without accepting a stable wrong result.</summary>
+    private static Task<(SemanticReferences? Result, string? FailReason)>
+        ReferencesWithRetryAsync(
+            Func<Task<(SemanticReferences? Result, string? FailReason)>> operation,
+            int attempts = 3) =>
+        SemanticRetry.UntilAsync(operation,
+            outcome => outcome.Result is not null ||
+                !SemanticRetry.IsDocumentedTransient(outcome.FailReason), attempts);
 
     [Fact]
     public async Task LeasedTextScopeMatchesFullAuthorityAcrossGlobalAliasAndEscapedIdentifier()
@@ -540,6 +682,19 @@ public sealed class Batch60ReferenceDocumentScopeTests
             $"<TargetFramework>net9.0</TargetFramework></PropertyGroup>{projectReference}" +
             "</Project>");
         File.WriteAllText(Path.Combine(directory, $"{name}.cs"), source);
+    }
+
+    private static void WriteNamedProject(string root, string directoryName,
+        string projectName, string reference, string source)
+    {
+        string directory = Path.Combine(root, directoryName);
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, $"{projectName}.csproj"),
+            $"<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+            $"<TargetFramework>net9.0</TargetFramework><AssemblyName>{projectName}</AssemblyName>" +
+            $"</PropertyGroup><ItemGroup><ProjectReference Include=\"../{reference}/{reference}.csproj\" />" +
+            "</ItemGroup></Project>");
+        File.WriteAllText(Path.Combine(directory, "Use.cs"), source);
     }
 
     private static string[] CanonicalResult(SemanticReferences result)

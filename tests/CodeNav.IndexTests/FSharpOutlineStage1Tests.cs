@@ -715,6 +715,6 @@ public class FSharpOutlineStage1Tests
     private static void Cleanup(string root)
     {
         TestWorkspaceCleanup.ClearIndexPools(root);
-        try { Directory.Delete(root, recursive: true); } catch { }
+        TestWorkspaceCleanup.DeleteWorkspace(root);
     }
 }

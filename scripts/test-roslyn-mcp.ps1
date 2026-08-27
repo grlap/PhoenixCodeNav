@@ -295,7 +295,8 @@ function Assert-Contains([object[]]$Values, $Expected, [string]$Message) {
     }
 }
 
-function Assert-FriendRelationshipAuthority($Payload, [string]$Label) {
+function Assert-FriendRelationshipAuthority($Payload, [string]$Label,
+    [bool]$RequireCoverage = $true, [object[]]$ExpectedUnprovenProjects = @()) {
     $expectedConfidence = if ($null -ne $baseline.target.PSObject.Properties["friendRelationshipConfidence"]) {
         [string]$baseline.target.friendRelationshipConfidence
     } else {
@@ -308,6 +309,24 @@ function Assert-FriendRelationshipAuthority($Payload, [string]$Label) {
     }
 
     Assert-Equal $expectedConfidence ([string]$Payload.meta.confidence) "$Label confidence changed"
+    Assert-Equal "semantic" ([string]$Payload.meta.navigationLayer) "$Label lost compiler-semantic provenance"
+    Assert-Equal ([string]$baseline.target.documentationCommentId) `
+        ([string]$Payload.symbol.documentationCommentId) "$Label resolved a different compiler symbol"
+    if ($RequireCoverage) {
+        Assert-True ($ExpectedUnprovenProjects.Count -gt 0) `
+            "$Label omitted its tool-specific expected friend-assembly coverage baseline"
+        Assert-True ($null -ne $Payload.PSObject.Properties["coverage"] -and
+            $null -ne $Payload.coverage) `
+            "$Label omitted required friend-assembly coverage"
+        Assert-True ($null -ne $Payload.coverage.PSObject.Properties["unprovenFriendAssemblyProjects"]) `
+            "$Label omitted required unproven friend-assembly projects"
+        $expectedUnprovenProjects = @($ExpectedUnprovenProjects |
+            ForEach-Object { [string]$_ } | Sort-Object)
+        $actualUnprovenProjects = @($Payload.coverage.unprovenFriendAssemblyProjects |
+            ForEach-Object { [string]$_ } | Sort-Object)
+        Assert-Equal ($expectedUnprovenProjects -join "|") ($actualUnprovenProjects -join "|") `
+            "$Label unproven friend-assembly coverage changed"
+    }
     $actualPartialReason = if ($null -ne $Payload.PSObject.Properties["partialReason"]) {
         [string]$Payload.partialReason
     } else {
@@ -348,7 +367,7 @@ function Get-ReferenceContractSignature($Payload, [switch]$IgnoreResidentSolutio
     $groups = @($Payload.groups | ForEach-Object {
         $samples = @($_.samples | ForEach-Object {
             "$([string]$_.path)|$([int]$_.line)|$([string]$_.kind)"
-        } | Sort-Object)
+        })
         "$([string]$_.project)|$([bool]$_.isTest)|$([int]$_.count)|$($samples -join ';')"
     } | Sort-Object)
     $partialReason = if ($null -ne $Payload.PSObject.Properties["partialReason"]) {
@@ -419,8 +438,7 @@ function Start-McpClient([string]$Label, [string]$WorkspaceRoot, [string]$Databa
     }
 }
 
-function Wait-ReferenceTelemetry($Client, [int]$ExpectedCount, [int]$TimeoutMs = 10000) {
-    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+function Get-ReferenceTelemetryRecords($Client) {
     $telemetryDirectory = Join-Path $Client.WorkspaceRoot ".codenav\telemetry"
     $producerId = if ($null -ne $Client.RuntimeProcessId) {
         [int]$Client.RuntimeProcessId
@@ -428,32 +446,57 @@ function Wait-ReferenceTelemetry($Client, [int]$ExpectedCount, [int]$TimeoutMs =
         [int]$Client.Process.Id
     }
     $pattern = "phoenix-$producerId-*.jsonl"
+    $records = @()
+    $files = @(Get-ChildItem -LiteralPath $telemetryDirectory -Filter $pattern -File `
+            -ErrorAction SilentlyContinue | Sort-Object Name)
+    foreach ($file in $files) {
+        $skip = if ($Client.TelemetryLineCountsBefore.ContainsKey($file.FullName)) {
+            [int]$Client.TelemetryLineCountsBefore[$file.FullName]
+        } else { 0 }
+        $newLines = @(Get-Content -LiteralPath $file.FullName -ErrorAction SilentlyContinue |
+            Select-Object -Skip $skip)
+        foreach ($line in $newLines) {
+            try {
+                $record = $line | ConvertFrom-Json
+                if ([string]$record.tool -eq "references" -and
+                    $null -ne $record.queryStages -and
+                    $null -ne $record.queryStages.documentScope) {
+                    $records += $record
+                }
+            } catch { }
+        }
+    }
+    return $records
+}
+
+function Wait-ReferenceTelemetry($Client, [int]$AfterCount,
+    [int]$TimeoutMs = 10000, [string]$ExpectedResult = "exact") {
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+    $settledAt = $null
+    $lastPostCallCount = -1
     while ([DateTime]::UtcNow -lt $deadline) {
-        $records = @()
-        $files = @(Get-ChildItem -LiteralPath $telemetryDirectory -Filter $pattern -File `
-                -ErrorAction SilentlyContinue | Sort-Object Name)
-        foreach ($file in $files) {
-            $skip = if ($Client.TelemetryLineCountsBefore.ContainsKey($file.FullName)) {
-                [int]$Client.TelemetryLineCountsBefore[$file.FullName]
-            } else { 0 }
-            $newLines = @(Get-Content -LiteralPath $file.FullName -ErrorAction SilentlyContinue |
-                Select-Object -Skip $skip)
-            foreach ($line in $newLines) {
-                try {
-                    $record = $line | ConvertFrom-Json
-                    if ([string]$record.tool -eq "references" -and
-                        [string]$record.result -eq "exact" -and
-                        $null -ne $record.queryStages -and
-                        $null -ne $record.queryStages.documentScope) {
-                        $records += $record
-                    }
-                } catch { }
+        $records = @(Get-ReferenceTelemetryRecords $Client)
+        $postCallCount = [Math]::Max(0, $records.Count - $AfterCount)
+        if ($postCallCount -gt 0) {
+            if ($postCallCount -ne $lastPostCallCount) {
+                $lastPostCallCount = $postCallCount
+                $settledAt = [DateTime]::UtcNow.AddMilliseconds(750)
+            } elseif ($null -ne $settledAt -and [DateTime]::UtcNow -ge $settledAt) {
+                # Retryable cold-load/snapshot attempts need not emit a document-scope record,
+                # and telemetry is flushed asynchronously after the accepted MCP call returns.
+                # Wait for the post-call record set to settle, then attribute the final record to
+                # the accepted invocation rather than racing an earlier retry record.
+                $records = @(Get-ReferenceTelemetryRecords $Client)
+                $accepted = @($records | Select-Object -Skip $AfterCount |
+                    Select-Object -Last 1)[0]
+                Assert-Equal $ExpectedResult ([string]$accepted.result) `
+                    "$($Client.Label): references telemetry result changed"
+                return $accepted
             }
         }
-        if ($records.Count -ge $ExpectedCount) { return $records }
         Start-Sleep -Milliseconds 50
     }
-    throw "$($Client.Label): timed out waiting for $ExpectedCount references telemetry records"
+    throw "$($Client.Label): timed out waiting for accepted references telemetry after record $AfterCount"
 }
 
 function Send-McpRequest($Client, [string]$Method, $Parameters, [int]$TimeoutMs = 30000) {
@@ -576,12 +619,19 @@ function Request-McpDaemonRetirement($Client) {
     }
 }
 
-function Reset-McpDaemon([string]$Label, [string]$WorkspaceRoot, [string]$DatabasePath) {
+function Initialize-ReusableIndex([string]$Label, [string]$WorkspaceRoot, [string]$DatabasePath) {
     $client = $null
     $initialized = $false
+    $startupEvidence = $null
     try {
         $client = Start-McpClient "$Label-reset" $WorkspaceRoot $DatabasePath
-        $null = Initialize-McpClient $client "writer"
+        $resetSession = Initialize-McpClient $client "writer"
+        $startupEvidence = [pscustomobject]@{
+            startupBuildReason = [string]$resetSession.Capabilities.index.startupBuildReason
+            startupPriorSchema = [string]$resetSession.Capabilities.index.startupPriorSchema
+            currentSchema = [string]$resetSession.Capabilities.build.indexSchema
+            indexVersion = [string]$resetSession.Capabilities.index.indexVersion
+        }
         $initialized = $true
     } finally {
         $cleanupErrors = New-Object System.Collections.Generic.List[string]
@@ -596,6 +646,7 @@ function Reset-McpDaemon([string]$Label, [string]$WorkspaceRoot, [string]$Databa
             Write-Warning "$Label cleanup after initialization failure also failed: $cleanupError"
         }
     }
+    return $startupEvidence
 }
 
 function Test-RetryableSemanticPayload($Payload) {
@@ -605,13 +656,20 @@ function Test-RetryableSemanticPayload($Payload) {
            $partialReason -match "cluster_cold_load|index_snapshot_unavailable"
 }
 
-function Invoke-SemanticWithRetry($Client, [string]$Name, [hashtable]$Arguments) {
+function Invoke-SemanticWithRetryCore($Client, [string]$Name, [hashtable]$Arguments,
+    [ref]$AttemptCount) {
     for ($attempt = 0; $attempt -lt 4; $attempt++) {
+        $AttemptCount.Value = $attempt + 1
         $payload = Invoke-McpTool $Client $Name $Arguments 120000
         if (-not (Test-RetryableSemanticPayload $payload)) { return $payload }
         Start-Sleep -Milliseconds 500
     }
     return $payload
+}
+
+function Invoke-SemanticWithRetry($Client, [string]$Name, [hashtable]$Arguments) {
+    $attemptCount = 0
+    return Invoke-SemanticWithRetryCore $Client $Name $Arguments ([ref]$attemptCount)
 }
 
 if ($SelfTestSemanticRetryContract) {
@@ -632,6 +690,26 @@ if ($SelfTestSemanticRetryContract) {
     Assert-True (Test-RetryableSemanticPayload $indexedFallback) "Indexed auto fallback was not classified as transient"
     Assert-True (Test-RetryableSemanticPayload $coldError) "Semantic-unavailable cold load was not classified as transient"
     Assert-True (-not (Test-RetryableSemanticPayload $stableIndexed)) "Stable indexed partiality was misclassified as transient"
+    $missingCoverage = [pscustomobject]@{
+        meta = [pscustomobject]@{
+            confidence = [string]$baseline.target.friendRelationshipConfidence
+            navigationLayer = "semantic"
+        }
+        symbol = [pscustomobject]@{
+            documentationCommentId = [string]$baseline.target.documentationCommentId
+        }
+        partial = $true
+        partialReason = [string]$baseline.target.friendRelationshipPartialReason
+    }
+    $missingCoverageRejected = $false
+    try {
+        Assert-FriendRelationshipAuthority $missingCoverage "self-test missing coverage" `
+            -ExpectedUnprovenProjects @($baseline.target.referencesUnprovenFriendAssemblyProjects)
+    } catch {
+        $missingCoverageRejected = $_.Exception.Message -match "omitted required friend-assembly coverage"
+    }
+    Assert-True $missingCoverageRejected "Friend-authority coverage omission was not rejected"
+    Assert-FriendRelationshipAuthority $missingCoverage "self-test optional coverage" $false
     Write-Host "Semantic retry contract self-test passed"
     exit 0
 }
@@ -644,16 +722,243 @@ Assert-Equal ([string]$baseline.roslynCommit) $roslynHead "Roslyn HEAD differs f
 $unexpectedStatus = @(Invoke-Git $Workspace @("--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all") |
     Where-Object { $_ -and $_ -notmatch '^\?\? \.codenav/' })
 Assert-Equal 0 $unexpectedStatus.Count "Frozen Roslyn workspace contains changes outside .codenav"
-Assert-True (Test-Path -LiteralPath $IndexDb -PathType Leaf) "Reusable Roslyn index is missing: $IndexDb"
+$roslynIndexWasMissing = -not (Test-Path -LiteralPath $IndexDb -PathType Leaf)
 Assert-True (Test-Path -LiteralPath $FSharpWorkspace -PathType Container) "Frozen FSharp workspace is missing: $FSharpWorkspace"
 $fsharpHead = [string](@(Invoke-Git $FSharpWorkspace @("rev-parse", "HEAD"))[0])
 Assert-Equal ([string]$fsharpBaseline.fsharpCommit) $fsharpHead "FSharp HEAD differs from the locked integration baseline"
 $unexpectedFSharpStatus = @(Invoke-Git $FSharpWorkspace @("--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all") |
     Where-Object { $_ -and $_ -notmatch '^\?\? \.codenav/' })
 Assert-Equal 0 $unexpectedFSharpStatus.Count "Frozen FSharp workspace contains changes outside .codenav"
-Assert-True (Test-Path -LiteralPath $FSharpIndexDb -PathType Leaf) "Reusable FSharp index is missing: $FSharpIndexDb"
+$fsharpIndexWasMissing = -not (Test-Path -LiteralPath $FSharpIndexDb -PathType Leaf)
 Assert-True (Test-Path -LiteralPath (Join-Path $FSharpWorkspace ([string]$fsharpBaseline.target.sourcePath)) -PathType Leaf) "Frozen FSharp checkout is missing the source probe"
 Assert-True (Test-Path -LiteralPath (Join-Path $FSharpWorkspace ([string]$fsharpBaseline.target.projectPath)) -PathType Leaf) "Frozen FSharp checkout is missing the project probe"
+
+if ($roslynIndexWasMissing) {
+    Write-Host "[SETUP] Roslyn reusable index is missing; MCP startup will build it at $IndexDb"
+}
+
+function Invoke-ReferencesWithTelemetry($Client, [hashtable]$Arguments,
+    [string]$ExpectedResult) {
+    $afterCount = @(Get-ReferenceTelemetryRecords $Client).Count
+    $attemptCount = 0
+    $payload = Invoke-SemanticWithRetryCore $Client "references" $Arguments `
+        ([ref]$attemptCount)
+    $telemetry = Wait-ReferenceTelemetry $Client $afterCount `
+        -ExpectedResult $ExpectedResult
+    return [pscustomobject]@{
+        Payload = $payload
+        Telemetry = $telemetry
+        Attempts = $attemptCount
+    }
+}
+
+function Test-RoslynBaselineCounts($Overview) {
+    return [int]$Overview.projects.total -eq [int]$expectedCounts.projects -and
+        [int]$Overview.solutions -eq [int]$expectedCounts.solutions -and
+        [int]$Overview.csFiles -eq [int]$expectedCounts.csFiles -and
+        [int]$Overview.fsFiles -eq [int]$expectedCounts.fsFiles -and
+        [int]$Overview.projects.fsharp -eq [int]$expectedCounts.fsProjects -and
+        [int]$Overview.symbols -eq [int]$expectedCounts.symbols -and
+        [int]$Overview.orphanedFiles -eq [int]$expectedCounts.orphanedFiles
+}
+
+function Get-RoslynOverviewCounts($Overview) {
+    return [ordered]@{
+        projects = [int]$Overview.projects.total
+        solutions = [int]$Overview.solutions
+        csharpFiles = [int]$Overview.csFiles
+        fsharpFiles = [int]$Overview.fsFiles
+        fsharpProjects = [int]$Overview.projects.fsharp
+        symbols = [int]$Overview.symbols
+        orphanedFiles = [int]$Overview.orphanedFiles
+    }
+}
+
+function Get-RoslynReferenceAuthorityEvidence($Client) {
+    try {
+        $search = Invoke-McpTool $Client "search_symbol" @{
+            query = [string]$baseline.target.name
+            limit = 10
+        }
+        $targets = @($search.symbols | Where-Object {
+            $_.path -eq [string]$baseline.target.path -and
+            $_.arity -eq [int]$baseline.target.arity
+        })
+        if ($targets.Count -ne 1) {
+            return [ordered]@{
+                error = "target_count_$($targets.Count)"
+                documentationCommentId = $null
+                referenceCount = $null
+                referenceProjects = $null
+                confidence = $null
+                partialReason = $null
+                unprovenFriendAssemblyProjects = @()
+            }
+        }
+
+        $references = Invoke-SemanticWithRetry $Client "references" @{
+            symbolId = [string]$targets[0].symbolId
+            mode = "auto"
+            maxProjects = 0
+            maxFiles = 1000
+            samplesPerGroup = 0
+            timeoutMs = 60000
+        }
+        return [ordered]@{
+            error = [string]$references.error
+            documentationCommentId = [string]$references.symbol.documentationCommentId
+            referenceCount = [int]$references.totalReferences
+            referenceProjects = @($references.groups).Count
+            confidence = [string]$references.meta.confidence
+            partialReason = [string]$references.partialReason
+            unprovenFriendAssemblyProjects = @(
+                $references.coverage.unprovenFriendAssemblyProjects |
+                    ForEach-Object { [string]$_ } | Sort-Object)
+        }
+    } catch {
+        return [ordered]@{
+            error = "probe_failed: $($_.Exception.Message)"
+            documentationCommentId = $null
+            referenceCount = $null
+            referenceProjects = $null
+            confidence = $null
+            partialReason = $null
+            unprovenFriendAssemblyProjects = @()
+        }
+    }
+}
+
+function Test-RoslynReferenceAuthorityEvidence($Evidence) {
+    $expectedUnproven = @(
+        $baseline.target.referencesUnprovenFriendAssemblyProjects |
+            ForEach-Object { [string]$_ } | Sort-Object)
+    return [string]::IsNullOrWhiteSpace([string]$Evidence.error) -and
+        [string]$Evidence.documentationCommentId -eq [string]$baseline.target.documentationCommentId -and
+        [int]$Evidence.referenceCount -eq [int]$baseline.target.referenceCount -and
+        [int]$Evidence.referenceProjects -eq [int]$baseline.target.referenceProjects -and
+        [string]$Evidence.confidence -eq [string]$baseline.target.friendRelationshipConfidence -and
+        [string]$Evidence.partialReason -eq [string]$baseline.target.friendRelationshipPartialReason -and
+        (@($Evidence.unprovenFriendAssemblyProjects) -join "|") -eq ($expectedUnproven -join "|")
+}
+
+function Test-FSharpBaselineCounts($Overview) {
+    return [int]$Overview.projects.total -eq [int]$fsharpBaseline.counts.projects -and
+        [int]$Overview.projects.fsharp -eq [int]$fsharpBaseline.counts.fsharpProjects -and
+        [int]$Overview.csFiles -eq [int]$fsharpBaseline.counts.csharpFiles -and
+        [int]$Overview.fsFiles -eq [int]$fsharpBaseline.counts.fsharpFiles -and
+        [int]$Overview.symbols -eq [int]$fsharpBaseline.counts.symbols -and
+        [int]$Overview.orphanedFiles -eq [int]$fsharpBaseline.counts.orphanedFiles
+}
+
+function Get-FSharpOverviewCounts($Overview) {
+    return [ordered]@{
+        projects = [int]$Overview.projects.total
+        fsharpProjects = [int]$Overview.projects.fsharp
+        csharpFiles = [int]$Overview.csFiles
+        fsharpFiles = [int]$Overview.fsFiles
+        symbols = [int]$Overview.symbols
+        orphanedFiles = [int]$Overview.orphanedFiles
+    }
+}
+
+function Repair-ReusedIndexIfBaselineDrifts($Client, $Overview, [string]$Label, $StartupEvidence,
+    [scriptblock]$CountsMatch, [scriptblock]$GetCounts,
+    [scriptblock]$GetAuthorityEvidence = $null,
+    [scriptblock]$AuthorityEvidenceMatches = $null) {
+    $priorVersion = [string]$Overview.meta.indexVersion
+    $priorCounts = & $GetCounts $Overview
+    $priorAuthorityEvidence = if ($null -ne $GetAuthorityEvidence) {
+        & $GetAuthorityEvidence $Client
+    } else { $null }
+    $startupBuildReason = [string]$StartupEvidence.startupBuildReason
+    $startupRebuilt = -not [string]::IsNullOrWhiteSpace($startupBuildReason)
+    $baselineMatches = (& $CountsMatch $Overview) -and
+        ($null -eq $AuthorityEvidenceMatches -or
+            (& $AuthorityEvidenceMatches $priorAuthorityEvidence))
+    if ($baselineMatches) {
+        return [pscustomobject]@{
+            Overview = $Overview
+            Evidence = [ordered]@{
+                outcome = if ($startupRebuilt) { "startup_rebuilt" } else { "reused" }
+                repaired = $startupRebuilt
+                startupRebuilt = $startupRebuilt
+                startupBuildReason = $startupBuildReason
+                startupPriorSchema = [string]$StartupEvidence.startupPriorSchema
+                priorIndexVersion = if ($startupRebuilt) { $null } else { $priorVersion }
+                priorCounts = if ($startupRebuilt) { $null } else { $priorCounts }
+                priorAuthorityEvidence = if ($startupRebuilt) { $null } else { $priorAuthorityEvidence }
+                rebuiltIndexVersion = if ($startupRebuilt) { $priorVersion } else { $null }
+                rebuiltCounts = if ($startupRebuilt) { $priorCounts } else { $null }
+                rebuiltAuthorityEvidence = if ($startupRebuilt) { $priorAuthorityEvidence } else { $null }
+            }
+        }
+    }
+
+    Write-Host "[SETUP] Reused $Label index evidence differs from the pinned fresh-index baseline; rebuilding through refresh_index force='full'."
+    $null = Invoke-McpTool $Client "refresh_index" @{ force = "full" } 120000
+    $stableReadyObservations = 0
+    $capabilities = $null
+    for ($attempt = 0; $attempt -lt 600; $attempt++) {
+        $capabilities = Invoke-McpTool $Client "server_capabilities" ([hashtable]::new())
+        if ($capabilities.index.state -eq "ready" -and
+            $capabilities.index.mode -eq "writer" -and
+            [string]$capabilities.index.indexVersion -ne $priorVersion) {
+            $stableReadyObservations++
+            if ($stableReadyObservations -ge 2) { break }
+        } else {
+            $stableReadyObservations = 0
+        }
+        if ($attempt -gt 0 -and $attempt % 30 -eq 0) {
+            Write-Host "[WAIT] $Label full rebuild is still publishing ($attempt seconds elapsed)."
+        }
+        Start-Sleep -Seconds 1
+    }
+    Assert-Equal 2 $stableReadyObservations "$Label full rebuild did not publish a stable fresh index"
+    $rebuilt = Invoke-McpTool $Client "repo_overview" ([hashtable]::new())
+    $rebuiltCounts = & $GetCounts $rebuilt
+    $rebuiltAuthorityEvidence = if ($null -ne $GetAuthorityEvidence) {
+        & $GetAuthorityEvidence $Client
+    } else { $null }
+    Assert-True (& $CountsMatch $rebuilt) `
+        "$Label full rebuild still disagrees with the pinned overview-count baseline"
+    Assert-True ($null -eq $AuthorityEvidenceMatches -or
+        (& $AuthorityEvidenceMatches $rebuiltAuthorityEvidence)) `
+        "$Label full rebuild still disagrees with the pinned authority-evidence baseline"
+    Write-Host "[SETUP] $Label baseline will be judged against repaired index $([string]$rebuilt.meta.indexVersion)."
+    return [pscustomobject]@{
+        Overview = $rebuilt
+        Evidence = [ordered]@{
+            outcome = if ($startupRebuilt) { "startup_and_count_repair" } else { "count_repair" }
+            repaired = $true
+            startupRebuilt = $startupRebuilt
+            startupBuildReason = $startupBuildReason
+            startupPriorSchema = [string]$StartupEvidence.startupPriorSchema
+            priorIndexVersion = $priorVersion
+            priorCounts = $priorCounts
+            priorAuthorityEvidence = $priorAuthorityEvidence
+            rebuiltIndexVersion = [string]$rebuilt.meta.indexVersion
+            rebuiltCounts = $rebuiltCounts
+            rebuiltAuthorityEvidence = $rebuiltAuthorityEvidence
+        }
+    }
+}
+
+function Repair-ReusedRoslynIndexIfCountsDrift($Client, $Overview, $StartupEvidence) {
+    return Repair-ReusedIndexIfBaselineDrifts $Client $Overview "Roslyn" $StartupEvidence `
+        { param($candidate) Test-RoslynBaselineCounts $candidate } `
+        { param($candidate) Get-RoslynOverviewCounts $candidate } `
+        { param($probeClient) Get-RoslynReferenceAuthorityEvidence $probeClient } `
+        { param($candidate) Test-RoslynReferenceAuthorityEvidence $candidate }
+}
+
+function Repair-ReusedFSharpIndexIfCountsDrift($Client, $Overview, $StartupEvidence) {
+    return Repair-ReusedIndexIfBaselineDrifts $Client $Overview "FSharp" $StartupEvidence `
+        { param($candidate) Test-FSharpBaselineCounts $candidate } `
+        { param($candidate) Get-FSharpOverviewCounts $candidate }
+}
+if ($fsharpIndexWasMissing) {
+    Write-Host "[SETUP] FSharp reusable index is missing; MCP startup will build it at $FSharpIndexDb"
+}
 
 $evidence = [ordered]@{
     baseline = $baseline.name
@@ -661,10 +966,20 @@ $evidence = [ordered]@{
     roslynHead = $roslynHead
     workspace = $Workspace
     indexDb = $IndexDb
+    roslynIndexBootstrapped = $roslynIndexWasMissing
+    roslynIndexStartup = $null
+    roslynIndexRepair = $null
+    roslynCountsProvenance = [ordered]@{
+        id = [string]$baseline.countsProvenance
+        detail = [string]$baseline.countsProvenanceDetail
+    }
     fsharpBaseline = $fsharpBaseline.name
     fsharpHead = $fsharpHead
     fsharpWorkspace = $FSharpWorkspace
     fsharpIndexDb = $FSharpIndexDb
+    fsharpIndexBootstrapped = $fsharpIndexWasMissing
+    fsharpIndexStartup = $null
+    fsharpIndexRepair = $null
     startedAtUtc = [DateTime]::UtcNow.ToString("O")
     results = [ordered]@{}
 }
@@ -686,24 +1001,68 @@ function Test-IntegrationCase([string]$Name, [scriptblock]$Body) {
 $writer = $null
 $secondClient = $null
 $fsharpWriter = $null
-Reset-McpDaemon "writer" $Workspace $IndexDb
-Reset-McpDaemon "fsharp-writer" $FSharpWorkspace $FSharpIndexDb
+$roslynStartup = Initialize-ReusableIndex "writer" $Workspace $IndexDb
+$evidence.roslynIndexStartup = $roslynStartup
+Assert-True (Test-Path -LiteralPath $IndexDb -PathType Leaf) "Roslyn index bootstrap did not produce a reusable index: $IndexDb"
+$fsharpStartup = Initialize-ReusableIndex "fsharp-writer" $FSharpWorkspace $FSharpIndexDb
+$evidence.fsharpIndexStartup = $fsharpStartup
+Assert-True (Test-Path -LiteralPath $FSharpIndexDb -PathType Leaf) "FSharp index bootstrap did not produce a reusable index: $FSharpIndexDb"
 try {
     $writer = Start-McpClient "writer" $Workspace $IndexDb
     $writerSession = Initialize-McpClient $writer "writer"
+    $writerCapabilities = $writerSession.Capabilities
+    $overview = Invoke-McpTool $writer "repo_overview" ([hashtable]::new())
+    if (-not $roslynIndexWasMissing) {
+        $roslynRepair = Repair-ReusedRoslynIndexIfCountsDrift $writer $overview $roslynStartup
+        $overview = $roslynRepair.Overview
+        $evidence.roslynIndexRepair = $roslynRepair.Evidence
+        $judgedIndexVersion = [string]$overview.meta.indexVersion
+
+        # The authority drift canary is intentionally semantic, so it warms compiler state in
+        # this daemon. Retire that probe daemon and start the actual gate on the same judged index
+        # so the later cold/warm telemetry contract remains a real cold/warm comparison.
+        Stop-McpClient $writer
+        Request-McpDaemonRetirement $writer
+        $writer = $null
+        $writer = Start-McpClient "writer" $Workspace $IndexDb
+        $writerSession = Initialize-McpClient $writer "writer"
+        $writerCapabilities = $writerSession.Capabilities
+        $overview = Invoke-McpTool $writer "repo_overview" ([hashtable]::new())
+        Assert-Equal $judgedIndexVersion ([string]$overview.meta.indexVersion) `
+            "Roslyn authority-probe restart crossed index epochs"
+    } else {
+        $evidence.roslynIndexRepair = [ordered]@{
+            outcome = "bootstrapped"
+            repaired = $false
+            startupRebuilt = $false
+            startupBuildReason = [string]$roslynStartup.startupBuildReason
+            startupPriorSchema = [string]$roslynStartup.startupPriorSchema
+            priorIndexVersion = $null
+            priorCounts = $null
+            rebuiltIndexVersion = [string]$overview.meta.indexVersion
+            rebuiltCounts = Get-RoslynOverviewCounts $overview
+        }
+    }
     $evidence.phoenixBuild = [ordered]@{
         serverInfo = $writerSession.Initialize.serverInfo
-        capabilities = $writerSession.Capabilities.build
+        capabilities = $writerCapabilities.build
     }
-    $evidence.results.writerCapabilities = $writerSession.Capabilities
+    $evidence.results.writerCapabilities = $writerCapabilities
+
+    Test-IntegrationCase "Roslyn reusable index startup and reuse are honest" {
+        Assert-True (-not [bool]$evidence.roslynIndexRepair.repaired) `
+            "The existing Roslyn index was rebuilt during startup or required a count repair. Inspect startupBuildReason, startupPriorSchema, IndexBuilder.SchemaVersion, and stored-output provenance; this gate run remains failed, and only a later ordinary reuse of the repaired matching fixture may pass."
+        Assert-True ([string]$evidence.roslynIndexRepair.outcome -in @("reused", "bootstrapped")) `
+            "Roslyn index startup outcome was neither ordinary reuse nor an explicit first bootstrap."
+    }
 
     Test-IntegrationCase "current server uses the frozen external index" {
         Assert-True (-not [string]::IsNullOrWhiteSpace([string]$writerSession.Initialize.serverInfo.version)) "MCP omitted its runtime version"
         Assert-True (@($writerSession.Tools.tools).Count -gt 0) "MCP advertised no tools"
-        Assert-Equal ([string]$baseline.roslynCommit) ([string](Invoke-McpTool $writer "repo_overview" ([hashtable]::new())).git.indexedCommit) "Indexed commit changed"
+        Assert-Equal ([string]$baseline.roslynCommit) ([string]$overview.git.indexedCommit) "Indexed commit changed"
+        Assert-Equal ([string]$overview.meta.indexVersion) ([string]$writerCapabilities.index.indexVersion) "Roslyn capabilities evidence is stale for the judged index epoch"
     }
 
-    $overview = Invoke-McpTool $writer "repo_overview" ([hashtable]::new())
     $evidence.results.repoOverview = $overview
     Test-IntegrationCase "repository counts" {
         Assert-Equal ([int]$expectedCounts.projects) ([int]$overview.projects.total) "Project count changed"
@@ -756,26 +1115,27 @@ try {
     # Run the exact references canary as the first semantic operation. Besides preserving the
     # correctness gate, this makes the emitted semanticOp record a reproducible cold-path sample
     # for compilationPreparation/documentScope/findReferences attribution on the pinned corpus.
-    $references = Invoke-SemanticWithRetry $writer "references" @{ symbolId = $targetHandle; mode = "auto"; maxProjects = 0; maxFiles = 1000; samplesPerGroup = 20; timeoutMs = 60000 }
+    $referencesCall = Invoke-ReferencesWithTelemetry $writer @{ symbolId = $targetHandle; mode = "auto"; maxProjects = 0; maxFiles = 1000; samplesPerGroup = 20; timeoutMs = 60000 } "partial"
+    $references = $referencesCall.Payload
     $evidence.results.references = $references
     Test-IntegrationCase "semantic references" {
         Assert-True ($null -eq $references.error) "references returned $($references.error): $($references.reason)"
-        Assert-Equal "exact" ([string]$references.meta.confidence) "references lost compiler-exact confidence"
-        Assert-True (-not [bool]$references.partial) "references unexpectedly became partial: $($references.partialReason)"
-        Assert-Equal ([int]$baseline.target.exactReferences) ([int]$references.totalReferences) "Reference count changed"
-        Assert-Equal ([int]$baseline.target.exactReferenceProjects) @($references.groups).Count "Reference-project count changed"
+        Assert-FriendRelationshipAuthority $references "references" `
+            -ExpectedUnprovenProjects @($baseline.target.referencesUnprovenFriendAssemblyProjects)
+        Assert-Equal ([int]$baseline.target.referenceCount) ([int]$references.totalReferences) "Reference count changed"
+        Assert-Equal ([int]$baseline.target.referenceProjects) @($references.groups).Count "Reference-project count changed"
     }
-    $referencesWarm = Invoke-SemanticWithRetry $writer "references" @{ symbolId = $targetHandle; mode = "auto"; maxProjects = 0; maxFiles = 1000; samplesPerGroup = 20; timeoutMs = 60000 }
+    $referencesWarmCall = Invoke-ReferencesWithTelemetry $writer @{ symbolId = $targetHandle; mode = "auto"; maxProjects = 0; maxFiles = 1000; samplesPerGroup = 20; timeoutMs = 60000 } "partial"
+    $referencesWarm = $referencesWarmCall.Payload
     $evidence.results.referencesWarm = $referencesWarm
     Test-IntegrationCase "warm semantic references parity" {
         Assert-True ($null -eq $referencesWarm.error) "warm references returned $($referencesWarm.error): $($referencesWarm.reason)"
-        Assert-Equal "exact" ([string]$referencesWarm.meta.confidence) "warm references lost compiler-exact confidence"
-        Assert-True (-not [bool]$referencesWarm.partial) "warm references unexpectedly became partial: $($referencesWarm.partialReason)"
+        Assert-FriendRelationshipAuthority $referencesWarm "warm references" `
+            -ExpectedUnprovenProjects @($baseline.target.referencesUnprovenFriendAssemblyProjects)
         Assert-Equal (Get-ReferenceContractSignature $references) (Get-ReferenceContractSignature $referencesWarm) "Cold/warm reference contract diverged"
     }
-    $writerReferenceTelemetry = @(Wait-ReferenceTelemetry $writer 2)
-    $writerReferenceColdTelemetry = $writerReferenceTelemetry[-2]
-    $writerReferenceWarmTelemetry = $writerReferenceTelemetry[-1]
+    $writerReferenceColdTelemetry = $referencesCall.Telemetry
+    $writerReferenceWarmTelemetry = $referencesWarmCall.Telemetry
     $evidence.results.referencesTelemetry = [ordered]@{
         cold = $writerReferenceColdTelemetry
         warm = $writerReferenceWarmTelemetry
@@ -897,9 +1257,12 @@ try {
     $implementationNames = @($implementations.implementations | ForEach-Object { Get-TypeResultName $_ })
     Test-IntegrationCase "compiler implementations" {
         Assert-True ($null -eq $implementations.error) "implementations returned $($implementations.error): $($implementations.reason)"
-        Assert-Equal "exact" ([string]$implementations.symbolConfidence) "implementations lost exact target identity"
-        Assert-Equal "heuristic" ([string]$implementations.implementationsConfidence) "implementations fallback confidence changed"
-        Assert-Equal "no_semantic_implementers" ([string]$implementations.partialReason) "implementations fallback reason changed"
+        Assert-FriendRelationshipAuthority $implementations "implementations" `
+            -ExpectedUnprovenProjects @($baseline.target.implementationsUnprovenFriendAssemblyProjects)
+        # A fresh index resolves both implementers through Roslyn. The heuristic-only split fields
+        # must stay absent; their presence would mean this canary fell back to indexed base lists.
+        Assert-True ($null -eq $implementations.PSObject.Properties["symbolConfidence"]) "implementations unexpectedly used mixed fallback identity"
+        Assert-True ($null -eq $implementations.PSObject.Properties["implementationsConfidence"]) "implementations unexpectedly used heuristic fallback results"
         foreach ($expected in @($baseline.target.expectedImplementations)) {
             Assert-Contains $implementationNames ([string]$expected.name) "Expected implementation is absent"
         }
@@ -910,9 +1273,9 @@ try {
     $derivedNames = @($hierarchy.derivedOrImplementing | ForEach-Object { Get-TypeResultName $_ })
     Test-IntegrationCase "compiler type hierarchy" {
         Assert-True ($null -eq $hierarchy.error) "type_hierarchy returned $($hierarchy.error): $($hierarchy.reason)"
-        Assert-Equal "exact" ([string]$hierarchy.meta.confidence) "type_hierarchy lost compiler-exact base identity"
-        Assert-Equal "heuristic" ([string]$hierarchy.derivedConfidence) "type_hierarchy derived fallback confidence changed"
-        Assert-Equal "no_semantic_derived" ([string]$hierarchy.partialReason) "type_hierarchy derived fallback reason changed"
+        Assert-FriendRelationshipAuthority $hierarchy "type_hierarchy" `
+            -ExpectedUnprovenProjects @($baseline.target.typeHierarchyUnprovenFriendAssemblyProjects)
+        Assert-True ($null -eq $hierarchy.PSObject.Properties["derivedConfidence"]) "type_hierarchy unexpectedly used heuristic derived results"
         foreach ($expected in @($baseline.target.expectedImplementations)) {
             Assert-Contains $derivedNames ([string]$expected.name) "Expected hierarchy descendant is absent"
         }
@@ -938,7 +1301,7 @@ try {
         }
         Test-IntegrationCase "implementation base binding: $($expected.name)" {
             Assert-True ($null -eq $baseDefinition.error) "Definition of the implementation's base returned $($baseDefinition.error): $($baseDefinition.reason)"
-            Assert-FriendRelationshipAuthority $baseDefinition "Implementation base binding"
+            Assert-FriendRelationshipAuthority $baseDefinition "Implementation base binding" $false
             Assert-True (($baseDefinition | ConvertTo-Json -Compress -Depth 20) -match [regex]::Escape([string]$baseline.target.path)) "Implementation base bound to the wrong declaration"
         }
     }
@@ -1023,6 +1386,55 @@ try {
         }
     }
 
+    # The internal overload target above is intentionally partial for references because the
+    # pinned repository contains textual candidates outside its loadable dependency graph.
+    # Keep a separate public, uniquely named method canary whose complete project closure proves
+    # that references still returns compiler-exact, non-partial results end to end.
+    $exactReferencesAt = Invoke-McpTool $writer "symbol_at" @{
+        path = [string]$baseline.exactReferencesTarget.path
+        line = [int]$baseline.exactReferencesTarget.line
+    }
+    $exactReferenceCandidates = @($exactReferencesAt.chain | Where-Object {
+        $_.name -eq [string]$baseline.exactReferencesTarget.name -and
+        ([string]$_.containingType).EndsWith([string]$baseline.exactReferencesTarget.container, [StringComparison]::Ordinal)
+    })
+    $exactReferences = $null
+    if ($exactReferenceCandidates.Count -eq 1) {
+        $exactReferences = Invoke-SemanticWithRetry $writer "references" @{
+            symbolId = [string]$exactReferenceCandidates[0].symbolId
+            mode = "auto"
+            maxProjects = 0
+            maxFiles = 1000
+            samplesPerGroup = [int]$baseline.exactReferencesTarget.samplesPerGroup
+            timeoutMs = 60000
+        }
+    }
+    $evidence.results.exactReferencesSymbolAt = $exactReferencesAt
+    $evidence.results.exactReferences = $exactReferences
+    Test-IntegrationCase "compiler-exact method references" {
+        Assert-Equal 1 $exactReferenceCandidates.Count "Exact references target is missing or ambiguous at its pinned declaration"
+        Assert-True ($null -ne $exactReferences) "Exact references target could not be queried"
+        Assert-True ($null -eq $exactReferences.error) "Method references returned $($exactReferences.error): $($exactReferences.reason)"
+        Assert-Equal ([string]$baseline.exactReferencesTarget.documentationCommentId) ([string]$exactReferences.symbol.documentationCommentId) "Method references bound to the wrong symbol"
+        Assert-Equal "exact" ([string]$exactReferences.meta.confidence) "Method references lost compiler-exact confidence"
+        Assert-Equal "semantic" ([string]$exactReferences.meta.navigationLayer) "Method references lost semantic provenance"
+        $exactReferencesPartial = $null -ne $exactReferences.PSObject.Properties["partial"] -and [bool]$exactReferences.partial
+        Assert-True (-not $exactReferencesPartial) "Method references unexpectedly became partial: $($exactReferences.partialReason)"
+        Assert-Equal ([int]$baseline.exactReferencesTarget.referenceCount) ([int]$exactReferences.totalReferences) "Compiler-exact method reference count changed"
+        Assert-Equal ([int]$baseline.exactReferencesTarget.referenceProjects) @($exactReferences.groups).Count "Compiler-exact method reference project count changed"
+        foreach ($expectedGroup in @($baseline.exactReferencesTarget.groups)) {
+            $actualGroups = @($exactReferences.groups | Where-Object {
+                [string]$_.project -eq [string]$expectedGroup.project
+            })
+            Assert-Equal 1 $actualGroups.Count "Compiler-exact method reference group $($expectedGroup.project) is missing or duplicated"
+            Assert-Equal ([int]$expectedGroup.count) ([int]$actualGroups[0].count) "Compiler-exact method reference count changed for $($expectedGroup.project)"
+            $actualSamples = @($actualGroups[0].samples | ForEach-Object {
+                "$([string]$_.path)|$([int]$_.line)|$([string]$_.kind)"
+            })
+            Assert-Equal (@($expectedGroup.samples) -join ";") ($actualSamples -join ";") "Compiler-exact method sample order changed for $($expectedGroup.project)"
+        }
+    }
+
     $projectGraph = Invoke-McpTool $writer "project_graph" @{ project = "Microsoft.CodeAnalysis.Workspaces"; depth = 2; direction = "both" }
     $evidence.results.projectGraph = $projectGraph
     Test-IntegrationCase "project graph" {
@@ -1061,14 +1473,45 @@ try {
 
     $fsharpWriter = Start-McpClient "fsharp-writer" $FSharpWorkspace $FSharpIndexDb
     $fsharpSession = Initialize-McpClient $fsharpWriter "writer"
+    $fsharpCapabilities = $fsharpSession.Capabilities
     $fsharpOverview = Invoke-McpTool $fsharpWriter "repo_overview" ([hashtable]::new())
-    $evidence.results.fsharpCapabilities = $fsharpSession.Capabilities
+    if (-not $fsharpIndexWasMissing) {
+        $fsharpRepair = Repair-ReusedFSharpIndexIfCountsDrift $fsharpWriter $fsharpOverview $fsharpStartup
+        $fsharpOverview = $fsharpRepair.Overview
+        $evidence.fsharpIndexRepair = $fsharpRepair.Evidence
+        if ([bool]$fsharpRepair.Evidence.repaired) {
+            $fsharpCapabilities = Invoke-McpTool $fsharpWriter "server_capabilities" `
+                ([hashtable]::new())
+        }
+    } else {
+        $evidence.fsharpIndexRepair = [ordered]@{
+            outcome = "bootstrapped"
+            repaired = $false
+            startupRebuilt = $false
+            startupBuildReason = [string]$fsharpStartup.startupBuildReason
+            startupPriorSchema = [string]$fsharpStartup.startupPriorSchema
+            priorIndexVersion = $null
+            priorCounts = $null
+            rebuiltIndexVersion = [string]$fsharpOverview.meta.indexVersion
+            rebuiltCounts = Get-FSharpOverviewCounts $fsharpOverview
+        }
+    }
+    $evidence.results.fsharpCapabilities = $fsharpCapabilities
     $evidence.results.fsharpOverview = $fsharpOverview
+
+    Test-IntegrationCase "FSharp reusable index startup and reuse are honest" {
+        Assert-True (-not [bool]$evidence.fsharpIndexRepair.repaired) `
+            "The existing FSharp index was rebuilt during startup or required a count repair. Inspect startupBuildReason, startupPriorSchema, IndexBuilder.SchemaVersion, and stored-output provenance; this gate run remains failed, and only a later ordinary reuse of the repaired matching fixture may pass."
+        Assert-True ([string]$evidence.fsharpIndexRepair.outcome -in @("reused", "bootstrapped")) `
+            "FSharp index startup outcome was neither ordinary reuse nor an explicit first bootstrap."
+    }
+
     Test-IntegrationCase "current server uses the frozen official FSharp index" {
         Assert-True (-not [string]::IsNullOrWhiteSpace([string]$fsharpSession.Initialize.serverInfo.version)) "FSharp MCP omitted its runtime version"
         Assert-True (@($fsharpSession.Tools.tools).Count -gt 0) "FSharp MCP advertised no tools"
         Assert-Equal ([string]$fsharpBaseline.fsharpCommit) ([string]$fsharpOverview.git.indexedCommit) "FSharp indexed commit changed"
         Assert-True ([bool]$fsharpOverview.git.headMatchesIndex) "FSharp HEAD no longer matches the reusable index"
+        Assert-Equal ([string]$fsharpOverview.meta.indexVersion) ([string]$fsharpCapabilities.index.indexVersion) "FSharp capabilities evidence is stale for the judged index epoch"
     }
 
     Test-IntegrationCase "official FSharp repository counts" {
@@ -1158,8 +1601,8 @@ try {
     $secondSession = Initialize-McpClient $secondClient "writer"
     $evidence.results.secondClientCapabilities = $secondSession.Capabilities
     Test-IntegrationCase "second client shares the same daemon and index epoch" {
-        Assert-Equal ([string]$writerSession.Capabilities.index.indexVersion) ([string]$secondSession.Capabilities.index.indexVersion) "Second client attached to a different index epoch"
-        Assert-Equal ([int]$writerSession.Capabilities.runtime.processId) ([int]$secondSession.Capabilities.runtime.processId) "Second client did not join the same daemon process"
+        Assert-Equal ([string]$writerCapabilities.index.indexVersion) ([string]$secondSession.Capabilities.index.indexVersion) "Second client attached to a different index epoch"
+        Assert-Equal ([int]$writerCapabilities.runtime.processId) ([int]$secondSession.Capabilities.runtime.processId) "Second client did not join the same daemon process"
     }
 
     $secondSearch = Invoke-McpTool $secondClient "search_symbol" @{ query = [string]$baseline.target.name; limit = 10 }
@@ -1170,10 +1613,10 @@ try {
         Assert-Equal $targetHandle ([string]$secondTarget[0].symbolId) "Second client saw a different index handle"
     }
 
-    $secondReferences = Invoke-SemanticWithRetry $secondClient "references" @{ symbolId = [string]$secondTarget[0].symbolId; mode = "auto"; maxProjects = 0; maxFiles = 1000; samplesPerGroup = 20; timeoutMs = 60000 }
+    $secondReferencesCall = Invoke-ReferencesWithTelemetry $secondClient @{ symbolId = [string]$secondTarget[0].symbolId; mode = "auto"; maxProjects = 0; maxFiles = 1000; samplesPerGroup = 20; timeoutMs = 60000 } "partial"
+    $secondReferences = $secondReferencesCall.Payload
     $evidence.results.secondClientReferences = $secondReferences
-    $secondReferenceTelemetryRecords = @(Wait-ReferenceTelemetry $secondClient 1)
-    $secondReferenceTelemetry = $secondReferenceTelemetryRecords[-1]
+    $secondReferenceTelemetry = $secondReferencesCall.Telemetry
     $evidence.results.secondClientReferenceTelemetry = $secondReferenceTelemetry
     Test-IntegrationCase "second client semantic references parity" {
         Assert-True ($null -eq $secondReferences.error) "Second-client references returned $($secondReferences.error): $($secondReferences.reason)"

@@ -197,33 +197,43 @@
     const context = canvas?.getContext("2d");
     const pauseButton = document.getElementById("atlas-pause");
     const pauseLabel = pauseButton?.querySelector(".atlas__pause-label");
-    const stepButtons = [...document.querySelectorAll("[data-atlas-step]")];
     if (!atlas || !scene || !canvas || !context || !pauseButton || !pauseLabel) return;
 
     let state = reducedMotion.matches ? 3 : 0;
-    let userPaused = reducedMotion.matches;
+    // Keep explicit user intent separate from the operating-system preference so a live
+    // preference change can suspend motion temporarily without losing the user's pause choice.
+    let userPaused = false;
     let visible = true;
     let width = 1;
     let height = 1;
     let dpr = 1;
-    let nodes = [];
     let raf = 0;
     let timer = 0;
     let lastTime = performance.now();
 
-    function createNodes() {
-      const random = mulberry32(20260710);
-      const count = width < 520 ? 38 : 58;
-      nodes = Array.from({ length: count }, (_, index) => {
-        const angle = random() * Math.PI * 2;
-        const radius = 0.18 + random() * 0.29;
+    const TAU = Math.PI * 2;
+    let stars = [];
+    let disk = [];
+
+    function createField() {
+      const random = mulberry32(20260821);
+      const starCount = width < 520 ? 70 : 110;
+      stars = Array.from({ length: starCount }, () => ({
+        x: random(),
+        y: random(),
+        size: 0.4 + random() * 1.0,
+        twinkle: random() * TAU,
+        warm: random() > 0.8
+      }));
+      const diskCount = width < 520 ? 520 : 920;
+      disk = Array.from({ length: diskCount }, () => {
+        const band = Math.pow(random(), 1.5);
         return {
-          angle,
-          radius,
-          speed: (0.018 + random() * 0.026) * (random() > 0.5 ? 1 : -1),
-          size: 0.6 + random() * 1.25,
-          group: index % 4,
-          phase: random() * Math.PI * 2
+          a: 1.35 + band * 1.25,
+          phi: random() * TAU,
+          size: 0.4 + random() * 0.9,
+          drift: (random() - 0.5) * 0.05,
+          heat: 0.5 + random() * 0.5
         };
       });
     }
@@ -236,98 +246,109 @@
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
-      createNodes();
+      createField();
       draw(performance.now(), true);
     }
 
-    function nodePosition(node, time, still) {
-      const motion = still ? 0 : time * node.speed * 0.00012;
-      const angle = node.angle + motion;
-      const squeeze = 0.82 + Math.sin(node.phase) * 0.07;
-      return {
-        x: width * 0.5 + Math.cos(angle) * width * node.radius,
-        y: height * 0.5 + Math.sin(angle) * height * node.radius * squeeze
-      };
+    function diskColor(t) {
+      const green = Math.round(225 - t * 70);
+      const blue = Math.round(190 - t * 115);
+      return `255,${green},${blue}`;
     }
 
-    function drawPath(points, progress, color) {
-      if (progress <= 0) return;
-      context.save();
+    function drawGrain(px, py, size, color, alpha) {
       context.beginPath();
-      context.moveTo(points[0].x * width, points[0].y * height);
-      const last = Math.min(points.length - 1, Math.ceil(progress));
-      for (let index = 1; index <= last; index += 1) {
-        const point = points[index];
-        context.lineTo(point.x * width, point.y * height);
+      context.arc(px, py, size, 0, TAU);
+      context.fillStyle = `rgba(${color},${alpha})`;
+      context.fill();
+    }
+
+    function drawDiskPass(time, still, cx, cy, horizon, farPass, ramp) {
+      const flat = 0.12;
+      for (const grain of disk) {
+        const angle = grain.phi + (still ? 0 : time * 0.002 * (0.9 / Math.pow(grain.a, 1.5)));
+        const sinA = Math.sin(angle);
+        if (farPass ? sinA >= 0 : sinA < 0) continue;
+        const cosA = Math.cos(angle);
+        const radius = grain.a * horizon;
+        const beam = 1 + 0.35 * -cosA;
+        const t = (grain.a - 1.35) / 1.25;
+        const color = diskColor(t);
+        const alpha = Math.min(1, ramp * grain.heat * (0.5 + 0.25 * beam));
+        const size = grain.size * (0.85 + beam * 0.2);
+
+        if (farPass) {
+          const wrap = -sinA;
+          const ringR = horizon * (1.08 + t * 0.2) + grain.drift * horizon;
+          const px = cx + cosA * (radius + (ringR - radius) * wrap);
+          const lift = wrap * (radius * flat + (ringR - radius * flat) * wrap);
+          drawGrain(px, cy - lift, size, color, alpha);
+          drawGrain(px, cy + lift * 0.92, size * 0.85, color, alpha * 0.45);
+        } else {
+          const px = cx + cosA * radius;
+          const py = cy + sinA * radius * flat + grain.drift * horizon;
+          drawGrain(px, py, size, color, alpha);
+        }
       }
-      context.strokeStyle = color;
-      context.lineWidth = 1.3;
-      context.shadowBlur = 10;
-      context.shadowColor = color;
-      context.setLineDash([4, 7]);
-      context.stroke();
-      context.restore();
     }
 
     function draw(time, still = false) {
-      context.clearRect(0, 0, width, height);
-      const positions = nodes.map((node) => nodePosition(node, time, still));
+      if (still) {
+        context.clearRect(0, 0, width, height);
+      } else {
+        context.globalCompositeOperation = "destination-out";
+        context.fillStyle = "rgba(0,0,0,0.18)";
+        context.fillRect(0, 0, width, height);
+        context.globalCompositeOperation = "source-over";
+      }
+      const cx = width * 0.5;
+      const cy = height * 0.52;
+      const horizon = Math.min(width, height) * 0.19;
+      const ramp = 0.6 + state * 0.12;
+      const einstein = horizon * (1.0 + state * 0.04);
 
-      for (let index = 0; index < nodes.length; index += 1) {
-        const node = nodes[index];
-        const point = positions[index];
-        const active = state > 0 && node.group <= Math.min(3, state);
-        const color = node.group === 0 ? "91,214,255" : node.group === 1 ? "141,114,255" : node.group === 2 ? "255,107,61" : "201,255,121";
-
-        if (active) {
-          for (let next = index + 1; next < nodes.length; next += 1) {
-            if (nodes[next].group !== node.group) continue;
-            const other = positions[next];
-            const distance = Math.hypot(point.x - other.x, point.y - other.y);
-            if (distance > width * 0.16) continue;
-            context.beginPath();
-            context.moveTo(point.x, point.y);
-            context.lineTo(other.x, other.y);
-            context.strokeStyle = `rgba(${color},${(1 - distance / (width * 0.16)) * 0.13})`;
-            context.lineWidth = 0.55;
-            context.stroke();
-          }
-        }
-
+      for (const star of stars) {
+        const sx = star.x * width;
+        const sy = star.y * height;
+        const dx = sx - cx;
+        const dy = sy - cy;
+        const r = Math.hypot(dx, dy) || 1;
+        const lensed = (r + Math.sqrt(r * r + 4 * einstein * einstein)) / 2;
+        if (lensed < horizon * 1.1) continue;
+        const lx = cx + (dx / r) * lensed;
+        const ly = cy + (dy / r) * lensed;
+        if (lx < -8 || lx > width + 8 || ly < -8 || ly > height + 8) continue;
+        const flicker = still ? 0.7 : 0.5 + 0.4 * Math.sin(time * 0.0011 + star.twinkle);
         context.beginPath();
-        context.arc(point.x, point.y, node.size + (active ? 0.55 : 0), 0, Math.PI * 2);
-        context.fillStyle = `rgba(${color},${active ? 0.78 : 0.27})`;
-        if (active) {
-          context.shadowBlur = 9;
-          context.shadowColor = `rgba(${color},.72)`;
-        }
+        context.arc(lx, ly, star.size, 0, TAU);
+        context.fillStyle = star.warm
+          ? `rgba(255,215,175,${0.32 * flicker})`
+          : `rgba(200,212,238,${0.34 * flicker})`;
         context.fill();
-        context.shadowBlur = 0;
       }
 
-      const route = [
-        { x: 0.2, y: 0.46 },
-        { x: 0.5, y: 0.5 },
-        { x: 0.79, y: 0.34 },
-        { x: 0.76, y: 0.79 }
-      ];
-      drawPath(route, state, "rgba(91,214,255,.82)");
+      context.globalCompositeOperation = "lighter";
+      drawDiskPass(time, still, cx, cy, horizon, true, ramp);
 
-      if (state > 0) {
-        const segment = Math.min(state, route.length - 1);
-        const from = route[segment - 1];
-        const to = route[segment];
-        const phase = still ? 1 : (time % 1600) / 1600;
-        const x = (from.x + (to.x - from.x) * phase) * width;
-        const y = (from.y + (to.y - from.y) * phase) * height;
-        context.beginPath();
-        context.arc(x, y, 3.2, 0, Math.PI * 2);
-        context.fillStyle = "#f8f7f3";
-        context.shadowBlur = 15;
-        context.shadowColor = "#5bd6ff";
-        context.fill();
-        context.shadowBlur = 0;
-      }
+      context.globalCompositeOperation = "source-over";
+
+      context.beginPath();
+      context.arc(cx, cy, horizon, 0, TAU);
+      context.fillStyle = "#04050a";
+      context.fill();
+
+      context.beginPath();
+      context.arc(cx, cy, horizon * 1.03, 0, TAU);
+      context.strokeStyle = `rgba(255,228,190,${0.62 + state * 0.1})`;
+      context.lineWidth = 1.8;
+      context.shadowBlur = 26;
+      context.shadowColor = "rgba(255,180,115,0.85)";
+      context.stroke();
+      context.shadowBlur = 0;
+
+      context.globalCompositeOperation = "lighter";
+      drawDiskPass(time, still, cx, cy, horizon, false, ramp);
+      context.globalCompositeOperation = "source-over";
     }
 
     function canAnimate() {
@@ -361,16 +382,16 @@
     }
 
     function updatePauseButton() {
-      pauseButton.setAttribute("aria-pressed", String(userPaused));
+      const motionPaused = reducedMotion.matches || userPaused;
+      pauseButton.setAttribute("aria-pressed", String(motionPaused));
       pauseLabel.textContent = reducedMotion.matches ? "Motion reduced" : userPaused ? "Play motion" : "Pause motion";
       pauseButton.disabled = reducedMotion.matches;
-      setGlobalMotionPaused(userPaused && !reducedMotion.matches);
+      setGlobalMotionPaused(motionPaused);
     }
 
     function setState(nextState, pauseFromChoice = false) {
       state = Math.max(0, Math.min(3, Number(nextState)));
       atlas.dataset.atlasState = String(state);
-      stepButtons.forEach((button) => button.setAttribute("aria-pressed", String(Number(button.dataset.atlasStep) === state)));
       if (pauseFromChoice && !reducedMotion.matches) {
         userPaused = true;
         stopFrameLoop();
@@ -379,10 +400,6 @@
       }
       draw(performance.now(), !canAnimate());
     }
-
-    stepButtons.forEach((button) => {
-      button.addEventListener("click", () => setState(button.dataset.atlasStep, true));
-    });
 
     pauseButton.addEventListener("click", () => {
       if (reducedMotion.matches) return;
@@ -398,29 +415,27 @@
       }
     });
 
-    if (finePointer.matches && !reducedMotion.matches) {
-      let pointerFrame = 0;
-      let pointer = { x: 0.5, y: 0.5 };
-      const renderPointer = () => {
-        pointerFrame = 0;
-        const rotateY = (pointer.x - 0.5) * 5;
-        const rotateX = (0.5 - pointer.y) * 5;
-        scene.style.transform = `perspective(950px) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg)`;
-        scene.style.setProperty("--pointer-x", `${(pointer.x * 100).toFixed(1)}%`);
-        scene.style.setProperty("--pointer-y", `${(pointer.y * 100).toFixed(1)}%`);
-      };
-      scene.addEventListener("pointermove", (event) => {
-        const rect = scene.getBoundingClientRect();
-        pointer = {
-          x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
-          y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))
-        };
-        if (!pointerFrame) pointerFrame = requestAnimationFrame(renderPointer);
-      });
-      scene.addEventListener("pointerleave", () => {
-        pointer = { x: 0.5, y: 0.5 };
-        if (!pointerFrame) pointerFrame = requestAnimationFrame(renderPointer);
-      });
+    function applyReducedMotionPreference() {
+      stopFrameLoop();
+      clearTimeout(timer);
+      if (reducedMotion.matches) {
+        setState(3);
+        updatePauseButton();
+        draw(performance.now(), true);
+        return;
+      }
+
+      updatePauseButton();
+      draw(performance.now(), true);
+      // canAnimate preserves the user's independent pause choice and the page visibility state.
+      startFrameLoop();
+      scheduleStep();
+    }
+
+    if (typeof reducedMotion.addEventListener === "function") {
+      reducedMotion.addEventListener("change", applyReducedMotionPreference);
+    } else if (typeof reducedMotion.addListener === "function") {
+      reducedMotion.addListener(applyReducedMotionPreference);
     }
 
     if ("IntersectionObserver" in window) {
@@ -457,40 +472,6 @@
     scheduleStep();
   }
 
-  function setupTabs() {
-    document.querySelectorAll("[data-tabs]").forEach((tabsRoot) => {
-      const tabs = [...tabsRoot.querySelectorAll('[role="tab"]')];
-      const panels = tabs.map((tab) => document.getElementById(tab.getAttribute("aria-controls")));
-
-      function selectTab(nextTab, moveFocus = false) {
-        tabs.forEach((tab, index) => {
-          const selected = tab === nextTab;
-          tab.setAttribute("aria-selected", String(selected));
-          tab.tabIndex = selected ? 0 : -1;
-          if (panels[index]) panels[index].hidden = !selected;
-        });
-        if (moveFocus) nextTab.focus();
-      }
-
-      tabs.forEach((tab, index) => {
-        tab.addEventListener("click", () => selectTab(tab));
-        tab.addEventListener("keydown", (event) => {
-          let nextIndex = index;
-          if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
-          else if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
-          else if (event.key === "Home") nextIndex = 0;
-          else if (event.key === "End") nextIndex = tabs.length - 1;
-          else return;
-          event.preventDefault();
-          selectTab(tabs[nextIndex], true);
-        });
-      });
-
-      selectTab(tabs.find((tab) => tab.getAttribute("aria-selected") === "true") || tabs[0]);
-    });
-    document.body.classList.add("tabs-ready");
-  }
-
   async function copyText(text) {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
@@ -502,9 +483,14 @@
     textarea.style.position = "fixed";
     textarea.style.opacity = "0";
     document.body.append(textarea);
-    textarea.select();
-    document.execCommand("copy");
-    textarea.remove();
+    let copied = false;
+    try {
+      textarea.select();
+      copied = document.execCommand("copy");
+    } finally {
+      textarea.remove();
+    }
+    if (!copied) throw new Error("The browser rejected the clipboard copy command.");
   }
 
   function setupCopyButtons() {
@@ -541,7 +527,6 @@
     setupActiveNavigation();
     setupScrollEffects();
     setupAtlas();
-    setupTabs();
     setupCopyButtons();
     document.documentElement.classList.replace("no-js", "js");
     window.__phoenixReady = true;

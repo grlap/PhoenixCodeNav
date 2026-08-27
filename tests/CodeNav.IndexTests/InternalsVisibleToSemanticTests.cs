@@ -29,10 +29,24 @@ public sealed class InternalsVisibleToSemanticTests
                 "reference assemblies are required for the semantic friend-assembly regression");
             var tools = new NavigationTools(manager, semantic);
 
-            JsonElement implementations = Parse(tools.Implementations(
-                name: "ISecretContract", arity: 0, timeoutMs: 60000));
-            JsonElement hierarchy = Parse(tools.TypeHierarchy(
-                name: "ISecretContract", arity: 0, timeoutMs: 60000));
+            Func<string> implementationsCall = () => tools.Implementations(
+                name: "ISecretContract", arity: 0, timeoutMs: 60000);
+            JsonElement implementations = grantInternals
+                ? SemanticRetry.ParseExactWithRetry(implementationsCall)
+                : SemanticRetry.ParseWithRetry(
+                    implementationsCall,
+                    json => json.TryGetProperty("meta", out JsonElement meta) &&
+                            meta.TryGetProperty("confidence", out JsonElement confidence) &&
+                            confidence.GetString() == "heuristic" &&
+                            json.TryGetProperty("implementationsConfidence",
+                                out JsonElement implementationsConfidence) &&
+                            implementationsConfidence.GetString() == "heuristic" &&
+                            json.TryGetProperty("partialReason", out JsonElement reason) &&
+                            reason.GetString() == "no_semantic_implementers",
+                    "grant=false retains the heuristic no_semantic_implementers denial");
+            JsonElement hierarchy = SemanticRetry.ParseExactWithRetry(() =>
+                tools.TypeHierarchy(
+                    name: "ISecretContract", arity: 0, timeoutMs: 60000));
 
             Assert.Equal(1, implementations.GetProperty("implementations").GetArrayLength());
             Assert.Equal(1, hierarchy.GetProperty("derivedOrImplementing").GetArrayLength());
@@ -239,8 +253,9 @@ public sealed class InternalsVisibleToSemanticTests
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
 
-            JsonElement before = Parse(tools.Implementations(
-                name: "ISecretContract", arity: 0, timeoutMs: 60000));
+            JsonElement before = SemanticRetry.ParseExactWithRetry(() =>
+                tools.Implementations(
+                    name: "ISecretContract", arity: 0, timeoutMs: 60000));
             Assert.Equal("exact", before.GetProperty("meta").GetProperty("confidence").GetString());
 
             (long FileCount, long HashSum) oldFingerprint;

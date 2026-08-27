@@ -39,8 +39,7 @@ public class Batch14PathBugsTests
         }
         finally
         {
-            TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -72,8 +71,7 @@ public class Batch14PathBugsTests
         }
         finally
         {
-            TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -104,22 +102,23 @@ public class Batch14PathBugsTests
                     before = q.Overview().CsFiles;
                 }
 
-                var tools = new NavigationTools(manager, new CodeNav.Core.Semantic.SemanticService(manager));
+                using var semantic = new SemanticService(manager);
+                var tools = new NavigationTools(manager, semantic);
                 string platformPath = forward.Replace('/', Path.DirectorySeparatorChar);
                 tools.RefreshIndex(paths: platformPath);
 
                 for (int i = 0; i < 200 && manager.Health().PendingChanges > 0; i++) Thread.Sleep(25);
                 Thread.Sleep(300); // let the refresh write commit
 
-                long after = manager.OpenQueries().Overview().CsFiles;
+                using var finalQueries = manager.OpenQueries();
+                long after = finalQueries.Overview().CsFiles;
                 Assert.Equal(before, after); // normalized -> matched the existing row; bug 9h3 would add one
             }
             finally { manager.Dispose(); }
         }
         finally
         {
-            TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -176,7 +175,7 @@ public class Batch14PathBugsTests
             // kae review: the pooled readers live on dbPath and copyPath UNDER ROOT — clear
             // root before deleting it. The redirected paths are asserted to never exist, so
             // they own no pools; their file deletes below stay as just-in-case cleanup.
-            TestWorkspaceCleanup.ClearIndexPools(root);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
             foreach (string path in new[] { redirectedBuild, redirectedCopy })
             {
                 try { File.Delete(path); } catch { }
@@ -184,7 +183,6 @@ public class Batch14PathBugsTests
                 try { File.Delete(path + "-shm"); } catch { }
                 try { File.Delete(path + "-journal"); } catch { }
             }
-            try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
 

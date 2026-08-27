@@ -584,9 +584,20 @@ public sealed partial class NavigationTools
         }
         if (solutionMetadataFiles.Count > 0)
         {
+            bool deletedSolutionMetadata = deleted.Any(IsSolutionMetadataPath);
             notes.Add(new ReviewNote(NoteIds.ReviewSolutionFilesChanged,
                 $"{solutionMetadataFiles.Count} solution metadata file(s) changed — inspect the raw diff for editor-inventory changes; solution membership does not provide build, dependency, ownership, or symbol-resolution authority."));
+            if (deletedSolutionMetadata)
+            {
+                notes.Add(new ReviewNote(NoteIds.ReviewDeletedSolutionMetadataScope,
+                    "Deleted solution metadata remains in changedFiles counts but is excluded from deletedFiles and former-symbol expansion."));
+            }
         }
+        // Keep the complete Git deletion inventory for changedFiles counts. Solution files stay
+        // visible there and in changedProjectFiles, but they are editor inventory rather than
+        // source-deletion evidence: deleting them cannot invalidate an exact C# move or populate
+        // deletedFiles.
+        var sourceDeleted = deleted.Where(path => !IsSolutionMetadataPath(path)).ToList();
 
         // ---- 3. Hunks -> symbols (span intersection, innermost policy) ----
         var touched = new List<SymbolHit>();
@@ -810,7 +821,7 @@ public sealed partial class NavigationTools
             // move-only contract. Every owner lookup used by the expansion below is now cached,
             // so a complete preflight cannot become incomplete merely because another deletion
             // exists; only actual proof incompleteness reintroduces a moved source.
-            foreach (string path in deleted.OrderBy(candidate => candidate,
+            foreach (string path in sourceDeleted.OrderBy(candidate => candidate,
                          StringComparer.Ordinal).Take(ReviewMaxDeletedFiles))
             {
                 if (!path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) continue;
@@ -828,7 +839,7 @@ public sealed partial class NavigationTools
                          .Take(ReviewMaxTypesPerDeleted))
                 {
                     List<SymbolHit> survivingDeclarations = FilterExistingReviewDeclarations(
-                            path, deleted, q.SymbolsByDeclarationIdentity(formerType.Kind,
+                            path, sourceDeleted, q.SymbolsByDeclarationIdentity(formerType.Kind,
                                 formerType.Name, formerType.Namespace, formerType.Container,
                                 formerType.Arity, 17), ReviewGitPathExists)
                         .Take(16).ToList();
@@ -849,10 +860,13 @@ public sealed partial class NavigationTools
             foreach (string source in provisionallyPreservedMoveSources)
             {
                 if (!deleted.Contains(source, StringComparer.Ordinal)) deleted.Add(source);
+                if (!IsSolutionMetadataPath(source) &&
+                    !sourceDeleted.Contains(source, StringComparer.Ordinal))
+                    sourceDeleted.Add(source);
             }
         }
 
-        var expandedDeletedPaths = deleted.OrderBy(path => path, StringComparer.Ordinal)
+        var expandedDeletedPaths = sourceDeleted.OrderBy(path => path, StringComparer.Ordinal)
             .Take(ReviewMaxDeletedFiles).ToHashSet(StringComparer.Ordinal);
 
         if (resolvedBase is not null)
@@ -860,7 +874,7 @@ public sealed partial class NavigationTools
             foreach (var (file, fileHunks) in changedHunks.OrderBy(pair => pair.Key,
                          StringComparer.Ordinal))
             {
-                bool deletedFile = deleted.Contains(file, StringComparer.Ordinal);
+                bool deletedFile = sourceDeleted.Contains(file, StringComparer.Ordinal);
                 if (!file.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
                     (deletedFile && !expandedDeletedPaths.Contains(file)) ||
                     (!csFiles.Contains(file, StringComparer.Ordinal) && !deletedFile))
@@ -1001,9 +1015,9 @@ public sealed partial class NavigationTools
         var ownerSuppressedMembers = new List<(string Path, SymbolRow Symbol)>();
         bool formerTypesCapHit = false;
         bool survivingDeclarationsCapHit = false;
-        var orderedDeleted = deleted.OrderBy(path => path, StringComparer.Ordinal).ToList();
+        var orderedDeleted = sourceDeleted.OrderBy(path => path, StringComparer.Ordinal).ToList();
         bool deletedFileCapHit = orderedDeleted.Count > ReviewMaxDeletedFiles;
-        if (deleted.Count > 0 && resolvedBase is not null)
+        if (sourceDeleted.Count > 0 && resolvedBase is not null)
         {
             foreach (var path in orderedDeleted.Take(ReviewMaxDeletedFiles))
             {
@@ -1032,7 +1046,7 @@ public sealed partial class NavigationTools
                 foreach (SymbolRow formerType in allFormerTypes.Take(ReviewMaxTypesPerDeleted))
                 {
                     List<SymbolHit> declarationProbe = FilterExistingReviewDeclarations(
-                        path, deleted, q.SymbolsByDeclarationIdentity(formerType.Kind,
+                        path, sourceDeleted, q.SymbolsByDeclarationIdentity(formerType.Kind,
                             formerType.Name, formerType.Namespace, formerType.Container,
                             formerType.Arity, 17), ReviewGitPathExists);
                     bool declarationsTruncated = declarationProbe.Count > 16;

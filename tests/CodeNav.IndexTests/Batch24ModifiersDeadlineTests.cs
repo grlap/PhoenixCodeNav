@@ -180,6 +180,6 @@ public class Batch24ModifiersDeadlineTests
     private static void Cleanup(string root)
     {
         TestWorkspaceCleanup.ClearIndexPools(root);
-        try { Directory.Delete(root, recursive: true); } catch { /* windows file locks */ }
+        TestWorkspaceCleanup.DeleteWorkspace(root);
     }
 }

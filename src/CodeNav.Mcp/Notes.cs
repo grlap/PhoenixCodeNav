@@ -18,6 +18,8 @@ internal static class NoteIds
     public const string ReviewDeletedDangling = "review.deleted_dangling";       // deleted file's former symbols still referenced
     public const string ReviewProjectFilesChanged = "review.project_files_changed"; // authoritative project/build shape in the diff — graph may shift
     public const string ReviewSolutionFilesChanged = "review.solution_files_changed"; // non-authoritative editor solution inventory changed
+    public const string ReviewDeletedSolutionMetadataScope =
+        "review.deleted_solution_metadata_scope"; // deleted editor metadata is counted but excluded from source-deletion proof
     // Kept for backwards compatibility with v0.11.0 responses. New emitters use one id per
     // cause below so clients can distinguish a caller-selected symbol cap from a byte budget.
     public const string ReviewSymbolsTruncated = "review.symbols_truncated";
@@ -49,6 +51,12 @@ internal static class NoteIds
         "references.conversion_usage_enumeration_gap"; // compatibility seam for legacy partial shaping
     public const string ReferencesCandidateFilesCap =
         "references.candidate_file_cap"; // indexed candidate file scan stopped at caller maxFiles
+    public const string ReferencesSamplesTrimmed =
+        "references.samples_trimmed"; // bounded sample metadata was selected but its line text could not be returned
+    public const string ReferencesSamplesDeadline =
+        "references.samples_deadline"; // bounded sample text was omitted after its post-count evidence deadline expired
+    public const string ReferencesSamplesByteBudget =
+        "references.samples_byte_budget"; // bounded sample evidence was omitted by the final response byte budget
     public const string SemanticDeclarationSitesBudget =
         "semantic.declaration_sites_budget"; // optional declaration sites omitted by count/byte budget
     public const string ImpactTransitiveSingleCount = "impact.transitive_single_count"; // by-design single transitive number

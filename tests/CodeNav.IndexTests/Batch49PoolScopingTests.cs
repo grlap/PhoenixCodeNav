@@ -142,4 +142,61 @@ public class Batch49PoolScopingTests
         Directory.Delete(root, recursive: true); // must not throw
         Assert.False(Directory.Exists(root));
     }
+
+    [Fact]
+    public void WorkspaceCleanupRemovesReadOnlyGitObjects()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-49-readonly-git-object").FullName;
+        string objectDirectory = Path.Combine(root, ".git", "objects", "ab");
+        string looseObject = Path.Combine(objectDirectory, "0123456789abcdef");
+        Directory.CreateDirectory(objectDirectory);
+        File.WriteAllText(looseObject, "fixture");
+        File.SetAttributes(looseObject, File.GetAttributes(looseObject) | FileAttributes.ReadOnly);
+
+        TestWorkspaceCleanup.DeleteWorkspace(root);
+
+        Assert.False(Directory.Exists(root));
+    }
+
+    [Fact]
+    public void WorkspaceCleanupClearsPoolsForCustomSqliteExtension()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-49-sqlite-extension").FullName;
+        string dbPath = Path.Combine(root, "index.sqlite");
+        using (var store = new IndexStore(dbPath, createNew: true)) { }
+        using (var queries = new IndexQueries(dbPath))
+            _ = queries.ReadMetadata();
+
+        TestWorkspaceCleanup.DeleteWorkspace(root);
+
+        Assert.False(Directory.Exists(root));
+    }
+
+    [Fact]
+    public void WorkspaceCleanupDoesNotFollowDirectoryLinks()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-49-cleanup-link-root").FullName;
+        string outside = Directory.CreateTempSubdirectory("codenav-49-cleanup-link-outside").FullName;
+        string marker = Path.Combine(outside, "must-survive.txt");
+        File.WriteAllText(marker, "outside");
+        try
+        {
+            Assert.True(
+                TestWorkspaceCleanup.TryCreateDirectoryLink(
+                    Path.Combine(root, "outside-link"), outside, out string? linkFailure,
+                    forceWindowsJunctionFallback: OperatingSystem.IsWindows()),
+                "the no-follow cleanup canary requires directory-link support; " +
+                $"enable symlink or junction creation before running the gate: {linkFailure}");
+
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+
+            Assert.False(Directory.Exists(root));
+            Assert.True(File.Exists(marker), "cleanup followed a directory link outside its workspace");
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+            TestWorkspaceCleanup.DeleteWorkspace(outside);
+        }
+    }
 }

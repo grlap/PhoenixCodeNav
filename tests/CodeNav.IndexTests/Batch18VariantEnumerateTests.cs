@@ -97,7 +97,7 @@ public class Batch18VariantTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 }

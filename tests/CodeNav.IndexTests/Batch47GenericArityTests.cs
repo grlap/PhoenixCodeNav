@@ -243,7 +243,7 @@ public class Batch47GenericArityTests
             Semantic.Dispose();
             _manager.Dispose();
             TestWorkspaceCleanup.ClearIndexPools(_root);
-            try { Directory.Delete(_root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(_root);
         }
 
         private static bool WaitUntil(Func<bool> condition, int timeoutMs)

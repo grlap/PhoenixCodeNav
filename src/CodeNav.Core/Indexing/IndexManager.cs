@@ -37,7 +37,9 @@ public sealed record IndexHealth(
     string? RefreshIncompleteReason = null,
     IReadOnlyList<string>? RefreshIncompletePaths = null,
     int RefreshIncompletePathCount = 0,
-    bool RefreshIncompletePathCountIsLowerBound = false);
+    bool RefreshIncompletePathCountIsLowerBound = false,
+    string? StartupBuildReason = null,
+    string? StartupPriorSchema = null);
 
 public sealed class IndexReadSnapshot : IDisposable
 {
@@ -141,6 +143,11 @@ public sealed class IndexManager : IDisposable
     private volatile bool _disposed;
     private volatile string _state = "missing";
     private volatile string? _error;
+    // Immutable evidence for this manager's startup. The external reusable-index gate reads it
+    // after readiness so an automatic schema/recovery rebuild cannot masquerade as ordinary
+    // reuse merely because the replacement already matches the current baseline.
+    private volatile string? _startupBuildReason;
+    private volatile string? _startupPriorSchema;
     private int _startupFailureCause;
     private volatile string? _refreshIncompleteReason;
     private volatile string[]? _refreshIncompletePaths;
@@ -934,6 +941,7 @@ public sealed class IndexManager : IDisposable
                     bool databaseExists = File.Exists(_databaseIoPath);
                     bool build = forceRebuild || !databaseExists;
                     bool compatibleExistingPublication = false;
+                    string? startupPriorSchema = null;
                     // x5ls.1.2: honest v1 build reason — which gate actually forced the build.
                     string buildReason = forceRebuild ? "explicit_full" : "startup_missing";
                     if (databaseExists)
@@ -942,6 +950,7 @@ public sealed class IndexManager : IDisposable
                         {
                             using var check = new IndexStore(_databaseIoPath, createNew: false);
                             string? onDisk = check.GetMeta("schema_version");
+                            startupPriorSchema = onDisk;
                             compatibleExistingPublication = string.Equals(onDisk,
                                 IndexBuilder.SchemaVersion, StringComparison.Ordinal);
                             if (compatibleExistingPublication)
@@ -970,6 +979,8 @@ public sealed class IndexManager : IDisposable
                             }
                         }
                     }
+                    _startupBuildReason = build ? buildReason : null;
+                    _startupPriorSchema = build && databaseExists ? startupPriorSchema : null;
                     if (build)
                     {
                         _state = "building";
@@ -2840,7 +2851,8 @@ public sealed class IndexManager : IDisposable
             Interlocked.Read(ref _pendingProcessed), _accessMode,
             _refreshIncompleteReason, _refreshIncompletePaths,
             Volatile.Read(ref _refreshIncompletePathCount),
-            Volatile.Read(ref _refreshIncompletePathCountIsLowerBound) != 0);
+            Volatile.Read(ref _refreshIncompletePathCountIsLowerBound) != 0,
+            _startupBuildReason, _startupPriorSchema);
     }
 
     /// <summary>Current git HEAD commit for the workspace, or null if not a git repo / git absent.

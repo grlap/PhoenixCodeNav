@@ -291,19 +291,27 @@ public sealed class Batch70RawContentBatchingTests
             }
 
             int saturated = 0;
+            using var saturationObserved = new ManualResetEventSlim(false);
             var hooks = new BuildCaptureTestHooks(
                 (workspaceRoot, gitPath, maxBytes) =>
                     GitInfo.ReadBoundedWorkspaceFileResult(
                         workspaceRoot, gitPath, maxBytes),
                 CSharpQueueCapacity: 1,
-                CSharpQueueSaturated: () => Interlocked.Increment(ref saturated));
+                CSharpQueueSaturated: () =>
+                {
+                    Interlocked.Increment(ref saturated);
+                    saturationObserved.Set();
+                },
+                BeforeCSharpQueueConsume: () => Assert.True(
+                    saturationObserved.Wait(TimeSpan.FromSeconds(10)),
+                    "The capacity-1 producer queue never exercised bounded backpressure."));
 
             BuildResult result = IndexBuilder.BuildWithSourceBatchSizeForTest(
                 root, sourceCount, buildCaptureTestHooks: hooks);
 
             Assert.Equal(sourceCount, result.CsFiles);
             Assert.True(Volatile.Read(ref saturated) > 0,
-                "The capacity-1 producer queue never exercised bounded backpressure.");
+                "The capacity-1 producer queue reported no saturation event.");
             using var queries = new IndexQueries(IndexBuilder.DefaultDbPath(root));
             Assert.Single(queries.SearchSymbols("Queue256", "exact", null, 2));
             Assert.Single(queries.SearchText("queue256", 2));

@@ -16,7 +16,7 @@
   <meta name="twitter:card" content="summary">
 
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.a057a0d24d.css">
+  <link rel="stylesheet" href="styles.758e0d187f.css">
 
   <script type="application/ld+json">
   {
@@ -49,7 +49,6 @@
         <a href="#questions">What to ask</a>
         <a href="#anatomy">Under the hood</a>
         <a href="#proof">Proof</a>
-        <a href="#setup">Setup</a>
       </div>
 
       <a class="nav__github" href="https://github.com/grlap/PhoenixCodeNav" target="_blank" rel="noopener">
@@ -65,8 +64,7 @@
           <a href="#questions"><span>02</span><b>What to ask</b></a>
           <a href="#anatomy"><span>03</span><b>Under the hood</b></a>
           <a href="#proof"><span>04</span><b>Proof</b></a>
-          <a href="#setup"><span>05</span><b>Setup</b></a>
-          <a href="https://github.com/grlap/PhoenixCodeNav" target="_blank" rel="noopener"><span>06</span><b>GitHub ↗</b></a>
+          <a href="https://github.com/grlap/PhoenixCodeNav" target="_blank" rel="noopener"><span>05</span><b>GitHub ↗</b></a>
         </div>
       </details>
     </nav>
@@ -80,63 +78,36 @@
 
       <div class="hero__inner shell">
         <div class="hero__copy">
-          <p class="eyebrow hero__eyebrow"><span></span>Local code navigation for AI agents</p>
+          <p class="eyebrow hero__eyebrow">Local code navigation for AI agents</p>
           <h1>
             <span class="hero__line"><span>Give your coding</span></span>
             <span class="hero__line hero__line--accent"><span>agent a map.</span></span>
           </h1>
-          <p class="hero__lead">PhoenixCodeNav helps Claude Code, Codex, and other MCP clients navigate large C# workspaces—locally, efficiently, and with every answer labeled by confidence.</p>
+          <p class="hero__lead">PhoenixCodeNav helps Claude Code, Codex, and other MCP clients navigate large C# workspaces locally, efficiently, and with every answer labeled by confidence.</p>
 
           <div class="hero__actions">
-            <a class="button button--primary" href="#setup"><span>See the setup</span><span aria-hidden="true">↓</span></a>
+            <a class="button button--primary" href="https://github.com/grlap/PhoenixCodeNav#install-work-machine" target="_blank" rel="noopener"><span>Read the README</span><span aria-hidden="true">↗</span></a>
             <a class="button button--quiet" href="#how"><span>See how it works</span><span aria-hidden="true">↘</span></a>
           </div>
 
           <div class="hero__plain-language">
             <span>MCP, in plain English</span>
-            <p>It is the connection that lets your coding agent use local tools. Phoenix runs behind the agent—it is not another editor or chat app.</p>
+            <p>It is the connection that lets your coding agent use local tools. Phoenix runs behind the agent. It is not another editor or chat app.</p>
           </div>
         </div>
 
         <figure class="atlas" id="atlas" data-atlas-state="3">
           <div class="atlas__scene" id="atlas-scene">
             <canvas id="atlas-canvas" aria-hidden="true"></canvas>
-            <div class="atlas__horizon" aria-hidden="true">
-              <div class="atlas__disc"></div>
-              <svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="24"></circle><path d="M21 46V18h15.5a9.5 9.5 0 0 1 0 19H21"></path></svg>
-            </div>
 
-            <div class="atlas__prompt">
-              <span class="atlas__prompt-label">Your agent asks</span>
-              <p>“What breaks if I change <b>InvoiceService</b>?”</p>
-              <span class="atlas__cursor" aria-hidden="true"></span>
-            </div>
+            <div class="atlas__void" aria-hidden="true"></div>
 
-            <div class="atlas__answer">
-              <span class="atlas__answer-label">Phoenix maps a route</span>
-              <ol>
-                <li data-answer-step="1"><i>✓</i><span>Find the definition</span><b>exact</b></li>
-                <li data-answer-step="2"><i>✓</i><span>Trace its callers</span><b>exact</b></li>
-                <li data-answer-step="3"><i>◫</i><span>Suggest likely test leads</span><b>heuristic</b></li>
-              </ol>
-            </div>
-
-            <span class="atlas__node-label atlas__node-label--one">Billing.Api</span>
-            <span class="atlas__node-label atlas__node-label--two">InvoiceService.cs</span>
-            <span class="atlas__node-label atlas__node-label--three">Billing.Tests</span>
-            <span class="atlas__node-label atlas__node-label--four">Payments.Core</span>
           </div>
 
           <div class="atlas__controls">
-            <div class="atlas__steps" role="group" aria-label="Atlas animation steps">
-              <button type="button" data-atlas-step="0" aria-pressed="true"><span>01</span>Ask</button>
-              <button type="button" data-atlas-step="1" aria-pressed="false"><span>02</span>Find</button>
-              <button type="button" data-atlas-step="2" aria-pressed="false"><span>03</span>Trace</button>
-              <button type="button" data-atlas-step="3" aria-pressed="false"><span>04</span>Verify</button>
-            </div>
             <button class="atlas__pause" id="atlas-pause" type="button" aria-pressed="false"><span class="pause-icon" aria-hidden="true"></span><span class="atlas__pause-label">Pause motion</span></button>
           </div>
-          <figcaption class="sr-only">An illustrative map shows a coding agent question traveling from a C# symbol definition through exact callers to heuristic test leads.</figcaption>
+          <figcaption class="sr-only">An illustrative black hole: a massive codebase bends everything toward it, while Phoenix keeps the agent’s question in a stable, bounded orbit.</figcaption>
         </figure>
       </div>
 
@@ -155,7 +126,7 @@
     <section class="contrast section shell" id="how">
       <div class="section-label" data-reveal><span>01</span><span>From hunting to navigating</span></div>
       <div class="section-intro section-intro--wide">
-        <p class="eyebrow eyebrow--ember" data-reveal><span></span>One symbol, two very different journeys</p>
+        <p class="eyebrow eyebrow--ember" data-reveal>One symbol, two very different journeys</p>
         <h2 data-reveal>Grep finds the word.<br><em>Phoenix understands the symbol.</em></h2>
         <p data-reveal>Text search is great when you need text. But a coding agent also needs definitions, dependency direction, callers, and the smallest useful source span.</p>
       </div>
@@ -202,7 +173,7 @@
         <div class="section-label" data-reveal><span>02</span><span>Questions, not commands</span></div>
         <div class="questions__head">
           <div>
-            <p class="eyebrow" data-reveal><span></span>Start with what you want to know</p>
+            <p class="eyebrow" data-reveal>Start with what you want to know</p>
             <h2 data-reveal>Ask the repo a<br>better question.</h2>
           </div>
           <p data-reveal>You do not need to memorize the tool names. Teach your agent the intent; Phoenix supplies a small, line-addressable answer.</p>
@@ -259,7 +230,7 @@
       <div class="confidence__inner shell">
         <div class="section-label section-label--dark" data-reveal><span>03</span><span>Honest answers</span></div>
         <div class="confidence__head">
-          <p class="eyebrow eyebrow--dark" data-reveal><span></span>Trust is part of the response</p>
+          <p class="eyebrow eyebrow--dark" data-reveal>Trust is part of the response</p>
           <h2 data-reveal>Three depths.<br><em>No false certainty.</em></h2>
           <p data-reveal>Phoenix uses the cheapest layer that can answer the question, then labels the result so your agent knows whether it has a fact or a lead.</p>
         </div>
@@ -300,7 +271,7 @@
       <div class="setup__inner shell">
         <div class="section-label section-label--dark" data-reveal><span>04</span><span>Under the hood</span></div>
         <div class="setup__head">
-          <p class="eyebrow eyebrow--dark" data-reveal><span></span>From syntax to meaning</p>
+          <p class="eyebrow eyebrow--dark" data-reveal>From syntax to meaning</p>
           <h2 data-reveal>How an agent turns<br><em>var into a fact.</em></h2>
           <p data-reveal>This is a real example from Phoenix’s pinned Roslyn test repository. The agent starts with <code>var newCompilation</code>, resolves the exact method call in a semantic snapshot, and separately reads bounded live source context. From those labeled pieces of evidence — plus the C# rule for <code>await</code> — it can explain the variable’s type without guessing from text.</p>
         </div>
@@ -470,7 +441,7 @@ Evidence:
         <div class="section-label" data-reveal><span>05</span><span>Operational signals</span></div>
         <div class="proof__head">
           <div>
-            <p class="eyebrow" data-reveal><span></span>Fast feedback without frozen promises</p>
+            <p class="eyebrow" data-reveal>Fast feedback without frozen promises</p>
             <h2 data-reveal>Progress you can see.<br>Confidence you can use.</h2>
           </div>
           <p data-reveal>Repository shape and hardware decide timings. Phoenix reports live progress, freshness, and bounded coverage instead of pretending one benchmark fits every workspace.</p>
@@ -524,105 +495,12 @@ Evidence:
       </div>
     </section>
 
-    <section class="setup section" id="setup">
-      <div class="setup__inner shell">
-        <div class="section-label section-label--dark" data-reveal><span>06</span><span>Beginner setup</span></div>
-        <div class="setup__head">
-          <p class="eyebrow eyebrow--dark" data-reveal><span></span>From source to first answer</p>
-          <h2 data-reveal>Three steps.<br><em>One new superpower.</em></h2>
-          <p data-reveal>Build the documented self-contained Windows executable from source, connect it once, and let the index warm in the background.</p>
-        </div>
-
-        <ol class="setup-steps">
-          <li class="setup-step" data-reveal>
-            <div class="setup-step__number"><span>01</span><i></i></div>
-            <div class="setup-step__copy">
-              <p class="setup-step__eyebrow">Build it</p>
-              <h3>Create the local server.</h3>
-              <p>Clone the repository and publish the complete self-contained <code>win-x64</code> output. Keep the generated directory together: it contains the executable, its adjacent <code>FSharp.Core.dll</code> reference sidecar, and the <code>portal/</code> companion. Building from source requires the .NET 10 SDK.</p>
-            </div>
-            <div class="code-window">
-              <header><span>PowerShell</span><button class="copy-button" type="button" data-copy="build-code"><span>Copy</span><i aria-hidden="true">□</i></button></header>
-              <pre id="build-code"><code>git clone https://github.com/grlap/<wbr>PhoenixCodeNav.git
-cd PhoenixCodeNav
-
-dotnet publish src/CodeNav.Mcp -c Release -r win-x64 --self-contained `
-  -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true `
-  -p:IncludeNativeLibrariesForSelfExtract=true -o artifacts/win-x64</code></pre>
-              <footer><span>Copy the complete output</span><b>artifacts/win-x64/ including portal/</b></footer>
-            </div>
-          </li>
-
-          <li class="setup-step" data-reveal>
-            <div class="setup-step__number"><span>02</span><i></i></div>
-            <div class="setup-step__copy">
-              <p class="setup-step__eyebrow">Connect it</p>
-              <h3>Give your agent the key.</h3>
-              <p>Point your MCP client at the executable you just built and the repository it should map. Put <code>.mcp.json</code> in that target repository's root; there, <code>.</code> means the repository itself.</p>
-            </div>
-            <div class="config-tabs" data-tabs>
-              <div class="config-tabs__list" role="tablist" aria-label="MCP client configuration">
-                <button id="tab-claude" type="button" role="tab" aria-selected="true" aria-controls="panel-claude" tabindex="0">Claude Code</button>
-                <button id="tab-codex" type="button" role="tab" aria-selected="false" aria-controls="panel-codex" tabindex="-1">Codex</button>
-              </div>
-              <div class="config-panel" id="panel-claude" role="tabpanel" aria-labelledby="tab-claude">
-                <div class="code-window">
-                  <header><span>.mcp.json</span><button class="copy-button" type="button" data-copy="claude-code"><span>Copy</span><i aria-hidden="true">□</i></button></header>
-                  <pre id="claude-code"><code>{
-  "mcpServers": {
-    "phoenix": {
-      "command": "C:\\path\\to\\PhoenixCodeNav\\<wbr>artifacts\\win-x64\\<wbr>PhoenixCodeNav.Mcp.exe",
-      "args": [
-        "--workspace-root",
-        "."
-      ]
-    }
-  }
-}</code></pre>
-                </div>
-              </div>
-              <div class="config-panel" id="panel-codex" role="tabpanel" aria-labelledby="tab-codex">
-                <div class="code-window">
-                  <header><span>~/.codex/config.toml</span><button class="copy-button" type="button" data-copy="codex-code"><span>Copy</span><i aria-hidden="true">□</i></button></header>
-                  <pre id="codex-code"><code>[mcp_servers.phoenix]
-command = "C:\\path\\to\\PhoenixCodeNav\\<wbr>artifacts\\win-x64\\<wbr>PhoenixCodeNav.Mcp.exe"
-args = [
-  "--workspace-root",
-  "C:\\path\\to\\repo",
-]</code></pre>
-                </div>
-              </div>
-            </div>
-          </li>
-
-          <li class="setup-step setup-step--last" data-reveal>
-            <div class="setup-step__number"><span>03</span><i></i></div>
-            <div class="setup-step__copy">
-              <p class="setup-step__eyebrow">Ask it</p>
-              <h3>Start with orientation.</h3>
-              <p>Add <code>.codenav/</code> to your repository’s <code>.gitignore</code>, attach the provided agent instructions, and begin with a simple request.</p>
-            </div>
-            <div class="first-question">
-              <div class="first-question__you"><span>You</span><p>Use Phoenix to map this repository before we change anything.</p></div>
-              <div class="first-question__agent"><span>Agent</span><p>I’ll check <code>repo_overview</code>, index freshness, and project structure first.</p></div>
-              <div class="first-question__status"><i></i><span>Phoenix connected · index builds in background</span></div>
-            </div>
-          </li>
-        </ol>
-
-        <div class="setup__links" data-reveal>
-          <a href="https://github.com/grlap/PhoenixCodeNav#install-work-machine" target="_blank" rel="noopener"><span>Read the complete setup guide</span><span aria-hidden="true">↗</span></a>
-          <a href="https://github.com/grlap/PhoenixCodeNav/blob/main/docs/agent-instructions.md" target="_blank" rel="noopener"><span>Copy the agent instructions</span><span aria-hidden="true">↗</span></a>
-        </div>
-      </div>
-    </section>
-
     <section class="boundary section" id="boundary">
       <div class="boundary__inner shell">
-        <div class="section-label" data-reveal><span>07</span><span>The trust boundary</span></div>
+        <div class="section-label" data-reveal><span>06</span><span>The trust boundary</span></div>
         <div class="boundary__content">
           <div class="boundary__copy">
-            <p class="eyebrow" data-reveal><span></span>Local server, honest boundary</p>
+            <p class="eyebrow" data-reveal>Local server, honest boundary</p>
             <h2 data-reveal>A local server.<br>An honest boundary.</h2>
             <p data-reveal>PhoenixCodeNav runs locally; there is no hosted Phoenix service. Every agent you attach converges on one shared Phoenix daemon per workspace — elected and rejoined automatically, never configured. It reads your C# workspace, serves bounded results to each MCP client, and leaves tracked source files and Git refs unchanged. It does write local indexes under <code>.codenav/</code>.</p>
             <p class="boundary__detail" data-reveal>Like other Git tooling, repository configuration still matters: Git may invoke configured helpers or fetch missing objects in a partial clone.</p>
@@ -643,9 +521,9 @@ args = [
 
     <section class="fit section" id="fit">
       <div class="fit__inner shell">
-        <div class="section-label section-label--dark" data-reveal><span>08</span><span>Use the right tool</span></div>
+        <div class="section-label section-label--dark" data-reveal><span>07</span><span>Use the right tool</span></div>
         <div class="fit__head">
-          <p class="eyebrow eyebrow--dark" data-reveal><span></span>Complement, do not replace</p>
+          <p class="eyebrow eyebrow--dark" data-reveal>Complement, do not replace</p>
           <h2 data-reveal>One toolbox.<br><em>Three strengths.</em></h2>
         </div>
         <div class="fit-grid">
@@ -656,7 +534,7 @@ args = [
 
         <div class="faq" data-reveal>
           <h3>Good questions before you start</h3>
-          <details><summary><span>Does Phoenix support every language?</span><i aria-hidden="true">+</i></summary><p>No. PhoenixCodeNav is C#-first, with deliberately bounded F# support: <code>.fs</code>/<code>.fsi</code> declarations support indexed symbol-name search across at most 64 owner-aware contexts per file, compile-owned files get syntax outlines, and a bounded same-project semantic layer answers position lookups and definitions. Truncated indexed contexts and affected owners are disclosed as partial coverage. Markdown and SQL are indexed for text navigation only. Everything beyond those bounds is labeled unsupported instead of returning a misleading empty answer.</p></details>
+          <details><summary><span>Does Phoenix support every language?</span><i aria-hidden="true">+</i></summary><p>No. PhoenixCodeNav is C#-first, with deliberately bounded F# support: <code>.fs</code>/<code>.fsi</code> declarations support indexed symbol-name search across at most 64 owner-aware contexts per file, compile-owned files get syntax outlines, and a bounded same-project semantic layer answers position lookups and definitions — resolving against the project's evaluated NuGet package closure, while project-to-project F# references remain unsupported and say so. Truncated indexed contexts and affected owners are disclosed as partial coverage. Markdown and SQL are indexed for text navigation only. Everything beyond those bounds is labeled unsupported instead of returning a misleading empty answer.</p></details>
           <details><summary><span>Is every answer compiler-exact?</span><i aria-hidden="true">+</i></summary><p>No—and that honesty is a feature. Semantic answers are exact when the required Roslyn cluster and references load. Otherwise Phoenix labels indexed, heuristic, partial, or stale coverage so the agent can verify or widen deliberately.</p></details>
           <details><summary><span>Does it require MSBuild to load my solution?</span><i aria-hidden="true">+</i></summary><p>No. Phoenix builds lazy Roslyn workspaces directly from parsed project facts. Building Phoenix from source requires the .NET 10 SDK; exact legacy semantics may also need .NET Framework reference assemblies.</p></details>
           <details><summary><span>What if I run five agents on one repository?</span><i aria-hidden="true">+</i></summary><p>They share one Phoenix daemon per workspace. The first launch elects it; every later agent joins it transparently through a lightweight proxy — no flags, no topology to learn. One index writer, one file watcher, and one warm compiler estate serve every session, so each additional agent costs far less than another full process. And when startup cannot succeed, the tools stay alive and report a typed, actionable cause instead of presenting a dead server.</p></details>
@@ -669,11 +547,11 @@ args = [
       <div class="final-cta__grid" aria-hidden="true"></div>
       <div class="final-cta__orbit" aria-hidden="true"><i></i><i></i><i></i></div>
       <div class="final-cta__inner shell">
-        <p class="eyebrow"><span></span>Ready for unfamiliar C# codebases</p>
+        <p class="eyebrow">Ready for unfamiliar C# codebases</p>
         <h2>Stop hunting.<br><em>Start navigating.</em></h2>
-        <p>Follow the source setup, attach PhoenixCodeNav to your coding agent, and give every unfamiliar C# repository a map.</p>
+        <p>When you are ready, the README has everything you need to attach PhoenixCodeNav to your coding agent and give every unfamiliar C# repository a map.</p>
         <div class="final-cta__actions">
-          <a class="button button--primary" href="#setup"><span>Start the setup</span><span aria-hidden="true">↑</span></a>
+          <a class="button button--primary" href="https://github.com/grlap/PhoenixCodeNav#install-work-machine" target="_blank" rel="noopener"><span>Read the README</span><span aria-hidden="true">↗</span></a>
           <a class="button button--quiet" href="https://github.com/grlap/PhoenixCodeNav" target="_blank" rel="noopener"><span>View on GitHub</span><span aria-hidden="true">↗</span></a>
         </div>
       </div>
@@ -690,12 +568,12 @@ args = [
       <div class="footer__links">
         <a href="https://github.com/grlap/PhoenixCodeNav" target="_blank" rel="noopener">GitHub ↗</a>
         <a href="https://github.com/grlap/PhoenixCodeNav/blob/main/docs/intro.md" target="_blank" rel="noopener">Why Phoenix? ↗</a>
-        <a href="#setup">Setup ↑</a>
+        <a href="https://github.com/grlap/PhoenixCodeNav#install-work-machine" target="_blank" rel="noopener">README ↗</a>
       </div>
       <div class="footer__bottom"><span>Named after Phoenix A—made for complex maps. No relation to Apache Phoenix.</span><span>Website designed to make the first step easier.</span></div>
     </div>
   </footer>
 
-  <script src="script.1f28c1e1e6.js" defer></script>
+  <script src="script.cfa22b595a.js" defer></script>
 </body>
 </html>

@@ -103,7 +103,7 @@ public class Batch30ClassifierTests
                 """);
             Assert.True(custom.IsTest, "Contains(\"nunit.framework\") must catch the custom-resolve shape");
         }
-        finally { try { Directory.Delete(root, recursive: true); } catch { } }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
     }
 
     // R3 — the custom-resolve-PROOF rule: when references are injected outside the csproj
@@ -165,7 +165,7 @@ public class Batch30ClassifierTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -225,7 +225,7 @@ public class Batch30ClassifierTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 }

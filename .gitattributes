@@ -1,0 +1,4 @@
+website/*.css text eol=lf
+website/*.js text eol=lf
+website/**/*.css text eol=lf
+website/**/*.js text eol=lf

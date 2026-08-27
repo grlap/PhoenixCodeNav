@@ -109,7 +109,7 @@ public class Batch46SemanticBudgetTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* Windows may retain a handle briefly. */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -143,24 +143,17 @@ public class Batch46SemanticBudgetTests
             // snapshot epoch beyond the bounded acquisition window, whose contract is retry.
             // Retry only the two documented transient semantic states; a stable wrong result
             // or any other failure reason still reaches the decisive assertions below.
-            SemanticImplementations? result = null;
-            string? reason = null;
-            for (int attempt = 0; attempt < 3; attempt++)
-            {
-                (result, reason) = await semantic.ImplementationsAsync(
+            var implementationAttempt = await SemanticRetry.UntilAsync(
+                () => semantic.ImplementationsAsync(
                     target.FilePath,
                     target.StartLine,
                     column: null,
                     nameHint: target.Name,
                     maxProjects: SemanticService.DefaultCandidateProjectBudget,
-                    timeoutMs: 120_000);
-                if (result is not null ||
-                    reason is not ("index_snapshot_unavailable" or "cluster_cold_load"))
-                {
-                    break;
-                }
-                await Task.Delay(250);
-            }
+                    timeoutMs: 120_000),
+                outcome => outcome.Result is not null ||
+                    !SemanticRetry.IsDocumentedTransient(outcome.FailReason));
+            (SemanticImplementations? result, string? reason) = implementationAttempt;
 
             Assert.True(result is not null, $"semantic implementations failed: {reason}");
             Assert.False(result!.DeadlineExhausted);
@@ -171,7 +164,7 @@ public class Batch46SemanticBudgetTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* Windows may retain a handle briefly. */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -201,21 +194,33 @@ public class Batch46SemanticBudgetTests
             using var semantic = new SemanticService(manager);
             if (!semantic.FrameworkRefsAvailable) return;
 
-            var (hierarchy, hierarchyCoverage, hierarchySkipped, hierarchyReason) =
-                await semantic.TypeHierarchyAsync(
-                    target.FilePath, target.StartLine, column: null, nameHint: target.Name,
-                    maxProjects: SemanticService.DefaultCandidateProjectBudget,
-                    timeoutMs: 120_000);
-            Assert.NotNull(hierarchy);
+            var hierarchyAttempt = await SemanticRetry.UntilAsync(
+                () => semantic.TypeHierarchyAsync(
+                        target.FilePath, target.StartLine, column: null, nameHint: target.Name,
+                        maxProjects: SemanticService.DefaultCandidateProjectBudget,
+                        timeoutMs: 120_000),
+                outcome => outcome.Result is not null ||
+                    !SemanticRetry.IsDocumentedTransient(outcome.FailReason),
+                attempts: 4);
+            (SemanticTypeHierarchy? hierarchy, ClusterCoverage? hierarchyCoverage,
+                List<string>? hierarchySkipped, string? hierarchyReason) = hierarchyAttempt;
+            Assert.True(hierarchy is not null, $"semantic hierarchy failed: {hierarchyReason}");
             Assert.Null(hierarchyReason);
             Assert.Equal(implementerCount, hierarchy!.DerivedOrImplementing.Count);
             AssertCompleteCandidateCoverage(hierarchyCoverage, hierarchySkipped);
 
-            var (implementations, implementationsReason) = await semantic.ImplementationsAsync(
-                target.FilePath, target.StartLine, column: null, nameHint: target.Name,
-                maxProjects: SemanticService.DefaultCandidateProjectBudget,
-                timeoutMs: 120_000);
-            Assert.NotNull(implementations);
+            var implementationsAttempt = await SemanticRetry.UntilAsync(
+                () => semantic.ImplementationsAsync(
+                    target.FilePath, target.StartLine, column: null, nameHint: target.Name,
+                    maxProjects: SemanticService.DefaultCandidateProjectBudget,
+                    timeoutMs: 120_000),
+                outcome => outcome.Result is not null ||
+                    !SemanticRetry.IsDocumentedTransient(outcome.FailReason),
+                attempts: 4);
+            (SemanticImplementations? implementations, string? implementationsReason) =
+                implementationsAttempt;
+            Assert.True(implementations is not null,
+                $"semantic implementations failed: {implementationsReason}");
             Assert.Null(implementationsReason);
             Assert.Equal(implementerCount, implementations!.Implementations.Count);
             AssertCompleteCandidateCoverage(implementations.Coverage,
@@ -236,7 +241,7 @@ public class Batch46SemanticBudgetTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -313,7 +318,7 @@ public class Batch46SemanticBudgetTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* Windows may retain a handle briefly. */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -347,7 +352,7 @@ public class Batch46SemanticBudgetTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -497,7 +502,7 @@ public class Batch46SemanticBudgetTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -568,7 +573,7 @@ public class Batch46SemanticBudgetTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -631,7 +636,7 @@ public class Batch46SemanticBudgetTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* Windows may retain a handle briefly. */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 

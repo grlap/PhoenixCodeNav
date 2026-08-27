@@ -71,8 +71,7 @@ public class IndexFixture : IDisposable
     {
         _semantic?.Dispose();
         _manager?.Dispose(); // releases the store, pooled connections, and the ownership lease
-        TestWorkspaceCleanup.ClearIndexPools(Root);
-        try { Directory.Delete(Root, recursive: true); } catch { /* leave temp on Windows lock */ }
+        TestWorkspaceCleanup.DeleteWorkspace(Root);
     }
 }
 

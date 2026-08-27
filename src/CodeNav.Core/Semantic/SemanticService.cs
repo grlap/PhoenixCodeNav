@@ -49,7 +49,15 @@ public sealed record SemanticReferences(
     // Compatibility field for the pre-v0.12.47 containment path. Production conversion scans now
     // enumerate compiler-bound implicit, explicit, and checked conversion operations directly;
     // the field remains so a deterministic legacy test seam can exercise partial-result shaping.
-    bool ConversionUsageEnumerationIncomplete = false);
+    bool ConversionUsageEnumerationIncomplete = false,
+    // Optional sample evidence is selected before its bounded text pass. If a tree, cached text,
+    // or line cannot be recovered, MCP discloses the selected/returned delta without relabelling
+    // otherwise-complete compiler counts as partial.
+    int ReferenceSamplesSelected = 0,
+    int ReferenceSamplesReturned = 0,
+    // Optional sample text can exhaust the deadline after counting is already complete. Keep that
+    // evidence-loss cause separate so MCP can offer timeout guidance without downgrading exact totals.
+    int ReferenceSamplesDeadlineOmitted = 0);
 
 /// <summary>One implementation / derived class / override, tagged for hierarchy ranking.
 /// <paramref name="Via"/> names the base type that introduces the queried interface when the type
@@ -143,6 +151,10 @@ public sealed partial class SemanticService : IDisposable
     /// while forcing the legacy full-solution SymbolFinder overload. Parity tests compare this
     /// authority path with document narrowing without changing any other semantic input.</summary>
     internal bool TestOnlyForceFullSolutionReferences;
+    internal bool TestOnlyReverseReferenceSites;
+    internal Action<int>? TestOnlyReferenceSampleTreeCountChanged;
+    internal Action? TestOnlyBeforeReferenceSampleText;
+    internal Func<SemanticLocation, bool>? TestOnlyReferenceSampleTextUnavailable;
 
     public bool FrameworkRefsAvailable
     {
@@ -719,16 +731,19 @@ public sealed partial class SemanticService : IDisposable
             }
 
             long postProcessStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-            var testFlags = ProjectTestFlags();
+            var testFlags = indexSnapshot.Queries.AllProjectTestFlags("cs");
+            Dictionary<string, string> canonicalProjectNames =
+                indexSnapshot.Queries.AllCanonicalProjectNames("cs");
             // When excluding generated code, drop reference locations in generated files from BOTH the
             // counts and the samples (bug wi3: the semantic path previously ignored includeGenerated).
             HashSet<string>? generatedPaths = null;
             if (!includeGenerated)
-            {
-                using var gq = _manager.OpenQueries();
-                generatedPaths = gq.GeneratedPaths();
-            }
+                generatedPaths = indexSnapshot.Queries.GeneratedPaths();
             var groups = new Dictionary<string, SemanticRefGroup>(StringComparer.OrdinalIgnoreCase);
+            var sampleTrees = new Dictionary<
+                (string Project, string Path, int Line, string Kind), SyntaxTree>();
+            var sampleTexts = new Dictionary<
+                (string Project, string Path, int Line, string Kind), string>();
             var kindCounts = new Dictionary<string, int>(StringComparer.Ordinal);
             var rootCache = new Dictionary<SyntaxTree, SyntaxNode>(); // one parse-root fetch per tree
             bool symbolIsType = symbol is INamedTypeSymbol;
@@ -754,13 +769,18 @@ public sealed partial class SemanticService : IDisposable
             // the outer catch — there is genuinely nothing to salvage there.
             try
             {
-                foreach (SemanticReferenceSite site in foundSites)
+                IEnumerable<SemanticReferenceSite> orderedSites = TestOnlyReverseReferenceSites
+                    ? foundSites.Reverse()
+                    : foundSites;
+                foreach (SemanticReferenceSite site in orderedSites)
                 {
                     queryStages.RawLocations++;
                     if (site.Location.SourceTree is null) continue;
                     queryStages.SourceLocations++;
                     Document doc = site.Document;
-                    string project = doc.Project.Name;
+                    string siteProject = doc.Project.Name;
+                    string project = canonicalProjectNames.GetValueOrDefault(
+                        siteProject, siteProject);
                     var lineSpan = site.Location.GetLineSpan();
                     int refLine = lineSpan.StartLinePosition.Line + 1;
                     string relPath = ToRelPath(doc.FilePath ?? doc.Name);
@@ -769,11 +789,11 @@ public sealed partial class SemanticService : IDisposable
                     // includeGenerated/usageKinds, so TotalLocations, KindCounts, and the group
                     // list all describe the same filtered set. Previously the tool dropped test
                     // GROUPS after the fact while summary/kinds still counted their locations.
-                    bool isTest = testFlags.TryGetValue(project, out bool t) && t;
+                    bool isTest = testFlags.TryGetValue(siteProject, out bool t) && t;
                     if (!includeTests && isTest) continue;
                     // publicConsumersOnly: API blast-radius view — drop usages from the DECLARING
                     // project itself, before counting, so totals reflect external consumers only.
-                    if (publicConsumersOnly && string.Equals(project, declaringProject, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (publicConsumersOnly && string.Equals(siteProject, declaringProject, StringComparison.OrdinalIgnoreCase)) continue;
 
                     // Classify HOW the symbol is used (call vs xmldoc mention vs ...); filter before
                     // counting so totals honor usageKinds (same discipline as includeGenerated).
@@ -814,44 +834,45 @@ public sealed partial class SemanticService : IDisposable
                         }
                     }
                     if (usageKinds is not null && !usageKinds.Contains(kind)) continue;
-                    if (!seenSites.Add((project, relPath,
+                    if (!seenSites.Add((siteProject, relPath,
                             site.Location.SourceSpan.Start, kind))) continue;
 
-                    // ALL bookkeeping commits before the awaitable sample fetch (review, 24n): with
-                    // the group commit trailing GetTextAsync, a deadline OCE on that await salvaged
-                    // a response whose total/kinds included the location but whose groups did not —
-                    // worst case "at least 1 exact references across 0 projects". The with-copy
-                    // shares the Samples List instance, so samples added below still land in the
-                    // stored group; a sample lost to the OCE costs a sample line, never a count.
+                    // Commit counted state before retaining bounded sample metadata. Text is read
+                    // only after the final deterministic set is known, so Roslyn enumeration order
+                    // cannot turn a public N-sample cap into O(total references) source reads.
                     total++;
                     kindCounts[kind] = kindCounts.GetValueOrDefault(kind) + 1;
                     if (!groups.TryGetValue(project, out var g))
                     {
-                        g = new SemanticRefGroup(project, isTest, 0, new List<SemanticLocation>());
+                        g = new SemanticRefGroup(project, isTest, 0,
+                            new List<SemanticLocation>());
                     }
-                    groups[project] = g with { Count = g.Count + 1 };
-                    // Placed AFTER the bookkeeping commit, matching where a real deadline OCE is
-                    // survivable (the awaitable sample fetch below) — counted state is consistent.
+                    groups[g.Project] = g with
+                    {
+                        Count = g.Count + 1,
+                        IsTestProject = g.IsTestProject || isTest,
+                    };
                     TestOnlyPerLocationCounted?.Invoke(total);
                     var samples = g.Samples;
-                    if (samples.Count < samplesPerGroup && !cts.IsCancellationRequested)
+                    if (TryRetainDeterministicReferenceSample(samples, relPath, refLine,
+                            lineText: "", project: g.Project, isTest, kind, samplesPerGroup,
+                            out SemanticLocation? evicted))
                     {
-                        long sampleStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-                        try
-                        {
-                            string text = (await site.Location.SourceTree.GetTextAsync(cts.Token)
-                                    .ConfigureAwait(false))
-                                .Lines[lineSpan.StartLinePosition.Line].ToString().Trim();
-                            samples.Add(new SemanticLocation(relPath, refLine, Truncate(text), project, isTest, kind));
-                            queryStages.SamplesRead++;
-                        }
-                        finally
-                        {
-                            queryStages.SampleTextMs += System.Diagnostics.Stopwatch
-                                .GetElapsedTime(sampleStarted).TotalMilliseconds;
-                        }
+                        // groups deliberately coalesces project names case-insensitively. Use the
+                        // group's canonical spelling for every auxiliary key as well, otherwise
+                        // Foo.csproj and foo.csproj can retain a sample that the text pass cannot
+                        // retrieve from its case-sensitive tuple dictionary.
+                        sampleTrees[(g.Project, relPath, refLine, kind)] =
+                            site.Location.SourceTree;
+                        // The retention helper rejects duplicate (path,line,kind) keys, so an
+                        // evicted key cannot still belong to another retained sample.
+                        if (evicted is not null)
+                            sampleTrees.Remove((g.Project, evicted.Path, evicted.Line,
+                                evicted.Kind ?? ""));
+                        TestOnlyReferenceSampleTreeCountChanged?.Invoke(sampleTrees.Count);
                     }
                 }
+
             }
             catch (OperationCanceledException) when (total > 0)
             {
@@ -860,6 +881,76 @@ public sealed partial class SemanticService : IDisposable
                 // confidence would read as dead code when the deadline simply beat the count.
                 deadlineExhausted = true;
             }
+            // Populate only the final bounded sample set. When counting already exhausted the
+            // deadline, TryGetText preserves any cached evidence without extending the operation
+            // with new asynchronous source loads. A missing tree/text entry degrades one sample,
+            // never the complete compiler-backed result.
+            int referenceSamplesSelected = groups.Values.Sum(group => group.Samples.Count);
+            int referenceSamplesDeadlineOmitted = 0;
+            foreach (SemanticRefGroup group in groups.Values
+                         .OrderBy(value => value.Project, StringComparer.Ordinal))
+            {
+                foreach (SemanticLocation sample in group.Samples)
+                {
+                    bool forceTextUnavailable =
+                        TestOnlyReferenceSampleTextUnavailable?.Invoke(sample) == true;
+                    var key = (group.Project, sample.Path, sample.Line, sample.Kind ?? "");
+                    if (!sampleTrees.TryGetValue(key, out SyntaxTree? tree)) continue;
+                    long sampleStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                    SourceText? source = null;
+                    bool sampleDeadlineObserved = false;
+                    try
+                    {
+                        TestOnlyBeforeReferenceSampleText?.Invoke();
+                        if (cts.IsCancellationRequested)
+                        {
+                            sampleDeadlineObserved = true;
+                            if (!forceTextUnavailable) tree.TryGetText(out source);
+                        }
+                        else
+                        {
+                            source = await tree.GetTextAsync(cts.Token)
+                                .ConfigureAwait(false);
+                            if (forceTextUnavailable) source = null;
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Counts are already complete: sample text is optional bounded evidence.
+                        // A cancellation here must not relabel exact totals as a truncated scan.
+                        sampleDeadlineObserved = true;
+                        if (!forceTextUnavailable) tree.TryGetText(out source);
+                    }
+                    finally
+                    {
+                        queryStages.SampleTextMs += System.Diagnostics.Stopwatch
+                            .GetElapsedTime(sampleStarted).TotalMilliseconds;
+                    }
+                    if (source is null)
+                    {
+                        if (sampleDeadlineObserved) referenceSamplesDeadlineOmitted++;
+                        continue;
+                    }
+                    int lineIndex = sample.Line - 1;
+                    if ((uint)lineIndex >= (uint)source.Lines.Count) continue;
+                    sampleTexts[key] = Truncate(
+                        source.Lines[lineIndex].ToString().Trim());
+                    queryStages.SamplesRead++;
+                }
+            }
+            foreach (SemanticRefGroup group in groups.Values)
+            {
+                for (int i = group.Samples.Count - 1; i >= 0; i--)
+                {
+                    SemanticLocation sample = group.Samples[i];
+                    var key = (group.Project, sample.Path, sample.Line, sample.Kind ?? "");
+                    if (sampleTexts.TryGetValue(key, out string? lineText))
+                        group.Samples[i] = sample with { LineText = lineText };
+                    else
+                        group.Samples.RemoveAt(i);
+                }
+            }
+            int referenceSamplesReturned = groups.Values.Sum(group => group.Samples.Count);
             queryStages.PostProcessMs += System.Diagnostics.Stopwatch
                 .GetElapsedTime(postProcessStarted).TotalMilliseconds;
             queryStages.UniqueSyntaxTrees = rootCache.Count;
@@ -874,7 +965,8 @@ public sealed partial class SemanticService : IDisposable
             var result = new SemanticReferences(
                 Describe(symbol),
                 total,
-                groups.Values.OrderByDescending(g => g.Count).ToList(),
+                groups.Values.OrderByDescending(g => g.Count)
+                    .ThenBy(g => g.Project, StringComparer.Ordinal).ToList(),
                 coverage,
                 skipped,
                 kindCounts,
@@ -886,7 +978,10 @@ public sealed partial class SemanticService : IDisposable
                 ClusterLoadMs: clusterLoadMs,
                 QueryMs: swPhase.ElapsedMilliseconds - clusterLoadMs,
                 ProjectModelUnproven: projectModelUnproven,
-                ConversionUsageEnumerationIncomplete: conversionUsageEnumerationIncomplete);
+                ConversionUsageEnumerationIncomplete: conversionUsageEnumerationIncomplete,
+                ReferenceSamplesSelected: referenceSamplesSelected,
+                ReferenceSamplesReturned: referenceSamplesReturned,
+                ReferenceSamplesDeadlineOmitted: referenceSamplesDeadlineOmitted);
             bool unsupportedLanguageSkipped = coverage.SkippedProjects.Count > 0;
             bool candidateProjectsSkipped = skipped.Count > 0;
             bool failedLoads = coverage.FailedProjects.Count > 0;
@@ -1536,7 +1631,7 @@ public sealed partial class SemanticService : IDisposable
                             ? simple.Identifier.GetLocation()
                             : forEach.GetLocation();
                         await AddConversionSiteAsync(document, location,
-                            ConversionUsageKind(elementConversion, elementMethod),
+                            ForEachConversionUsageKind(elementConversion, elementMethod),
                             elementMethod, target, solution, matchedOperators, seenSites, sites,
                             cancellationToken).ConfigureAwait(false);
                     }
@@ -1738,6 +1833,22 @@ public sealed partial class SemanticService : IDisposable
         : conversion.IsImplicit
             ? SemanticReferenceKinds.ImplicitConversion
             : SemanticReferenceKinds.ExplicitConversion;
+
+    // GetForEachStatementInfo().ElementConversion may report IsImplicit even when foreach binds
+    // an op_Explicit method: the language applies the selected element conversion implicitly.
+    // Other conversion carriers use Roslyn's ordinary conversion classification, so only the
+    // foreach carrier keys the public usage kind directly from operator identity.
+    private static string ForEachConversionUsageKind(Conversion conversion,
+        IMethodSymbol operatorMethod) => operatorMethod.Name switch
+        {
+            "op_CheckedImplicit" or "op_CheckedExplicit" =>
+                SemanticReferenceKinds.CheckedConversion,
+            "op_Explicit" => SemanticReferenceKinds.ExplicitConversion,
+            "op_Implicit" => SemanticReferenceKinds.ImplicitConversion,
+            _ => conversion.IsImplicit
+                ? SemanticReferenceKinds.ImplicitConversion
+                : SemanticReferenceKinds.ExplicitConversion,
+        };
 
     private static string CommonConversionUsageKind(CommonConversion conversion,
         bool isChecked) => isChecked || conversion.MethodSymbol?.Name is
@@ -2162,6 +2273,46 @@ public sealed partial class SemanticService : IDisposable
     }
 
     // ---------------------------------------------------------------- shaping
+
+    internal static bool TryRetainDeterministicReferenceSample(
+        List<SemanticLocation> samples, string path, int line, string lineText, string project,
+        bool isTest, string? kind, int limit, out SemanticLocation? evicted)
+    {
+        evicted = null;
+        if (limit <= 0) return false;
+        // Once the bounded set is full, the common worse-than-tail candidate is an O(1)
+        // rejection. Equal also rejects a duplicate of the tail; only a candidate that can
+        // actually enter the set needs the bounded insertion scan below.
+        if (samples.Count >= limit &&
+            CompareReferenceSampleKey(path, line, kind, samples[^1]) >= 0)
+            return false;
+
+        int insertAt = 0;
+        while (insertAt < samples.Count)
+        {
+            int comparison = CompareReferenceSampleKey(path, line, kind, samples[insertAt]);
+            if (comparison == 0) return false;
+            if (comparison < 0) break;
+            insertAt++;
+        }
+        if (insertAt >= limit) return false;
+
+        var retained = new SemanticLocation(path, line, lineText, project, isTest, kind);
+        if (samples.Count >= limit) evicted = samples[^1];
+        samples.Insert(insertAt, retained);
+        if (samples.Count > limit) samples.RemoveAt(limit);
+        return true;
+    }
+
+    private static int CompareReferenceSampleKey(string path, int line, string? kind,
+        SemanticLocation right)
+    {
+        int comparison = string.CompareOrdinal(path, right.Path);
+        if (comparison != 0) return comparison;
+        comparison = line.CompareTo(right.Line);
+        if (comparison != 0) return comparison;
+        return string.CompareOrdinal(kind ?? "", right.Kind ?? "");
+    }
 
     private static bool FriendAssemblyAuthorityUnproven(ISymbol symbol,
         IEnumerable<string> accessingProjects, ClusterCoverage? coverage)

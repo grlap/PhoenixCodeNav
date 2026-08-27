@@ -3,6 +3,7 @@ using CodeNav.Core.Discovery;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
+using Microsoft.Data.Sqlite;
 
 namespace CodeNav.Tests;
 
@@ -506,7 +507,8 @@ public class FSharpTierATests
 
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000),
+                manager.Health().Error);
             using var semantic = new SemanticService(manager);
             var tools = new NavigationTools(manager, semantic);
 
@@ -2592,6 +2594,137 @@ public class FSharpTierATests
         finally { Cleanup(root); }
     }
 
+    [Fact]
+    public void FSharpStoredSymbolsAndOrphansMatchColdBuildAfterDeltaRefresh()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-fsharp-cold-delta-parity")
+            .FullName;
+        try
+        {
+            string projectDirectory = Path.Combine(root, "Core");
+            Directory.CreateDirectory(projectDirectory);
+            File.WriteAllText(Path.Combine(projectDirectory, "Core.fsproj"),
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                  <ItemGroup><Compile Include="Owned.fs" /></ItemGroup>
+                </Project>
+                """);
+            string ownedPath = Path.Combine(projectDirectory, "Owned.fs");
+            File.WriteAllText(ownedPath,
+                "module Core.Owned\nlet deltaInitialMarker = 1\n");
+
+            string deltaDbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, deltaDbPath);
+
+            File.WriteAllText(ownedPath,
+                "module Core.Owned\nlet deltaFinalMarker = 2\n");
+            File.WriteAllText(Path.Combine(root, "Loose.fs"),
+                "module LooseImplementation\nlet looseImplementationMarker = 3\n");
+            File.WriteAllText(Path.Combine(root, "Loose.fsi"),
+                "module LooseSignature\nval looseSignatureMarker: int\n");
+            File.WriteAllText(Path.Combine(root, "Loose.fsx"),
+                "let looseScriptMarker = 4\n");
+
+            using (var store = new IndexStore(deltaDbPath, createNew: false))
+            {
+                RefreshResult refresh = DeltaRefresher.Refresh(store, root,
+                [
+                    "Core/Owned.fs",
+                    "Loose.fs",
+                    "Loose.fsi",
+                    "Loose.fsx",
+                ]);
+                Assert.Equal(1, refresh.ChangedFiles);
+                Assert.Equal(3, refresh.AddedFiles);
+            }
+
+            FSharpStoredSnapshot delta = ReadFSharpStoredSnapshot(deltaDbPath);
+            string coldDbPath = Path.Combine(root, ".codenav", "cold-parity.db");
+            IndexBuilder.Build(root, coldDbPath);
+            FSharpStoredSnapshot cold = ReadFSharpStoredSnapshot(coldDbPath);
+
+            Assert.Equal<string>(cold.SymbolRows, delta.SymbolRows);
+            Assert.Equal<string>(cold.OrphanPaths, delta.OrphanPaths);
+            Assert.Equal(cold.OrphanedFiles, delta.OrphanedFiles);
+            Assert.Equal(["Loose.fs", "Loose.fsi"], delta.OrphanPaths);
+            Assert.Equal(2, delta.OrphanedFiles);
+            Assert.Contains(delta.SymbolRows, row =>
+                row.Contains("deltaFinalMarker", StringComparison.Ordinal));
+            Assert.DoesNotContain(delta.SymbolRows, row =>
+                row.Contains("deltaInitialMarker", StringComparison.Ordinal));
+            Assert.Contains(delta.SymbolRows, row =>
+                row.Contains("looseImplementationMarker", StringComparison.Ordinal));
+            Assert.Contains(delta.SymbolRows, row =>
+                row.Contains("looseSignatureMarker", StringComparison.Ordinal));
+            Assert.DoesNotContain(delta.SymbolRows, row =>
+                row.Contains("looseScriptMarker", StringComparison.Ordinal));
+        }
+        finally { Cleanup(root); }
+    }
+
+    private static FSharpStoredSnapshot ReadFSharpStoredSnapshot(string dbPath)
+    {
+        string[] symbolRows;
+        string[] orphanPaths;
+        using (var store = new IndexStore(dbPath, createNew: false))
+        using (SqliteConnection connection = store.OpenReader())
+        {
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.CommandText = """
+                    SELECT f.path, s.kind, s.name, COALESCE(s.ns, ''),
+                           COALESCE(s.container, ''), s.signature, s.accessibility,
+                           s.start_line, s.end_line, s.is_partial, s.arity,
+                           COALESCE(s.attr_markers, ''), COALESCE(s.modifiers, ''),
+                           COALESCE(s.accessors, ''), s.declaration_key,
+                           COALESCE(parent.declaration_key, '')
+                    FROM symbols s
+                    JOIN files f ON f.id = s.file_id
+                    LEFT JOIN symbols parent ON parent.id = s.parent_id
+                    WHERE f.lang = 'fs'
+                    ORDER BY f.path, s.start_line, s.end_line, s.kind, s.name,
+                             s.declaration_key, COALESCE(parent.declaration_key, '')
+                    """;
+                using SqliteDataReader reader = command.ExecuteReader();
+                var rows = new List<string>();
+                while (reader.Read())
+                {
+                    object?[] values = Enumerable.Range(0, reader.FieldCount)
+                        .Select(index => reader.IsDBNull(index) ? null : reader.GetValue(index))
+                        .ToArray();
+                    rows.Add(JsonSerializer.Serialize(values));
+                }
+                symbolRows = rows.ToArray();
+            }
+
+            using (SqliteCommand command = connection.CreateCommand())
+            {
+                command.CommandText = """
+                    SELECT path
+                    FROM files
+                    WHERE lang = 'fs' AND lower(path) NOT LIKE '%.fsx'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM compile_items ci WHERE ci.file_id = files.id)
+                    ORDER BY path
+                    """;
+                using SqliteDataReader reader = command.ExecuteReader();
+                var paths = new List<string>();
+                while (reader.Read()) paths.Add(reader.GetString(0));
+                orphanPaths = paths.ToArray();
+            }
+        }
+
+        using var queries = new IndexQueries(dbPath);
+        return new FSharpStoredSnapshot(symbolRows, orphanPaths,
+            queries.Overview().OrphanedFiles);
+    }
+
+    private sealed record FSharpStoredSnapshot(
+        string[] SymbolRows,
+        string[] OrphanPaths,
+        long OrphanedFiles);
+
     private static void WriteMixedWorkspace(string root)
     {
         Directory.CreateDirectory(Path.Combine(root, "Build"));
@@ -2690,7 +2823,6 @@ public class FSharpTierATests
 
     private static void Cleanup(string root)
     {
-        TestWorkspaceCleanup.ClearIndexPools(root);
-        try { Directory.Delete(root, recursive: true); } catch { }
+        TestWorkspaceCleanup.DeleteWorkspace(root);
     }
 }

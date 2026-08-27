@@ -33,7 +33,8 @@ internal sealed record BuildCaptureTestHooks(
     Action<string>? FirstCaptureFailureRetained = null,
     int? CSharpQueueCapacity = null,
     Action? CSharpQueueSaturated = null,
-    int? CSharpProducerMaxDegreeOfParallelism = null);
+    int? CSharpProducerMaxDegreeOfParallelism = null,
+    Action? BeforeCSharpQueueConsume = null);
 
 internal sealed class IndexWorkspaceMismatchException : IOException
 {
@@ -128,8 +129,11 @@ public static class IndexBuilder
     /// v27: stored F# indexing processes at most 64 deterministically ordered owner/TFM parse
     /// contexts per file and persists total/processed/truncated coverage.
     /// v28: context-budget selection reserves representation for valid compile owners and
-    /// persists truncated-owner coverage.</summary>
-    public const string SchemaVersion = "28";
+    /// persists truncated-owner coverage.
+    /// v29: conservatively repairs a historical missed stored-output rebuild boundary after a
+    /// fresh unchanged-commit F# fixture exposed different persisted symbol rows and orphan-file
+    /// classification under schema v28; cold-build/delta parity now guards recurrence.</summary>
+    public const string SchemaVersion = "29";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }
@@ -750,6 +754,7 @@ public static class IndexBuilder
             Exception? writerFailure = null;
             try
             {
+                buildCaptureTestHooks?.BeforeCSharpQueueConsume?.Invoke();
                 foreach (PreparedCSharpSource item in csharpQueue.GetConsumingEnumerable())
                 {
                     parsedBatch.Add(item);

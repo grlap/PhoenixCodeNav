@@ -73,8 +73,12 @@ public class Batch10ModifiersTests
 
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            for (int i = 0; i < 200 && !manager.IsQueryable; i++) Thread.Sleep(50);
-            Assert.True(manager.IsQueryable, "index did not become queryable after rebuild");
+            Assert.True(WaitUntilQueryable(manager, 30_000),
+                $"index did not become queryable after rebuild: {manager.Health().Error}");
+
+            IndexHealth health = manager.Health();
+            Assert.Equal("startup_incompatible", health.StartupBuildReason);
+            Assert.Equal("0", health.StartupPriorSchema);
 
             using var store2 = new IndexStore(dbPath, createNew: false);
             Assert.Equal(IndexBuilder.SchemaVersion, store2.GetMeta("schema_version"));
@@ -82,7 +86,7 @@ public class Batch10ModifiersTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -102,8 +106,8 @@ public class Batch10ModifiersTests
 
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            for (int i = 0; i < 200 && !manager.IsQueryable; i++) Thread.Sleep(50);
-            Assert.True(manager.IsQueryable, "corrupt index did not recover via rebuild");
+            Assert.True(WaitUntilQueryable(manager, 30_000),
+                $"corrupt index did not recover via rebuild: {manager.Health().Error}");
 
             using var q = new IndexQueries(dbPath);
             Assert.True(q.Overview().Symbols > 0);
@@ -111,7 +115,18 @@ public class Batch10ModifiersTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
+    }
+
+    private static bool WaitUntilQueryable(IndexManager manager, int timeoutMs)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (manager.IsQueryable) return true;
+            Thread.Sleep(50);
+        }
+        return manager.IsQueryable;
     }
 }

@@ -1697,7 +1697,7 @@ public partial class FSharpSemanticStage2Tests
         {
             RemoveJunction(junction);
             Cleanup(root);
-            try { Directory.Delete(outside, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(outside);
         }
     }
 
@@ -1751,7 +1751,7 @@ public partial class FSharpSemanticStage2Tests
         {
             RemoveJunction(linked);
             Cleanup(root);
-            try { Directory.Delete(outside, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(outside);
         }
     }
 
@@ -2593,9 +2593,22 @@ public partial class FSharpSemanticStage2Tests
               }
             }
             """;
-        WriteProject(root,
-            Path.Combine(Path.GetDirectoryName(projectPath) ?? "", "obj", "project.assets.json")
-                .Replace(Path.DirectorySeparatorChar, '/'), json);
+        string assetsRelativePath = Path.Combine(
+                Path.GetDirectoryName(projectPath) ?? "", "obj", "project.assets.json")
+            .Replace(Path.DirectorySeparatorChar, '/');
+        WriteProject(root, assetsRelativePath, json);
+
+        // A restored assets file is newer than every input used to produce it. File writes can
+        // otherwise receive the same timestamp under suite load, which correctly trips the
+        // product's stale-assets guard but does not represent the fixture being modeled here.
+        string assetsPath = Path.Combine(root,
+            assetsRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        DateTime restoredAt = new[]
+        {
+            DateTime.UtcNow,
+            File.GetLastWriteTimeUtc(absoluteProjectPath),
+        }.Max().AddSeconds(1);
+        File.SetLastWriteTimeUtc(assetsPath, restoredAt);
     }
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
@@ -2735,7 +2748,6 @@ public partial class FSharpSemanticStage2Tests
 
     private static void Cleanup(string root)
     {
-        TestWorkspaceCleanup.ClearIndexPools(root);
-        try { Directory.Delete(root, recursive: true); } catch { }
+        TestWorkspaceCleanup.DeleteWorkspace(root);
     }
 }

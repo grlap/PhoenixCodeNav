@@ -252,7 +252,7 @@ internal static class Batch43Support
 
     internal static void Cleanup(string root)
     {
-        try { Directory.Delete(root, recursive: true); } catch { /* Windows process handles */ }
+        TestWorkspaceCleanup.DeleteWorkspace(root);
     }
 
     internal static void CreateDirectoryLink(string link, string target, string workingDirectory)

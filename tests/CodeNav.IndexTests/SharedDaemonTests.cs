@@ -1240,12 +1240,21 @@ public sealed class SharedDaemonTests
                 Assert.NotNull(endpoint.SocketPath);
                 _ = new UnixDomainSocketEndPoint(endpoint.SocketPath);
             }
-            client = await CreateFrameworkDependentClientAsync(root, indexDb);
+            client = await CreateFrameworkDependentClientAsync(root, indexDb,
+                idleMilliseconds: 30_000);
             JsonElement capabilities = await CallAsync(client, "server_capabilities");
             Assert.Equal("daemon",
                 capabilities.GetProperty("runtime").GetProperty("indexMode").GetString());
             Assert.Equal("writer",
                 capabilities.GetProperty("index").GetProperty("mode").GetString());
+            Assert.True(IndexOwnershipLease.IsHeld(root, indexDb));
+
+            // The framework-dependent child is only a proxy. Closing it must leave the shared
+            // daemon alive, and that daemon must keep the writer lease until explicit retirement.
+            await DisposeClientAsync(client);
+            client = null;
+            Assert.True(IndexOwnershipLease.IsHeld(root, indexDb),
+                "the shared daemon released its ownership lease when only its proxy exited");
         }
         finally
         {
@@ -1671,7 +1680,8 @@ public sealed class SharedDaemonTests
 
     private static async Task<McpClient> CreateFrameworkDependentClientAsync(
         string root,
-        string indexDb)
+        string indexDb,
+        int idleMilliseconds = 600)
     {
         string executable = FindMcpExecutable();
         string managedEntry = Path.Combine(
@@ -1686,7 +1696,7 @@ public sealed class SharedDaemonTests
                 managedEntry,
                 "--workspace-root", root,
                 "--index-db", indexDb,
-                "--daemon-idle-ms", "600",
+                "--daemon-idle-ms", idleMilliseconds.ToString(),
             ],
         });
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));

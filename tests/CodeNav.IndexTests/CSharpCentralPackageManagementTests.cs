@@ -1,4 +1,5 @@
 using System.Text;
+using CodeNav.Core;
 using CodeNav.Core.Discovery;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
@@ -6,6 +7,8 @@ using Microsoft.CodeAnalysis;
 
 namespace CodeNav.Tests;
 
+// DisableParallelization keeps the process-global NUGET_PACKAGES redirect from overlapping any
+// other xUnit collection in this assembly, not merely the tests declared in this class.
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class CSharpCpmEnvironmentIsolationCollection
 {
@@ -103,9 +106,20 @@ public sealed class CSharpCentralPackageManagementTests
     [Fact]
     public async Task CentralPackageVersionRefreshReloadsTheWarmCSharpProject()
     {
-        string root = Directory.CreateTempSubdirectory("codenav-csharp-cpm-refresh").FullName;
+        // Prime the permanent process-wide framework-reference cache before redirecting the
+        // process-global NuGet root to this deliberately minimal fixture.
+        _ = ReferenceAssemblyLocator.Net472References(out _);
+        string sandbox = Directory.CreateTempSubdirectory(
+            "codenav-csharp-cpm-refresh").FullName;
+        string root = Path.Combine(sandbox, "workspace");
+        string packagesRoot = Path.Combine(sandbox, "packages");
+        string? priorPackagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
         try
         {
+            Directory.CreateDirectory(root);
+            WritePackageFixture(packagesRoot, PackageId, "5.6.0");
+            WritePackageFixture(packagesRoot, PackageId, "3.6.0");
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", packagesRoot);
             WriteWorkspace(root, "5.6.0");
             WriteDirectoryPackagesWithProperty(root, "5.6.0");
             string dbPath = IndexBuilder.DefaultDbPath(root);
@@ -142,7 +156,8 @@ public sealed class CSharpCentralPackageManagementTests
         }
         finally
         {
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", priorPackagesRoot);
+            TestWorkspaceCleanup.DeleteWorkspace(sandbox);
         }
     }
 
@@ -259,21 +274,26 @@ public sealed class CSharpCentralPackageManagementTests
                 ReferenceAssemblyLocator.Net472References(out string? net472SourceDuringRedirect);
             Assert.Same(net472BeforeRedirect, net472DuringRedirect);
             Assert.Equal(net472SourceBeforeRedirect, net472SourceDuringRedirect);
+            string? resolvedFixture = ReferenceAssemblyLocator.ResolvePackageDllExact(
+                packageId, version, out bool exactVersionDirectoryExists);
+            Assert.True(exactVersionDirectoryExists);
+            Assert.Equal(fixturePath, resolvedFixture);
 
             Directory.CreateDirectory(workspaceRoot);
             WriteWorkspace(workspaceRoot, version, packageId);
             string dbPath = IndexBuilder.DefaultDbPath(workspaceRoot);
             IndexBuilder.Build(workspaceRoot, dbPath);
 
-            using var workspace = new SemanticWorkspace(workspaceRoot, dbPath);
+            var log = new List<string>();
+            using var workspace = new SemanticWorkspace(workspaceRoot, dbPath, log.Add);
             using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
                 ["Cpm.Consumer"], CancellationToken.None);
 
             Project project = Assert.Single(lease.Solution.Projects);
             Assert.Empty(lease.Coverage.FailedProjects);
             Assert.Contains(project.MetadataReferences.OfType<PortableExecutableReference>(),
-                reference => string.Equals(reference.FilePath, fixturePath,
-                    StringComparison.Ordinal));
+                reference => WorkspacePaths.FileSystemPathComparer.Equals(
+                    reference.FilePath, fixturePath));
         }
         finally
         {
@@ -573,6 +593,16 @@ public sealed class CSharpCentralPackageManagementTests
             """);
         File.WriteAllText(Path.Combine(root, "src", "Marker.cs"),
             "namespace Cpm.Consumer; public sealed class Marker { }");
+    }
+
+    private static void WritePackageFixture(string packagesRoot, string packageId,
+        string version)
+    {
+        string fixtureDirectory = Path.Combine(packagesRoot, packageId.ToLowerInvariant(),
+            version, "lib", "netstandard2.0");
+        Directory.CreateDirectory(fixtureDirectory);
+        File.Copy(typeof(Microsoft.CodeAnalysis.CSharp.CSharpCompilation).Assembly.Location,
+            Path.Combine(fixtureDirectory, "Microsoft.CodeAnalysis.CSharp.dll"));
     }
 
     private static void WriteDirectoryPackages(string root, string version,

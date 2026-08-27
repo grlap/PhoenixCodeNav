@@ -127,7 +127,7 @@ public class Batch16RegexSearchTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -168,7 +168,7 @@ public class Batch16RegexSearchTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* leave temp on Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 }

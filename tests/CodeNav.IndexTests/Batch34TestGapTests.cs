@@ -226,6 +226,12 @@ public class Batch34TestGapTests
                 Assert.Contains("conversion_usage_enumeration_gap",
                     refs.GetProperty("partialReason").GetString());
                 Assert.Equal(1, conversionClassifications);
+                JsonElement salvagedGroup = Assert.Single(refs.GetProperty("groups")
+                    .EnumerateArray());
+                JsonElement salvagedSample = Assert.Single(salvagedGroup
+                    .GetProperty("samples").EnumerateArray());
+                Assert.False(string.IsNullOrWhiteSpace(
+                    salvagedSample.GetProperty("text").GetString()));
 
                 // Seam off: the same query is a full census again — no hedge, all 3 counted.
                 semantic.TestOnlyPerLocationCounted = null;
@@ -233,8 +239,115 @@ public class Batch34TestGapTests
                 var full = SemanticRetry.ParseExactWithRetry(() => tools.References(name: "Ping", timeoutMs: 60000));
                 Assert.Equal(3, full.GetProperty("totalReferences").GetInt32());
                 Assert.False(full.TryGetProperty("totalIsLowerBound", out _));
+                Assert.False(full.TryGetProperty("sampleCoverage", out _));
+
+                int textPassCancellation = 0;
+                semantic.TestOnlyBeforeReferenceSampleText = () =>
+                {
+                    if (Interlocked.Exchange(ref textPassCancellation, 1) == 0)
+                        throw new OperationCanceledException();
+                };
+                var textDegraded = SemanticRetry.ParseExactWithRetry(
+                    () => tools.References(name: "Ping", timeoutMs: 60000));
+                Assert.Equal(1, textPassCancellation);
+                Assert.Equal(3, textDegraded.GetProperty("totalReferences").GetInt32());
+                Assert.Equal("exact", textDegraded.GetProperty("meta")
+                    .GetProperty("confidence").GetString());
+                Assert.False(textDegraded.TryGetProperty("totalIsLowerBound", out _));
+                Assert.False(textDegraded.GetProperty("partial").GetBoolean());
+                Assert.False(textDegraded.TryGetProperty("sampleCoverage", out _));
+
+                semantic.TestOnlyReferenceSampleTextUnavailable = _ => true;
+                semantic.TestOnlyBeforeReferenceSampleText = () =>
+                    throw new OperationCanceledException();
+                var samplesDeadline = SemanticRetry.ParseExactWithRetry(
+                    () => tools.References(name: "Ping", timeoutMs: 60000));
+                Assert.Equal(3, samplesDeadline.GetProperty("totalReferences").GetInt32());
+                Assert.Equal("exact", samplesDeadline.GetProperty("meta")
+                    .GetProperty("confidence").GetString());
+                Assert.False(samplesDeadline.GetProperty("partial").GetBoolean());
+                JsonElement deadlineCoverage = samplesDeadline.GetProperty("sampleCoverage");
+                JsonElement deadlineReason = Assert.Single(deadlineCoverage
+                    .GetProperty("reasons").EnumerateArray());
+                Assert.Equal("references.samples_deadline",
+                    deadlineReason.GetProperty("noteId").GetString());
+                Assert.Contains("timeoutMs", deadlineReason.GetProperty("guidance").GetString());
+
+                semantic.TestOnlyBeforeReferenceSampleText = null;
+                var samplesTrimmed = SemanticRetry.ParseExactWithRetry(
+                    () => tools.References(name: "Ping", timeoutMs: 60000));
+                Assert.Equal(3, samplesTrimmed.GetProperty("totalReferences").GetInt32());
+                Assert.Equal("exact", samplesTrimmed.GetProperty("meta")
+                    .GetProperty("confidence").GetString());
+                Assert.False(samplesTrimmed.GetProperty("partial").GetBoolean());
+                JsonElement sampleCoverage = samplesTrimmed.GetProperty("sampleCoverage");
+                Assert.True(sampleCoverage.GetProperty("selected").GetInt32() > 0);
+                Assert.Equal(0, sampleCoverage.GetProperty("returned").GetInt32());
+                Assert.False(sampleCoverage.GetProperty("complete").GetBoolean());
+                JsonElement textLossReason = Assert.Single(sampleCoverage
+                    .GetProperty("reasons").EnumerateArray());
+                Assert.Equal("references.samples_trimmed",
+                    textLossReason.GetProperty("noteId").GetString());
+                Assert.Equal(sampleCoverage.GetProperty("selected").GetInt32(),
+                    textLossReason.GetProperty("omitted").GetInt32());
+                Assert.All(samplesTrimmed.GetProperty("groups").EnumerateArray(), group =>
+                    Assert.Empty(group.GetProperty("samples").EnumerateArray()));
+                semantic.TestOnlyReferenceSampleTextUnavailable = null;
             }
-            finally { semantic.Dispose(); m.Dispose(); }
+            finally
+            {
+                semantic.TestOnlyBeforeReferenceSampleText = null;
+                semantic.TestOnlyReferenceSampleTextUnavailable = null;
+                semantic.Dispose();
+                m.Dispose();
+            }
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void ReferenceSampleCoverageCountsOnlySamplesThatSurviveResponseBudgeting()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-reference-sample-budget").FullName;
+        try
+        {
+            string proj = Path.Combine(root, "P");
+            Directory.CreateDirectory(proj);
+            File.WriteAllText(Path.Combine(proj, "P.csproj"), SdkCsproj);
+            File.WriteAllText(Path.Combine(proj, "Core.cs"),
+                "namespace S { public class Core { public void Ping() { } } }");
+            File.WriteAllText(Path.Combine(proj, "Uses.cs"),
+                "namespace S { public class Uses { public void Call(Core c) { c.Ping(); } } }");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            using var semantic = new SemanticService(manager);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 15_000));
+            if (!semantic.FrameworkRefsAvailable) return;
+            var tools = new NavigationTools(manager, semantic)
+            {
+                // Instance-scoped shaping seam: exercise the actual response-budget callback
+                // without creating hundreds of projects merely to exceed the public 64 KiB cap.
+                TestOnlyReferencesResponseMaxBytes = 1024,
+            };
+
+            JsonElement response = SemanticRetry.ParseExactWithRetry(() =>
+                tools.References(name: "Ping", samplesPerGroup: 10,
+                    timeoutMs: 60_000));
+
+            Assert.True(response.GetProperty("truncated").GetBoolean());
+            Assert.Empty(response.GetProperty("groups").EnumerateArray());
+            JsonElement coverage = response.GetProperty("sampleCoverage");
+            Assert.Equal(1, coverage.GetProperty("selected").GetInt32());
+            Assert.Equal(0, coverage.GetProperty("returned").GetInt32());
+            Assert.False(coverage.GetProperty("complete").GetBoolean());
+            JsonElement budgetReason = Assert.Single(coverage.GetProperty("reasons")
+                .EnumerateArray());
+            Assert.Equal(1, budgetReason.GetProperty("omitted").GetInt32());
+            Assert.Equal("references.samples_byte_budget",
+                budgetReason.GetProperty("noteId").GetString());
         }
         finally { Cleanup(root); }
     }
@@ -255,6 +368,6 @@ public class Batch34TestGapTests
     private static void Cleanup(string root)
     {
         TestWorkspaceCleanup.ClearIndexPools(root);
-        try { Directory.Delete(root, recursive: true); } catch { /* windows locks */ }
+        TestWorkspaceCleanup.DeleteWorkspace(root);
     }
 }

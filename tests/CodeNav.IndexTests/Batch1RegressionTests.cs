@@ -9,7 +9,7 @@ namespace CodeNav.Tests;
 /// <summary>
 /// Regression coverage for review batch 1: PhoenixCodeNav-qie/bw3/d10/k1s.
 /// </summary>
-public class WorkspacePathsTests
+public class WorkspacePathsTests : IDisposable
 {
     private readonly string _root = Path.GetFullPath(Directory.CreateTempSubdirectory("codenav-paths").FullName);
 
@@ -60,6 +60,8 @@ public class WorkspacePathsTests
             Assert.False(ok, $"expected rejection of '{rel}'");
         }
     }
+
+    public void Dispose() => TestWorkspaceCleanup.DeleteWorkspace(_root);
 }
 
 [CollectionDefinition("Batch1 SQLite pool isolation", DisableParallelization = true)]
@@ -140,7 +142,7 @@ public class Batch1ToolTests : IClassFixture<IndexFixture>, IDisposable
         }
         finally
         {
-            Directory.Delete(outsideDir, recursive: true);
+            TestWorkspaceCleanup.DeleteWorkspace(outsideDir);
         }
     }
 
@@ -220,8 +222,7 @@ public class Batch1ToolTests : IClassFixture<IndexFixture>, IDisposable
         }
         finally
         {
-            TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* Windows handles */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 

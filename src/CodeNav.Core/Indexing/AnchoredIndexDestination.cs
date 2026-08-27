@@ -51,6 +51,7 @@ internal sealed class AnchoredIndexDestination : IDisposable
     private bool _stageGuardReleased;
     private readonly List<SidecarGuard> _stageSidecarGuards = new();
     private readonly List<SidecarGuard> _publishSidecarGuards = new();
+    internal Action<string>? TestOnlyAfterLiveSidecarRemoval;
 
     private enum InstallAttemptResult
     {
@@ -691,7 +692,7 @@ internal sealed class AnchoredIndexDestination : IDisposable
                 {
                     handle.Dispose();
                     SidecarReservationResult removed =
-                        TryRemoveExistingWindowsSidecar(path);
+                        TryRemoveCurrentWindowsSidecar(path);
                     if (removed != SidecarReservationResult.Reserved)
                     {
                         ReleaseSidecarGuards(guards);
@@ -707,7 +708,7 @@ internal sealed class AnchoredIndexDestination : IDisposable
                     int error = Marshal.GetLastPInvokeError();
                     handle.Dispose();
                     ReleaseSidecarGuards(guards);
-                    return IsWindowsReplacementContention(error)
+                    return IsWindowsSidecarContention(error)
                         ? SidecarReservationResult.RetryableContention
                         : SidecarReservationResult.Failed;
                 }
@@ -732,21 +733,48 @@ internal sealed class AnchoredIndexDestination : IDisposable
                 if (fd < 0 && !sqliteCompatible &&
                     Marshal.GetLastPInvokeError() == 17)
                 {
-                    if (!TryStatxAt(dirFd, name, out StatxIdentity existing) ||
-                        !existing.IsRegular || existing.Links != 1 ||
-                        unlinkat(dirFd, name, 0) != 0)
+                    if (!TryStatxAt(dirFd, name, out StatxIdentity existing,
+                            out int statxError))
+                    {
+                        ReleaseSidecarGuards(guards);
+                        return statxError == 2
+                            ? SidecarReservationResult.RetryableContention
+                            : SidecarReservationResult.Failed;
+                    }
+                    if (!existing.IsRegular || existing.Links != 1)
                     {
                         ReleaseSidecarGuards(guards);
                         return SidecarReservationResult.Failed;
                     }
+                    // Inspect the then-current live name only inside the post-drain publication
+                    // boundary. SQLite may create, remove, or replace this sidecar while the
+                    // private stage is being built, so stage-time identity is not authority.
+                    if (unlinkat(dirFd, name, 0) != 0)
+                    {
+                        int error = Marshal.GetLastPInvokeError();
+                        ReleaseSidecarGuards(guards);
+                        return error == 2
+                            ? SidecarReservationResult.RetryableContention
+                            : SidecarReservationResult.Failed;
+                    }
+                    TestOnlyAfterLiveSidecarRemoval?.Invoke(
+                        Path.Combine(Path.GetDirectoryName(_dbPath)!, name));
                     fd = openat(dirFd, name,
                         LinuxOpenFlags.ExclusiveCreateReadWrite,
                         Convert.ToUInt32("600", 8));
                 }
-                if (fd < 0 || !TryStatxFd(fd, out StatxIdentity identity) ||
+                if (fd < 0)
+                {
+                    int error = Marshal.GetLastPInvokeError();
+                    ReleaseSidecarGuards(guards);
+                    return error == 17
+                        ? SidecarReservationResult.RetryableContention
+                        : SidecarReservationResult.Failed;
+                }
+                if (!TryStatxFd(fd, out StatxIdentity identity) ||
                     !identity.IsRegular || identity.Links != 1)
                 {
-                    if (fd >= 0) close(fd);
+                    close(fd);
                     ReleaseSidecarGuards(guards);
                     return SidecarReservationResult.Failed;
                 }
@@ -758,7 +786,7 @@ internal sealed class AnchoredIndexDestination : IDisposable
         return SidecarReservationResult.Reserved;
     }
 
-    private SidecarReservationResult TryRemoveExistingWindowsSidecar(string path)
+    private SidecarReservationResult TryRemoveCurrentWindowsSidecar(string path)
     {
         using SafeFileHandle existing = OpenWindowsFile(path,
             GenericRead | DeleteAccess, FileShareRead | FileShareWrite);
@@ -775,7 +803,11 @@ internal sealed class AnchoredIndexDestination : IDisposable
             info.NumberOfLinks != 1)
             return SidecarReservationResult.Failed;
         if (MarkWindowsDeleteOnClose(existing))
+        {
+            existing.Dispose();
+            TestOnlyAfterLiveSidecarRemoval?.Invoke(path);
             return SidecarReservationResult.Reserved;
+        }
         return IsWindowsReplacementContention(Marshal.GetLastPInvokeError())
             ? SidecarReservationResult.RetryableContention
             : SidecarReservationResult.Failed;
@@ -910,6 +942,9 @@ internal sealed class AnchoredIndexDestination : IDisposable
 
     private static bool IsWindowsReplacementContention(int error) =>
         error is 5 or 32 or 33;
+
+    private static bool IsWindowsSidecarContention(int error) =>
+        IsWindowsReplacementContention(error) || error is 80 or 183;
 
     private SafeFileHandle? OpenReleasedWindowsStageForDelete()
     {
@@ -1152,15 +1187,30 @@ internal sealed class AnchoredIndexDestination : IDisposable
     }
 
     private static bool TryStatxFd(int fd, out StatxIdentity identity) =>
-        TryStatx(fd, "", 0x1000, out identity); // AT_EMPTY_PATH
+        TryStatx(fd, "", 0x1000, out identity, out _); // AT_EMPTY_PATH
 
     private static bool TryStatxAt(int dirFd, string leaf, out StatxIdentity identity) =>
-        TryStatx(dirFd, leaf, 0x100, out identity); // AT_SYMLINK_NOFOLLOW
+        TryStatx(dirFd, leaf, 0x100, out identity, out _); // AT_SYMLINK_NOFOLLOW
+
+    private static bool TryStatxAt(int dirFd, string leaf, out StatxIdentity identity,
+        out int error) =>
+        TryStatx(dirFd, leaf, 0x100, out identity, out error); // AT_SYMLINK_NOFOLLOW
+
+    internal const uint StatxIdentityMask = 0x00000001 | 0x00000002 | 0x00000004 |
+        0x00000100 | 0x00000200; // TYPE|MODE|NLINK|INO|SIZE
+
+    internal static bool TryValidateStatxIdentity(bool syscallSucceeded, uint returnedMask,
+        int lastError, out int error)
+    {
+        error = syscallSucceeded ? 0 : lastError;
+        return syscallSucceeded && (returnedMask & StatxIdentityMask) == StatxIdentityMask;
+    }
 
     private static bool TryStatx(int dirFd, string path, int flags,
-        out StatxIdentity identity)
+        out StatxIdentity identity, out int error)
     {
         identity = default;
+        error = 0;
         IntPtr buffer = Marshal.AllocHGlobal(256);
         try
         {
@@ -1169,11 +1219,17 @@ internal sealed class AnchoredIndexDestination : IDisposable
             // STATX_TYPE (0x1) owns the S_IFMT bits this identity trusts; STATX_MODE (0x2) owns
             // the permission bits. Request and require BOTH so a mask-honoring filesystem can
             // never satisfy the gate while leaving S_IFMT unfilled (review PhoenixCodeNav-0ce1).
-            const uint requested = 0x00000001 | 0x00000002 | 0x00000004 | 0x00000100 |
-                0x00000200; // TYPE|MODE|NLINK|INO|SIZE
-            if (statx(dirFd, path, flags, requested, buffer) != 0) return false;
-            uint mask = unchecked((uint)Marshal.ReadInt32(buffer, 0));
-            if ((mask & requested) != requested) return false;
+            int statxResult = statx(dirFd, path, flags, StatxIdentityMask, buffer);
+            bool syscallSucceeded = statxResult == 0;
+            int lastError = syscallSucceeded ? 0 : Marshal.GetLastPInvokeError();
+            uint mask = syscallSucceeded
+                ? unchecked((uint)Marshal.ReadInt32(buffer, 0))
+                : 0;
+            // statx succeeded here, so an incomplete mask is an authority failure, not an
+            // errno-bearing syscall failure. Keep error at zero rather than leaking stale errno
+            // from an earlier openat into the publication contention classifier.
+            if (!TryValidateStatxIdentity(syscallSucceeded, mask, lastError, out error))
+                return false;
             uint links = unchecked((uint)Marshal.ReadInt32(buffer, 16));
             ushort mode = unchecked((ushort)Marshal.ReadInt16(buffer, 28));
             ulong inode = unchecked((ulong)Marshal.ReadInt64(buffer, 32));

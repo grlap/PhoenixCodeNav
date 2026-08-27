@@ -440,6 +440,6 @@ public class Batch37Tests
     private static void Cleanup(string root)
     {
         TestWorkspaceCleanup.ClearIndexPools(root);
-        try { Directory.Delete(root, recursive: true); } catch { /* windows locks */ }
+        TestWorkspaceCleanup.DeleteWorkspace(root);
     }
 }

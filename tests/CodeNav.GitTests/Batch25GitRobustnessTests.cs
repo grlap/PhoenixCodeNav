@@ -53,7 +53,7 @@ public class Batch25GitRobustnessTests
                 GitInfo.ResolveGitExeFrom(nonCanonical, null));
             Assert.Null(GitInfo.ResolveGitExeFrom(null, root)); // no git anywhere
         }
-        finally { try { Directory.Delete(root, recursive: true); } catch { } }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public class Batch25GitRobustnessTests
                 Assert.Throws<ArgumentException>(() => GitInfo.Invocation(wrapper, "status"));
             }
         }
-        finally { try { Directory.Delete(root, recursive: true); } catch { } }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
     }
 
     // ------------------------------------------------------------------ h99: spawning
@@ -134,7 +134,7 @@ public class Batch25GitRobustnessTests
             Assert.Equal(@"C:\somewhere\git.exe", exe2);
             Assert.Equal("status", args2);
         }
-        finally { try { Directory.Delete(root, recursive: true); } catch { } }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
     }
 
     // ------------------------------------------------------------------ wll: watcher unit
@@ -143,24 +143,28 @@ public class Batch25GitRobustnessTests
     public async Task LogsWatchAttachesWhenTheReflogDirIsBorn()
     {
         string gitDir = Directory.CreateTempSubdirectory("codenav-wll").FullName;
-        int fires = 0;
-        using (var w = new GitWatcher(gitDir, () => Interlocked.Increment(ref fires)))
+        try
         {
-            // Simulate the first commit: git creates logs/ and appends logs/HEAD.
-            string logs = Path.Combine(gitDir, "logs");
-            Directory.CreateDirectory(logs);
-            File.WriteAllText(Path.Combine(logs, "HEAD"), "0000 1111 first\n");
-            Assert.True(await WaitAsync(() => Volatile.Read(ref fires) >= 1, 5000),
-                "logs/ creation did not signal (re-attach hook missing — wll)");
+            int fires = 0;
+            using (var w = new GitWatcher(gitDir, () => Interlocked.Increment(ref fires)))
+            {
+                // Simulate the first commit: git creates logs/ and appends logs/HEAD.
+                string logs = Path.Combine(gitDir, "logs");
+                Directory.CreateDirectory(logs);
+                File.WriteAllText(Path.Combine(logs, "HEAD"), "0000 1111 first\n");
+                Assert.True(await WaitAsync(() => Volatile.Read(ref fires) >= 1, 5000),
+                    "logs/ creation did not signal (re-attach hook missing — wll)");
 
-            // The DECISIVE part: a subsequent plain commit only appends logs/HEAD. Without the
-            // late attach nobody watches that file and this append is silent forever.
-            int before = Volatile.Read(ref fires);
-            await Task.Delay(600); // let the first debounce window fully drain
-            File.AppendAllText(Path.Combine(logs, "HEAD"), "1111 2222 second\n");
-            Assert.True(await WaitAsync(() => Volatile.Read(ref fires) > before, 5000),
-                "append to logs/HEAD went unseen — the late-attached reflog watch is not live");
+                // The DECISIVE part: a subsequent plain commit only appends logs/HEAD. Without the
+                // late attach nobody watches that file and this append is silent forever.
+                int before = Volatile.Read(ref fires);
+                await Task.Delay(600); // let the first debounce window fully drain
+                File.AppendAllText(Path.Combine(logs, "HEAD"), "1111 2222 second\n");
+                Assert.True(await WaitAsync(() => Volatile.Read(ref fires) > before, 5000),
+                    "append to logs/HEAD went unseen — the late-attached reflog watch is not live");
+            }
         }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(gitDir); }
     }
 
     // ------------------------------------------------------------------ wll: end-to-end
@@ -210,8 +214,7 @@ public class Batch25GitRobustnessTests
         }
         finally
         {
-            TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* git/windows locks */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 

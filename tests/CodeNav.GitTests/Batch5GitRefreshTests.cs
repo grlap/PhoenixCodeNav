@@ -691,7 +691,6 @@ public class Batch5GitRefreshTests
 
     private static void Cleanup(string root)
     {
-        TestWorkspaceCleanup.ClearIndexPools(root);
-        try { Directory.Delete(root, recursive: true); } catch { /* git handles / windows locks */ }
+        TestWorkspaceCleanup.DeleteWorkspace(root);
     }
 }

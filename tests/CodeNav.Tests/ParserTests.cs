@@ -12,7 +12,7 @@ public class ProjectFileParserTests : IDisposable
     [DllImport("libc", SetLastError = true)]
     private static extern int mkfifo(string pathname, uint mode);
 
-    public void Dispose() => Directory.Delete(_root, recursive: true);
+    public void Dispose() => TestWorkspaceCleanup.DeleteWorkspace(_root);
 
     private string WriteFile(string relPath, string content)
     {

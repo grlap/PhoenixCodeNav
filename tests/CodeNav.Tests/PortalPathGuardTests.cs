@@ -71,7 +71,7 @@ public sealed class PortalPathGuardTests
         }
         finally
         {
-            Directory.Delete(root, recursive: true);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 

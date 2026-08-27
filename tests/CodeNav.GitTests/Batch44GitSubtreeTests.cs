@@ -496,7 +496,7 @@ public sealed class Batch44GitSubtreeTests
     }
 
     [Fact]
-    public void ReviewPackConservativelyLeavesAnEolOnlyUnstagedMoveUncorrelated()
+    public void ReviewPackCorrelatesAnEolOnlyUnstagedMoveAsNormalizedBlob()
     {
         string? gitExe = FindGit();
         if (gitExe is null) return;
@@ -533,6 +533,15 @@ public sealed class Batch44GitSubtreeTests
             Assert.NotEqual(committedOid, rawOid);
             Assert.Equal(committedOid, normalizedOid);
 
+            // Stale-test repair: review-normalized-move-evidence has shipped this contract since
+            // v0.12.44. GitInfo deliberately correlates the filter-normalized blob identity. The
+            // raw CRLF bytes differ, but .gitattributes makes the repository object byte-identical,
+            // so this is a normalized_blob move rather than a dangling deletion.
+            // This repository's visible history is a single squashed Init commit, so the commit
+            // that introduced the stale opposite assertion cannot be recovered. The shipped
+            // feature id and current GitInfo implementation are the durable contract; this edit
+            // repairs test provenance and does not change product behavior.
+
             manager.RequestRefresh(new[] { "Old.cs", "New.cs" });
             Assert.True(WaitUntil(() =>
             {
@@ -544,11 +553,15 @@ public sealed class Batch44GitSubtreeTests
 
             JsonElement pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
                 () => tools.ReviewPack(),
-                j => j.TryGetProperty("deletedFiles", out _), "review_pack with deletedFiles");
-            Assert.False(pack.TryGetProperty("movedFiles", out _));
-            Assert.Equal(1, pack.GetProperty("changedFiles").GetProperty("deleted").GetInt32());
-            Assert.Contains(pack.GetProperty("deletedFiles").EnumerateArray(), deleted =>
-                deleted.GetProperty("path").GetString() == "Old.cs");
+                j => j.TryGetProperty("movedFiles", out _),
+                "review_pack with normalized move evidence");
+            JsonElement move = Assert.Single(pack.GetProperty("movedFiles")
+                .GetProperty("items").EnumerateArray());
+            Assert.Equal("Old.cs", move.GetProperty("from").GetString());
+            Assert.Equal("New.cs", move.GetProperty("to").GetString());
+            Assert.Equal("normalized_blob", move.GetProperty("match").GetString());
+            Assert.Equal(0, pack.GetProperty("changedFiles").GetProperty("deleted").GetInt32());
+            Assert.False(pack.TryGetProperty("deletedFiles", out _));
         }
         finally
         {
@@ -790,13 +803,19 @@ public sealed class Batch44GitSubtreeTests
             using var manager = new IndexManager(root, dbPath);
             using var semantic = new SemanticService(manager);
             manager.Start();
+            int stableReadyObservations = 0;
             Assert.True(WaitUntil(() =>
             {
-                if (!manager.IsQueryable) return false;
-                var (currentHead, status) = manager.CurrentHeadCommitEx();
-                return status == "ok" && string.Equals(currentHead, head,
-                    StringComparison.Ordinal);
-            }, 20_000), "manager did not attach the expected Git baseline");
+                if (!manager.IsQueryable || manager.State != "ready")
+                {
+                    stableReadyObservations = 0;
+                    return false;
+                }
+                return ++stableReadyObservations >= 20;
+            }, 30_000), "manager did not remain ready after its startup freshness sweep");
+            var (currentHead, headStatus) = manager.CurrentHeadCommitEx();
+            Assert.Equal("ok", headStatus);
+            Assert.Equal(head, currentHead);
 
             File.Delete(Path.Combine(root, "Old.cs"));
             string untracked = Path.Combine(root, "Late.cs");
@@ -1414,7 +1433,6 @@ public sealed class Batch44GitSubtreeTests
 
     private static void Cleanup(string root)
     {
-        TestWorkspaceCleanup.ClearIndexPools(root);
-        try { Directory.Delete(root, recursive: true); } catch { /* Windows pooled handles */ }
+        TestWorkspaceCleanup.DeleteWorkspace(root);
     }
 }

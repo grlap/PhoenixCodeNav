@@ -827,7 +827,8 @@ public class SemanticColdStartLoaderTests : IDisposable
             var managerLog = new List<string>();
             using var manager = new IndexManager(root, dbPath, managerLog.Add);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            Assert.True(WaitUntil(() => manager.State == "ready", 20_000),
+                manager.Health().Error);
             using var semantic = new SemanticService(manager);
 
             var (declaration, reason, projectModelUnproven, partialReason) =
@@ -1581,7 +1582,8 @@ public class SemanticColdStartLoaderTests : IDisposable
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            Assert.True(WaitUntil(() => manager.State == "ready", 30_000),
+                manager.Health().Error);
             using var semantic = new SemanticService(manager);
             SemanticWorkspace workspace = semantic.TestOnlyWorkspace;
             workspace.TestOnlyManagedHeapBytes = static () => 0;

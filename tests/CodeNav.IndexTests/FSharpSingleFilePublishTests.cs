@@ -147,7 +147,7 @@ public sealed class FSharpSingleFilePublishTests
                 cancellationToken: mcpTimeout.Token);
             JsonElement capabilities = await WaitForReadyAsync(client, TimeSpan.FromSeconds(60),
                 mcpTimeout.Token);
-            Assert.Equal("0.12.67", capabilities.GetProperty("version").GetString());
+            Assert.Equal("0.12.68", capabilities.GetProperty("version").GetString());
             JsonElement semantic = await CallJsonAsync(client, "symbol_at",
                 new Dictionary<string, object?>
                 {
@@ -214,7 +214,7 @@ public sealed class FSharpSingleFilePublishTests
             }
             PortalTestRuntimeCleanup.DeleteCoordinationFiles(workspace);
             TestWorkspaceCleanup.ClearIndexPools(workspace);
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 

@@ -28,6 +28,7 @@ public sealed partial class NavigationTools
     private readonly IOperationsPortalLauncher _operationsPortalLauncher;
 
     internal string? TestOnlySemanticFailureReason { get; set; }
+    internal int? TestOnlyReferencesResponseMaxBytes { get; set; }
 
     public NavigationTools(IndexManager manager, SemanticService semantic)
         : this(manager, semantic, new OperationsPortalLauncher())
@@ -86,6 +87,12 @@ public sealed partial class NavigationTools
             out bool indexedAtUtcTruncated, out int? indexedAtUtcBytes);
         string? lastRefreshUtc = CapabilityText(h.LastRefreshUtc, CapabilityIdentityTextBytes,
             out bool lastRefreshUtcTruncated, out int? lastRefreshUtcBytes);
+        string? startupBuildReason = CapabilityText(h.StartupBuildReason,
+            CapabilityIdentityTextBytes, out bool startupBuildReasonTruncated,
+            out int? startupBuildReasonBytes);
+        string? startupPriorSchema = CapabilityText(h.StartupPriorSchema,
+            CapabilityIdentityTextBytes, out bool startupPriorSchemaTruncated,
+            out int? startupPriorSchemaBytes);
         string workspaceRoot = Json.Utf8Prefix(h.WorkspaceRoot, CapabilityDynamicTextBytes,
             out bool workspaceRootTruncated);
         int? workspaceRootBytes = workspaceRootTruncated ? Json.Utf8Bytes(h.WorkspaceRoot) : null;
@@ -167,6 +174,7 @@ public sealed partial class NavigationTools
                 new { id = "semantic-planning-attribution", summary = "v0.12.13 implementations/type_hierarchy semanticOp telemetry splits transitive-closure database query+row mapping, managed identity filtering, frontier bookkeeping, seed discovery, and scan-set planning with privacy-safe work counts and writer/follower accessMode" },
                 new { id = "indexed-base-type-edges", summary = "v0.12.14 schema v18 persists syntax-derived simple-name/arity base-list edges before display-signature truncation; implementations/type_hierarchy use indexed lookups instead of repeated leading-wildcard symbol scans while semantic verification preserves same-name collision honesty" },
                 new { id = "references-stage-attribution", summary = "v0.12.15 references semanticOp telemetry attributes direct-candidate/scan-set planning and splits post-resolution query wall into Roslyn FindReferences, syntax-root loading, usage classification, sample text, remaining processing, and privacy-safe work counts" },
+                new { id = "references-deterministic-samples", summary = "v0.12.68 completed reference scans retain bounded per-project evidence unique by path, line, and usage kind in ordinal path, line, and usage-kind order and equal-count project groups in ordinal project order independent of Roslyn enumeration order, use the canonical per-group project spelling, then read source text only for that final bounded set; multiple source spans with the same path/line/kind share one sample while totals still count every span; post-response-budget sampleCoverage discloses selected versus emitted evidence and separate deadline, other text-loss, or byte-budget causes, while complete counts, queryStages.samplesRead meaning, and the public sample cap remain unchanged" },
                 new { id = "references-parallel-compilation-preparation", summary = "v0.12.16 exact references prepares the selected scan set's Roslyn compilations in dependency-first waves on the same pinned Solution through one bounded process-wide lane; queryStages exposes preparation, cache reuse, queueing, wave, and completeness counts" },
                 new { id = "references-document-scoped-search", summary = "v0.12.17 exact references narrows eligible symbols to a conservative document superset derived from the same leased live Solution; unsafe kinds and any planning uncertainty retain full-solution SymbolFinder authority, with mode/reason/count telemetry" },
                 new { id = "semantic-persistent-syntax-indexes", summary = "v0.12.18 assigns stable storage-only Solution/Project/Document identities so Roslyn can persist checksum-validated SyntaxTreeIndex data across MCP processes; source and project authority are unchanged, and documentScope exposes the project-wide alias-scan breadth" },
@@ -179,6 +187,9 @@ public sealed partial class NavigationTools
                 new { id = "index-raw-ordinal-file-batching", summary = "v0.12.35 file rows use client-assigned ids and cached raw ordinal SQLite statements; full C# builds persist exact batches of 1..32 while delta and structural writes use the same one-row path" },
                 new { id = "index-deferred-secondary-index-build", summary = "v0.12.35 cold builds bulk-load under primary and unique constraints, then create all nine query-facing secondary indexes inside the unpublished finalization transaction and report their measured cost" },
                 new { id = "index-private-staged-rebuild-publication", summary = "v0.12.36 supported workspace-local full rebuilds construct and finalize a pinned private database while the prior publication remains readable, then publish rebuilding only for bounded handle drain and anchored atomic install" },
+                new { id = "index-live-recovery-sidecar-publication-boundary", summary = "v0.12.68 keeps live SQLite recovery sidecars intact throughout private construction on Windows and Unix, then re-inspects and reserves or removes the current safe names only inside the post-drain publication boundary" },
+                new { id = "index-schema-29-fsharp-output-rebuild", summary = "v0.12.68 schema v29 forces deployed schema-28 indexes to rebuild after a fresh unchanged-commit FSharp fixture exposed stored symbol and orphan-classification drift; the external gate pins the fresh counts and requires a later ordinary reuse run to reproduce them" },
+                new { id = "index-startup-rebuild-evidence", summary = "v0.12.68 server_capabilities index.startupBuildReason and startupPriorSchema preserve this process's startup rebuild cause after readiness, so the external reusable-index gate fails an existing-index migration or recovery run instead of mistaking its rebuilt matching counts for ordinary reuse" },
                 new { id = "index-raw-ordinal-content-fts-batching", summary = "v0.12.37 introduced exact-width raw ordinal file_contents and FTS5 batching; v0.12.38 retains raw content batches while superseding cold FTS batches with one deferred rebuild, and live writes keep transactional content+FTS updates" },
                 new { id = "index-bounded-synchronous-csharp-build-handoff", summary = "v0.12.38 cold C# parsing hands prepared sources to the single writer through a bounded synchronous queue, eliminating sync-over-async ThreadPool starvation while retaining full-width writer batches" },
                 new { id = "index-deferred-fts-rebuild", summary = "v0.12.38 cold builds populate file_contents first, rebuild the external-content FTS5 index once during unpublished finalization, and retain transactional incremental FTS maintenance for live refreshes" },
@@ -239,6 +250,7 @@ public sealed partial class NavigationTools
                 new { id = "csharp-conversion-semantic-handles", summary = "v0.12.48 schema v24 conversion idx handles pin semantic definitions and references with uncapped canonical declaration keys; fingerprints bind the existing per-file content hash to a deterministic syntax ordinal among declarations on the same source line, distinguishing same-file twins without follow-up queries, invalidating the file epoch conservatively without a per-symbol context digest, and rejecting older identities that cannot prove the current row" },
                 new { id = "references-candidate-file-cap-disclosure", summary = "v0.12.46 indexed references disclose the existing caller-selected maxFiles candidate-file bound through coverage, candidate_file_cap, references.candidate_file_cap, and lower-bound totals instead of presenting a scanned subset as complete" },
                 new { id = "csharp-conversion-usage-enumeration", summary = "v0.12.47 semantic references enumerate compiler-bound implicitConversion, explicitConversion, and checkedConversion sites across the selected dependent closure, including stacked, nullable-tuple, full C# compound-assignment, primary-constructor, foreach, deconstruction, and interface-dispatch carriers, so exact zero means no matching conversion was found in complete loaded coverage" },
+                new { id = "csharp-foreach-conversion-operator-kind", summary = "v0.12.68 classifies compiler-selected foreach conversions by operator identity so explicit, implicit, and checked operators retain their distinct usage classification" },
                 new { id = "csharp-operator-semantic-handles", summary = "v0.12.47 regular and conversion operator idx handles pin definition/references with canonical syntax declaration keys, including checked and explicit-interface forms; indexed definition retains the resolved row, indexed/failed-auto references fail closed, and implementations/type_hierarchy reject operator handles instead of retargeting" },
                 new { id = "csharp-explicit-interface-operator-accessibility", summary = "v0.12.47 schema v23 persists explicit-interface regular operators as private so search, outline, and review_pack do not overstate public API" },
                 new { id = "semantic-indivisible-identity-completeness", summary = "v0.12.47 definition/references remove optional declaration-site lists with truthful declaration totals and stable note id semantic.declaration_sites_budget before preserving a complete indivisible compiler symbol identity above ordinary hardBytes; responseBudget then reports measured serializedBytes, exceeded:true, completeIdentity:true, and reason:indivisible_semantic_identity without identity truncation or rejection" },
@@ -263,11 +275,12 @@ public sealed partial class NavigationTools
                 new { id = "review-project-shape-completeness", summary = "Unevaluated imports/SDKs/conditions/expressions block deleted-path proof; projectOwnershipFallbackCoverage.evaluationIncomplete and review.project_shape_incomplete disclose it" },
                 new { id = "review-project-file-guidance", summary = "v0.12.41 changedProjectFiles reports every modified or deleted project, build, and solution input; review.project_files_changed counts only authoritative .csproj/.fsproj/.csproj.user/.fsproj.user/.shproj/.proj/.projitems/.props/.targets and Directory.Build.rsp/MSBuild.rsp inputs and warns that dependency, compile-set, or test-classification evidence may shift" },
                 new { id = "review-solution-metadata-guidance", summary = "v0.12.44 .sln/.slnx/.slnf changes remain visible in changedProjectFiles and emit review.solution_files_changed, while changedProjectFilesCoverage splits authoritative and solutionMetadata counts; solution metadata never invalidates exact-move, declaration-survivor, ownership, dependency, build, or symbol-resolution proof" },
+                new { id = "review-deleted-solution-metadata-counts", summary = "v0.12.68 retains deleted .sln/.slnx/.slnf metadata in changedFiles totals while excluding it only from source-deletion expansion and former-symbol analysis; review.deleted_solution_metadata_scope discloses that distinct cause" },
                 new { id = "review-default-baseline-honesty", summary = "v0.11.4 bounded git_index_baseline_unavailable gives refresh_index or explicit baseRef guidance; caller-supplied invalid refs remain bad_request" },
                 new { id = "review-unmapped-change-coverage", summary = "v0.11.2 unmapped change coverage: namespace and file-level C# regions not fully covered by reviewable indexed symbols appear in bounded unmappedChanges records with explicit side, old/new coordinates, reason, and total/returned/truncated" },
                 new { id = "review-index-epoch-consistency", summary = "review_pack pins rows and response metadata to one stable SQLite read epoch; an overlapping refresh cannot mix old symbols with new ownership or health evidence" },
                 new { id = "review-per-hunk-type-mapping", summary = "Type/member suppression is evaluated per old/new hunk, so a type-header edit remains reviewable when a separate hunk touches one of its members" },
-                new { id = "stable-note-ids", summary = "diagnostic notes carry MACHINE-MATCHABLE stable ids (a0b): consumers match ids, not prose. review_pack notes are {id, text} natively; retrofitted additively elsewhere — references.noteId (zero_loading_gap), impact.transitiveNoteId (transitive_single_count), type_hierarchy.noteId (heuristic_fallback), search_text.noteId (did_you_mean | elsewhere_matches | absent_everywhere). Ids are the contract — prose may be reworded, ids may not; one id per CAUSE" },
+                new { id = "stable-note-ids", summary = "diagnostic notes carry MACHINE-MATCHABLE stable ids (a0b): consumers match ids, not prose. review_pack notes are {id, text} natively; retrofitted additively elsewhere — references.noteId (zero_loading_gap), references.sampleCoverage.reasons[].noteId (samples_deadline | samples_trimmed | samples_byte_budget), impact.transitiveNoteId (transitive_single_count), type_hierarchy.noteId (heuristic_fallback), search_text.noteId (did_you_mean | elsewhere_matches | absent_everywhere). Ids are the contract — prose may be reworded, ids may not; one id per CAUSE" },
                 new { id = "worktree-indexes", summary = "On Windows and Linux, worktrees lists anchored sibling status and index_worktree creates or refreshes a Git-validated target; macOS is unsupported for both operations" },
                 new { id = "index-write-destination-authority", summary = "IndexManager and direct IndexBuilder writes validate database/WAL/SHM/rollback-journal leaves and parents: Windows pins the full no-delete-share chain, Linux writes through a held directory fd, and macOS performs startup and per-open identity revalidation only" },
                 new { id = "worktree-index-platform-policy", summary = "Windows uses targeted indexed_commit-to-HEAD plus dirt reconciliation, Linux uses an anchored full sweep with usedFullSweep=true, and macOS returns unsupported_platform" },
@@ -332,6 +345,12 @@ public sealed partial class NavigationTools
                 lastRefreshUtc,
                 lastRefreshUtcTruncated = lastRefreshUtcTruncated ? true : (bool?)null,
                 lastRefreshUtcBytes,
+                startupBuildReason,
+                startupBuildReasonTruncated = startupBuildReasonTruncated ? true : (bool?)null,
+                startupBuildReasonBytes,
+                startupPriorSchema,
+                startupPriorSchemaTruncated = startupPriorSchemaTruncated ? true : (bool?)null,
+                startupPriorSchemaBytes,
                 h.PendingChanges,
                 pendingChangesKnown = h.AccessMode == IndexManager.WriterAccessMode
                     ? (bool?)null
@@ -2156,7 +2175,44 @@ public sealed partial class NavigationTools
                         Json.WithAuxiliaryListsBudget(groups0,
                         result.SkippedCandidateProjects, boundedOutOfGraph,
                         (items, truncated, skippedItems, skippedTruncated,
-                            outOfGraphItems, outOfGraphBudgetTruncated) => new
+                            outOfGraphItems, outOfGraphBudgetTruncated) =>
+                        {
+                            int emittedReferenceSamples = items.Sum(group =>
+                                group.Samples.Count);
+                            var sampleCoverageReasons = new List<object>();
+                            int textOmitted = result.ReferenceSamplesSelected -
+                                result.ReferenceSamplesReturned;
+                            int deadlineOmitted = Math.Min(textOmitted,
+                                result.ReferenceSamplesDeadlineOmitted);
+                            int otherTextOmitted = textOmitted - deadlineOmitted;
+                            if (deadlineOmitted > 0)
+                            {
+                                sampleCoverageReasons.Add(new
+                                {
+                                    noteId = NoteIds.ReferencesSamplesDeadline,
+                                    omitted = deadlineOmitted,
+                                    guidance = "Raise timeoutMs to allow bounded sample text to load.",
+                                });
+                            }
+                            if (otherTextOmitted > 0)
+                            {
+                                sampleCoverageReasons.Add(new
+                                {
+                                    noteId = NoteIds.ReferencesSamplesTrimmed,
+                                    omitted = otherTextOmitted,
+                                });
+                            }
+                            if (emittedReferenceSamples <
+                                result.ReferenceSamplesReturned)
+                            {
+                                sampleCoverageReasons.Add(new
+                                {
+                                    noteId = NoteIds.ReferencesSamplesByteBudget,
+                                    omitted = result.ReferenceSamplesReturned -
+                                        emittedReferenceSamples,
+                                });
+                            }
+                            return new
                             {
                                 symbol = SemanticSymbolJson(result.Symbol),
                                 summary,
@@ -2173,6 +2229,16 @@ public sealed partial class NavigationTools
                                     count = g.Count,
                                     samples = g.Samples.Select(s => new { s.Path, s.Line, text = s.LineText, kind = s.Kind }),
                                 }),
+                                sampleCoverage = emittedReferenceSamples <
+                                    result.ReferenceSamplesSelected
+                                    ? new
+                                    {
+                                        selected = result.ReferenceSamplesSelected,
+                                        returned = emittedReferenceSamples,
+                                        complete = false,
+                                        reasons = sampleCoverageReasons,
+                                    }
+                                    : null,
                                 coverage = CoverageJson(result.Coverage),
                                 partial,
                                 partialReason,
@@ -2207,7 +2273,8 @@ public sealed partial class NavigationTools
                                 timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
                                 truncated,
                                 meta = meta0,
-                            }));
+                            };
+                        }, maxBytes: TestOnlyReferencesResponseMaxBytes));
                 }
                 failReason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
             }

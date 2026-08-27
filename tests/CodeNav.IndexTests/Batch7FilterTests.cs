@@ -57,6 +57,7 @@ public sealed class VendorFixture : IDisposable
 
     private readonly object _toolsGate = new();
     private IndexManager? _manager;
+    private CodeNav.Core.Semantic.SemanticService? _semantic;
     private NavigationTools? _tools;
 
     /// <summary>
@@ -76,8 +77,10 @@ public sealed class VendorFixture : IDisposable
                 manager.Start();
                 for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
                 Assert.True(manager.IsQueryable, "index did not become queryable");
+                var semantic = new CodeNav.Core.Semantic.SemanticService(manager);
                 _manager = manager;
-                _tools = new NavigationTools(manager, new CodeNav.Core.Semantic.SemanticService(manager));
+                _semantic = semantic;
+                _tools = new NavigationTools(manager, semantic);
                 return _tools;
             }
         }
@@ -92,8 +95,9 @@ public sealed class VendorFixture : IDisposable
 
     public void Dispose()
     {
-        TestWorkspaceCleanup.ClearIndexPools(Root);
-        try { Directory.Delete(Root, recursive: true); } catch { /* leave temp on Windows lock */ }
+        _semantic?.Dispose();
+        _manager?.Dispose();
+        TestWorkspaceCleanup.DeleteWorkspace(Root);
     }
 }
 

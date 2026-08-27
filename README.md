@@ -312,6 +312,7 @@ dotnet test tests/CodeNav.WatcherTests                           # watcher timin
 dotnet test tests/CodeNav.LifecycleTests                         # leases, publication, process lifecycle
 dotnet test PhoenixCodeNav.sln                                   # complete solution suite
 pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1              # external Roslyn/F# MCP gate
+node ./website/verify.mjs                                        # static-site contract gate
 dotnet run --project src/CodeNav.WorkspaceGen -- --out C:/temp/acme-2k \
     --projects 2000 --density 6 --clean                          # synthetic enterprise repo
 dotnet run --project src/CodeNav.Bench -c Release -- --workspace C:/temp/acme-2k --rebuild
@@ -321,8 +322,23 @@ dotnet run --project src/CodeNav.Bench -c Release -- --workspace C:/temp/acme-2k
 bash scripts/smoke-mcp.sh C:/temp/acme-2k                        # stdio protocol smoke test
 ```
 
+The complete suite requires directory-link support: NTFS junction creation on Windows
+(ordinary non-elevated NTFS is sufficient; Developer Mode is not required) and directory
+symbolic links on Unix. Failure of either prerequisite is an infrastructure failure rather than
+a green containment result. The website verifier additionally requires Node.js and Git
+working-tree/index metadata (ordinary or split index) so it can verify that content-hashed assets are tracked without
+launching a Git subprocess.
+
 `--db` plus `--build-only` indexes the real workspace into an explicit scratch database and exits
 after reporting phase time, total time, symbol count, and database size.
+
+The external MCP gate requires the pinned Roslyn and F# submodules to be checked out. Its first run
+builds missing `.codenav/index.db` files through normal MCP startup; later runs reuse those indexes.
+If a reused index disagrees with its fresh-index baseline canary (overview counts plus Roslyn
+reference-authority evidence), the gate performs one in-band full rebuild to preserve before/after
+evidence, but that run still fails so a missing schema-version bump cannot
+hide behind automatic repair. Only a later run against the repaired index may pass, and the rebuilt counts
+must match the pinned fresh-index baseline.
 
 Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.FSharp` (isolated FCS syntax
 and bounded semantic adapter), `CodeNav.Mcp` (server, ships as `PhoenixCodeNav.Mcp.exe`),

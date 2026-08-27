@@ -224,6 +224,17 @@ public sealed class Batch63SyntaxIndexerParityTests
                     public static implicit operator int(LoopValue value) => 0;
                 }
 
+                public readonly struct ExplicitLoopValue
+                {
+                    public static explicit operator int(ExplicitLoopValue value) => 0;
+                }
+
+                public readonly struct CheckedLoopValue
+                {
+                    public static explicit operator int(CheckedLoopValue value) => 0;
+                    public static explicit operator checked int(CheckedLoopValue value) => 0;
+                }
+
                 public readonly struct StackSource
                 {
                     public static explicit operator StackMid(StackSource value) => default;
@@ -259,6 +270,7 @@ public sealed class Batch63SyntaxIndexerParityTests
             File.WriteAllText(Path.Combine(consumer, "Use.cs"),
                 """
                 using System.Collections.Generic;
+                using System.Runtime.CompilerServices;
                 using System.Threading.Tasks;
                 using ConversionHandles;
                 namespace ConversionConsumer;
@@ -273,6 +285,36 @@ public sealed class Batch63SyntaxIndexerParityTests
                     public PrimaryBase(int value) { }
                 }
                 public sealed class PrimaryDerived(LoopValue value) : PrimaryBase(value) { }
+                public sealed class AsyncLoopValues<T>
+                {
+                    public AsyncLoopEnumerator<T> GetAsyncEnumerator() => new();
+                }
+                public sealed class AsyncLoopEnumerator<T>
+                {
+                    public T Current => default!;
+                    public BoolAwaitable MoveNextAsync() => default;
+                    public VoidAwaitable DisposeAsync() => default;
+                }
+                public readonly struct BoolAwaitable
+                {
+                    public BoolAwaiter GetAwaiter() => default;
+                }
+                public readonly struct BoolAwaiter : INotifyCompletion
+                {
+                    public bool IsCompleted => true;
+                    public bool GetResult() => false;
+                    public void OnCompleted(System.Action continuation) => continuation();
+                }
+                public readonly struct VoidAwaitable
+                {
+                    public VoidAwaiter GetAwaiter() => default;
+                }
+                public readonly struct VoidAwaiter : INotifyCompletion
+                {
+                    public bool IsCompleted => true;
+                    public void GetResult() { }
+                    public void OnCompleted(System.Action continuation) => continuation();
+                }
                 public static class Use
                 {
                     public static void Run()
@@ -292,9 +334,33 @@ public sealed class Batch63SyntaxIndexerParityTests
                     {
                         foreach (int item in values) _ = item;
                     }
-                    public static async Task LoopAsync(IAsyncEnumerable<LoopValue> values)
+                    public static async Task LoopAsync(AsyncLoopValues<LoopValue> values)
                     {
                         await foreach (int item in values) _ = item;
+                    }
+                    public static void ExplicitLoop(IEnumerable<ExplicitLoopValue> values)
+                    {
+                        foreach (int item in values) _ = item;
+                    }
+                    public static async Task ExplicitLoopAsync(
+                        AsyncLoopValues<ExplicitLoopValue> values)
+                    {
+                        await foreach (int item in values) _ = item;
+                    }
+                    public static void CheckedLoop(IEnumerable<CheckedLoopValue> values)
+                    {
+                        checked
+                        {
+                            foreach (int item in values) _ = item;
+                        }
+                    }
+                    public static async Task CheckedLoopAsync(
+                        AsyncLoopValues<CheckedLoopValue> values)
+                    {
+                        checked
+                        {
+                            await foreach (int item in values) _ = item;
+                        }
                     }
                     public static int[] Spread(IEnumerable<LoopValue> values) => [.. values];
                     public static int Coalesce(CompoundValue? value) => value ?? 0;
@@ -333,6 +399,10 @@ public sealed class Batch63SyntaxIndexerParityTests
                 module Use =
                     let value = 1
                 """);
+
+            AssertConversionFixtureCompiles(
+                Path.Combine(lib, "Conversions.cs"),
+                Path.Combine(consumer, "Use.cs"));
 
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
@@ -388,6 +458,14 @@ public sealed class Batch63SyntaxIndexerParityTests
             AssertSemanticHandle(tools, "implicit operator int",
                 "implicit operator int(LoopValue value)",
                 SemanticReferenceKinds.ImplicitConversion, expectedTotal: 4);
+            AssertSemanticHandle(tools, "explicit operator int",
+                "explicit operator int(ExplicitLoopValue value)",
+                SemanticReferenceKinds.ExplicitConversion, expectedTotal: 2);
+            AssertSemanticHandle(tools, "explicit operator checked int",
+                "explicit operator checked int(CheckedLoopValue value)",
+                SemanticReferenceKinds.CheckedConversion, expectedTotal: 2);
+            AssertSemanticHandle(tools, "explicit operator int",
+                "explicit operator int(CheckedLoopValue value)", expectedTotal: 0);
             AssertSemanticHandle(tools, "explicit operator StackMid",
                 "explicit operator StackMid(StackSource value)",
                 SemanticReferenceKinds.ExplicitConversion);
@@ -399,9 +477,12 @@ public sealed class Batch63SyntaxIndexerParityTests
                 SemanticReferenceKinds.ImplicitConversion, expectedTotal: 2);
             AssertSemanticHandle(tools, "implicit operator CompoundValue",
                 "implicit operator CompoundValue(int value)",
-                SemanticReferenceKinds.ImplicitConversion, expectedTotal: 2);
-            // Two assignment conversions and two foreach-deconstruction conversions occupy only
-            // two physical lines. A stale line-granular dedup contract would report 2, not 4.
+                SemanticReferenceKinds.ImplicitConversion, expectedTotal: 3);
+            // The valid async-enumerable fixture lets Roslyn bind the entire Consumer compilation.
+            // CompoundValue(int) then has assignment, compound-assignment writeback, and nullable
+            // coalesce sites. DeconstructValue(int) has 2 tuple assignment + 2 DeconstructSource +
+            // 2 named-pair + 2 foreach + 1 lifted nullable-tuple sites = 9. These counts deliberately
+            // pin compiler-bound operations, including distinct tuple elements on one physical line.
             int identityCacheHits = 0;
             int identityCacheMisses = 0;
             semantic.TestOnlyConversionIdentityCacheLookup = hit =>
@@ -421,21 +502,21 @@ public sealed class Batch63SyntaxIndexerParityTests
             };
             AssertSemanticHandle(tools, "implicit operator int",
                 "implicit operator int(DeconstructValue value)",
-                SemanticReferenceKinds.ImplicitConversion, expectedTotal: 8);
+                SemanticReferenceKinds.ImplicitConversion, expectedTotal: 9);
             semantic.TestOnlyConversionSiteAdded = null;
             semantic.TestOnlyConversionIdentityCacheLookup = null;
             Assert.True(identityCacheMisses > 0);
-            Assert.True(identityCacheHits >= 7,
-                $"expected the eight repeated conversion sites to reuse identity; " +
+            Assert.True(identityCacheHits >= 8,
+                $"expected the nine repeated conversion sites to reuse identity; " +
                 $"hits={identityCacheHits}, misses={identityCacheMisses}");
             Assert.Equal(SemanticReferenceKinds.ImplicitConversion,
                 Assert.Single(deconstructionKinds));
             Assert.Equal(2, SiteCount("(int first, int second)"));
             Assert.Equal(2, SiteCount("(int third, int fourth)"));
-            Assert.Equal(1, SiteCount("(int fifth, int sixth)"));
+            Assert.Equal(2, SiteCount("(int fifth, int sixth)"));
             Assert.Equal(2, SiteCount("foreach ((int left, int right)"));
             Assert.Equal(1, SiteCount("(DeconstructValue Left, DeconstructValue Right)? pair)"));
-            Assert.Equal(8, deconstructionSites.Values.Sum());
+            Assert.Equal(9, deconstructionSites.Values.Sum());
 
             int SiteCount(string sourceFragment) => deconstructionSites
                 .Where(pair => pair.Key.Contains(sourceFragment, StringComparison.Ordinal))
@@ -1266,6 +1347,43 @@ public sealed class Batch63SyntaxIndexerParityTests
             Assert.False(references.TryGetProperty("kinds", out _));
         }
         return references;
+    }
+
+    private static void AssertConversionFixtureCompiles(string libraryPath,
+        string consumerPath)
+    {
+        string trustedPlatformAssemblies = Assert.IsType<string>(
+            AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"));
+        MetadataReference[] platformReferences = trustedPlatformAssemblies
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(path => MetadataReference.CreateFromFile(path))
+            .ToArray();
+        var parseOptions = new CSharpParseOptions(LanguageVersion.Preview);
+        var compilationOptions = new CSharpCompilationOptions(
+            OutputKind.DynamicallyLinkedLibrary);
+        CSharpCompilation library = CSharpCompilation.Create("ConversionHandles",
+            [CSharpSyntaxTree.ParseText(File.ReadAllText(libraryPath), parseOptions,
+                path: libraryPath)], platformReferences, compilationOptions);
+        using var libraryImage = new MemoryStream();
+        var libraryEmit = library.Emit(libraryImage);
+        Assert.True(libraryEmit.Success,
+            "The conversion library fixture must compile before site counts are trusted: " +
+            string.Join(Environment.NewLine, libraryEmit.Diagnostics));
+
+        MetadataReference[] consumerReferences =
+        [
+            .. platformReferences,
+            MetadataReference.CreateFromImage(libraryImage.ToArray()),
+        ];
+        CSharpCompilation consumer = CSharpCompilation.Create("Consumer",
+            [CSharpSyntaxTree.ParseText(File.ReadAllText(consumerPath), parseOptions,
+                path: consumerPath)], consumerReferences, compilationOptions);
+        Diagnostic[] errors = consumer.GetDiagnostics()
+            .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+            .ToArray();
+        Assert.True(errors.Length == 0,
+            "The conversion consumer fixture must bind before site counts are trusted: " +
+            string.Join(Environment.NewLine, errors.Select(error => error.ToString())));
     }
 
     private static JsonElement ParseJson(string json) => JsonDocument.Parse(json).RootElement;

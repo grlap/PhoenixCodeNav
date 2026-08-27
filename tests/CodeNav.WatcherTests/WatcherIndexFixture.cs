@@ -24,7 +24,6 @@ public sealed class IndexFixture : IDisposable
 
     public void Dispose()
     {
-        TestWorkspaceCleanup.ClearIndexPools(Root);
-        try { Directory.Delete(Root, recursive: true); } catch { /* leave temp on Windows lock */ }
+        TestWorkspaceCleanup.DeleteWorkspace(Root);
     }
 }

@@ -3,13 +3,15 @@
   "fsharpCommit": "5928e91b5f701586690562ce10bd639357fff50b",
   "defaultWorkspace": "external/fsharp",
   "indexRelativePath": ".codenav/index.db",
+  "countsProvenance": "schema_29_rebuild_after_fsharp_stored_output_drift_with_reused_index_parity",
+  "countsProvenanceDetail": "A forced full refresh at the unchanged pinned FSharp commit produced symbols 116170 and orphanedFiles 4140 while the reusable schema-28 fixture still reported the older stored output. With the repository's introducing history squashed, schema 29 conservatively repairs that historical missed stored-output rebuild boundary; the new cold-build/delta parity canary guards recurrence, and a subsequent ordinary reuse must reproduce these pinned fresh counts before the external gate passes.",
   "counts": {
     "projects": 112,
     "fsharpProjects": 72,
     "csharpFiles": 243,
     "fsharpFiles": 6432,
-    "symbols": 116168,
-    "orphanedFiles": 4174
+    "symbols": 116170,
+    "orphanedFiles": 4140
   },
   "target": {
     "sourcePath": "src/FSharp.Core/option.fs",

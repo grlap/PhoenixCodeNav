@@ -45,7 +45,7 @@ public class WatcherTests
         }
         finally
         {
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -77,7 +77,7 @@ public class WatcherTests
         }
         finally
         {
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -102,7 +102,7 @@ public class WatcherTests
         }
         finally
         {
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -131,7 +131,7 @@ public class WatcherTests
         }
         finally
         {
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -159,7 +159,7 @@ public class WatcherTests
         }
         finally
         {
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 }
@@ -197,7 +197,7 @@ public class ReparsePointTests
         }
         finally
         {
-            try { Directory.Delete(root, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -243,8 +243,8 @@ public class ReparsePointTests
             // delete ('outside' holds no db; its clear is a harmless no-op kept for symmetry).
             TestWorkspaceCleanup.ClearIndexPools(root);
             TestWorkspaceCleanup.ClearIndexPools(outside);
-            try { Directory.Delete(root, recursive: true); } catch { }
-            try { Directory.Delete(outside, recursive: true); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+            TestWorkspaceCleanup.DeleteWorkspace(outside);
         }
     }
 

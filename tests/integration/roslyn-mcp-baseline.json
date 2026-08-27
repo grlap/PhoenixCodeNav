@@ -3,6 +3,8 @@
   "roslynCommit": "e7680f251b8fc52a0ba7108906c0e40ff3263a32",
   "defaultWorkspace": "external/roslyn",
   "indexRelativePath": ".codenav/index.db",
+  "countsProvenance": "fresh_normal_mcp_startup_friend_assembly_authority_correction_with_exact_public_method_canary",
+  "countsProvenanceDetail": "The prior 10-reference/1-project exact result incorrectly treated the internal ICompilationFactoryService target as compiler-authoritative despite an unproven friend-assembly project model. A fresh normal MCP startup at the unchanged pinned Roslyn commit produced 47 references across 7 projects: Microsoft.CodeAnalysis.Workspaces.UnitTests, Microsoft.CodeAnalysis.Workspaces, Microsoft.CodeAnalysis.CSharp.Workspaces, Microsoft.CodeAnalysis.Features, Microsoft.CodeAnalysis.CSharp.EditorFeatures.UnitTests, Microsoft.CodeAnalysis.Workspaces.Test.Utilities, and Microsoft.CodeAnalysis.EditorFeatures.UnitTests. Coverage explicitly reported the first closure project plus Microsoft.CodeAnalysis as the six unproven friend-assembly projects, so authority is indexed/project_model_unproven rather than exact. The public GetOpenDocumentIds canary independently proves exact non-partial references with 9 sites across 4 projects and returned sample order.",
   "counts": {
     "projects": 351,
     "solutions": 38,
@@ -17,10 +19,35 @@
     "arity": 0,
     "path": "src/Workspaces/Core/Portable/Workspace/Host/CompilationFactory/ICompilationFactoryService.cs",
     "line": 12,
+    "documentationCommentId": "T:Microsoft.CodeAnalysis.Host.ICompilationFactoryService",
     "friendRelationshipConfidence": "indexed",
     "friendRelationshipPartialReason": "project_model_unproven",
-    "exactReferences": 10,
-    "exactReferenceProjects": 1,
+    "referencesUnprovenFriendAssemblyProjects": [
+      "Microsoft.CodeAnalysis",
+      "Microsoft.CodeAnalysis.CSharp.Workspaces",
+      "Microsoft.CodeAnalysis.EditorFeatures.UnitTests",
+      "Microsoft.CodeAnalysis.Features",
+      "Microsoft.CodeAnalysis.Workspaces",
+      "Microsoft.CodeAnalysis.Workspaces.Test.Utilities"
+    ],
+    "implementationsUnprovenFriendAssemblyProjects": [
+      "Microsoft.CodeAnalysis",
+      "Microsoft.CodeAnalysis.CSharp.Workspaces",
+      "Microsoft.CodeAnalysis.EditorFeatures.UnitTests",
+      "Microsoft.CodeAnalysis.Features",
+      "Microsoft.CodeAnalysis.Workspaces",
+      "Microsoft.CodeAnalysis.Workspaces.Test.Utilities"
+    ],
+    "typeHierarchyUnprovenFriendAssemblyProjects": [
+      "Microsoft.CodeAnalysis",
+      "Microsoft.CodeAnalysis.CSharp.Workspaces",
+      "Microsoft.CodeAnalysis.EditorFeatures.UnitTests",
+      "Microsoft.CodeAnalysis.Features",
+      "Microsoft.CodeAnalysis.Workspaces",
+      "Microsoft.CodeAnalysis.Workspaces.Test.Utilities"
+    ],
+    "referenceCount": 47,
+    "referenceProjects": 7,
     "indexedReferenceCandidates": 49,
     "expectedImplementations": [
       {
@@ -44,6 +71,49 @@
     "path": "src/Workspaces/Core/Portable/Workspace/Solution/SolutionCompilationState.RegularCompilationTracker.cs",
     "line": 216,
     "container": "RegularCompilationTracker"
+  },
+  "exactReferencesTarget": {
+    "name": "GetOpenDocumentIds",
+    "path": "src/Workspaces/Core/Portable/Workspace/Workspace_Editor.cs",
+    "line": 191,
+    "container": "Workspace",
+    "documentationCommentId": "M:Microsoft.CodeAnalysis.Workspace.GetOpenDocumentIds(Microsoft.CodeAnalysis.ProjectId)",
+    "referenceCount": 9,
+    "referenceProjects": 4,
+    "samplesPerGroup": 2,
+    "groups": [
+      {
+        "project": "Microsoft.CodeAnalysis.EditorFeatures",
+        "count": 4,
+        "samples": [
+          "src/EditorFeatures/Core/EditAndContinue/ActiveStatementTrackingService.cs|193|call",
+          "src/EditorFeatures/Core/InlineRename/InlineRenameSession.cs|205|call"
+        ]
+      },
+      {
+        "project": "Microsoft.CodeAnalysis.Workspaces",
+        "count": 2,
+        "samples": [
+          "src/Workspaces/Core/Portable/Workspace/Workspace_Editor.cs|868|call",
+          "src/Workspaces/Core/Portable/Workspace/Workspace_Editor.cs|886|call"
+        ]
+      },
+      {
+        "project": "Microsoft.CodeAnalysis.EditorFeatures.UnitTests",
+        "count": 2,
+        "samples": [
+          "src/EditorFeatures/Test/Preview/PreviewWorkspaceTests.cs|105|call",
+          "src/EditorFeatures/Test/Preview/PreviewWorkspaceTests.cs|109|call"
+        ]
+      },
+      {
+        "project": "Microsoft.CodeAnalysis.Features",
+        "count": 1,
+        "samples": [
+          "src/Features/Core/Portable/MetadataAsSource/MetadataAsSourceFileService.cs|214|call"
+        ]
+      }
+    ]
   },
   "understandingTarget": {
     "path": "src/Workspaces/Core/Portable/Workspace/Solution/SolutionCompilationState.WithFrozenSourceGeneratedDocumentsCompilationTracker.cs",

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using CodeNav.Core;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
 using CodeNav.Mcp;
@@ -107,11 +108,10 @@ public class Batch41Tests
         finally
         {
             Cleanup(root);
-            // kae review: co holds coDb (bare holds nothing) — clear each root it deletes.
-            TestWorkspaceCleanup.ClearIndexPools(co);
-            TestWorkspaceCleanup.ClearIndexPools(bare);
-            try { Directory.Delete(co, recursive: true); } catch { }
-            try { Directory.Delete(bare, recursive: true); } catch { }
+            // co holds coDb while bare holds Git's read-only loose objects. The shared cleanup
+            // clears the scoped SQLite pool and normalizes those object attributes.
+            TestWorkspaceCleanup.DeleteWorkspace(co);
+            TestWorkspaceCleanup.DeleteWorkspace(bare);
         }
     }
 
@@ -687,14 +687,13 @@ public class Batch41Tests
             Assert.True(child.WaitForExit(10_000));
             Assert.True(WaitUntil(() => !IndexOwnershipLease.IsHeld(wt, wtDb), 10_000),
                 "kernel did not release the ownership lease after process death");
-            WorktreeIndexResult recoveryRequired = WorktreeIndexer.Ensure(
+            WorktreeIndexResult recovered = WorktreeIndexer.Ensure(
                 root, mainDb, wt, "refresh", _ => { });
-            Assert.Equal("worktree_not_indexable", recoveryRequired.Action);
-            using (var recover = new IndexStore(wtDb, createNew: false))
-                recover.CheckpointForAtomicInstall();
-            IndexQueries.ClearPoolsFor(wtDb); // kae: scoped — mirror the product's install-path clear
-            Assert.Equal("refreshed", WorktreeIndexer.Ensure(
-                root, mainDb, wt, "refresh", _ => { }).Action);
+            // Stale-test repair: this fixture starts the child with --standalone, so it is the only
+            // lease owner. Once the crashed process releases that kernel lease, recovery is the
+            // established contract. The two pre-crash assertions above preserve the still-live
+            // foreign-owner contract as worktree_index_locked for both create and refresh.
+            Assert.Equal("refreshed", recovered.Action);
             GC.KeepAlive(stdout);
         }
         finally
@@ -1167,15 +1166,29 @@ public class Batch41Tests
     public void DirectBuildReleasesLeaseAndNativeHandlesAfterSuccessAndSchemaFailure()
     {
         string root = Directory.CreateTempSubdirectory("codenav-41-build-handoff").FullName;
+        string foreignRoot = Directory.CreateTempSubdirectory(
+            "codenav-41-build-handoff-foreign").FullName;
         string database = IndexBuilder.DefaultDbPath(root);
+        string foreignDatabase = IndexBuilder.DefaultDbPath(foreignRoot);
         try
         {
             WriteLab(root);
-            IndexStore.AfterOpenBeforeCreateSchemaForTest = path =>
+            Directory.CreateDirectory(Path.GetDirectoryName(foreignDatabase)!);
+            bool foreignOpenObserved = false;
+            IndexStore.AfterOpenBeforeCreateSchemaForTest = openedDatabase =>
             {
-                if (CodeNav.Core.WorkspacePaths.FullPathsEqual(path, database))
+                if (WorkspacePaths.FullPathsEqual(openedDatabase, foreignDatabase))
+                {
+                    foreignOpenObserved = true;
+                    return;
+                }
+                if (IsDatabaseOrStageFor(openedDatabase, database))
                     throw new InvalidOperationException("simulated schema failure");
             };
+
+            using (new IndexStore(foreignDatabase, createNew: true)) { }
+            Assert.True(foreignOpenObserved,
+                "the isolation probe did not exercise the process-global schema hook");
             Assert.Throws<InvalidOperationException>(() => IndexBuilder.Build(root, database));
             Assert.False(IndexOwnershipLease.IsHeld(root, database));
             AssertNoSqliteSidecars(database);
@@ -1196,6 +1209,7 @@ public class Batch41Tests
         {
             IndexStore.AfterOpenBeforeCreateSchemaForTest = null;
             Cleanup(root);
+            Cleanup(foreignRoot);
         }
     }
 
@@ -1377,6 +1391,7 @@ public class Batch41Tests
             File.WriteAllText(marker, "external-marker");
             AnchoredIndexDestination.BeforeStageSidecarReservationForTest = stagePath =>
             {
+                if (!IsStageFor(stagePath, wt)) return;
                 planted = stagePath + suffix;
                 CreateJunction(planted, external);
             };
@@ -1415,6 +1430,7 @@ public class Batch41Tests
             IndexBuilder.Build(root, mainDb);
             AnchoredIndexDestination.BeforeStageSidecarReservationForTest = stagePath =>
             {
+                if (!IsStageFor(stagePath, wt)) return;
                 planted = stagePath + "-journal";
                 File.CreateSymbolicLink(planted, external);
             };
@@ -1454,6 +1470,7 @@ public class Batch41Tests
         string root = Directory.CreateTempSubdirectory("codenav-41-publish-cleanup").FullName;
         string wt = Path.GetFullPath(Path.Combine(root, "..", Path.GetFileName(root) + "-wt"));
         string? plantedSidecar = null;
+        string? externalFile = null;
         try
         {
             WriteRepo(root);
@@ -1461,17 +1478,20 @@ public class Batch41Tests
             string mainDb = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, mainDb);
             plantedSidecar = IndexBuilder.DefaultDbPath(wt) + suffix;
+            externalFile = Path.Combine(root, "do-not-touch-" + suffix[1..] + ".txt");
+            File.WriteAllText(externalFile, "external-owner");
             WorktreeIndexer.BeforeAnchoredInstallForTest = installDb =>
             {
                 if (!IsInstallFor(installDb, wt)) return; // foreign parallel-class Ensure
-                File.WriteAllText(plantedSidecar, "hostile-entry");
+                CreateHardLinkForTest(plantedSidecar, externalFile);
             };
 
             WorktreeIndexResult result = WorktreeIndexer.Ensure(
                 root, mainDb, wt, "create", _ => { });
 
             Assert.Equal("snapshot_failed", result.Action);
-            Assert.Equal("hostile-entry", File.ReadAllText(plantedSidecar));
+            Assert.Equal("external-owner", File.ReadAllText(plantedSidecar));
+            Assert.Equal("external-owner", File.ReadAllText(externalFile));
             // Covers stage/publish database names and every -wal/-shm/-journal derivative.
             AssertNoTemporaryIndexArtifacts(Path.Combine(wt, ".codenav"));
         }
@@ -1764,6 +1784,9 @@ public class Batch41Tests
         psi.ArgumentList.Add(workspaceRoot);
         psi.ArgumentList.Add("--index-db");
         psi.ArgumentList.Add(dbPath);
+        // Model one crashed writer process, not a shared-daemon election that can leave another
+        // owner alive. Once its kernel lease dies, refresh must recover the worktree normally.
+        psi.ArgumentList.Add("--standalone");
         return Process.Start(psi) ?? throw new InvalidOperationException(
             "could not start child Phoenix process");
     }
@@ -1831,6 +1854,38 @@ public class Batch41Tests
             Path.GetFullPath(IndexBuilder.DefaultDbPath(worktreeRoot)),
             StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsStageFor(string stagePath, string worktreeRoot) =>
+        WorkspacePaths.FullPathsEqual(
+            Path.GetDirectoryName(stagePath)!,
+            Path.GetDirectoryName(IndexBuilder.DefaultDbPath(worktreeRoot))!);
+
+    private static bool IsDatabaseOrStageFor(string openedDatabase, string database)
+    {
+        if (WorkspacePaths.FullPathsEqual(openedDatabase, database)) return true;
+
+        string candidate = Path.GetFullPath(openedDatabase);
+        if (OperatingSystem.IsLinux() &&
+            candidate.StartsWith($"/proc/{Environment.ProcessId}/fd/",
+                StringComparison.Ordinal))
+        {
+            try
+            {
+                candidate = new FileInfo(candidate).ResolveLinkTarget(returnFinalTarget: true)
+                    ?.FullName ?? candidate;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        string name = Path.GetFileName(candidate);
+        return WorkspacePaths.FullPathsEqual(
+                Path.GetDirectoryName(candidate)!, Path.GetDirectoryName(database)!) &&
+            name.StartsWith(".phoenix-stage-", StringComparison.Ordinal) &&
+            AnchoredIndexDestination.IsPrivatePublicationArtifactName(name);
+    }
+
     /// <summary>Asserts an index_worktree response carries 'action' — error envelopes do not,
     /// and the raw payload (with its detail) is the forensic that names the actual failure.</summary>
     private static string ActionOf(JsonElement result, string context)
@@ -1884,14 +1939,12 @@ public class Batch41Tests
 
     private static void Cleanup(string root)
     {
-        TestWorkspaceCleanup.ClearIndexPools(root);
-        try { Directory.Delete(root, recursive: true); } catch { /* windows locks */ }
+        TestWorkspaceCleanup.DeleteWorkspace(root);
     }
 
     private static void CleanupWorktree(string mainRoot, string wt)
     {
-        TestWorkspaceCleanup.ClearIndexPools(wt);
         try { Git(mainRoot, $"worktree remove --force \"{wt}\""); } catch { }
-        try { Directory.Delete(wt, recursive: true); } catch { /* already removed / locks */ }
+        TestWorkspaceCleanup.DeleteWorkspace(wt);
     }
 }

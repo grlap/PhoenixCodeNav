@@ -19,9 +19,25 @@ When the session context says `You are a delegated child session for TermAl dele
 
 ## Phase 1: Establish the implementation change set
 
-Run this path-only inventory. Exclude only generated Beads JSONL ledgers because they are workflow bookkeeping, not implementation. Do not emit patch content yet:
+Run this path-only inventory. Exclude only generated Beads JSONL ledgers because they are workflow bookkeeping, not implementation. Do not emit patch content yet.
 
-```text
+On PowerShell, use this exact argument-array form. Keep the three pathspec strings quoted inside the array and splat the array into Git; never execute a bare `:(exclude)...` token because PowerShell parses it before Git:
+
+```powershell
+$beadsLedgerExcludes = @(
+    ':(exclude).beads/interactions.jsonl'
+    ':(exclude).beads/issues.jsonl'
+    ':(exclude).beads/events.jsonl'
+)
+git --no-optional-locks status --short -- . @beadsLedgerExcludes
+git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only -- . @beadsLedgerExcludes
+git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only -- . @beadsLedgerExcludes
+git ls-files --others --exclude-standard -- . @beadsLedgerExcludes
+```
+
+On a POSIX shell, use the quoted pathspec form below. Do not use this block from PowerShell:
+
+```sh
 git --no-optional-locks status --short -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
 git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
 git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
@@ -38,9 +54,16 @@ Before diffing or opening target content, inspect changed-entry metadata without
 
 Read the current `CLAUDE.md` and `AGENTS.md`; their commit, Beads, build, and repository-safety rules govern the remaining review. If either file is dirty, it is also part of the review target and must be inspected adversarially.
 
-Only after the containment checks pass, run the content-bearing diffs:
+Only after the containment checks pass, run the content-bearing diffs. On PowerShell, reuse the exact `$beadsLedgerExcludes` array from the inventory:
 
-```text
+```powershell
+git --no-pager diff --binary --no-ext-diff --no-textconv --no-color -- . @beadsLedgerExcludes
+git --no-pager diff --cached --binary --no-ext-diff --no-textconv --no-color -- . @beadsLedgerExcludes
+```
+
+On a POSIX shell, use:
+
+```sh
 git --no-pager diff --binary --no-ext-diff --no-textconv --no-color -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
 git --no-pager diff --cached --binary --no-ext-diff --no-textconv --no-color -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
 ```

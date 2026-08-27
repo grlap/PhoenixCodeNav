@@ -1,16 +1,16 @@
 # PhoenixCodeNav website
 
-Static, dependency-free product website for PhoenixCodeNav. It is designed for people who are new to MCP and large-repository code navigation, while keeping the technical claims aligned with the repository documentation.
+Static, package-free product website for PhoenixCodeNav. It is designed for people who are new to MCP and large-repository code navigation, while keeping the technical claims aligned with the repository documentation.
 
 ## Files
 
-- `index.html` — semantic page content, SEO metadata, setup examples, and structured data
-- `styles.a057a0d24d.css` — complete responsive visual system and CSS motion
-- `script.1f28c1e1e6.js` — hero atlas, scroll reveals, tabs, copy buttons, navigation, and accessibility enhancements
-- `verify.mjs` — dependency-free structural, asset-integrity, accessibility-reference, and launch-guard checks
+- `index.html` — semantic page content, SEO metadata, product examples, and structured data
+- `styles.758e0d187f.css` — complete responsive visual system and CSS motion
+- `script.cfa22b595a.js` — hero atlas, scroll reveals, copy buttons, navigation, and accessibility enhancements
+- `verify.mjs` — package-free structural, asset-integrity, accessibility-reference, and launch-guard checks
 - `assets/` — original code-native brand assets
 
-There is no package manager, build command, third-party font, CDN, analytics, or external runtime dependency.
+The published page has no package manager, build command, third-party font, CDN, analytics, or external runtime dependency. The repository verifier is a development tool and requires Node.js plus Git working-tree/index metadata (ordinary or split index) so it can prove every content-hashed asset is tracked; it does not launch the Git executable.
 
 ## Local preview
 
@@ -24,7 +24,7 @@ Then open `http://localhost:8080/`.
 
 ## Verification
 
-Run the dependency-free source checks from the repository root:
+Run the package-free source checks from the repository root (with Node.js and Git working-tree metadata available):
 
 ```powershell
 node website/verify.mjs
@@ -54,6 +54,5 @@ Before a public deployment:
 - All essential content remains available without JavaScript.
 - The mobile menu is a native `details` element and gains focus containment when JavaScript runs.
 - The hero animation has a visible pause/play control and stops while offscreen or when the page is hidden.
-- `prefers-reduced-motion` disables canvas and continuous animation while preserving the final explanatory state.
-- Configuration tabs support arrow, Home, and End keys.
+- `prefers-reduced-motion` skips continuous canvas animation, draws the final explanatory state as a still image, and reacts immediately when the preference changes after page load without losing the user's pause choice.
 - Code examples wrap instead of creating page-level horizontal overflow.

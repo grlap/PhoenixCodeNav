@@ -336,8 +336,14 @@ public class PortalDataSourceTests
                     $"phoenix-{Environment.ProcessId}-20260724080000-1.jsonl"),
                 SemanticOperation("outside-secret", "references", 10));
 
-            if (!TryCreateDirectoryLink(Path.Combine(root, ".codenav"), outsideCodeNav))
-                throw SkipException.ForSkip("The host cannot create a directory link or junction.");
+            // Supported-host prerequisite: Windows must permit junction creation and Unix must
+            // permit directory symlinks. Failing this probe is infrastructure failure, not a green
+            // containment result; the Unix-only cases below use UnixFact for platform skips.
+            Assert.True(TestWorkspaceCleanup.TryCreateDirectoryLink(
+                    Path.Combine(root, ".codenav"), outsideCodeNav,
+                    out string? linkFailure),
+                "portal containment tests require directory-link support (a Windows junction " +
+                $"or Unix symlink); enable that host capability before running the gate: {linkFailure}");
 
             var source = new PortalDataSource([root]);
             source.RefreshForTest();
@@ -844,26 +850,41 @@ public class PortalDataSourceTests
         {
             string telemetryDirectory = Path.Combine(root, ".codenav", "telemetry");
             Directory.CreateDirectory(telemetryDirectory);
-            string outsideTelemetry = Path.Combine(outside, "secret.jsonl");
-            File.WriteAllText(
-                outsideTelemetry,
-                SemanticOperation("outside-leaf-secret", "references", 10));
             string telemetryLink = Path.Combine(
                 telemetryDirectory,
                 $"phoenix-{Environment.ProcessId}-20260724080000-1.jsonl");
-            string outsideIndex = Path.Combine(outside, "index.db");
-            File.WriteAllText(outsideIndex, "outside-index-secret");
             Directory.CreateDirectory(Path.Combine(root, ".codenav"));
-            try
+            string indexLink = Path.Combine(root, ".codenav", "index.db");
+            if (OperatingSystem.IsWindows())
             {
-                File.CreateSymbolicLink(telemetryLink, outsideTelemetry);
-                File.CreateSymbolicLink(
-                    Path.Combine(root, ".codenav", "index.db"),
-                    outsideIndex);
+                // NTFS junctions need no Developer Mode/elevation and still exercise the exact
+                // leaf-entry reparse-point rejection: the misleading .jsonl/.db names are
+                // directories whose outside contents must never be opened.
+                string outsideTelemetryDirectory = Path.Combine(outside, "telemetry-target");
+                string outsideIndexDirectory = Path.Combine(outside, "index-target");
+                Directory.CreateDirectory(outsideTelemetryDirectory);
+                Directory.CreateDirectory(outsideIndexDirectory);
+                File.WriteAllText(Path.Combine(outsideTelemetryDirectory, "secret.jsonl"),
+                    SemanticOperation("outside-leaf-secret", "references", 10));
+                File.WriteAllText(Path.Combine(outsideIndexDirectory, "secret.db"),
+                    "outside-index-secret");
+                Assert.True(TestWorkspaceCleanup.TryCreateDirectoryLink(
+                        telemetryLink, outsideTelemetryDirectory,
+                        out string? telemetryLinkFailure),
+                    $"Windows telemetry leaf junction prerequisite failed: {telemetryLinkFailure}");
+                Assert.True(TestWorkspaceCleanup.TryCreateDirectoryLink(
+                        indexLink, outsideIndexDirectory, out string? indexLinkFailure),
+                    $"Windows index leaf junction prerequisite failed: {indexLinkFailure}");
             }
-            catch
+            else
             {
-                throw SkipException.ForSkip("The host cannot create file symbolic links.");
+                string outsideTelemetry = Path.Combine(outside, "secret.jsonl");
+                File.WriteAllText(outsideTelemetry,
+                    SemanticOperation("outside-leaf-secret", "references", 10));
+                string outsideIndex = Path.Combine(outside, "index.db");
+                File.WriteAllText(outsideIndex, "outside-index-secret");
+                File.CreateSymbolicLink(telemetryLink, outsideTelemetry);
+                File.CreateSymbolicLink(indexLink, outsideIndex);
             }
 
             var source = new PortalDataSource([root]);
@@ -889,12 +910,9 @@ public class PortalDataSourceTests
         }
     }
 
-    [Fact]
+    [UnixFact]
     public void UnixSpecialTelemetryFileFailsClosedWithoutBlocking()
     {
-        if (OperatingSystem.IsWindows())
-            throw SkipException.ForSkip("FIFO coverage applies to Unix hosts.");
-
         string root = Directory.CreateTempSubdirectory("codenav-portal-fifo").FullName;
         try
         {
@@ -1193,12 +1211,9 @@ public class PortalDataSourceTests
         }
     }
 
-    [Fact]
+    [UnixFact]
     public void DirectoryReplacementAfterAnchoringCannotRedirectEnumeration()
     {
-        if (OperatingSystem.IsWindows())
-            throw SkipException.ForSkip("Unix symlink race coverage; Windows junction coverage is separate.");
-
         string root = Directory.CreateTempSubdirectory("codenav-portal-swap-root").FullName;
         string outside = Directory.CreateTempSubdirectory("codenav-portal-swap-out").FullName;
         try
@@ -1353,45 +1368,6 @@ public class PortalDataSourceTests
         Assert.Equal(expected == 0, root.GetProperty("dataComplete").GetBoolean());
     }
 
-    private static bool TryCreateDirectoryLink(string link, string target)
-    {
-        try
-        {
-            Directory.CreateSymbolicLink(link, target);
-            return new DirectoryInfo(link).LinkTarget is not null;
-        }
-        catch when (OperatingSystem.IsWindows())
-        {
-            try
-            {
-                using Process process = Process.Start(new ProcessStartInfo
-                {
-                    FileName = Environment.GetEnvironmentVariable("COMSPEC") ?? "cmd.exe",
-                    Arguments = $"/d /s /c \"mklink /J \\\"{link}\\\" \\\"{target}\\\"\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                })!;
-                if (!process.WaitForExit(5000))
-                {
-                    process.Kill(entireProcessTree: true);
-                    return false;
-                }
-                return process.ExitCode == 0
-                    && new DirectoryInfo(link).LinkTarget is not null;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
     [DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
     private static extern int UnixMkFifo(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string path,
@@ -1401,5 +1377,14 @@ public class PortalDataSourceTests
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, "sentinel-unchanged");
+    }
+}
+
+internal sealed class UnixFactAttribute : Xunit.FactAttribute
+{
+    public UnixFactAttribute()
+    {
+        if (OperatingSystem.IsWindows())
+            Skip = "Requires Unix file types and symbolic-link semantics.";
     }
 }

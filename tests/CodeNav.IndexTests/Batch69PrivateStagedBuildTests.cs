@@ -15,6 +15,31 @@ public sealed class Batch69StagedBuildCollection;
 public sealed class Batch69PrivateStagedBuildTests
 {
     [Fact]
+    public void LinuxStatxIdentityValidationDistinguishesIncompleteMasksFromMissingEntries()
+    {
+        Assert.False(AnchoredIndexDestination.TryValidateStatxIdentity(
+            syscallSucceeded: true,
+            returnedMask: AnchoredIndexDestination.StatxIdentityMask & ~0x1u,
+            lastError: 2,
+            out int incompleteMaskError));
+        Assert.Equal(0, incompleteMaskError);
+
+        Assert.True(AnchoredIndexDestination.TryValidateStatxIdentity(
+            syscallSucceeded: true,
+            returnedMask: AnchoredIndexDestination.StatxIdentityMask,
+            lastError: 2,
+            out int completeIdentityError));
+        Assert.Equal(0, completeIdentityError);
+
+        Assert.False(AnchoredIndexDestination.TryValidateStatxIdentity(
+            syscallSucceeded: false,
+            returnedMask: 0,
+            lastError: 2,
+            out int missingEntryError));
+        Assert.Equal(2, missingEntryError);
+    }
+
+    [Fact]
     public void SupportedHostDirectBuilderAcceptsItsInstalledStageIdentity()
     {
         if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
@@ -33,6 +58,124 @@ public sealed class Batch69PrivateStagedBuildTests
                 pinReadSnapshot: false, pooling: false);
             Assert.Single(queries.SearchSymbols(
                 "InstalledStageAlpha69", "exact", null, 2));
+            AssertNoPublicationArtifacts(Path.GetDirectoryName(database)!);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void SupportedHostPublicationHandlesRecoverySidecarsCreatedOrReplacedAfterStageAllocation()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-69-sidecar-recreation").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteWorkspace(root, "RecoverySidecarAlpha69");
+            IndexBuilder.Build(root, database);
+            IndexQueries.ClearPoolsFor(database);
+            string oldVersion;
+            using (var oldStore = new IndexStore(database, createNew: false))
+                oldVersion = oldStore.GetMeta("index_version")!;
+
+            string wal = database + "-wal";
+            string journal = database + "-journal";
+            File.WriteAllText(wal, "stage-time identity");
+
+            Assert.True(AnchoredIndexDestination.TryOpen(
+                root, root, database, createIndexDirectory: false,
+                out AnchoredIndexDestination? destination));
+            using (destination!)
+            {
+                string stagePath = destination!.CreateStagePath();
+                Assert.Equal("stage-time identity", File.ReadAllText(wal));
+
+                File.Delete(wal);
+                File.WriteAllText(wal, "publication-time replacement");
+                File.WriteAllText(journal, "publication-time arrival");
+                BuildResult stage = IndexBuilder.BuildOwned(root, stagePath,
+                    reservedPrivateStage: true);
+                Assert.Equal(1, stage.CsFiles);
+
+                Assert.True(destination.InstallStage(TimeSpan.FromSeconds(5)),
+                    "a safe recovery sidecar identity change blocked publication");
+            }
+
+            Assert.False(File.Exists(wal));
+            Assert.False(File.Exists(journal));
+            using (var installedStore = new IndexStore(database, createNew: false))
+                Assert.NotEqual(oldVersion, installedStore.GetMeta("index_version"));
+            using (var queries = new IndexQueries(database,
+                       pinReadSnapshot: false, pooling: false))
+                Assert.Single(queries.SearchSymbols(
+                    "RecoverySidecarAlpha69", "exact", null, 2));
+            AssertNoPublicationArtifacts(Path.GetDirectoryName(database)!);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void SupportedHostPublicationRetriesWhenSidecarReappearsDuringReservation()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsLinux()) return;
+
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-69-sidecar-reservation-race").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        int recreated = 0;
+        try
+        {
+            WriteWorkspace(root, "RecoverySidecarRaceAlpha69");
+            IndexBuilder.Build(root, database);
+            IndexQueries.ClearPoolsFor(database);
+            File.WriteAllText(database + "-wal", "publication-time sidecar");
+
+            Assert.True(AnchoredIndexDestination.TryOpen(
+                root, root, database, createIndexDirectory: false,
+                out AnchoredIndexDestination? destination));
+            using (destination!)
+            {
+                string stagePath = destination!.CreateStagePath();
+                BuildResult stage = IndexBuilder.BuildOwned(root, stagePath,
+                    reservedPrivateStage: true);
+                Assert.Equal(1, stage.CsFiles);
+
+                try
+                {
+                    destination.TestOnlyAfterLiveSidecarRemoval = path =>
+                    {
+                        StringComparison comparison = OperatingSystem.IsWindows()
+                            ? StringComparison.OrdinalIgnoreCase
+                            : StringComparison.Ordinal;
+                        if (!string.Equals(Path.GetFullPath(path),
+                                Path.GetFullPath(database + "-wal"), comparison) ||
+                            Interlocked.Exchange(ref recreated, 1) != 0) return;
+                        File.WriteAllText(path, "replacement in reservation gap");
+                    };
+
+                    Assert.True(destination.InstallStage(TimeSpan.FromSeconds(5)),
+                        "the sidecar recreation race did not consume the bounded retry path");
+                }
+                finally
+                {
+                    destination.TestOnlyAfterLiveSidecarRemoval = null;
+                }
+            }
+
+            Assert.Equal(1, recreated);
+            Assert.False(File.Exists(database + "-wal"));
+            using var queries = new IndexQueries(database,
+                pinReadSnapshot: false, pooling: false);
+            Assert.Single(queries.SearchSymbols(
+                "RecoverySidecarRaceAlpha69", "exact", null, 2));
             AssertNoPublicationArtifacts(Path.GetDirectoryName(database)!);
         }
         finally

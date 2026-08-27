@@ -51,8 +51,7 @@ public class Batch17SearchTextHintsTests : IDisposable
     {
         _semantic.Dispose();
         _manager.Dispose();
-        TestWorkspaceCleanup.ClearIndexPools(_root);
-        try { Directory.Delete(_root, recursive: true); } catch { /* leave temp on Windows lock */ }
+        TestWorkspaceCleanup.DeleteWorkspace(_root);
     }
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;

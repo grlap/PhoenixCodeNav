@@ -52,6 +52,25 @@ internal static class SemanticRetry
         return default!; // unreachable
     }
 
+    /// <summary>Async counterpart for typed semantic-service calls. The caller owns the
+    /// acceptance predicate and final assertions; this helper owns only bounded retry timing so
+    /// every typed test uses the same policy.</summary>
+    internal static async Task<T> UntilAsync<T>(Func<Task<T>> call, Func<T, bool> accept,
+        int attempts = 3)
+    {
+        T last = default!;
+        for (int i = 0; i < attempts; i++)
+        {
+            if (i > 0) await Task.Delay(250);
+            last = await call();
+            if (accept(last)) return last;
+        }
+        return last;
+    }
+
+    internal static bool IsDocumentedTransient(string? reason) =>
+        reason is "index_snapshot_unavailable" or "cluster_cold_load";
+
     internal static JsonElement ParseExactWithRetry(Func<string> call, int attempts = 3) =>
         ParseWithRetry(call,
             j => j.TryGetProperty("meta", out var meta) &&

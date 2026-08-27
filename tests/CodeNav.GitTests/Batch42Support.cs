@@ -135,7 +135,6 @@ internal static class Batch42Support
 
     internal static void Cleanup(string root)
     {
-        TestWorkspaceCleanup.ClearIndexPools(root);
-        try { Directory.Delete(root, recursive: true); } catch { /* windows locks */ }
+        TestWorkspaceCleanup.DeleteWorkspace(root);
     }
 }

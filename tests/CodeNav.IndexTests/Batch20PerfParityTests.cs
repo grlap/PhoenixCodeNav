@@ -50,7 +50,7 @@ public class Batch20PerfParityTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -91,7 +91,7 @@ public class Batch20PerfParityTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -114,7 +114,7 @@ public class Batch20PerfParityTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -141,7 +141,7 @@ public class Batch20PerfParityTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 }

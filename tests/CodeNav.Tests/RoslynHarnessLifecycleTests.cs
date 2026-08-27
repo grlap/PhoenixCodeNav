@@ -39,6 +39,38 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
             script,
             StringComparison.Ordinal);
         Assert.Contains("phoenixBuild = $null", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "$roslynIndexWasMissing = -not (Test-Path -LiteralPath $IndexDb -PathType Leaf)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$fsharpIndexWasMissing = -not (Test-Path -LiteralPath $FSharpIndexDb -PathType Leaf)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Initialize-ReusableIndex \"writer\" $Workspace $IndexDb",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Roslyn index bootstrap did not produce a reusable index",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Initialize-ReusableIndex \"fsharp-writer\" $FSharpWorkspace $FSharpIndexDb",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "FSharp index bootstrap did not produce a reusable index",
+            script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Reusable Roslyn index is missing",
+            script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Reusable FSharp index is missing",
+            script,
+            StringComparison.Ordinal);
 
         foreach (string forbidden in new[]
                  {
@@ -69,10 +101,196 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
         Assert.False(fixture.TryGetProperty("fsharp", out _));
         Assert.Equal("external/roslyn",
             fixture.GetProperty("defaultWorkspace").GetString());
+        Assert.Equal(
+            "fresh_normal_mcp_startup_friend_assembly_authority_correction_with_exact_public_method_canary",
+            fixture.GetProperty("countsProvenance").GetString());
+        Assert.Contains("prior 10-reference/1-project exact result incorrectly treated",
+            fixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("47 references across 7 projects",
+            fixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("GetOpenDocumentIds",
+            fixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("Microsoft.CodeAnalysis.CSharp.EditorFeatures.UnitTests",
+            fixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("six unproven friend-assembly projects",
+            fixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Equal("external/fsharp",
             fsharpFixture.GetProperty("defaultWorkspace").GetString());
         Assert.Equal("src/FSharp.Core/option.fs",
             fsharpFixture.GetProperty("target").GetProperty("sourcePath").GetString());
+        Assert.Equal(116170,
+            fsharpFixture.GetProperty("counts").GetProperty("symbols").GetInt32());
+        Assert.Equal(4140,
+            fsharpFixture.GetProperty("counts").GetProperty("orphanedFiles").GetInt32());
+        Assert.Equal("schema_29_rebuild_after_fsharp_stored_output_drift_with_reused_index_parity",
+            fsharpFixture.GetProperty("countsProvenance").GetString());
+        Assert.Contains("schema-28 fixture still reported the older stored output",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("schema 29 conservatively repairs that historical missed stored-output rebuild boundary",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("cold-build/delta parity canary guards recurrence",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("subsequent ordinary reuse",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Equal("indexed",
+            fixture.GetProperty("target").GetProperty("friendRelationshipConfidence").GetString());
+        Assert.Equal("project_model_unproven",
+            fixture.GetProperty("target").GetProperty("friendRelationshipPartialReason").GetString());
+        Assert.Equal("T:Microsoft.CodeAnalysis.Host.ICompilationFactoryService",
+            fixture.GetProperty("target").GetProperty("documentationCommentId").GetString());
+        Assert.Equal(6, fixture.GetProperty("target")
+            .GetProperty("referencesUnprovenFriendAssemblyProjects").GetArrayLength());
+        Assert.Equal(6, fixture.GetProperty("target")
+            .GetProperty("implementationsUnprovenFriendAssemblyProjects").GetArrayLength());
+        Assert.Equal(6, fixture.GetProperty("target")
+            .GetProperty("typeHierarchyUnprovenFriendAssemblyProjects").GetArrayLength());
+        Assert.Equal(47,
+            fixture.GetProperty("target").GetProperty("referenceCount").GetInt32());
+        Assert.Equal(7,
+            fixture.GetProperty("target").GetProperty("referenceProjects").GetInt32());
+        Assert.Contains("function Invoke-ReferencesWithTelemetry", script,
+            StringComparison.Ordinal);
+        Assert.Contains("$afterCount = @(Get-ReferenceTelemetryRecords $Client).Count", script,
+            StringComparison.Ordinal);
+        Assert.Contains("function Invoke-SemanticWithRetryCore", script,
+            StringComparison.Ordinal);
+        Assert.Contains("([ref]$attemptCount)", script, StringComparison.Ordinal);
+        Assert.Contains("Wait-ReferenceTelemetry $Client $afterCount `", script,
+            StringComparison.Ordinal);
+        Assert.Contains("Select-Object -Skip $AfterCount", script,
+            StringComparison.Ordinal);
+        Assert.Contains("Select-Object -Last 1", script,
+            StringComparison.Ordinal);
+        Assert.Contains("AddMilliseconds(750)", script, StringComparison.Ordinal);
+        Assert.Contains("post-call record set to settle", script, StringComparison.Ordinal);
+        Assert.Contains("timed out waiting for accepted references telemetry", script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("$AfterCount + $ExpectedNewCount", script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Select-Object -Last $ExpectedCount", script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "[string]$record.result -eq $ExpectedResult",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Assert-Equal $ExpectedResult ([string]$accepted.result)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "-ExpectedUnprovenProjects @($baseline.target.referencesUnprovenFriendAssemblyProjects)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("roslynCountsProvenance = [ordered]@{", script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "-ExpectedUnprovenProjects @($baseline.target.implementationsUnprovenFriendAssemblyProjects)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "-ExpectedUnprovenProjects @($baseline.target.typeHierarchyUnprovenFriendAssemblyProjects)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Test-IntegrationCase \"compiler-exact method references\"",
+            script,
+            StringComparison.Ordinal);
+        Assert.Equal(9,
+            fixture.GetProperty("exactReferencesTarget")
+                .GetProperty("referenceCount").GetInt32());
+        Assert.Equal(4,
+            fixture.GetProperty("exactReferencesTarget")
+                .GetProperty("referenceProjects").GetInt32());
+        Assert.Equal(2,
+            fixture.GetProperty("exactReferencesTarget")
+                .GetProperty("samplesPerGroup").GetInt32());
+        Assert.Equal(4,
+            fixture.GetProperty("exactReferencesTarget")
+                .GetProperty("groups").GetArrayLength());
+        Assert.Contains(
+            "Method references lost compiler-exact confidence",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Repair-ReusedFSharpIndexIfCountsDrift $fsharpWriter $fsharpOverview",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Repair-ReusedRoslynIndexIfCountsDrift $writer $overview",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("function Get-RoslynReferenceAuthorityEvidence", script,
+            StringComparison.Ordinal);
+        Assert.Contains("function Test-RoslynReferenceAuthorityEvidence", script,
+            StringComparison.Ordinal);
+        Assert.Contains("priorAuthorityEvidence = $priorAuthorityEvidence", script,
+            StringComparison.Ordinal);
+        Assert.Contains("rebuiltAuthorityEvidence = $rebuiltAuthorityEvidence", script,
+            StringComparison.Ordinal);
+        Assert.Contains("full rebuild still disagrees with the pinned authority-evidence baseline",
+            script, StringComparison.Ordinal);
+        Assert.Contains("Roslyn authority-probe restart crossed index epochs", script,
+            StringComparison.Ordinal);
+        Assert.Contains("roslynIndexRepair = $null", script,
+            StringComparison.Ordinal);
+        Assert.Contains("fsharpIndexRepair = $null", script, StringComparison.Ordinal);
+        Assert.Contains("priorIndexVersion = $priorVersion", script,
+            StringComparison.Ordinal);
+        Assert.Contains("rebuiltIndexVersion = [string]$rebuilt.meta.indexVersion", script,
+            StringComparison.Ordinal);
+        Assert.Contains("$Label baseline will be judged against repaired index", script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Test-IntegrationCase \"Roslyn reusable index startup and reuse are honest\"",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Test-IntegrationCase \"FSharp reusable index startup and reuse are honest\"",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("this gate run remains failed", script,
+            StringComparison.Ordinal);
+        Assert.Contains("startupBuildReason = [string]$resetSession.Capabilities.index.startupBuildReason",
+            script, StringComparison.Ordinal);
+        Assert.Contains("startupPriorSchema = [string]$resetSession.Capabilities.index.startupPriorSchema",
+            script, StringComparison.Ordinal);
+        Assert.Contains("outcome = if ($startupRebuilt) { \"startup_rebuilt\" } else { \"reused\" }",
+            script, StringComparison.Ordinal);
+        Assert.Contains("only a later ordinary reuse of the repaired matching fixture may pass",
+            script, StringComparison.Ordinal);
+        Assert.Contains("outcome = \"bootstrapped\"", script,
+            StringComparison.Ordinal);
+        Assert.Contains("rebuiltCounts = Get-RoslynOverviewCounts $overview", script,
+            StringComparison.Ordinal);
+        Assert.Contains("$fsharpCapabilities = Invoke-McpTool $fsharpWriter \"server_capabilities\"",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("fsharpCapabilities = $fsharpCapabilities", script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "FSharp capabilities evidence is stale for the judged index epoch",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "omitted required friend-assembly coverage",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Assert-FriendRelationshipAuthority $baseDefinition \"Implementation base binding\" $false",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$Label full rebuild is still publishing",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$implementations.PSObject.Properties[\"implementationsConfidence\"]",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$hierarchy.PSObject.Properties[\"derivedConfidence\"]",
+            script,
+            StringComparison.Ordinal);
         Assert.Contains("path = external/roslyn", submodules, StringComparison.Ordinal);
         Assert.Contains(
             "url = https://github.com/dotnet/roslyn",

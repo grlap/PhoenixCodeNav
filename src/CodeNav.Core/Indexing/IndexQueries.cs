@@ -2016,6 +2016,27 @@ public sealed partial class IndexQueries : IDisposable
         return map;
     }
 
+    /// <summary>Case-insensitive logical project name → deterministic public spelling. Physical
+    /// project rows can differ only by case; choose the ordinal minimum rather than whichever row
+    /// SQLite or Roslyn happens to enumerate first.</summary>
+    public Dictionary<string, string> AllCanonicalProjectNames(string? language = null)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        IEnumerable<string> names = language is null
+            ? Query("SELECT name FROM projects", r => r.GetString(0))
+            : Query("SELECT name FROM projects WHERE lang = $lang", r => r.GetString(0),
+                ("$lang", language));
+        foreach (string name in names)
+        {
+            if (!map.TryGetValue(name, out string? current) ||
+                string.CompareOrdinal(name, current) < 0)
+            {
+                map[name] = name;
+            }
+        }
+        return map;
+    }
+
     /// <summary>Project name → whether every physical project row with that logical name is a
     /// test project. This is the conservative name-keyed filter for mixed-language scan plans:
     /// a production C# project must not be hidden by a same-name F# test project.</summary>

@@ -81,7 +81,14 @@ public class ReviewCommandContractTests
         Assert.DoesNotContain("Confirm reintroduction-test evidence", text);
         Assert.Contains("Run `dotnet build PhoenixCodeNav.sln -c Release --no-restore`", text);
         Assert.Contains("Run `pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1`", text);
-        Assert.Contains("Missing submodules, mismatched external commits, missing reusable indexes, or any harness failure stop the review gate", text);
+        Assert.Contains("Run `node ./website/verify.mjs`", text);
+        Assert.Contains("The harness bootstraps a missing reusable index through normal MCP startup and reuses an existing index", text);
+        Assert.Contains("if a reused index disagrees with its fresh-index baseline canary " +
+            "(overview counts plus Roslyn reference-authority evidence)", text);
+        Assert.Contains("but that gate run still fails", text);
+        Assert.Contains("Only a later run against the repaired matching fixture may pass", text);
+        Assert.Contains("a fresh rebuilt index that still disagrees with the baseline", text);
+        Assert.Contains("do not restore or update submodules implicitly", text);
         Assert.Contains(":(exclude).beads/interactions.jsonl", text);
         Assert.Contains(":(exclude).beads/issues.jsonl", text);
         Assert.Contains(":(exclude).beads/events.jsonl", text);
@@ -109,9 +116,13 @@ public class ReviewCommandContractTests
         int postValidationInventory = text.IndexOf(
             "After validation, restart all of Step 1 from its path-only inventories",
             StringComparison.Ordinal);
+        int websiteVerification = text.IndexOf(
+            "Run `node ./website/verify.mjs`",
+            StringComparison.Ordinal);
         Assert.True(solutionTests >= 0 && solutionTests < externalIntegration &&
-            externalIntegration < postValidationInventory,
-            "The external MCP integration harness must run after solution tests and before delegation inventories restart.");
+            externalIntegration < websiteVerification &&
+            websiteVerification < postValidationInventory,
+            "The external MCP and website gates must run after solution tests and before delegation inventories restart.");
 
         int pathInventory = text.IndexOf("git ls-files --others --exclude-standard", StringComparison.Ordinal);
         int containmentCheck = text.IndexOf("Before diffing or opening target content", StringComparison.Ordinal);
@@ -131,6 +142,12 @@ public class ReviewCommandContractTests
         Assert.Contains("inspect their changed content instead of refusing the review", text);
         Assert.DoesNotContain("this dirty command/lens set is reviewing its own trust policy", text);
         Assert.Contains("git --no-optional-locks status --short", text);
+        Assert.Contains("On PowerShell, use this exact argument-array form", text);
+        Assert.Contains("$beadsLedgerExcludes = @(", text);
+        Assert.Contains("never execute a bare `:(exclude)...` token", text);
+        Assert.True(Count(text, "@beadsLedgerExcludes") >= 6,
+            "Every PowerShell inventory and content-diff command must splat the quoted ledger pathspec array.");
+        Assert.Contains("Do not use this block from PowerShell", text);
         Assert.DoesNotContain("git ls-files --others --ignored --exclude-standard", text);
         Assert.Contains("If any inventory command fails or its path output is truncated or malformed", text);
         Assert.Contains("`Review verdict: INCONCLUSIVE` and stop before reading target content", text);
@@ -235,6 +252,8 @@ public class ReviewCommandContractTests
         const string externalIntegration = "pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1";
         Assert.Contains(externalIntegration, agents);
         Assert.Contains(externalIntegration, claude);
+        Assert.Contains("node ./website/verify.mjs", agents);
+        Assert.Contains("node ./website/verify.mjs", claude);
 
         string allReviewAssets = claude + "\n" + agents + "\n" + string.Join("\n",
             Directory.GetFiles(Path.Combine(Root(), ".claude"), "*.md", SearchOption.AllDirectories)

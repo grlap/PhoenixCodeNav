@@ -97,7 +97,7 @@ public class Batch21CompileFidelityTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -129,7 +129,7 @@ public class Batch21CompileFidelityTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -201,7 +201,7 @@ public class Batch21CompileFidelityTests
         finally
         {
             TestWorkspaceCleanup.ClearIndexPools(root);
-            try { Directory.Delete(root, recursive: true); } catch { /* Windows lock */ }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 }
