@@ -82,12 +82,11 @@ public class ReviewCommandContractTests
         Assert.Contains("Run `dotnet build PhoenixCodeNav.sln -c Release --no-restore`", text);
         Assert.Contains("Run `pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1`", text);
         Assert.Contains("Run `node ./website/verify.mjs`", text);
-        Assert.Contains("The harness bootstraps a missing reusable index through normal MCP startup and reuses an existing index", text);
-        Assert.Contains("if a reused index disagrees with its fresh-index baseline canary " +
-            "(overview counts plus Roslyn reference-authority evidence)", text);
-        Assert.Contains("but that gate run still fails", text);
-        Assert.Contains("Only a later run against the repaired matching fixture may pass", text);
-        Assert.Contains("a fresh rebuilt index that still disagrees with the baseline", text);
+        Assert.Contains("requires both checkouts to match their pinned commits before startup", text);
+        Assert.Contains("builds new isolated indexes through normal MCP startup", text);
+        Assert.Contains("It never updates submodules, repairs old indexes, or changes baselines", text);
+        Assert.Contains("pre-existing explicit index paths", text);
+        Assert.Contains("fresh-index baseline drift", text);
         Assert.Contains("do not restore or update submodules implicitly", text);
         Assert.Contains(":(exclude).beads/interactions.jsonl", text);
         Assert.Contains(":(exclude).beads/issues.jsonl", text);

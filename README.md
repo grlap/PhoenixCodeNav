@@ -335,13 +335,12 @@ launching a Git subprocess.
 `--db` plus `--build-only` indexes the real workspace into an explicit scratch database and exits
 after reporting phase time, total time, symbol count, and database size.
 
-The external MCP gate requires the pinned Roslyn and F# submodules to be checked out. Its first run
-builds missing `.codenav/index.db` files through normal MCP startup; later runs reuse those indexes.
-If a reused index disagrees with its fresh-index baseline canary (overview counts plus Roslyn
-reference-authority evidence), the gate performs one in-band full rebuild to preserve before/after
-evidence, but that run still fails so a missing schema-version bump cannot
-hide behind automatic repair. Only a later run against the repaired index may pass, and the rebuilt counts
-must match the pinned fresh-index baseline.
+The external MCP gate requires the pinned Roslyn and F# submodules to be checked out at the exact
+commits recorded by their baselines. It checks those commits before starting Phoenix, builds new
+isolated indexes through normal MCP startup, and runs every integration assertion against those
+fresh indexes. The gate never updates a submodule, repairs or trusts an index from an earlier run,
+or changes a baseline automatically. A commit mismatch, pre-existing explicit index path, or fresh
+result that disagrees with the pinned baseline stops the gate for an agent to investigate.
 
 Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.FSharp` (isolated FCS syntax
 and bounded semantic adapter), `CodeNav.Mcp` (server, ships as `PhoenixCodeNav.Mcp.exe`),

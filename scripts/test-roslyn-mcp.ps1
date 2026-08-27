@@ -11,7 +11,10 @@ param(
     [switch]$SelfTestProcessLifecycleReadinessFailure,
     [switch]$SelfTestProcessHost,
     [switch]$SelfTestProcessGrandchild,
-    [switch]$SelfTestSemanticRetryContract
+    [switch]$SelfTestSemanticRetryContract,
+    [switch]$SelfTestFreshIndexLifecycleContract,
+    [switch]$SelfTestFreshIndexLeaseProbe,
+    [string]$SelfTestLeasePath
 )
 
 Set-StrictMode -Version 1.0
@@ -46,6 +49,36 @@ $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 
 function Quote-ProcessArgument([string]$Value) {
     return '"' + $Value.Replace('"', '\"') + '"'
+}
+
+function Test-IsFileContentionException([Exception]$Exception) {
+    $current = $Exception
+    while ($null -ne $current) {
+        if ($current -is [IO.IOException] -or
+            $current -is [UnauthorizedAccessException]) {
+            return $true
+        }
+        $current = $current.InnerException
+    }
+    return $false
+}
+
+if ($SelfTestFreshIndexLeaseProbe) {
+    $probeLease = $null
+    try {
+        $probeLease = [IO.File]::Open($SelfTestLeasePath, [IO.FileMode]::OpenOrCreate,
+            [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        Write-Host "LEASE_PROBE_ACQUIRED"
+        exit 0
+    } catch {
+        if (Test-IsFileContentionException $_.Exception) {
+            [Console]::Error.WriteLine("LEASE_PROBE_REJECTED")
+            exit 23
+        }
+        throw
+    } finally {
+        if ($null -ne $probeLease) { $probeLease.Dispose() }
+    }
 }
 
 function Stop-ProcessTree([Diagnostics.Process]$Process) {
@@ -251,10 +284,16 @@ if ([string]::IsNullOrWhiteSpace($Workspace)) {
     }
 }
 $Workspace = [IO.Path]::GetFullPath($Workspace)
-if ([string]::IsNullOrWhiteSpace($IndexDb)) {
-    $IndexDb = Join-Path $Workspace ([string]$baseline.indexRelativePath)
+$externalIntegrationRoot = [IO.Path]::GetFullPath(
+    (Join-Path $repoRoot "artifacts\external-integration"))
+$freshRun = $null
+$freshIndexRoot = $null
+$freshRunLease = $null
+$freshRunLeasePath = Join-Path $externalIntegrationRoot ".fresh-index-gate.lock"
+$usesDefaultRoslynIndex = [string]::IsNullOrWhiteSpace($IndexDb)
+if (-not $usesDefaultRoslynIndex) {
+    $IndexDb = [IO.Path]::GetFullPath($IndexDb)
 }
-$IndexDb = [IO.Path]::GetFullPath($IndexDb)
 if ([string]::IsNullOrWhiteSpace($FSharpBaselinePath)) {
     $FSharpBaselinePath = Join-Path $repoRoot "tests\integration\fsharp-mcp-baseline.json"
 }
@@ -267,10 +306,10 @@ if ([string]::IsNullOrWhiteSpace($FSharpWorkspace)) {
     }
 }
 $FSharpWorkspace = [IO.Path]::GetFullPath($FSharpWorkspace)
-if ([string]::IsNullOrWhiteSpace($FSharpIndexDb)) {
-    $FSharpIndexDb = Join-Path $FSharpWorkspace ([string]$fsharpBaseline.indexRelativePath)
+$usesDefaultFSharpIndex = [string]::IsNullOrWhiteSpace($FSharpIndexDb)
+if (-not $usesDefaultFSharpIndex) {
+    $FSharpIndexDb = [IO.Path]::GetFullPath($FSharpIndexDb)
 }
-$FSharpIndexDb = [IO.Path]::GetFullPath($FSharpIndexDb)
 if ([string]::IsNullOrWhiteSpace($EvidencePath)) {
     $EvidencePath = Join-Path $repoRoot "artifacts\external-integration\last-results.json"
 }
@@ -298,6 +337,126 @@ function Assert-Contains([object[]]$Values, $Expected, [string]$Message) {
     if (-not (@($Values) -contains $Expected)) {
         throw "$Message (missing '$Expected'; actual '$(@($Values) -join ', ')')"
     }
+}
+
+function Get-SqliteArtifactPaths([string]$DatabasePath) {
+    return @(
+        $DatabasePath,
+        "$DatabasePath-wal",
+        "$DatabasePath-shm",
+        "$DatabasePath-journal"
+    )
+}
+
+function Assert-VerifiedDirectoryChain([string]$AnchorPath, [string]$TargetPath,
+    [string]$Label, [bool]$CreateMissing = $false) {
+    $anchorFull = [IO.Path]::GetFullPath($AnchorPath).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $targetFull = [IO.Path]::GetFullPath($TargetPath).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $comparison = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        [StringComparison]::OrdinalIgnoreCase
+    } else {
+        [StringComparison]::Ordinal
+    }
+    $separator = [string][IO.Path]::DirectorySeparatorChar
+    Assert-True ($targetFull.Equals($anchorFull, $comparison) -or
+        $targetFull.StartsWith($anchorFull + $separator, $comparison)) `
+        "$Label escapes its trusted anchor: $targetFull"
+
+    $anchorItem = Get-Item -LiteralPath $anchorFull -Force
+    Assert-True ($anchorItem.PSIsContainer -and
+        ($anchorItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) `
+        "$Label anchor is not a plain directory: $anchorFull"
+
+    $cursor = $anchorFull
+    $relative = $targetFull.Substring($anchorFull.Length).TrimStart(
+        [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    foreach ($segment in @($relative -split '[\\/]+' | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne '.'
+    })) {
+        $cursor = Join-Path $cursor $segment
+        if ($CreateMissing -and -not (Test-Path -LiteralPath $cursor)) {
+            [IO.Directory]::CreateDirectory($cursor) | Out-Null
+        }
+        Assert-True (Test-Path -LiteralPath $cursor -PathType Container) `
+            "$Label directory is missing: $cursor"
+        $item = Get-Item -LiteralPath $cursor -Force
+        Assert-True ($item.PSIsContainer -and
+            ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) `
+            "$Label directory is a reparse point: $cursor"
+    }
+}
+
+function New-FreshIndexRun([string]$AnchorPath, [string]$IntegrationRoot,
+    [string]$LeasePath) {
+    Assert-VerifiedDirectoryChain $AnchorPath $IntegrationRoot `
+        "External integration root" $true
+    if (Test-Path -LiteralPath $LeasePath) {
+        $leaseItem = Get-Item -LiteralPath $LeasePath -Force
+        Assert-True (-not $leaseItem.PSIsContainer -and
+            ($leaseItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) `
+            "External integration lease is not a plain file: $LeasePath"
+    }
+
+    $lease = $null
+    $runRoot = $null
+    try {
+        try {
+            $lease = [IO.File]::Open($LeasePath, [IO.FileMode]::OpenOrCreate,
+                [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        } catch {
+            if (Test-IsFileContentionException $_.Exception) {
+                throw "Another external MCP integration gate owns the fresh-index lease: $LeasePath"
+            }
+            throw
+        }
+        $runId = [Guid]::NewGuid().ToString("N")
+        $runRoot = Join-Path $IntegrationRoot "fresh-index-$runId"
+        [IO.Directory]::CreateDirectory($runRoot) | Out-Null
+        Assert-VerifiedDirectoryChain $AnchorPath $runRoot "Fresh integration run"
+        return [pscustomobject]@{
+            RunId = $runId
+            Root = [IO.Path]::GetFullPath($runRoot)
+            Lease = $lease
+            LeasePath = [IO.Path]::GetFullPath($LeasePath)
+        }
+    } catch {
+        if ($null -ne $runRoot -and (Test-Path -LiteralPath $runRoot -PathType Container)) {
+            try {
+                Assert-VerifiedDirectoryChain $AnchorPath $runRoot "Failed fresh integration run"
+                [IO.Directory]::Delete($runRoot, $false)
+            } catch { }
+        }
+        if ($null -ne $lease) { $lease.Dispose() }
+        throw
+    }
+}
+
+function Remove-FreshIndexRun([string]$AnchorPath, [string]$RunRoot,
+    [string[]]$DatabasePaths) {
+    Assert-VerifiedDirectoryChain $AnchorPath $RunRoot "Fresh integration cleanup"
+    $rootFull = [IO.Path]::GetFullPath($RunRoot)
+    foreach ($databasePath in $DatabasePaths) {
+        $databaseFull = [IO.Path]::GetFullPath($databasePath)
+        Assert-True ([IO.Path]::GetFullPath((Split-Path -Parent $databaseFull)) -eq $rootFull) `
+            "Fresh integration database is outside its run directory: $databaseFull"
+        foreach ($candidate in Get-SqliteArtifactPaths $databaseFull) {
+            Assert-VerifiedDirectoryChain $AnchorPath $RunRoot "Fresh integration cleanup"
+            if (-not (Test-Path -LiteralPath $candidate)) { continue }
+            $item = Get-Item -LiteralPath $candidate -Force
+            Assert-True (-not $item.PSIsContainer -and
+                ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) `
+                "Fresh integration cleanup refused a non-plain file: $candidate"
+            Remove-Item -LiteralPath $candidate -Force
+        }
+    }
+
+    Assert-VerifiedDirectoryChain $AnchorPath $RunRoot "Fresh integration cleanup"
+    $remaining = @(Get-ChildItem -LiteralPath $RunRoot -Force)
+    Assert-Equal 0 $remaining.Count `
+        "Fresh integration cleanup found unexpected entries in $RunRoot"
+    [IO.Directory]::Delete($RunRoot, $false)
 }
 
 function Assert-FriendRelationshipAuthority($Payload, [string]$Label,
@@ -563,9 +722,9 @@ function Initialize-McpClient($Client, [string]$ExpectedMode) {
     $capabilities = $null
     $stableReadyObservations = 0
     # Every writer startup deliberately runs a detect-all freshness sweep. The frozen Roslyn
-    # checkout has 17k C# files, and a cold post-reboot sweep can take several minutes even
-    # though the reusable index is already valid. Keep this integration gate bounded, but size
-    # the bound for the repository it intentionally exercises rather than a tiny unit fixture.
+    # checkout has 17k C# files, and building its fresh integration index can take several
+    # minutes. Keep this integration gate bounded, but size the bound for the repository it
+    # intentionally exercises rather than a tiny unit fixture.
     # A writer can briefly report ready before a queued refresh starts, so require readiness to
     # remain stable across two observations one second apart before issuing semantic probes.
     for ($attempt = 0; $attempt -lt 600; $attempt++) {
@@ -622,36 +781,6 @@ function Request-McpDaemonRetirement($Client) {
     } finally {
         $process.Dispose()
     }
-}
-
-function Initialize-ReusableIndex([string]$Label, [string]$WorkspaceRoot, [string]$DatabasePath) {
-    $client = $null
-    $initialized = $false
-    $startupEvidence = $null
-    try {
-        $client = Start-McpClient "$Label-reset" $WorkspaceRoot $DatabasePath
-        $resetSession = Initialize-McpClient $client "writer"
-        $startupEvidence = [pscustomobject]@{
-            startupBuildReason = [string]$resetSession.Capabilities.index.startupBuildReason
-            startupPriorSchema = [string]$resetSession.Capabilities.index.startupPriorSchema
-            currentSchema = [string]$resetSession.Capabilities.build.indexSchema
-            indexVersion = [string]$resetSession.Capabilities.index.indexVersion
-        }
-        $initialized = $true
-    } finally {
-        $cleanupErrors = New-Object System.Collections.Generic.List[string]
-        try { Stop-McpClient $client } catch { $cleanupErrors.Add($_.Exception.Message) }
-        try { Request-McpDaemonRetirement $client } catch {
-            $cleanupErrors.Add($_.Exception.Message)
-        }
-        if ($initialized -and $cleanupErrors.Count -gt 0) {
-            throw "$Label reset cleanup failed: $($cleanupErrors -join '; ')"
-        }
-        foreach ($cleanupError in $cleanupErrors) {
-            Write-Warning "$Label cleanup after initialization failure also failed: $cleanupError"
-        }
-    }
-    return $startupEvidence
 }
 
 function Test-RetryableSemanticPayload($Payload) {
@@ -719,6 +848,90 @@ if ($SelfTestSemanticRetryContract) {
     exit 0
 }
 
+if ($SelfTestFreshIndexLifecycleContract) {
+    $selfTestRoot = Join-Path ([IO.Path]::GetTempPath()) `
+        ("PhoenixCodeNav-fresh-index-selftest-" + [Guid]::NewGuid().ToString("N"))
+    [IO.Directory]::CreateDirectory($selfTestRoot) | Out-Null
+    $anchor = Join-Path $selfTestRoot "anchor"
+    $outside = Join-Path $selfTestRoot "outside"
+    [IO.Directory]::CreateDirectory($anchor) | Out-Null
+    [IO.Directory]::CreateDirectory($outside) | Out-Null
+    $outsideMarker = Join-Path $outside "outside-marker.txt"
+    [IO.File]::WriteAllText($outsideMarker, "outside")
+    $linkedRoot = Join-Path $anchor "linked-integration"
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        New-Item -ItemType Junction -Path $linkedRoot -Target $outside | Out-Null
+    } else {
+        [IO.Directory]::CreateSymbolicLink($linkedRoot, $outside) | Out-Null
+    }
+    $linkRejected = $false
+    try {
+        Assert-VerifiedDirectoryChain $anchor $linkedRoot "Linked self-test root"
+    } catch {
+        $linkRejected = $_.Exception.Message -match "reparse point"
+    }
+    Assert-True $linkRejected "Fresh-index containment accepted a linked ancestor"
+    Assert-True (Test-Path -LiteralPath $outsideMarker -PathType Leaf) `
+        "Fresh-index containment modified the outside marker"
+    [IO.Directory]::Delete($linkedRoot, $false)
+
+    $integrationRoot = Join-Path $anchor "artifacts\external-integration"
+    $leasePath = Join-Path $integrationRoot ".fresh-index-gate.lock"
+    $run = New-FreshIndexRun $anchor $integrationRoot $leasePath
+    $probeStart = New-Object Diagnostics.ProcessStartInfo
+    $shellCommand = if ($PSVersionTable.PSEdition -eq "Core") {
+        Get-Command pwsh -CommandType Application
+    } else {
+        Get-Command powershell.exe -CommandType Application
+    }
+    $probeStart.FileName = [string]$shellCommand.Source
+    $probeStart.Arguments = "-NoProfile -ExecutionPolicy Bypass -File $(Quote-ProcessArgument $PSCommandPath) -SelfTestFreshIndexLeaseProbe -SelfTestLeasePath $(Quote-ProcessArgument $leasePath)"
+    $probeStart.UseShellExecute = $false
+    $probeStart.CreateNoWindow = $true
+    $probeStart.RedirectStandardOutput = $true
+    $probeStart.RedirectStandardError = $true
+    $probeProcess = [Diagnostics.Process]::Start($probeStart)
+    $probeStdout = $probeProcess.StandardOutput.ReadToEndAsync()
+    $probeStderr = $probeProcess.StandardError.ReadToEndAsync()
+    $probeProcess.WaitForExit()
+    $probeStdout.Wait()
+    $probeStderr.Wait()
+    Assert-Equal 23 $probeProcess.ExitCode `
+        "Fresh-index lease allowed a second process to acquire ownership; stdout=$([string]$probeStdout.Result); stderr=$([string]$probeStderr.Result)"
+    Assert-True ([string]$probeStderr.Result -match "LEASE_PROBE_REJECTED") `
+        "Fresh-index lease probe did not report the ownership collision"
+    $probeProcess.Dispose()
+
+    $roslynDb = Join-Path $run.Root "roslyn-index.db"
+    $fsharpDb = Join-Path $run.Root "fsharp-index.db"
+    foreach ($artifact in @($roslynDb, "$roslynDb-wal", $fsharpDb, "$fsharpDb-shm")) {
+        [IO.File]::WriteAllText($artifact, "self-test")
+    }
+    $unexpected = Join-Path $run.Root "unexpected.txt"
+    [IO.File]::WriteAllText($unexpected, "must survive exact cleanup")
+    $unexpectedRejected = $false
+    try {
+        Remove-FreshIndexRun $anchor $run.Root @($roslynDb, $fsharpDb)
+    } catch {
+        $unexpectedRejected = $_.Exception.Message -match "unexpected entries"
+    }
+    Assert-True $unexpectedRejected "Fresh-index cleanup silently removed an unknown entry"
+    Assert-True (Test-Path -LiteralPath $unexpected -PathType Leaf) `
+        "Fresh-index cleanup recursively deleted an unknown entry"
+    Remove-Item -LiteralPath $unexpected -Force
+    Remove-FreshIndexRun $anchor $run.Root @($roslynDb, $fsharpDb)
+    $run.Lease.Dispose()
+    Remove-Item -LiteralPath $leasePath -Force
+    [IO.Directory]::Delete($integrationRoot, $false)
+    [IO.Directory]::Delete((Split-Path -Parent $integrationRoot), $false)
+    Remove-Item -LiteralPath $outsideMarker -Force
+    [IO.Directory]::Delete($outside, $false)
+    [IO.Directory]::Delete($anchor, $false)
+    [IO.Directory]::Delete($selfTestRoot, $false)
+    Write-Host "Fresh-index lifecycle contract self-test passed"
+    exit 0
+}
+
 $mcpDllPath = Join-Path $repoRoot "src\CodeNav.Mcp\bin\Release\net10.0\PhoenixCodeNav.Mcp.dll"
 Assert-True (Test-Path -LiteralPath $mcpDllPath -PathType Leaf) "Release MCP binary is missing. Run: dotnet build PhoenixCodeNav.sln -c Release --no-restore"
 Assert-True (Test-Path -LiteralPath $Workspace -PathType Container) "Frozen Roslyn workspace is missing: $Workspace"
@@ -727,20 +940,58 @@ Assert-Equal ([string]$baseline.roslynCommit) $roslynHead "Roslyn HEAD differs f
 $unexpectedStatus = @(Invoke-Git $Workspace @("--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all") |
     Where-Object { $_ -and $_ -notmatch '^\?\? \.codenav/' })
 Assert-Equal 0 $unexpectedStatus.Count "Frozen Roslyn workspace contains changes outside .codenav"
-$roslynIndexWasMissing = -not (Test-Path -LiteralPath $IndexDb -PathType Leaf)
 Assert-True (Test-Path -LiteralPath $FSharpWorkspace -PathType Container) "Frozen FSharp workspace is missing: $FSharpWorkspace"
 $fsharpHead = [string](@(Invoke-Git $FSharpWorkspace @("rev-parse", "HEAD"))[0])
 Assert-Equal ([string]$fsharpBaseline.fsharpCommit) $fsharpHead "FSharp HEAD differs from the locked integration baseline"
 $unexpectedFSharpStatus = @(Invoke-Git $FSharpWorkspace @("--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all") |
     Where-Object { $_ -and $_ -notmatch '^\?\? \.codenav/' })
 Assert-Equal 0 $unexpectedFSharpStatus.Count "Frozen FSharp workspace contains changes outside .codenav"
-$fsharpIndexWasMissing = -not (Test-Path -LiteralPath $FSharpIndexDb -PathType Leaf)
 Assert-True (Test-Path -LiteralPath (Join-Path $FSharpWorkspace ([string]$fsharpBaseline.target.sourcePath)) -PathType Leaf) "Frozen FSharp checkout is missing the source probe"
 Assert-True (Test-Path -LiteralPath (Join-Path $FSharpWorkspace ([string]$fsharpBaseline.target.projectPath)) -PathType Leaf) "Frozen FSharp checkout is missing the project probe"
 
-if ($roslynIndexWasMissing) {
-    Write-Host "[SETUP] Roslyn reusable index is missing; MCP startup will build it at $IndexDb"
+function Initialize-FreshIndexPath([string]$Label, [string]$DatabasePath) {
+    foreach ($candidate in Get-SqliteArtifactPaths $DatabasePath) {
+        Assert-True (-not (Test-Path -LiteralPath $candidate)) `
+            "$Label integration index path is not fresh: $candidate"
+    }
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $DatabasePath)) | Out-Null
 }
+
+$defaultDatabasePaths = New-Object System.Collections.Generic.List[string]
+try {
+    if ($usesDefaultRoslynIndex -or $usesDefaultFSharpIndex) {
+        $freshRun = New-FreshIndexRun $repoRoot $externalIntegrationRoot $freshRunLeasePath
+        $freshIndexRoot = [string]$freshRun.Root
+        $freshRunLease = $freshRun.Lease
+        if ($usesDefaultRoslynIndex) {
+            $IndexDb = Join-Path $freshIndexRoot "roslyn-index.db"
+            $defaultDatabasePaths.Add($IndexDb)
+        }
+        if ($usesDefaultFSharpIndex) {
+            $FSharpIndexDb = Join-Path $freshIndexRoot "fsharp-index.db"
+            $defaultDatabasePaths.Add($FSharpIndexDb)
+        }
+    }
+    $IndexDb = [IO.Path]::GetFullPath($IndexDb)
+    $FSharpIndexDb = [IO.Path]::GetFullPath($FSharpIndexDb)
+
+    Initialize-FreshIndexPath "Roslyn" $IndexDb
+    Initialize-FreshIndexPath "FSharp" $FSharpIndexDb
+} catch {
+    $setupFailure = $_.Exception
+    if ($null -ne $freshIndexRoot -and
+        (Test-Path -LiteralPath $freshIndexRoot -PathType Container)) {
+        try {
+            Remove-FreshIndexRun $repoRoot $freshIndexRoot @($defaultDatabasePaths)
+        } catch {
+            Write-Warning "Fresh-index setup cleanup also failed: $($_.Exception.Message)"
+        }
+    }
+    if ($null -ne $freshRunLease) { $freshRunLease.Dispose() }
+    throw $setupFailure
+}
+Write-Host "[SETUP] Roslyn pinned checkout will build a fresh integration index at $IndexDb"
+Write-Host "[SETUP] FSharp pinned checkout will build a fresh integration index at $FSharpIndexDb"
 
 function Invoke-ReferencesWithTelemetry($Client, [hashtable]$Arguments,
     [string]$ExpectedResult) {
@@ -757,16 +1008,6 @@ function Invoke-ReferencesWithTelemetry($Client, [hashtable]$Arguments,
     }
 }
 
-function Test-RoslynBaselineCounts($Overview) {
-    return [int]$Overview.projects.total -eq [int]$expectedCounts.projects -and
-        [int]$Overview.solutions -eq [int]$expectedCounts.solutions -and
-        [int]$Overview.csFiles -eq [int]$expectedCounts.csFiles -and
-        [int]$Overview.fsFiles -eq [int]$expectedCounts.fsFiles -and
-        [int]$Overview.projects.fsharp -eq [int]$expectedCounts.fsProjects -and
-        [int]$Overview.symbols -eq [int]$expectedCounts.symbols -and
-        [int]$Overview.orphanedFiles -eq [int]$expectedCounts.orphanedFiles
-}
-
 function Get-RoslynOverviewCounts($Overview) {
     return [ordered]@{
         projects = [int]$Overview.projects.total
@@ -777,82 +1018,6 @@ function Get-RoslynOverviewCounts($Overview) {
         symbols = [int]$Overview.symbols
         orphanedFiles = [int]$Overview.orphanedFiles
     }
-}
-
-function Get-RoslynReferenceAuthorityEvidence($Client) {
-    try {
-        $search = Invoke-McpTool $Client "search_symbol" @{
-            query = [string]$baseline.target.name
-            limit = 10
-        }
-        $targets = @($search.symbols | Where-Object {
-            $_.path -eq [string]$baseline.target.path -and
-            $_.arity -eq [int]$baseline.target.arity
-        })
-        if ($targets.Count -ne 1) {
-            return [ordered]@{
-                error = "target_count_$($targets.Count)"
-                documentationCommentId = $null
-                referenceCount = $null
-                referenceProjects = $null
-                confidence = $null
-                partialReason = $null
-                unprovenFriendAssemblyProjects = @()
-            }
-        }
-
-        $references = Invoke-SemanticWithRetry $Client "references" @{
-            symbolId = [string]$targets[0].symbolId
-            mode = "auto"
-            maxProjects = 0
-            maxFiles = 1000
-            samplesPerGroup = 0
-            timeoutMs = 60000
-        }
-        return [ordered]@{
-            error = [string]$references.error
-            documentationCommentId = [string]$references.symbol.documentationCommentId
-            referenceCount = [int]$references.totalReferences
-            referenceProjects = @($references.groups).Count
-            confidence = [string]$references.meta.confidence
-            partialReason = [string]$references.partialReason
-            unprovenFriendAssemblyProjects = @(
-                $references.coverage.unprovenFriendAssemblyProjects |
-                    ForEach-Object { [string]$_ } | Sort-Object)
-        }
-    } catch {
-        return [ordered]@{
-            error = "probe_failed: $($_.Exception.Message)"
-            documentationCommentId = $null
-            referenceCount = $null
-            referenceProjects = $null
-            confidence = $null
-            partialReason = $null
-            unprovenFriendAssemblyProjects = @()
-        }
-    }
-}
-
-function Test-RoslynReferenceAuthorityEvidence($Evidence) {
-    $expectedUnproven = @(
-        $baseline.target.referencesUnprovenFriendAssemblyProjects |
-            ForEach-Object { [string]$_ } | Sort-Object)
-    return [string]::IsNullOrWhiteSpace([string]$Evidence.error) -and
-        [string]$Evidence.documentationCommentId -eq [string]$baseline.target.documentationCommentId -and
-        [int]$Evidence.referenceCount -eq [int]$baseline.target.referenceCount -and
-        [int]$Evidence.referenceProjects -eq [int]$baseline.target.referenceProjects -and
-        [string]$Evidence.confidence -eq [string]$baseline.target.friendRelationshipConfidence -and
-        [string]$Evidence.partialReason -eq [string]$baseline.target.friendRelationshipPartialReason -and
-        (@($Evidence.unprovenFriendAssemblyProjects) -join "|") -eq ($expectedUnproven -join "|")
-}
-
-function Test-FSharpBaselineCounts($Overview) {
-    return [int]$Overview.projects.total -eq [int]$fsharpBaseline.counts.projects -and
-        [int]$Overview.projects.fsharp -eq [int]$fsharpBaseline.counts.fsharpProjects -and
-        [int]$Overview.csFiles -eq [int]$fsharpBaseline.counts.csharpFiles -and
-        [int]$Overview.fsFiles -eq [int]$fsharpBaseline.counts.fsharpFiles -and
-        [int]$Overview.symbols -eq [int]$fsharpBaseline.counts.symbols -and
-        [int]$Overview.orphanedFiles -eq [int]$fsharpBaseline.counts.orphanedFiles
 }
 
 function Get-FSharpOverviewCounts($Overview) {
@@ -866,114 +1031,20 @@ function Get-FSharpOverviewCounts($Overview) {
     }
 }
 
-function Repair-ReusedIndexIfBaselineDrifts($Client, $Overview, [string]$Label, $StartupEvidence,
-    [scriptblock]$CountsMatch, [scriptblock]$GetCounts,
-    [scriptblock]$GetAuthorityEvidence = $null,
-    [scriptblock]$AuthorityEvidenceMatches = $null) {
-    $priorVersion = [string]$Overview.meta.indexVersion
-    $priorCounts = & $GetCounts $Overview
-    $priorAuthorityEvidence = if ($null -ne $GetAuthorityEvidence) {
-        & $GetAuthorityEvidence $Client
-    } else { $null }
-    $startupBuildReason = [string]$StartupEvidence.startupBuildReason
-    $startupRebuilt = -not [string]::IsNullOrWhiteSpace($startupBuildReason)
-    $baselineMatches = (& $CountsMatch $Overview) -and
-        ($null -eq $AuthorityEvidenceMatches -or
-            (& $AuthorityEvidenceMatches $priorAuthorityEvidence))
-    if ($baselineMatches) {
-        return [pscustomobject]@{
-            Overview = $Overview
-            Evidence = [ordered]@{
-                outcome = if ($startupRebuilt) { "startup_rebuilt" } else { "reused" }
-                repaired = $startupRebuilt
-                startupRebuilt = $startupRebuilt
-                startupBuildReason = $startupBuildReason
-                startupPriorSchema = [string]$StartupEvidence.startupPriorSchema
-                priorIndexVersion = if ($startupRebuilt) { $null } else { $priorVersion }
-                priorCounts = if ($startupRebuilt) { $null } else { $priorCounts }
-                priorAuthorityEvidence = if ($startupRebuilt) { $null } else { $priorAuthorityEvidence }
-                rebuiltIndexVersion = if ($startupRebuilt) { $priorVersion } else { $null }
-                rebuiltCounts = if ($startupRebuilt) { $priorCounts } else { $null }
-                rebuiltAuthorityEvidence = if ($startupRebuilt) { $priorAuthorityEvidence } else { $null }
-            }
-        }
-    }
-
-    Write-Host "[SETUP] Reused $Label index evidence differs from the pinned fresh-index baseline; rebuilding through refresh_index force='full'."
-    $null = Invoke-McpTool $Client "refresh_index" @{ force = "full" } 120000
-    $stableReadyObservations = 0
-    $capabilities = $null
-    for ($attempt = 0; $attempt -lt 600; $attempt++) {
-        $capabilities = Invoke-McpTool $Client "server_capabilities" ([hashtable]::new())
-        if ($capabilities.index.state -eq "ready" -and
-            $capabilities.index.mode -eq "writer" -and
-            [string]$capabilities.index.indexVersion -ne $priorVersion) {
-            $stableReadyObservations++
-            if ($stableReadyObservations -ge 2) { break }
-        } else {
-            $stableReadyObservations = 0
-        }
-        if ($attempt -gt 0 -and $attempt % 30 -eq 0) {
-            Write-Host "[WAIT] $Label full rebuild is still publishing ($attempt seconds elapsed)."
-        }
-        Start-Sleep -Seconds 1
-    }
-    Assert-Equal 2 $stableReadyObservations "$Label full rebuild did not publish a stable fresh index"
-    $rebuilt = Invoke-McpTool $Client "repo_overview" ([hashtable]::new())
-    $rebuiltCounts = & $GetCounts $rebuilt
-    $rebuiltAuthorityEvidence = if ($null -ne $GetAuthorityEvidence) {
-        & $GetAuthorityEvidence $Client
-    } else { $null }
-    Assert-True (& $CountsMatch $rebuilt) `
-        "$Label full rebuild still disagrees with the pinned overview-count baseline"
-    Assert-True ($null -eq $AuthorityEvidenceMatches -or
-        (& $AuthorityEvidenceMatches $rebuiltAuthorityEvidence)) `
-        "$Label full rebuild still disagrees with the pinned authority-evidence baseline"
-    Write-Host "[SETUP] $Label baseline will be judged against repaired index $([string]$rebuilt.meta.indexVersion)."
-    return [pscustomobject]@{
-        Overview = $rebuilt
-        Evidence = [ordered]@{
-            outcome = if ($startupRebuilt) { "startup_and_count_repair" } else { "count_repair" }
-            repaired = $true
-            startupRebuilt = $startupRebuilt
-            startupBuildReason = $startupBuildReason
-            startupPriorSchema = [string]$StartupEvidence.startupPriorSchema
-            priorIndexVersion = $priorVersion
-            priorCounts = $priorCounts
-            priorAuthorityEvidence = $priorAuthorityEvidence
-            rebuiltIndexVersion = [string]$rebuilt.meta.indexVersion
-            rebuiltCounts = $rebuiltCounts
-            rebuiltAuthorityEvidence = $rebuiltAuthorityEvidence
-        }
-    }
-}
-
-function Repair-ReusedRoslynIndexIfCountsDrift($Client, $Overview, $StartupEvidence) {
-    return Repair-ReusedIndexIfBaselineDrifts $Client $Overview "Roslyn" $StartupEvidence `
-        { param($candidate) Test-RoslynBaselineCounts $candidate } `
-        { param($candidate) Get-RoslynOverviewCounts $candidate } `
-        { param($probeClient) Get-RoslynReferenceAuthorityEvidence $probeClient } `
-        { param($candidate) Test-RoslynReferenceAuthorityEvidence $candidate }
-}
-
-function Repair-ReusedFSharpIndexIfCountsDrift($Client, $Overview, $StartupEvidence) {
-    return Repair-ReusedIndexIfBaselineDrifts $Client $Overview "FSharp" $StartupEvidence `
-        { param($candidate) Test-FSharpBaselineCounts $candidate } `
-        { param($candidate) Get-FSharpOverviewCounts $candidate }
-}
-if ($fsharpIndexWasMissing) {
-    Write-Host "[SETUP] FSharp reusable index is missing; MCP startup will build it at $FSharpIndexDb"
-}
-
 $evidence = [ordered]@{
     baseline = $baseline.name
     phoenixBuild = $null
     roslynHead = $roslynHead
     workspace = $Workspace
     indexDb = $IndexDb
-    roslynIndexBootstrapped = $roslynIndexWasMissing
-    roslynIndexStartup = $null
-    roslynIndexRepair = $null
+    freshIndexRun = if ($null -ne $freshRun) {
+        [ordered]@{
+            runId = [string]$freshRun.RunId
+            root = [string]$freshRun.Root
+            leasePath = [string]$freshRun.LeasePath
+        }
+    } else { $null }
+    roslynFreshIndex = $null
     roslynCountsProvenance = [ordered]@{
         id = [string]$baseline.countsProvenance
         detail = [string]$baseline.countsProvenanceDetail
@@ -982,9 +1053,7 @@ $evidence = [ordered]@{
     fsharpHead = $fsharpHead
     fsharpWorkspace = $FSharpWorkspace
     fsharpIndexDb = $FSharpIndexDb
-    fsharpIndexBootstrapped = $fsharpIndexWasMissing
-    fsharpIndexStartup = $null
-    fsharpIndexRepair = $null
+    fsharpFreshIndex = $null
     startedAtUtc = [DateTime]::UtcNow.ToString("O")
     results = [ordered]@{}
 }
@@ -1006,47 +1075,16 @@ function Test-IntegrationCase([string]$Name, [scriptblock]$Body) {
 $writer = $null
 $secondClient = $null
 $fsharpWriter = $null
-$roslynStartup = Initialize-ReusableIndex "writer" $Workspace $IndexDb
-$evidence.roslynIndexStartup = $roslynStartup
-Assert-True (Test-Path -LiteralPath $IndexDb -PathType Leaf) "Roslyn index bootstrap did not produce a reusable index: $IndexDb"
-$fsharpStartup = Initialize-ReusableIndex "fsharp-writer" $FSharpWorkspace $FSharpIndexDb
-$evidence.fsharpIndexStartup = $fsharpStartup
-Assert-True (Test-Path -LiteralPath $FSharpIndexDb -PathType Leaf) "FSharp index bootstrap did not produce a reusable index: $FSharpIndexDb"
 try {
     $writer = Start-McpClient "writer" $Workspace $IndexDb
     $writerSession = Initialize-McpClient $writer "writer"
     $writerCapabilities = $writerSession.Capabilities
     $overview = Invoke-McpTool $writer "repo_overview" ([hashtable]::new())
-    if (-not $roslynIndexWasMissing) {
-        $roslynRepair = Repair-ReusedRoslynIndexIfCountsDrift $writer $overview $roslynStartup
-        $overview = $roslynRepair.Overview
-        $evidence.roslynIndexRepair = $roslynRepair.Evidence
-        $judgedIndexVersion = [string]$overview.meta.indexVersion
-
-        # The authority drift canary is intentionally semantic, so it warms compiler state in
-        # this daemon. Retire that probe daemon and start the actual gate on the same judged index
-        # so the later cold/warm telemetry contract remains a real cold/warm comparison.
-        Stop-McpClient $writer
-        Request-McpDaemonRetirement $writer
-        $writer = $null
-        $writer = Start-McpClient "writer" $Workspace $IndexDb
-        $writerSession = Initialize-McpClient $writer "writer"
-        $writerCapabilities = $writerSession.Capabilities
-        $overview = Invoke-McpTool $writer "repo_overview" ([hashtable]::new())
-        Assert-Equal $judgedIndexVersion ([string]$overview.meta.indexVersion) `
-            "Roslyn authority-probe restart crossed index epochs"
-    } else {
-        $evidence.roslynIndexRepair = [ordered]@{
-            outcome = "bootstrapped"
-            repaired = $false
-            startupRebuilt = $false
-            startupBuildReason = [string]$roslynStartup.startupBuildReason
-            startupPriorSchema = [string]$roslynStartup.startupPriorSchema
-            priorIndexVersion = $null
-            priorCounts = $null
-            rebuiltIndexVersion = [string]$overview.meta.indexVersion
-            rebuiltCounts = Get-RoslynOverviewCounts $overview
-        }
+    $evidence.roslynFreshIndex = [ordered]@{
+        outcome = "fresh"
+        startupBuildReason = [string]$writerCapabilities.index.startupBuildReason
+        indexVersion = [string]$overview.meta.indexVersion
+        counts = Get-RoslynOverviewCounts $overview
     }
     $evidence.phoenixBuild = [ordered]@{
         serverInfo = $writerSession.Initialize.serverInfo
@@ -1054,14 +1092,16 @@ try {
     }
     $evidence.results.writerCapabilities = $writerCapabilities
 
-    Test-IntegrationCase "Roslyn reusable index startup and reuse are honest" {
-        Assert-True (-not [bool]$evidence.roslynIndexRepair.repaired) `
-            "The existing Roslyn index was rebuilt during startup or required a count repair. Inspect startupBuildReason, startupPriorSchema, IndexBuilder.SchemaVersion, and stored-output provenance; this gate run remains failed, and only a later ordinary reuse of the repaired matching fixture may pass."
-        Assert-True ([string]$evidence.roslynIndexRepair.outcome -in @("reused", "bootstrapped")) `
-            "Roslyn index startup outcome was neither ordinary reuse nor an explicit first bootstrap."
+    Test-IntegrationCase "Roslyn pinned checkout builds a fresh index" {
+        Assert-True (Test-Path -LiteralPath $IndexDb -PathType Leaf) `
+            "Roslyn fresh index was not created: $IndexDb"
+        Assert-Equal "fresh" ([string]$evidence.roslynFreshIndex.outcome) `
+            "Roslyn integration index was not fresh"
+        Assert-Equal "startup_missing" ([string]$evidence.roslynFreshIndex.startupBuildReason) `
+            "Roslyn server did not report a database-absent startup build"
     }
 
-    Test-IntegrationCase "current server uses the frozen external index" {
+    Test-IntegrationCase "current server uses the fresh pinned Roslyn index" {
         Assert-True (-not [string]::IsNullOrWhiteSpace([string]$writerSession.Initialize.serverInfo.version)) "MCP omitted its runtime version"
         Assert-True (@($writerSession.Tools.tools).Count -gt 0) "MCP advertised no tools"
         Assert-Equal ([string]$baseline.roslynCommit) ([string]$overview.git.indexedCommit) "Indexed commit changed"
@@ -1077,7 +1117,7 @@ try {
         Assert-Equal ([int]$expectedCounts.orphanedFiles) ([int]$overview.orphanedFiles) "Orphaned-file count changed"
         Assert-Equal ([int]$expectedCounts.fsFiles) ([int]$overview.fsFiles) "F# file count changed"
         Assert-Equal ([int]$expectedCounts.fsProjects) ([int]$overview.projects.fsharp) "F# project count changed"
-        Assert-True ([bool]$overview.git.headMatchesIndex) "Roslyn HEAD no longer matches the reusable index"
+        Assert-True ([bool]$overview.git.headMatchesIndex) "Roslyn HEAD no longer matches the fresh integration index"
     }
 
     $fileResult = Invoke-McpTool $writer "find_file" @{ nameOrGlob = "ICompilationFactoryService.cs"; limit = 10 }
@@ -1262,16 +1302,12 @@ try {
     $implementationNames = @($implementations.implementations | ForEach-Object { Get-TypeResultName $_ })
     Test-IntegrationCase "compiler implementations" {
         Assert-True ($null -eq $implementations.error) "implementations returned $($implementations.error): $($implementations.reason)"
-        Assert-Equal ([string]$baseline.target.documentationCommentId) `
-            ([string]$implementations.symbol.documentationCommentId) "implementations resolved a different compiler symbol"
-        Assert-Equal "exact" ([string]$implementations.symbolConfidence) "implementations lost exact target identity"
-        Assert-Equal ([string]$baseline.target.implementationsConfidence) `
-            ([string]$implementations.implementationsConfidence) "implementations fallback confidence changed"
-        Assert-Equal ([string]$baseline.target.implementationsConfidence) `
-            ([string]$implementations.meta.confidence) "implementations envelope confidence changed"
-        Assert-Equal "syntax" ([string]$implementations.meta.navigationLayer) "implementations fallback lost syntax provenance"
-        Assert-Equal ([string]$baseline.target.implementationsPartialReason) `
-            ([string]$implementations.partialReason) "implementations fallback reason changed"
+        Assert-FriendRelationshipAuthority $implementations "implementations" `
+            -ExpectedUnprovenProjects @($baseline.target.implementationsUnprovenFriendAssemblyProjects)
+        # A fresh index resolves both implementers through Roslyn. The heuristic-only split fields
+        # must stay absent; their presence would mean this canary fell back to indexed base lists.
+        Assert-True ($null -eq $implementations.PSObject.Properties["symbolConfidence"]) "implementations unexpectedly used mixed fallback identity"
+        Assert-True ($null -eq $implementations.PSObject.Properties["implementationsConfidence"]) "implementations unexpectedly used heuristic fallback results"
         foreach ($expected in @($baseline.target.expectedImplementations)) {
             Assert-Contains $implementationNames ([string]$expected.name) "Expected implementation is absent"
         }
@@ -1282,21 +1318,9 @@ try {
     $derivedNames = @($hierarchy.derivedOrImplementing | ForEach-Object { Get-TypeResultName $_ })
     Test-IntegrationCase "compiler type hierarchy" {
         Assert-True ($null -eq $hierarchy.error) "type_hierarchy returned $($hierarchy.error): $($hierarchy.reason)"
-        Assert-Equal ([string]$baseline.target.documentationCommentId) `
-            ([string]$hierarchy.symbol.documentationCommentId) "type_hierarchy resolved a different compiler symbol"
-        Assert-Equal ([string]$baseline.target.typeHierarchyConfidence) `
-            ([string]$hierarchy.meta.confidence) "type_hierarchy envelope confidence changed"
-        Assert-Equal "semantic" ([string]$hierarchy.meta.navigationLayer) "type_hierarchy lost semantic upper-relation provenance"
-        Assert-Equal ([string]$baseline.target.typeHierarchyDerivedConfidence) `
-            ([string]$hierarchy.derivedConfidence) "type_hierarchy derived confidence changed"
-        Assert-Equal ([string]$baseline.target.typeHierarchyPartialReason) `
-            ([string]$hierarchy.partialReason) "type_hierarchy derived fallback reason changed"
-        $expectedHierarchyUnproven = @($baseline.target.typeHierarchyUnprovenFriendAssemblyProjects |
-            ForEach-Object { [string]$_ } | Sort-Object)
-        $actualHierarchyUnproven = @($hierarchy.coverage.unprovenFriendAssemblyProjects |
-            ForEach-Object { [string]$_ } | Sort-Object)
-        Assert-Equal ($expectedHierarchyUnproven -join "|") ($actualHierarchyUnproven -join "|") `
-            "type_hierarchy unproven friend-assembly coverage changed"
+        Assert-FriendRelationshipAuthority $hierarchy "type_hierarchy" `
+            -ExpectedUnprovenProjects @($baseline.target.typeHierarchyUnprovenFriendAssemblyProjects)
+        Assert-True ($null -eq $hierarchy.PSObject.Properties["derivedConfidence"]) "type_hierarchy unexpectedly used heuristic derived results"
         foreach ($expected in @($baseline.target.expectedImplementations)) {
             Assert-Contains $derivedNames ([string]$expected.name) "Expected hierarchy descendant is absent"
         }
@@ -1496,42 +1520,29 @@ try {
     $fsharpSession = Initialize-McpClient $fsharpWriter "writer"
     $fsharpCapabilities = $fsharpSession.Capabilities
     $fsharpOverview = Invoke-McpTool $fsharpWriter "repo_overview" ([hashtable]::new())
-    if (-not $fsharpIndexWasMissing) {
-        $fsharpRepair = Repair-ReusedFSharpIndexIfCountsDrift $fsharpWriter $fsharpOverview $fsharpStartup
-        $fsharpOverview = $fsharpRepair.Overview
-        $evidence.fsharpIndexRepair = $fsharpRepair.Evidence
-        if ([bool]$fsharpRepair.Evidence.repaired) {
-            $fsharpCapabilities = Invoke-McpTool $fsharpWriter "server_capabilities" `
-                ([hashtable]::new())
-        }
-    } else {
-        $evidence.fsharpIndexRepair = [ordered]@{
-            outcome = "bootstrapped"
-            repaired = $false
-            startupRebuilt = $false
-            startupBuildReason = [string]$fsharpStartup.startupBuildReason
-            startupPriorSchema = [string]$fsharpStartup.startupPriorSchema
-            priorIndexVersion = $null
-            priorCounts = $null
-            rebuiltIndexVersion = [string]$fsharpOverview.meta.indexVersion
-            rebuiltCounts = Get-FSharpOverviewCounts $fsharpOverview
-        }
+    $evidence.fsharpFreshIndex = [ordered]@{
+        outcome = "fresh"
+        startupBuildReason = [string]$fsharpCapabilities.index.startupBuildReason
+        indexVersion = [string]$fsharpOverview.meta.indexVersion
+        counts = Get-FSharpOverviewCounts $fsharpOverview
     }
     $evidence.results.fsharpCapabilities = $fsharpCapabilities
     $evidence.results.fsharpOverview = $fsharpOverview
 
-    Test-IntegrationCase "FSharp reusable index startup and reuse are honest" {
-        Assert-True (-not [bool]$evidence.fsharpIndexRepair.repaired) `
-            "The existing FSharp index was rebuilt during startup or required a count repair. Inspect startupBuildReason, startupPriorSchema, IndexBuilder.SchemaVersion, and stored-output provenance; this gate run remains failed, and only a later ordinary reuse of the repaired matching fixture may pass."
-        Assert-True ([string]$evidence.fsharpIndexRepair.outcome -in @("reused", "bootstrapped")) `
-            "FSharp index startup outcome was neither ordinary reuse nor an explicit first bootstrap."
+    Test-IntegrationCase "FSharp pinned checkout builds a fresh index" {
+        Assert-True (Test-Path -LiteralPath $FSharpIndexDb -PathType Leaf) `
+            "FSharp fresh index was not created: $FSharpIndexDb"
+        Assert-Equal "fresh" ([string]$evidence.fsharpFreshIndex.outcome) `
+            "FSharp integration index was not fresh"
+        Assert-Equal "startup_missing" ([string]$evidence.fsharpFreshIndex.startupBuildReason) `
+            "FSharp server did not report a database-absent startup build"
     }
 
-    Test-IntegrationCase "current server uses the frozen official FSharp index" {
+    Test-IntegrationCase "current server uses the fresh pinned FSharp index" {
         Assert-True (-not [string]::IsNullOrWhiteSpace([string]$fsharpSession.Initialize.serverInfo.version)) "FSharp MCP omitted its runtime version"
         Assert-True (@($fsharpSession.Tools.tools).Count -gt 0) "FSharp MCP advertised no tools"
         Assert-Equal ([string]$fsharpBaseline.fsharpCommit) ([string]$fsharpOverview.git.indexedCommit) "FSharp indexed commit changed"
-        Assert-True ([bool]$fsharpOverview.git.headMatchesIndex) "FSharp HEAD no longer matches the reusable index"
+        Assert-True ([bool]$fsharpOverview.git.headMatchesIndex) "FSharp HEAD no longer matches the fresh integration index"
         Assert-Equal ([string]$fsharpOverview.meta.indexVersion) ([string]$fsharpCapabilities.index.indexVersion) "FSharp capabilities evidence is stale for the judged index epoch"
     }
 
@@ -1664,6 +1675,19 @@ try {
     try { Stop-McpClient $writer } catch { $stopErrors.Add($_.Exception.Message) }
     foreach ($client in @($fsharpWriter, $secondClient, $writer)) {
         try { Request-McpDaemonRetirement $client } catch { $stopErrors.Add($_.Exception.Message) }
+    }
+    if ($null -ne $freshIndexRoot -and
+        (Test-Path -LiteralPath $freshIndexRoot -PathType Container)) {
+        try {
+            Remove-FreshIndexRun $repoRoot $freshIndexRoot @($defaultDatabasePaths)
+        } catch {
+            $stopErrors.Add("fresh integration index cleanup failed: $($_.Exception.Message)")
+        }
+    }
+    if ($null -ne $freshRunLease) {
+        try { $freshRunLease.Dispose() } catch {
+            $stopErrors.Add("fresh integration lease release failed: $($_.Exception.Message)")
+        }
     }
     foreach ($stopError in $stopErrors) { $failures.Add("teardown: $stopError") }
 

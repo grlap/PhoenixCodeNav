@@ -826,8 +826,21 @@ public sealed class Batch44GitSubtreeTests
                     "public class RewrittenReviewEpoch44 { }\n"),
             };
 
-            string json = tools.ReviewPack(baseRef: head, maxBytes: 24576);
-            JsonElement response = Parse(json);
+            (string json, JsonElement response) = SemanticRetry.Until(
+                () =>
+                {
+                    // A saturated parallel suite can transiently fail the final Git safety
+                    // preflight after the hook has already rewritten this file. Restore the
+                    // starting epoch before every shared retry so each attempt still proves the
+                    // same original-bytes -> rewritten-bytes transition.
+                    File.WriteAllText(untracked, movedContent);
+                    string candidateJson = tools.ReviewPack(baseRef: head, maxBytes: 24576);
+                    return (Json: candidateJson, Response: Parse(candidateJson));
+                },
+                candidate => candidate.Response.TryGetProperty("error", out JsonElement error) &&
+                             error.GetString() == "git_worktree_changed",
+                candidate => candidate.Json,
+                "review_pack reports git_worktree_changed after final-epoch rewrite");
             Assert.Equal("git_worktree_changed", response.GetProperty("error").GetString());
             Assert.False(response.TryGetProperty("changedFiles", out _), json);
         }

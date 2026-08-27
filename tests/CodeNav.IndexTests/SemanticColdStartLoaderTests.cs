@@ -422,8 +422,11 @@ public class SemanticColdStartLoaderTests : IDisposable
             using var semantic = new SemanticService(manager);
 
             int column = consumerSource.IndexOf("ITarget", StringComparison.Ordinal) + 1;
-            var (definition, reason, _, _) = await semantic.DefinitionAsync(
-                "Consumer/Consumer.cs", 1, column, "ITarget", 30_000);
+            var result = await SemanticRetry.UntilAsync(
+                () => semantic.DefinitionAsync(
+                    "Consumer/Consumer.cs", 1, column, "ITarget", 30_000),
+                candidate => !SemanticRetry.IsDocumentedTransient(candidate.FailReason));
+            var (definition, reason, _, _) = result;
 
             Assert.Null(reason);
             Assert.NotNull(definition);

@@ -74,12 +74,12 @@ The loop, in order — no step skipped or reordered:
    decisive behavior and assertions, not merely prove that the code does not throw.
 3. `dotnet build` at **0 warnings**; `dotnet test` green;
    `pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1` green against the pinned Roslyn/F#
-   submodules; and `node ./website/verify.mjs` green. The MCP harness bootstraps missing reusable
-   indexes through normal MCP startup and reuses existing indexes. A reused baseline mismatch
-   (overview counts plus the Roslyn reference-authority canary) gets one in-band
-   full rebuild to capture before/after evidence, but that gate run still fails; only a later
-   run against the repaired matching fixture may pass. A fresh mismatch, missing external prerequisite, or integration failure
-   block check-in. Known solution-test flake:
+   submodules; and `node ./website/verify.mjs` green. The MCP harness first requires each external
+   checkout to match its pinned commit, then builds new isolated Roslyn and F# indexes through
+   normal MCP startup and runs every assertion against those fresh indexes. It never updates a
+   submodule, repairs an old index, or learns a new baseline automatically. A mismatched checkout,
+   pre-existing explicit index path, baseline mismatch, missing prerequisite, or integration failure
+   blocks check-in. Known solution-test flake:
    `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` (watcher timing) — if it fires
    in a full run, verify it passes isolated and note it.
    The complete suite requires directory-link support: NTFS junction creation on Windows

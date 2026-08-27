@@ -138,13 +138,12 @@ documentation-only, test-only, and apparently trivial changes still follow the f
 3. Run a Release build with literal zero warnings, the complete test suite green, and the
    external Roslyn/F# MCP integration gate with
    `pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1`, then run
-   `node ./website/verify.mjs`. Both external contract gates must pass. The MCP harness runs
-   against the pinned submodules, bootstraps missing reusable indexes through normal MCP startup,
-   and reuses existing indexes. A reused baseline mismatch (overview counts plus the Roslyn
-   reference-authority canary) gets one in-band full rebuild
-   to capture before/after evidence, but that gate run still fails; only a later run against the
-   repaired matching fixture may pass. A fresh mismatch, missing prerequisite, or any harness failure blocks
-   check-in. The documented
+   `node ./website/verify.mjs`. Both external contract gates must pass. The MCP harness first
+   requires each external checkout to match its pinned commit, then builds new isolated Roslyn and
+   F# indexes through normal MCP startup and runs every assertion against those fresh indexes. It
+   never updates a submodule, repairs an old index, or learns a new baseline automatically. A
+   mismatched checkout, pre-existing explicit index path, baseline mismatch, missing prerequisite,
+   or any harness failure blocks check-in. The documented
    `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` timing flake may be noted only
    when it is the sole solution-test failure and passes in isolation.
    The complete suite requires directory-link support: NTFS junction creation on Windows
