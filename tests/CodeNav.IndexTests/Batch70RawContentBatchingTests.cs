@@ -291,6 +291,7 @@ public sealed class Batch70RawContentBatchingTests
             }
 
             int saturated = 0;
+            bool producerUsedDedicatedThread = false;
             using var saturationObserved = new ManualResetEventSlim(false);
             var hooks = new BuildCaptureTestHooks(
                 (workspaceRoot, gitPath, maxBytes) =>
@@ -304,7 +305,9 @@ public sealed class Batch70RawContentBatchingTests
                 },
                 BeforeCSharpQueueConsume: () => Assert.True(
                     saturationObserved.Wait(TimeSpan.FromSeconds(10)),
-                    "The capacity-1 producer queue never exercised bounded backpressure."));
+                    "The capacity-1 producer queue never exercised bounded backpressure."),
+                CSharpProducerStarted: () => producerUsedDedicatedThread =
+                    !Thread.CurrentThread.IsThreadPoolThread);
 
             BuildResult result = IndexBuilder.BuildWithSourceBatchSizeForTest(
                 root, sourceCount, buildCaptureTestHooks: hooks);
@@ -312,6 +315,8 @@ public sealed class Batch70RawContentBatchingTests
             Assert.Equal(sourceCount, result.CsFiles);
             Assert.True(Volatile.Read(ref saturated) > 0,
                 "The capacity-1 producer queue reported no saturation event.");
+            Assert.True(producerUsedDedicatedThread,
+                "The synchronous cold-build producer consumed a shared ThreadPool worker.");
             using var queries = new IndexQueries(IndexBuilder.DefaultDbPath(root));
             Assert.Single(queries.SearchSymbols("Queue256", "exact", null, 2));
             Assert.Single(queries.SearchText("queue256", 2));

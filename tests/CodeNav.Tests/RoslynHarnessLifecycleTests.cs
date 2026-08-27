@@ -102,15 +102,19 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
         Assert.Equal("external/roslyn",
             fixture.GetProperty("defaultWorkspace").GetString());
         Assert.Equal(
-            "fresh_normal_mcp_startup_friend_assembly_authority_correction_with_exact_public_method_canary",
+            "repeated_full_rebuild_friend_assembly_consumer_scan_authority_with_exact_public_method_canary",
             fixture.GetProperty("countsProvenance").GetString());
-        Assert.Contains("prior 10-reference/1-project exact result incorrectly treated",
+        Assert.Contains("Repeated ordinary startup and in-band full rebuild probes",
             fixture.GetProperty("countsProvenanceDetail").GetString());
-        Assert.Contains("47 references across 7 projects",
+        Assert.Contains("10 compiler-bound ICompilationFactoryService references",
+            fixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("49 indexed textual candidates are discovery inputs",
             fixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Contains("GetOpenDocumentIds",
             fixture.GetProperty("countsProvenanceDetail").GetString());
-        Assert.Contains("Microsoft.CodeAnalysis.CSharp.EditorFeatures.UnitTests",
+        Assert.Contains("external candidates cannot bind and emit no result group",
+            fixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("implementations retains exact symbol identity with heuristic indexed base-list hits",
             fixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Contains("six unproven friend-assembly projects",
             fixture.GetProperty("countsProvenanceDetail").GetString());
@@ -118,15 +122,15 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
             fsharpFixture.GetProperty("defaultWorkspace").GetString());
         Assert.Equal("src/FSharp.Core/option.fs",
             fsharpFixture.GetProperty("target").GetProperty("sourcePath").GetString());
-        Assert.Equal(116170,
+        Assert.Equal(116168,
             fsharpFixture.GetProperty("counts").GetProperty("symbols").GetInt32());
-        Assert.Equal(4140,
+        Assert.Equal(4174,
             fsharpFixture.GetProperty("counts").GetProperty("orphanedFiles").GetInt32());
-        Assert.Equal("schema_29_rebuild_after_fsharp_stored_output_drift_with_reused_index_parity",
+        Assert.Equal("schema_29_repeated_full_and_scratch_cold_build_with_reused_index_parity",
             fsharpFixture.GetProperty("countsProvenance").GetString());
-        Assert.Contains("schema-28 fixture still reported the older stored output",
+        Assert.Contains("in-band full refresh and an independent scratch cold build",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
-        Assert.Contains("schema 29 conservatively repairs that historical missed stored-output rebuild boundary",
+        Assert.Contains("previously checked-in 116170/4140 claim was not reproducible",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Contains("cold-build/delta parity canary guards recurrence",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
@@ -140,13 +144,21 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
             fixture.GetProperty("target").GetProperty("documentationCommentId").GetString());
         Assert.Equal(6, fixture.GetProperty("target")
             .GetProperty("referencesUnprovenFriendAssemblyProjects").GetArrayLength());
-        Assert.Equal(6, fixture.GetProperty("target")
-            .GetProperty("implementationsUnprovenFriendAssemblyProjects").GetArrayLength());
+        Assert.Equal("heuristic", fixture.GetProperty("target")
+            .GetProperty("implementationsConfidence").GetString());
+        Assert.Equal("no_semantic_implementers", fixture.GetProperty("target")
+            .GetProperty("implementationsPartialReason").GetString());
+        Assert.Equal("exact", fixture.GetProperty("target")
+            .GetProperty("typeHierarchyConfidence").GetString());
+        Assert.Equal("heuristic", fixture.GetProperty("target")
+            .GetProperty("typeHierarchyDerivedConfidence").GetString());
+        Assert.Equal("no_semantic_derived", fixture.GetProperty("target")
+            .GetProperty("typeHierarchyPartialReason").GetString());
         Assert.Equal(6, fixture.GetProperty("target")
             .GetProperty("typeHierarchyUnprovenFriendAssemblyProjects").GetArrayLength());
-        Assert.Equal(47,
+        Assert.Equal(10,
             fixture.GetProperty("target").GetProperty("referenceCount").GetInt32());
-        Assert.Equal(7,
+        Assert.Equal(1,
             fixture.GetProperty("target").GetProperty("referenceProjects").GetInt32());
         Assert.Contains("function Invoke-ReferencesWithTelemetry", script,
             StringComparison.Ordinal);
@@ -184,11 +196,7 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
         Assert.Contains("roslynCountsProvenance = [ordered]@{", script,
             StringComparison.Ordinal);
         Assert.Contains(
-            "-ExpectedUnprovenProjects @($baseline.target.implementationsUnprovenFriendAssemblyProjects)",
-            script,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "-ExpectedUnprovenProjects @($baseline.target.typeHierarchyUnprovenFriendAssemblyProjects)",
+            "$baseline.target.typeHierarchyUnprovenFriendAssemblyProjects |",
             script,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -283,13 +291,9 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
             "$Label full rebuild is still publishing",
             script,
             StringComparison.Ordinal);
-        Assert.Contains(
-            "$implementations.PSObject.Properties[\"implementationsConfidence\"]",
-            script,
+        Assert.Contains("$implementations.implementationsConfidence", script,
             StringComparison.Ordinal);
-        Assert.Contains(
-            "$hierarchy.PSObject.Properties[\"derivedConfidence\"]",
-            script,
+        Assert.Contains("$hierarchy.derivedConfidence", script,
             StringComparison.Ordinal);
         Assert.Contains("path = external/roslyn", submodules, StringComparison.Ordinal);
         Assert.Contains(
@@ -393,6 +397,8 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
             StringComparison.Ordinal);
         Assert.Contains("StderrTask = $process.StandardError.ReadToEndAsync()",
             lifecycleBlock, StringComparison.Ordinal);
+        Assert.Contains("$Client.Process.WaitForExit()", lifecycleBlock,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("Add-Type -TypeDefinition", lifecycleBlock,
             StringComparison.Ordinal);
         Assert.DoesNotContain("Get-Content -Raw -LiteralPath $BaselinePath",

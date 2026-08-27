@@ -929,7 +929,10 @@ public sealed class IndexManager : IDisposable
             // never release the lease between its acquisition and publication of the workers.
             _pump = Task.Run(PumpRefreshesAsync);
 
-            _startTask = Task.Run(() =>
+            // Startup can synchronously scan, parse, and publish a complete repository. Give that
+            // lifecycle-owned work its own thread so MCP dispatch and progress inspection do not
+            // depend on ThreadPool hill-climbing while every parser lane is busy.
+            _startTask = Task.Factory.StartNew(() =>
             {
                 bool restoreReadyClaimOnFailure = false;
                 bool stagedPublicationInstalled = false;
@@ -1231,7 +1234,8 @@ public sealed class IndexManager : IDisposable
                     }
                     _startupComplete.TrySetResult(true);
                 }
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
         }
     }
 
@@ -1789,7 +1793,12 @@ public sealed class IndexManager : IDisposable
             RefreshRequestPassedStartupBarrierForTest?.Invoke();
             if (req.FullRebuild)
             {
-                FullRebuildInPump();
+                // The channel continuation may run on the shared ThreadPool. Never execute the
+                // synchronous repository build on that continuation: the builder's unrestricted
+                // parser fan-out must coexist with lightweight MCP status requests.
+                await Task.Factory.StartNew(FullRebuildInPump, CancellationToken.None,
+                        TaskCreationOptions.LongRunning, TaskScheduler.Default)
+                    .ConfigureAwait(false);
                 FullRebuildCompletedForTest?.Invoke();
                 continue;
             }

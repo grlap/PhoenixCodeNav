@@ -59,7 +59,8 @@ public sealed partial class SemanticService
             }
 
             clusterLoadInProgress = true;
-            var (scanLease, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
+            var (scanLease, symbol, coverage, skipped, _, _) =
+                await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, statsBox: scanBox).ConfigureAwait(false);
             deferredRetentionPending = false;
@@ -306,7 +307,8 @@ public sealed partial class SemanticService
             planning.SeedProjects = implementerSeeds.Count;
 
             clusterLoadInProgress = true;
-            var (scanLease, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
+            var (scanLease, symbol, coverage, skipped, _, _) =
+                await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
                 statsBox: scanBox, planStatsBox: planning.ScanSet).ConfigureAwait(false);

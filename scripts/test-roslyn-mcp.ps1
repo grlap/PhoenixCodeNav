@@ -88,6 +88,11 @@ function Stop-McpClient($Client) {
         if (-not $Client.Process.WaitForExit(5000)) {
             throw "$($Client.Label): process tree did not exit after bounded termination"
         }
+        # The timed overload proves the process exited but does not complete .NET's redirected-
+        # stream bookkeeping. The parameterless follow-up is the documented drain barrier; without
+        # it a completed process can leave ReadToEndAsync queued long enough to look like a teardown
+        # failure while the machine is busy finishing an index build.
+        $Client.Process.WaitForExit()
         $exitConfirmed = $true
         if (-not $Client.StderrTask.Wait(3000)) {
             throw "$($Client.Label): stderr drain did not complete after process exit"
@@ -1257,12 +1262,16 @@ try {
     $implementationNames = @($implementations.implementations | ForEach-Object { Get-TypeResultName $_ })
     Test-IntegrationCase "compiler implementations" {
         Assert-True ($null -eq $implementations.error) "implementations returned $($implementations.error): $($implementations.reason)"
-        Assert-FriendRelationshipAuthority $implementations "implementations" `
-            -ExpectedUnprovenProjects @($baseline.target.implementationsUnprovenFriendAssemblyProjects)
-        # A fresh index resolves both implementers through Roslyn. The heuristic-only split fields
-        # must stay absent; their presence would mean this canary fell back to indexed base lists.
-        Assert-True ($null -eq $implementations.PSObject.Properties["symbolConfidence"]) "implementations unexpectedly used mixed fallback identity"
-        Assert-True ($null -eq $implementations.PSObject.Properties["implementationsConfidence"]) "implementations unexpectedly used heuristic fallback results"
+        Assert-Equal ([string]$baseline.target.documentationCommentId) `
+            ([string]$implementations.symbol.documentationCommentId) "implementations resolved a different compiler symbol"
+        Assert-Equal "exact" ([string]$implementations.symbolConfidence) "implementations lost exact target identity"
+        Assert-Equal ([string]$baseline.target.implementationsConfidence) `
+            ([string]$implementations.implementationsConfidence) "implementations fallback confidence changed"
+        Assert-Equal ([string]$baseline.target.implementationsConfidence) `
+            ([string]$implementations.meta.confidence) "implementations envelope confidence changed"
+        Assert-Equal "syntax" ([string]$implementations.meta.navigationLayer) "implementations fallback lost syntax provenance"
+        Assert-Equal ([string]$baseline.target.implementationsPartialReason) `
+            ([string]$implementations.partialReason) "implementations fallback reason changed"
         foreach ($expected in @($baseline.target.expectedImplementations)) {
             Assert-Contains $implementationNames ([string]$expected.name) "Expected implementation is absent"
         }
@@ -1273,9 +1282,21 @@ try {
     $derivedNames = @($hierarchy.derivedOrImplementing | ForEach-Object { Get-TypeResultName $_ })
     Test-IntegrationCase "compiler type hierarchy" {
         Assert-True ($null -eq $hierarchy.error) "type_hierarchy returned $($hierarchy.error): $($hierarchy.reason)"
-        Assert-FriendRelationshipAuthority $hierarchy "type_hierarchy" `
-            -ExpectedUnprovenProjects @($baseline.target.typeHierarchyUnprovenFriendAssemblyProjects)
-        Assert-True ($null -eq $hierarchy.PSObject.Properties["derivedConfidence"]) "type_hierarchy unexpectedly used heuristic derived results"
+        Assert-Equal ([string]$baseline.target.documentationCommentId) `
+            ([string]$hierarchy.symbol.documentationCommentId) "type_hierarchy resolved a different compiler symbol"
+        Assert-Equal ([string]$baseline.target.typeHierarchyConfidence) `
+            ([string]$hierarchy.meta.confidence) "type_hierarchy envelope confidence changed"
+        Assert-Equal "semantic" ([string]$hierarchy.meta.navigationLayer) "type_hierarchy lost semantic upper-relation provenance"
+        Assert-Equal ([string]$baseline.target.typeHierarchyDerivedConfidence) `
+            ([string]$hierarchy.derivedConfidence) "type_hierarchy derived confidence changed"
+        Assert-Equal ([string]$baseline.target.typeHierarchyPartialReason) `
+            ([string]$hierarchy.partialReason) "type_hierarchy derived fallback reason changed"
+        $expectedHierarchyUnproven = @($baseline.target.typeHierarchyUnprovenFriendAssemblyProjects |
+            ForEach-Object { [string]$_ } | Sort-Object)
+        $actualHierarchyUnproven = @($hierarchy.coverage.unprovenFriendAssemblyProjects |
+            ForEach-Object { [string]$_ } | Sort-Object)
+        Assert-Equal ($expectedHierarchyUnproven -join "|") ($actualHierarchyUnproven -join "|") `
+            "type_hierarchy unproven friend-assembly coverage changed"
         foreach ($expected in @($baseline.target.expectedImplementations)) {
             Assert-Contains $derivedNames ([string]$expected.name) "Expected hierarchy descendant is absent"
         }

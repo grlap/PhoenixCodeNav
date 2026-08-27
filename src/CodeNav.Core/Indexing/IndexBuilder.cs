@@ -34,7 +34,8 @@ internal sealed record BuildCaptureTestHooks(
     int? CSharpQueueCapacity = null,
     Action? CSharpQueueSaturated = null,
     int? CSharpProducerMaxDegreeOfParallelism = null,
-    Action? BeforeCSharpQueueConsume = null);
+    Action? BeforeCSharpQueueConsume = null,
+    Action? CSharpProducerStarted = null);
 
 internal sealed class IndexWorkspaceMismatchException : IOException
 {
@@ -622,11 +623,16 @@ public static class IndexBuilder
         using var csharpProducerCancellation = new CancellationTokenSource();
         Exception? csharpCaptureFailure = null;
 
-        var producer = Task.Run(() =>
-        {
-            try
+        // A full build already owns one synchronous SQLite consumer. Keep its CPU-bound capture
+        // producer off the shared ThreadPool as well: Parallel still selects the same unrestricted
+        // degree of parallelism, but the calling lane is a dedicated worker, leaving request
+        // dispatch able to run while a large repository is rebuilding.
+        var producer = Task.Factory.StartNew(() =>
             {
-                Parallel.ForEach(
+                buildCaptureTestHooks?.CSharpProducerStarted?.Invoke();
+                try
+                {
+                    Parallel.ForEach(
                     PrioritizeCSharpFilesForColdBuild(scan.CsFiles),
                     new ParallelOptions
                     {
@@ -672,18 +678,19 @@ public static class IndexBuilder
                         }
                     }
                 });
-            }
-            catch (OperationCanceledException)
-                when (csharpProducerCancellation.IsCancellationRequested)
-            {
-                // The single writer failed and canceled blocked producers before propagating its
-                // original exception. No queued parsed source may outlive the failed build.
-            }
-            finally
-            {
-                csharpQueue.CompleteAdding();
-            }
-        });
+                }
+                catch (OperationCanceledException)
+                    when (csharpProducerCancellation.IsCancellationRequested)
+                {
+                    // The single writer failed and canceled blocked producers before propagating its
+                    // original exception. No queued parsed source may outlive the failed build.
+                }
+                finally
+                {
+                    csharpQueue.CompleteAdding();
+                }
+            }, CancellationToken.None, TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
 
         long symbolCount = 0, lineCount = 0;
         int csCount = 0;

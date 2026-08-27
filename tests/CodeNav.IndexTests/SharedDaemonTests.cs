@@ -1097,6 +1097,7 @@ public sealed class SharedDaemonTests
         DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
         using var buildEntered = new ManualResetEventSlim();
         using var releaseBuild = new ManualResetEventSlim();
+        bool rebuildUsedDedicatedThread = false;
         using var daemonLifetime = new CancellationTokenSource();
         var daemon = new DaemonServer(
             endpoint,
@@ -1106,6 +1107,7 @@ public sealed class SharedDaemonTests
             configureIndexForTest: manager =>
                 manager.FullRebuildAfterTelemetryStartedForTest = () =>
                 {
+                    rebuildUsedDedicatedThread = !Thread.CurrentThread.IsThreadPoolThread;
                     buildEntered.Set();
                     releaseBuild.Wait();
                 });
@@ -1116,6 +1118,8 @@ public sealed class SharedDaemonTests
                 () => DaemonDescriptor.TryRead(endpoint)?.Pid == Environment.ProcessId,
                 TimeSpan.FromSeconds(15));
             Assert.True(buildEntered.Wait(TimeSpan.FromSeconds(15)));
+            Assert.True(rebuildUsedDedicatedThread,
+                "The synchronous full rebuild consumed a shared ThreadPool worker.");
 
             string executable = FindMcpExecutable();
             first = await CreateClientAsync(executable, root);
@@ -1168,6 +1172,84 @@ public sealed class SharedDaemonTests
             await CleanupEndpointForTestAsync(endpoint);
             TestWorkspaceCleanup.DeleteWorkspace(root);
             TestWorkspaceCleanup.DeleteWorkspace(alternateRuntime);
+        }
+    }
+
+    [Fact]
+    public async Task ExplicitFullRebuildUsesDedicatedLaneAndKeepsCapabilitiesResponsive()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix explicit rebuild dispatch ").FullName;
+        File.WriteAllText(Path.Combine(root, "Marker.cs"),
+            "public sealed class ExplicitRebuildDispatchMarker { }");
+        IndexBuilder.Build(root);
+
+        McpClient? client = null;
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        using var buildEntered = new ManualResetEventSlim();
+        using var releaseBuild = new ManualResetEventSlim();
+        bool rebuildUsedDedicatedThread = false;
+        using var daemonLifetime = new CancellationTokenSource();
+        var daemon = new DaemonServer(
+            endpoint,
+            indexDb: null,
+            rebuild: false,
+            keepAlive: true,
+            configureIndexForTest: manager =>
+                manager.FullRebuildAfterTelemetryStartedForTest = () =>
+                {
+                    rebuildUsedDedicatedThread = !Thread.CurrentThread.IsThreadPoolThread;
+                    buildEntered.Set();
+                    releaseBuild.Wait();
+                });
+        Task<int> daemonTask = daemon.RunAsync(daemonLifetime.Token);
+        try
+        {
+            await WaitUntilAsync(
+                () => DaemonDescriptor.TryRead(endpoint)?.Pid == Environment.ProcessId,
+                TimeSpan.FromSeconds(15));
+            client = await CreateClientAsync(FindMcpExecutable(), root);
+            await WaitForIndexStateAsync(client, "ready");
+
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+            {
+                CallToolResult refresh = await client.CallToolAsync(
+                    "refresh_index",
+                    new Dictionary<string, object?> { ["force"] = "full" },
+                    cancellationToken: timeout.Token);
+                Assert.False(refresh.IsError is true);
+                Assert.True(ParseContent(refresh).GetProperty("queued").GetBoolean());
+            }
+            Assert.True(buildEntered.Wait(TimeSpan.FromSeconds(15)),
+                "The explicit full rebuild never entered its build phase.");
+            Assert.True(rebuildUsedDedicatedThread,
+                "The explicit full rebuild consumed a shared ThreadPool worker.");
+
+            JsonElement building = await CallAsync(client, "server_capabilities");
+            Assert.Equal("building",
+                building.GetProperty("index").GetProperty("state").GetString());
+
+            releaseBuild.Set();
+            await WaitForIndexStateAsync(client, "ready");
+        }
+        finally
+        {
+            releaseBuild.Set();
+            try { await RetireDaemonForTestAsync(endpoint); } catch { }
+            if (client is not null) await TryDisposeClientAsync(client);
+            daemonLifetime.Cancel();
+            try
+            {
+                try { Assert.Equal(0, await daemonTask); }
+                catch (OperationCanceledException) { }
+            }
+            finally
+            {
+                PhoenixRuntimeMode.Set(PhoenixProcessMode.Standalone);
+            }
+            await CleanupEndpointForTestAsync(endpoint);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 

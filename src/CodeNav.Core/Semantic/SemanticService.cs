@@ -646,7 +646,8 @@ public sealed partial class SemanticService : IDisposable
             clusterLoadInProgress = true;
             TestOnlyPhaseHook?.Invoke("beforeScanSetLoad");
             (SemanticSolutionLease scanLease, ISymbol? symbol, ClusterCoverage coverage,
-                List<string> skipped, List<string> outOfGraph) scanResult;
+                List<string> skipped, List<string> outOfGraph,
+                List<string> potentialAccessingProjects) scanResult;
             using (SemanticPhaseEventSource.Log.Measure("scanLoad", operationId))
             {
                 scanResult = await LoadScanSetAndResolveAsync(
@@ -658,7 +659,8 @@ public sealed partial class SemanticService : IDisposable
                     declarationKeyHint: declarationKeyHint,
                     scanAllDependents: userDefinedConversion).ConfigureAwait(false);
             }
-            var (scanLease, symbol, coverage, skipped, outOfGraph) = scanResult;
+            var (scanLease, symbol, coverage, skipped, outOfGraph,
+                potentialAccessingProjects) = scanResult;
             deferredRetentionPending = false;
             using var scanOperation = scanLease;
             Solution solution = scanLease.Solution;
@@ -956,8 +958,13 @@ public sealed partial class SemanticService : IDisposable
             queryStages.UniqueSyntaxTrees = rootCache.Count;
             queryStages.UniqueSites = seenSites.Count;
 
+            // Friend access controls whether dependent compilations can bind an internal symbol at
+            // all. Result groups are therefore not authority evidence: the exact failure mode is
+            // that an unmodeled imported grant leaves only same-assembly sites in the result. Use
+            // the projects selected for the consumer scan, including candidates that produced no
+            // compiler-bound site, so an incomplete census can never certify itself as exact.
             bool projectModelUnproven = FriendAssemblyAuthorityUnproven(symbol,
-                groups.Keys, coverage);
+                potentialAccessingProjects, coverage);
             int outOfGraphCandidateCount = outOfGraph.Count;
             List<string>? outOfGraphSample = outOfGraphCandidateCount > 0
                 ? outOfGraph.Take(20).ToList()
@@ -1139,7 +1146,8 @@ public sealed partial class SemanticService : IDisposable
 
             clusterLoadInProgress = true;
             TestOnlyPhaseHook?.Invoke("beforeScanSetLoad");
-            var (scanLease, symbol, coverage, skipped, _) = await LoadScanSetAndResolveAsync(
+            var (scanLease, symbol, coverage, skipped, _, _) =
+                await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
                 statsBox: scanBox, planStatsBox: planning.ScanSet).ConfigureAwait(false);
@@ -2039,7 +2047,9 @@ public sealed partial class SemanticService : IDisposable
     /// dependent scan set and re-resolves the symbol IN the loaded snapshot. The returned
     /// symbol and solution are one consistent snapshot for SymbolFinder.
     /// </summary>
-    private async Task<(SemanticSolutionLease Lease, ISymbol? Symbol, ClusterCoverage Coverage, List<string> Skipped, List<string> OutOfGraph)> LoadScanSetAndResolveAsync(
+    private async Task<(SemanticSolutionLease Lease, ISymbol? Symbol, ClusterCoverage Coverage,
+        List<string> Skipped, List<string> OutOfGraph,
+        List<string> PotentialAccessingProjects)> LoadScanSetAndResolveAsync(
         string symbolName, string owningProject, string path, int line, int? column, string? nameHint,
         int maxProjects, IndexQueries q, CancellationToken ct,
         IReadOnlyList<string>? prioritySeeds = null, int? arityHint = null,
@@ -2062,6 +2072,7 @@ public sealed partial class SemanticService : IDisposable
         var outOfGraphSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var unsupportedCandidatePaths = new HashSet<string>(StringComparer.Ordinal);
         HashSet<string> scanSet = new(StringComparer.OrdinalIgnoreCase);
+        var potentialAccessingProjects = new List<string>();
         try
         {
             HashSet<string> dependents;
@@ -2081,7 +2092,6 @@ public sealed partial class SemanticService : IDisposable
             dependents.Add(owningProject);
             int budget = NormalizeCandidateProjectBudget(maxProjects);
 
-            var chosen = new List<string>();
             var chosenSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var relevant = new List<string>();
             var relevantSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2097,7 +2107,8 @@ public sealed partial class SemanticService : IDisposable
             void Consider(string project)
             {
                 if (relevantSet.Add(project)) relevant.Add(project);
-                if (chosen.Count < budget && chosenSet.Add(project)) chosen.Add(project);
+                if (potentialAccessingProjects.Count < budget && chosenSet.Add(project))
+                    potentialAccessingProjects.Add(project);
             }
 
             void AddOutOfGraph(string project)
@@ -2194,8 +2205,8 @@ public sealed partial class SemanticService : IDisposable
                         System.Diagnostics.Stopwatch.GetTimestamp() - dependencyStarted;
                 }
             }
-            foreach (var p in chosen) scanSet.Add(p);
-            selectedProjectCount = chosen.Count;
+            foreach (var p in potentialAccessingProjects) scanSet.Add(p);
+            selectedProjectCount = potentialAccessingProjects.Count;
             // The owning project's mandatory dependency closure is loaded regardless of the
             // optional candidate budget. Report only relevant projects absent from the FINAL scan
             // set, otherwise a budget filled by seeds can falsely mark a project that was loaded.
@@ -2260,7 +2271,8 @@ public sealed partial class SemanticService : IDisposable
             var symbol = await ResolveInSolutionAsync(
                 solution, owningProject, WorkspacePaths.Normalize(path), line, column, nameHint, ct,
                 arityHint, declarationKeyHint).ConfigureAwait(false);
-            return (lease, symbol, coverage, skipped, outOfGraph);
+            return (lease, symbol, coverage, skipped, outOfGraph,
+                potentialAccessingProjects);
         }
         catch
         {

@@ -385,6 +385,65 @@ public sealed class InternalsVisibleToSemanticTests
         }
     }
 
+    [Fact]
+    public void ImportedFriendAuthorityCannotBecomeExactWhenExternalCandidatesDoNotBind()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-ivt-unbound").FullName;
+        try
+        {
+            WriteWorkspace(root, grantInternals: true);
+            File.WriteAllText(Path.Combine(root, "Directory.Build.targets"),
+                """
+                <Project>
+                  <ItemGroup>
+                    <InternalsVisibleTo Remove="Friend.Consumer" />
+                  </ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(root, "Contracts", "ContractFactory.cs"),
+                """
+                namespace FriendContracts;
+                internal static class ContractFactory
+                {
+                    internal static ISecretContract? Current;
+                }
+                """);
+            File.WriteAllText(Path.Combine(root, "Consumer", "SecretImplementation.cs"),
+                """
+                namespace FriendConsumer;
+                // ISecretContract is a candidate in this dependent project, but the imported
+                // authority can revoke access before the compiler binds a reference site.
+                internal sealed class UnrelatedConsumer { }
+                """);
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20000));
+            using var semantic = new SemanticService(manager);
+            if (!semantic.FrameworkRefsAvailable) return;
+            var tools = new NavigationTools(manager, semantic);
+
+            JsonElement references = SemanticRetry.ParseWithRetry(
+                () => tools.References(
+                    name: "ISecretContract", path: "Contracts/ISecretContract.cs", line: 2,
+                    mode: "semantic", timeoutMs: 60000),
+                json => json.TryGetProperty("partialReason", out JsonElement reason) &&
+                        reason.GetString() == "project_model_unproven",
+                "unbound friend candidate retains project-model uncertainty");
+
+            AssertProjectModelUnproven(references);
+            Assert.Equal(1, references.GetProperty("totalReferences").GetInt32());
+            JsonElement group = Assert.Single(references.GetProperty("groups").EnumerateArray());
+            Assert.Equal("Friend.Contracts", group.GetProperty("project").GetString());
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
     private static void WriteWorkspace(string root, bool grantInternals)
     {
         string contracts = Path.Combine(root, "Contracts");

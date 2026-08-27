@@ -111,6 +111,9 @@ counters (no fabricated ETAs).
 `refresh_index` is the in-band writer hatch: `force: 'auto'` (the default) re-detects changes,
 `force: 'incremental'` explicitly requests that incremental sweep, and `force: 'full'` rebuilds
 from scratch — recovering even a corrupted index without shell access.
+Startup and explicit full builds run their synchronous orchestration and cold C# producer on
+dedicated execution lanes, so lightweight MCP status and capability requests remain responsive
+during parser fan-out; this changes neither parser concurrency nor the publication boundary.
 Targeted `refresh_index(paths: ...)` and explicit `review_pack(paths: ...)` accept one to 256 exact
 workspace-relative paths, within a 64 KiB input string, as comma-separated text or a serialized
 JSON string array. Use the JSON form for a filename containing a comma. Blank, rooted, traversing,

@@ -94,6 +94,13 @@ for code identifiers.
    complete and carries measured `responseBudget` exception metadata rather than being truncated
    or rejected.
 
+   Literal local SDK `InternalsVisibleTo` items are modeled, but imported or package/build authority
+   remains explicitly unproven. For internal symbols, the selected dependent consumer scan—not the
+   projects that happened to produce compiler-bound result groups—decides whether that uncertainty
+   can affect the answer. A candidate that cannot bind because the grant was not modeled therefore
+   keeps `project_model_unproven` instead of allowing an incomplete same-assembly result to certify
+   itself as exact.
+
 `open_operations_portal` is an explicit operational tool outside the navigation layers. It starts
 or reuses the separately packaged, loopback-only, read-only portal for the current workspace and
 returns its authenticated URL; the agent must show that URL verbatim and the tool never opens a
@@ -280,7 +287,10 @@ Explicitly live source/Git and compiler-backed semantic evidence may use newer w
 `.fsproj` directly, independent of solution membership; index `.cs`, `.fs`, `.fsi`, `.fsx`, `.md`,
 and `.sql` text, while parsing only `.cs` with Roslyn syntax during indexing. Parsed C# rows cross a
 bounded synchronous queue to the single writer, so backpressure cannot strand every parser behind a
-ThreadPool-scheduled async continuation. Since v0.12.39, cold builds schedule C# files by descending
+ThreadPool-scheduled async continuation. Since v0.12.69, startup and explicit full-build orchestration
+plus the cold C# producer run on dedicated long-running execution lanes. Parser concurrency and queue
+capacity are unchanged, while lightweight MCP dispatch remains independent of synchronous build
+coordination. Since v0.12.39, cold builds schedule C# files by descending
 scanned byte size with an ordinal-path tie-breaker, overlapping giant Roslyn parses with ordinary
 parse-and-persist work instead of leaving them as final stragglers. Since v0.12.24, that writer
 caches raw SQLite statements for every exact symbol-batch size from 1 through 32 and binds by

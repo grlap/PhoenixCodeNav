@@ -353,6 +353,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("review-deleted-solution-metadata-counts", ids);
         Assert.Contains("index-raw-ordinal-content-fts-batching", ids);
         Assert.Contains("index-bounded-synchronous-csharp-build-handoff", ids);
+        Assert.Contains("index-build-request-dispatch-isolation", ids);
         Assert.Contains("index-deferred-fts-rebuild", ids);
         Assert.Contains("index-size-prioritized-csharp-build-scheduling", ids);
         Assert.Contains("index-abandoned-private-stage-reaping", ids);
@@ -979,6 +980,16 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("startupBuildReason", startupRebuildEvidence);
         Assert.Contains("startupPriorSchema", startupRebuildEvidence);
         Assert.Contains("existing-index migration or recovery", startupRebuildEvidence);
+        string friendAssembly = Summary("friend-assembly-semantics");
+        Assert.Contains("since v0.12.69", friendAssembly);
+        Assert.Contains("references census uses its selected consumer scan", friendAssembly);
+        Assert.Contains("candidates with no compiler-bound result site", friendAssembly);
+        string buildDispatchIsolation = Summary("index-build-request-dispatch-isolation");
+        Assert.Contains("v0.12.69", buildDispatchIsolation);
+        Assert.Contains("dedicated long-running execution lanes", buildDispatchIsolation);
+        Assert.Contains("server_capabilities dispatch", buildDispatchIsolation);
+        Assert.Contains("without changing parser concurrency, queue capacity, publication, or authority",
+            buildDispatchIsolation);
         string defaultBaseline = Summary("review-default-baseline-honesty");
         Assert.Contains("bounded git_index_baseline_unavailable", defaultBaseline);
         Assert.Contains("refresh_index", defaultBaseline);

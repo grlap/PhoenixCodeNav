@@ -3,8 +3,8 @@
   "roslynCommit": "e7680f251b8fc52a0ba7108906c0e40ff3263a32",
   "defaultWorkspace": "external/roslyn",
   "indexRelativePath": ".codenav/index.db",
-  "countsProvenance": "fresh_normal_mcp_startup_friend_assembly_authority_correction_with_exact_public_method_canary",
-  "countsProvenanceDetail": "The prior 10-reference/1-project exact result incorrectly treated the internal ICompilationFactoryService target as compiler-authoritative despite an unproven friend-assembly project model. A fresh normal MCP startup at the unchanged pinned Roslyn commit produced 47 references across 7 projects: Microsoft.CodeAnalysis.Workspaces.UnitTests, Microsoft.CodeAnalysis.Workspaces, Microsoft.CodeAnalysis.CSharp.Workspaces, Microsoft.CodeAnalysis.Features, Microsoft.CodeAnalysis.CSharp.EditorFeatures.UnitTests, Microsoft.CodeAnalysis.Workspaces.Test.Utilities, and Microsoft.CodeAnalysis.EditorFeatures.UnitTests. Coverage explicitly reported the first closure project plus Microsoft.CodeAnalysis as the six unproven friend-assembly projects, so authority is indexed/project_model_unproven rather than exact. The public GetOpenDocumentIds canary independently proves exact non-partial references with 9 sites across 4 projects and returned sample order.",
+  "countsProvenance": "repeated_full_rebuild_friend_assembly_consumer_scan_authority_with_exact_public_method_canary",
+  "countsProvenanceDetail": "Repeated ordinary startup and in-band full rebuild probes at the unchanged pinned Roslyn commit produced 10 compiler-bound ICompilationFactoryService references in the declaring Microsoft.CodeAnalysis.Workspaces project. The 49 indexed textual candidates are discovery inputs, not compiler reference sites; the one result group therefore must not certify exactness. Coverage reports Microsoft.CodeAnalysis.Workspaces plus five external candidate projects as the six unproven friend-assembly projects, so the selected consumer scan keeps reference authority indexed/project_model_unproven even when external candidates cannot bind and emit no result group. For the same imported friend-grant boundary, implementations retains exact symbol identity with heuristic indexed base-list hits, while type_hierarchy retains compiler-exact upper relations and labels only its indexed derived results heuristic. The public GetOpenDocumentIds canary independently proves exact non-partial references with 9 sites across 4 projects and returned sample order.",
   "counts": {
     "projects": 351,
     "solutions": 38,
@@ -30,14 +30,11 @@
       "Microsoft.CodeAnalysis.Workspaces",
       "Microsoft.CodeAnalysis.Workspaces.Test.Utilities"
     ],
-    "implementationsUnprovenFriendAssemblyProjects": [
-      "Microsoft.CodeAnalysis",
-      "Microsoft.CodeAnalysis.CSharp.Workspaces",
-      "Microsoft.CodeAnalysis.EditorFeatures.UnitTests",
-      "Microsoft.CodeAnalysis.Features",
-      "Microsoft.CodeAnalysis.Workspaces",
-      "Microsoft.CodeAnalysis.Workspaces.Test.Utilities"
-    ],
+    "implementationsConfidence": "heuristic",
+    "implementationsPartialReason": "no_semantic_implementers",
+    "typeHierarchyConfidence": "exact",
+    "typeHierarchyDerivedConfidence": "heuristic",
+    "typeHierarchyPartialReason": "no_semantic_derived",
     "typeHierarchyUnprovenFriendAssemblyProjects": [
       "Microsoft.CodeAnalysis",
       "Microsoft.CodeAnalysis.CSharp.Workspaces",
@@ -46,8 +43,8 @@
       "Microsoft.CodeAnalysis.Workspaces",
       "Microsoft.CodeAnalysis.Workspaces.Test.Utilities"
     ],
-    "referenceCount": 47,
-    "referenceProjects": 7,
+    "referenceCount": 10,
+    "referenceProjects": 1,
     "indexedReferenceCandidates": 49,
     "expectedImplementations": [
       {
