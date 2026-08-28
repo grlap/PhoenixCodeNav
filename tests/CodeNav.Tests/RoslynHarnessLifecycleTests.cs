@@ -154,9 +154,9 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
         Assert.False(fsharpFixture.TryGetProperty("indexRelativePath", out _));
         Assert.Equal("src/FSharp.Core/option.fs",
             fsharpFixture.GetProperty("target").GetProperty("sourcePath").GetString());
-        Assert.Equal(116168,
+        Assert.Equal(116170,
             fsharpFixture.GetProperty("counts").GetProperty("symbols").GetInt32());
-        Assert.Equal(4174,
+        Assert.Equal(4140,
             fsharpFixture.GetProperty("counts").GetProperty("orphanedFiles").GetInt32());
         Assert.Equal("fresh_isolated_normal_mcp_schema_29_pinned_fsharp_counts",
             fsharpFixture.GetProperty("countsProvenance").GetString());
@@ -174,15 +174,19 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Contains("do not determine index counts",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
-        Assert.Contains("116170",
+        Assert.Contains("current baseline expects symbols 116170 and orphanedFiles 4140",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
-        Assert.Contains("4140",
+        Assert.Contains("separate anomalous fresh run recorded symbols 116168 and orphanedFiles 4174",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Contains("PhoenixCodeNav-rswp",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
-        Assert.Contains("cold-build/delta parity canary guards stored-output convergence",
+        Assert.Contains("blocking PhoenixCodeNav-rswp signal, not an accepted gate result",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
-        Assert.Contains("fresh isolated indexes are created every run",
+        Assert.Contains("cold-build/delta parity canary guards within-run stored-output convergence",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("it does not prove run-to-run determinism",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("Fresh isolated indexes are created every run",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Equal("indexed",
             fixture.GetProperty("target").GetProperty("friendRelationshipConfidence").GetString());

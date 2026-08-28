@@ -5,12 +5,12 @@ Static, package-free product website for PhoenixCodeNav. It is designed for peop
 ## Files
 
 - `index.html` — semantic page content, SEO metadata, product examples, and structured data
-- `styles.758e0d187f.css` — complete responsive visual system and CSS motion
-- `script.cfa22b595a.js` — hero atlas, scroll reveals, copy buttons, navigation, and accessibility enhancements
-- `verify.mjs` — package-free structural, asset-integrity, accessibility-reference, and launch-guard checks
+- `styles.css` — complete responsive visual system and CSS motion
+- `script.js` — hero atlas, scroll reveals, copy buttons, navigation, and accessibility enhancements
+- `verify.mjs` — package-free structural, asset-reference integrity, accessibility-reference, and launch-guard checks
 - `assets/` — original code-native brand assets
 
-The published page has no package manager, build command, third-party font, CDN, analytics, or external runtime dependency. The repository verifier is a development tool and requires Node.js plus Git working-tree/index metadata (ordinary or split index) so it can prove every content-hashed asset is tracked; it does not launch the Git executable.
+The published page has no package manager, build command, third-party font, CDN, analytics, or external runtime dependency. The repository verifier is a development tool and requires Node.js plus Git working-tree/index metadata (ordinary or split index) so it can prove every referenced CSS and JavaScript asset is tracked; it does not launch the Git executable.
 
 ## Local preview
 
@@ -47,7 +47,7 @@ Before a public deployment:
 1. Choose the hosting URL, update canonical/social metadata, and change the robots directive to `index,follow` at launch.
 2. Reconfirm product claims against the intended public commit.
 3. Publish a license or explicit use terms before making the website public; repository visibility alone does not grant reuse rights.
-4. Confirm the host serves CSS, JavaScript, and SVG with their correct MIME types. The current asset filenames already contain content hashes for cache safety.
+4. Confirm the host serves CSS, JavaScript, and SVG with their correct MIME types. This repository deploys through GitHub Pages. GitHub Pages caches each stable URL independently, so warm clients can briefly mix HTML and asset generations until those entries revalidate or expire; this workflow does not configure custom per-asset cache headers. Before upload, the deployment workflow runs `node ./website/verify.mjs --auto`, selecting prelaunch or launch checks from the committed robots directive while verifying source and asset-reference integrity. That gate proves repository coherence, not cross-resource cache atomicity. After deployment, verify the current HTML and both assets with cold requests.
 
 ## Accessibility and motion
 

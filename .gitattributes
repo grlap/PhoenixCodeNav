@@ -1,3 +1,4 @@
+# Keep static website source bytes consistent across Windows, macOS, and Linux checkouts.
 website/*.css text eol=lf
 website/*.js text eol=lf
 website/**/*.css text eol=lf

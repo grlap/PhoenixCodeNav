@@ -5,7 +5,16 @@ on:
     branches: [main]
     paths:
       - "website/**"
-      - ".github/workflows/pages.yml"
+      - ".gitattributes"
+      - ".github/workflows/static.yml"
+      - "tests/integration/roslyn-mcp-baseline.json"
+      - "LICENSE"
+      - "LICENSE.md"
+      - "LICENSE.txt"
+      - "COPYING"
+      - "COPYING.md"
+      - "TERMS.md"
+      - "EULA.md"
   workflow_dispatch:
 
 permissions:
@@ -26,7 +35,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
       - uses: actions/configure-pages@v5
+
+      - name: Verify website
+        run: node ./website/verify.mjs --auto
 
       - uses: actions/upload-pages-artifact@v4
         with:

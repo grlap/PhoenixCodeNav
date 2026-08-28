@@ -26,6 +26,40 @@ public class ReviewCommandContractTests
     private static int Count(string text, string value) =>
         text.Split(value, StringSplitOptions.None).Length - 1;
 
+    [Fact]
+    public void WebsiteDeployWorkflowPinsAutomaticVerificationInputsAndExactRobotsPolicy()
+    {
+        string workflow = Read(".github", "workflows", "static.yml");
+        string verifier = Read("website", "verify.mjs");
+
+        Assert.Contains("actions/setup-node@v6", workflow);
+        Assert.Contains("node-version: \"24\"", workflow);
+        Assert.Contains("run: node ./website/verify.mjs --auto", workflow);
+        Assert.Contains("- \"website/**\"", workflow);
+        Assert.Contains("- \".gitattributes\"", workflow);
+        Assert.Contains("- \"tests/integration/roslyn-mcp-baseline.json\"", workflow);
+        System.Text.RegularExpressions.Match termsArray =
+            System.Text.RegularExpressions.Regex.Match(
+                verifier,
+                "const termsFiles = \\[(?<items>[^\\]]+)\\];");
+        Assert.True(termsArray.Success, "The website verifier must keep an explicit termsFiles inventory.");
+        List<string> termsFiles = [];
+        foreach (System.Text.RegularExpressions.Match match in
+            System.Text.RegularExpressions.Regex.Matches(termsArray.Groups["items"].Value, "\"([^\"]+)\""))
+        {
+            termsFiles.Add(match.Groups[1].Value);
+        }
+        Assert.NotEmpty(termsFiles);
+        Assert.All(termsFiles, path => Assert.Contains($"- \"{path}\"", workflow));
+        Assert.Contains("hasExactRobotsPolicy(robots, [\"index\", \"follow\"])", verifier);
+        Assert.Contains("hasExactRobotsPolicy(robots, [\"noindex\", \"nofollow\"])", verifier);
+        Assert.Contains("[\"index\", \"follow\", \"nofollow\"]", verifier);
+        Assert.Contains("[\"index\", \"follow\", \"none\"]", verifier);
+        Assert.Contains("check(robotsContents.length === 1", verifier);
+        Assert.Contains("robotsTokensForContents([\"index,follow\", \"noindex,nofollow\"])", verifier);
+        Assert.Equal(1, Count(verifier, "const robotsContents = metaContents(\"name\", \"robots\")"));
+    }
+
     [Theory]
     [InlineData("review-code")]
     [InlineData("review-changes")]

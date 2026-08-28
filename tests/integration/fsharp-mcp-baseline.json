@@ -9,14 +9,14 @@
     "resolvedPackageDllCount": 0
   },
   "countsProvenance": "fresh_isolated_normal_mcp_schema_29_pinned_fsharp_counts",
-  "countsProvenanceDetail": "Pinned indexing inputs are the parent gitlink and checkout commit 5928e91b5f701586690562ce10bd639357fff50b plus database-absent startupBuildReason startup_missing; the current baseline expects symbols 116168 and orphanedFiles 4174. The Microsoft.NETFramework.ReferenceAssemblies.net472 1.0.3 gate fixture and verified-empty per-run NUGET_PACKAGES root are separately attested semantic inputs and do not determine index counts: semantic evidence requires frameworkRefsAvailable true, frameworkRefsSource equal to the exact gate fixture, and resolvedPackageDllCount 0. Four earlier fresh runs on the same commit recorded symbols 116170 and orphanedFiles 4140; that unexplained ownership variance is tracked as PhoenixCodeNav-rswp instead of being attributed to semantic inputs. The cold-build/delta parity canary guards stored-output convergence, and fresh isolated indexes are created every run without restoring the external checkout, repairing a prior index, or changing this baseline automatically.",
+  "countsProvenanceDetail": "Pinned indexing inputs are the parent gitlink and checkout commit 5928e91b5f701586690562ce10bd639357fff50b plus database-absent startupBuildReason startup_missing; the current baseline expects symbols 116170 and orphanedFiles 4140, matching the latest fresh run and four earlier fresh runs on the same commit. A separate anomalous fresh run recorded symbols 116168 and orphanedFiles 4174; recurrence of that unexplained ownership variance is a blocking PhoenixCodeNav-rswp signal, not an accepted gate result or a semantic-input difference. The Microsoft.NETFramework.ReferenceAssemblies.net472 1.0.3 gate fixture and verified-empty per-run NUGET_PACKAGES root are separately attested semantic inputs and do not determine index counts: semantic evidence requires frameworkRefsAvailable true, frameworkRefsSource equal to the exact gate fixture, and resolvedPackageDllCount 0. The cold-build/delta parity canary guards within-run stored-output convergence; it does not prove run-to-run determinism. Fresh isolated indexes are created every run without restoring the external checkout, repairing a prior index, accepting alternate count pairs, or changing this baseline automatically.",
   "counts": {
     "projects": 112,
     "fsharpProjects": 72,
     "csharpFiles": 243,
     "fsharpFiles": 6432,
-    "symbols": 116168,
-    "orphanedFiles": 4174
+    "symbols": 116170,
+    "orphanedFiles": 4140
   },
   "target": {
     "sourcePath": "src/FSharp.Core/option.fs",

@@ -326,8 +326,8 @@ function pathStaysInside(parent, candidate, pathApi = { relative, isAbsolute, se
     !fromParent.startsWith(`..${pathApi.sep}`));
 }
 
-function cacheableAssetReferences(source) {
-  return [...source.matchAll(/`((?:styles\.[0-9a-f]{10}\.css)|(?:script\.[0-9a-f]{10}\.js))`/gi)]
+function documentedAssetReferences(source) {
+  return [...source.matchAll(/`((?:styles\.css)|(?:script\.js))`/gi)]
     .map((match) => match[1])
     .sort();
 }
@@ -410,10 +410,14 @@ function reducedMotionKeepsAtlasVisible(source) {
   });
 }
 
+function metaContents(attributeName, attributeValue) {
+  return matches(/<meta\b[^>]*>/gi).map((match) => match[0])
+    .filter((candidate) => attribute(candidate, attributeName).toLowerCase() === attributeValue.toLowerCase())
+    .map((tag) => attribute(tag, "content"));
+}
+
 function metaContent(attributeName, attributeValue) {
-  const tag = matches(/<meta\b[^>]*>/gi).map((match) => match[0])
-    .find((candidate) => attribute(candidate, attributeName).toLowerCase() === attributeValue.toLowerCase());
-  return tag ? attribute(tag, "content") : "";
+  return metaContents(attributeName, attributeValue)[0] ?? "";
 }
 
 function isAbsoluteHttps(value) {
@@ -434,9 +438,42 @@ function htmlCode(id) {
     .replaceAll("&amp;", "&");
 }
 
+function hasExactRobotsPolicy(robotsTokens, expectedTokens) {
+  return robotsTokens.length === expectedTokens.length &&
+    new Set(robotsTokens).size === robotsTokens.length &&
+    expectedTokens.every((token) => robotsTokens.includes(token));
+}
+
+function selectsLaunchMode(argumentsList, robotsTokens) {
+  if (argumentsList.includes("--launch")) return true;
+  return argumentsList.includes("--auto") &&
+    hasExactRobotsPolicy(robotsTokens, ["index", "follow"]);
+}
+
+function robotsTokensForContents(contents) {
+  if (contents.length !== 1) return [];
+  return contents[0].toLowerCase().split(",").map((token) => token.trim()).filter(Boolean);
+}
+
 const args = process.argv.slice(2);
-const launchMode = args.includes("--launch");
-check(args.every((argument) => argument === "--launch"), "Only the optional --launch argument is supported.");
+const robotsContents = metaContents("name", "robots");
+const modeRobots = robotsTokensForContents(robotsContents);
+const launchMode = selectsLaunchMode(args, modeRobots);
+check(args.length <= 1 && args.every((argument) => argument === "--launch" || argument === "--auto"),
+  "Only one optional --launch or --auto argument is supported.");
+check(robotsContents.length === 1, "The page must contain exactly one robots meta tag.");
+check(robotsTokensForContents(["index,follow", "noindex,nofollow"]).length === 0,
+  "Robots parsing must reject multiple robots meta tags instead of selecting the first.");
+check(selectsLaunchMode(["--auto"], ["index", "follow"]),
+  "Automatic verification mode must select launch checks for index,follow.");
+check(!selectsLaunchMode(["--auto"], ["noindex", "nofollow"]),
+  "Automatic verification mode must select prelaunch checks for noindex,nofollow.");
+check(!selectsLaunchMode(["--auto"], ["index", "follow", "nofollow"]),
+  "Automatic verification mode must reject a launch policy containing nofollow.");
+check(!selectsLaunchMode(["--auto"], ["index", "follow", "none"]),
+  "Automatic verification mode must reject a launch policy containing none.");
+check(!selectsLaunchMode(["--auto"], ["index", "follow", "follow"]),
+  "Automatic verification mode must reject duplicate launch-policy tokens.");
 
 function finishGitIndexFixture(content, objectIdBytes = 20) {
   const algorithm = objectIdBytes === 32 ? "sha256" : "sha1";
@@ -509,8 +546,8 @@ function makeSplitLinkFixture(hash, sharedCount, deleted, replaced) {
   ]);
 }
 
-check(parseGitIndex(makeV2IndexFixture([".gitattributes", "website/script.js"]), 20).entries
-  .join("\0") === [".gitattributes", "website/script.js"].join("\0"),
+check(parseGitIndex(makeV2IndexFixture(["README.md", "website/script.js"]), 20).entries
+  .join("\0") === ["README.md", "website/script.js"].join("\0"),
 "The Git index parser must read ordinary v2 staged paths.");
 check(parseGitIndex(makeV2IndexFixture(["website/script.js"], [], 32), 32).entries[0] ===
   "website/script.js",
@@ -519,7 +556,7 @@ check(parseGitIndex(makeV4IndexFixture(), 20).entries.join("\0") ===
   ["website/a.js", "website/b.js"].join("\0"),
 "The Git index parser must reconstruct v4 prefix-compressed paths.");
 const splitShared = parseGitIndex(makeV2IndexFixture([
-  ".gitattributes", "website/old.js", "website/styles.css",
+  "README.md", "website/old.js", "website/styles.css",
 ]), 20);
 const splitHash = splitShared.checksum;
 const splitLink = makeSplitLinkFixture(splitHash, splitShared.entries.length,
@@ -528,7 +565,7 @@ const splitOverlay = parseGitIndex(makeV2IndexFixture(["", "website/new.js"], [
   { signature: "link", data: splitLink },
 ]), 20);
 check([...mergeSplitIndex(splitOverlay, splitShared, splitLink, 20).paths].sort().join("\0") ===
-  [".gitattributes", "website/new.js", "website/old.js"].join("\0"),
+  ["README.md", "website/new.js", "website/old.js"].join("\0"),
 "The Git index parser must merge split-index replacement, deletion, and addition entries.");
 const tamperedIndex = makeV2IndexFixture(["website/script.js"]);
 tamperedIndex[20] ^= 1;
@@ -597,38 +634,41 @@ const scripts = assets.filter((asset) => asset.cleanReference.endsWith(".js"));
 check(stylesheets.length === 1, "The page must reference exactly one local stylesheet.");
 check(scripts.length === 1, "The page must reference exactly one local JavaScript file.");
 
-const referencedCacheableAssets = [...stylesheets, ...scripts]
+const referencedAssets = [...stylesheets, ...scripts]
   .map((asset) => asset.cleanReference)
   .sort();
-const documentedCacheableAssets = cacheableAssetReferences(readme);
-check(sameAssetInventory(documentedCacheableAssets, referencedCacheableAssets),
-"The website README must list the exact cacheable assets referenced by index.html.");
+const documentedAssets = documentedAssetReferences(readme);
+check(sameAssetInventory(documentedAssets, referencedAssets),
+"The website README must list the exact CSS and JavaScript assets referenced by index.html.");
 check(sameAssetInventory(
-  cacheableAssetReferences("`styles.aaaaaaaaaa.css` `script.bbbbbbbbbb.js`"),
-  ["styles.aaaaaaaaaa.css", "script.bbbbbbbbbb.js"]),
-"The README asset verifier must accept an exact cacheable-asset inventory.");
+  documentedAssetReferences("`styles.css` `script.js`"),
+  ["styles.css", "script.js"]),
+"The README asset verifier must accept the stable asset inventory.");
 check(!sameAssetInventory(
-  cacheableAssetReferences("`styles.cccccccccc.css` `script.bbbbbbbbbb.js`"),
-  ["styles.aaaaaaaaaa.css", "script.bbbbbbbbbb.js"]),
-"The README asset verifier must reject a stale cacheable-asset inventory.");
-check(gitAttributesExists,
-  "Repository .gitattributes must exist so content-hashed website assets retain stable bytes.");
-checkTracked(".gitattributes",
-  "Repository .gitattributes must be tracked with the content-hashed website assets.");
-check(/^website\/\*\.css text eol=lf$/m.test(gitAttributes) &&
-  /^website\/\*\.js text eol=lf$/m.test(gitAttributes) &&
-  /^website\/\*\*\/\*\.css text eol=lf$/m.test(gitAttributes) &&
-  /^website\/\*\*\/\*\.js text eol=lf$/m.test(gitAttributes),
-  "Git attributes must preserve LF bytes for direct and nested content-hashed website assets.");
+  documentedAssetReferences("`styles.css`"),
+  ["styles.css", "script.js"]),
+"The README asset verifier must reject an incomplete asset inventory.");
+check(!sameAssetInventory(
+  documentedAssetReferences("`script.js` `script.js`"),
+  ["styles.css", "script.js"]),
+"The README asset verifier must reject an equal-length mismatched asset inventory.");
+check(/GitHub Pages caches each stable URL independently, so warm clients can briefly mix HTML and asset generations/i.test(readme),
+"The website README must disclose the residual mixed-generation cache window for stable asset names.");
+
+check(gitAttributesExists, "The repository must keep .gitattributes for website line-ending normalization.");
+checkTracked(".gitattributes", "The repository .gitattributes file must be tracked in Git.");
+check(/^website\/\*\.css text eol=lf$/m.test(gitAttributes),
+  ".gitattributes must normalize top-level website CSS to LF.");
+check(/^website\/\*\.js text eol=lf$/m.test(gitAttributes),
+  ".gitattributes must normalize top-level website JavaScript to LF.");
+check(/^website\/\*\*\/\*\.css text eol=lf$/m.test(gitAttributes),
+  ".gitattributes must normalize nested website CSS to LF.");
+check(/^website\/\*\*\/\*\.js text eol=lf$/m.test(gitAttributes),
+  ".gitattributes must normalize nested website JavaScript to LF.");
 
 for (const asset of [...stylesheets, ...scripts]) {
   checkTracked(`website/${asset.cleanReference}`,
-    `Cacheable asset ${asset.reference} must be tracked in Git.`);
-  const hashMatch = /\.([0-9a-f]{10})\.(?:css|js)$/i.exec(asset.cleanReference);
-  check(Boolean(hashMatch), `Cacheable asset ${asset.reference} must contain a ten-character content hash.`);
-  if (!hashMatch || !asset.exists) continue;
-  const digest = createHash("sha256").update(readFileSync(asset.path)).digest("hex").slice(0, 10);
-  check(digest === hashMatch[1].toLowerCase(), `Content hash in ${asset.reference} must match the file contents.`);
+    `Referenced asset ${asset.reference} must be tracked in Git.`);
 }
 
 const structuredData = matches(/<script\b[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi);
@@ -783,9 +823,10 @@ check(/<div class="section-label"[^>]*>\s*<span>06<\/span><span>The trust bounda
   /<div class="section-label section-label--dark"[^>]*>\s*<span>07<\/span><span>Use the right tool<\/span>/i.test(html),
 "Section numbering must remain sequential after removing the setup walkthrough.");
 
-const robots = metaContent("name", "robots").toLowerCase().split(",").map((token) => token.trim()).filter(Boolean);
+const robots = modeRobots;
 if (launchMode) {
-  check(robots.includes("index") && robots.includes("follow") && !robots.includes("noindex"), "Launch mode requires an index,follow robots directive.");
+  check(hasExactRobotsPolicy(robots, ["index", "follow"]),
+    "Launch mode requires the exact index,follow robots directive without duplicate or conflicting tokens.");
   const canonicalTag = matches(/<link\b[^>]*>/gi).map((match) => match[0]).find((tag) => attribute(tag, "rel").toLowerCase() === "canonical");
   check(isAbsoluteHttps(canonicalTag ? attribute(canonicalTag, "href") : ""), "Launch mode requires an absolute HTTPS canonical URL.");
   check(isAbsoluteHttps(metaContent("property", "og:url")), "Launch mode requires an absolute HTTPS og:url.");
@@ -794,7 +835,8 @@ if (launchMode) {
   const termsFiles = ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING", "COPYING.md", "TERMS.md", "EULA.md"];
   check(termsFiles.some((name) => existsSync(resolve(repoRoot, name))), "Launch mode requires a root license or explicit use-terms file.");
 } else {
-  check(robots.includes("noindex") && robots.includes("nofollow"), "Prelaunch mode requires the noindex,nofollow guard.");
+  check(hasExactRobotsPolicy(robots, ["noindex", "nofollow"]),
+    "Prelaunch mode requires the exact noindex,nofollow guard without duplicate or conflicting tokens.");
 }
 
 const stylesheet = stylesheets.length === 1 && stylesheets[0].exists ? readFileSync(stylesheets[0].path, "utf8") : "";

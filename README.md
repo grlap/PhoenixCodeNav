@@ -331,7 +331,7 @@ The complete suite requires directory-link support: NTFS junction creation on Wi
 (ordinary non-elevated NTFS is sufficient; Developer Mode is not required) and directory
 symbolic links on Unix. Failure of either prerequisite is an infrastructure failure rather than
 a green containment result. The website verifier additionally requires Node.js and Git
-working-tree/index metadata (ordinary or split index) so it can verify that content-hashed assets are tracked without
+working-tree/index metadata (ordinary or split index) so it can verify that referenced CSS and JavaScript assets are tracked without
 launching a Git subprocess.
 
 `--db` plus `--build-only` indexes the real workspace into an explicit scratch database and exits
