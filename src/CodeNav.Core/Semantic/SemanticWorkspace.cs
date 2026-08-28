@@ -19,7 +19,12 @@ public sealed record ClusterCoverage(
     IReadOnlyList<string>? UnprovenFriendAssemblyProjects = null,
     // Stable per-project causes for failures that have an actionable semantic contract. The
     // existing FailedProjects list remains the compatibility carrier for every failed load.
-    IReadOnlyDictionary<string, string>? FailedProjectCauses = null);
+    IReadOnlyDictionary<string, string>? FailedProjectCauses = null,
+    // Count of package-DLL metadata references successfully admitted across the requested loaded
+    // projects. This is compiler-input evidence, not a count of distinct package IDs.
+    int ResolvedPackageDllCount = 0,
+    // Exact framework-reference directory selected for this compilation, when available.
+    string? FrameworkRefsSource = null);
 
 /// <summary>Stable one-cause classification shared by semantic telemetry and MCP envelopes.
 /// Keeping this in Core prevents each protocol shaper from inventing a different token for the
@@ -100,6 +105,7 @@ public sealed partial class SemanticWorkspace : IDisposable
         public required (long Count, long Sum) Fingerprint { get; set; }
         public required string ModelIdentity { get; init; }
         public required bool UnprovenFriendAssemblyAuthority { get; init; }
+        public required int ResolvedPackageDllCount { get; init; }
         public long LastUse { get; set; }
         public ProjectResources? Resources { get; init; }
         public IReadOnlyList<PreparedMetadataCandidate> MetadataCandidates { get; init; } = [];

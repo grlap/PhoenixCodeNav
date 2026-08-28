@@ -21,9 +21,15 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
         string fsharpBaseline = File.ReadAllText(Path.Combine(
             root, "tests", "integration", "fsharp-mcp-baseline.json"));
         string submodules = File.ReadAllText(Path.Combine(root, ".gitmodules"));
+        string testProject = File.ReadAllText(Path.Combine(
+            root, "tests", "CodeNav.Tests", "CodeNav.Tests.csproj"));
 
         Assert.Contains(
-            "Assert-Equal ([string]$baseline.roslynCommit) $roslynHead",
+            "Assert-Equal ([string]$baseline.roslynCommit) $roslynGitlink",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Assert-Equal $roslynGitlink $roslynHead",
             script,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -31,7 +37,11 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
             script,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Assert-Equal ([string]$fsharpBaseline.fsharpCommit) $fsharpHead",
+            "Assert-Equal ([string]$fsharpBaseline.fsharpCommit) $fsharpGitlink",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Assert-Equal $fsharpGitlink $fsharpHead",
             script,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -105,21 +115,37 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
         Assert.False(fixture.TryGetProperty("fsharp", out _));
         Assert.Equal("external/roslyn",
             fixture.GetProperty("defaultWorkspace").GetString());
+        System.Text.Json.JsonElement semanticInputs = fixture.GetProperty("semanticInputs");
+        Assert.Equal("Microsoft.NETFramework.ReferenceAssemblies.net472",
+            semanticInputs.GetProperty("net472ReferencePackage").GetString());
+        Assert.Equal("1.0.3",
+            semanticInputs.GetProperty("net472ReferencePackageVersion").GetString());
+        Assert.Equal(".NETFramework,Version=v4.7.2",
+            semanticInputs.GetProperty("net472Framework").GetString());
+        Assert.Equal(0, semanticInputs.GetProperty("resolvedPackageDllCount").GetInt32());
+        Assert.Equal(semanticInputs.GetRawText(),
+            fsharpFixture.GetProperty("semanticInputs").GetRawText());
         Assert.False(fixture.TryGetProperty("indexRelativePath", out _));
         Assert.Equal(
             "fresh_normal_mcp_startup_friend_assembly_authority_correction_with_exact_public_method_canary",
             fixture.GetProperty("countsProvenance").GetString());
-        Assert.Contains("four independent database-absent normal MCP startups",
+        Assert.Contains("Pinned inputs are parent gitlink and checkout commit",
             fixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Contains("startupBuildReason startup_missing",
             fixture.GetProperty("countsProvenanceDetail").GetString());
-        Assert.Contains("47 compiler-bound ICompilationFactoryService references across 7 projects",
+        Assert.Contains("verified-empty per-run NUGET_PACKAGES root",
             fixture.GetProperty("countsProvenanceDetail").GetString());
-        Assert.Contains("supersedes the committed 10-reference/1-project record",
+        Assert.Contains("frameworkRefsAvailable true",
+            fixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("frameworkRefsSource equal to the exact gate fixture",
+            fixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("resolvedPackageDllCount 0",
+            fixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("47 compiler-bound ICompilationFactoryService references across 7 projects",
             fixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Contains("GetOpenDocumentIds",
             fixture.GetProperty("countsProvenanceDetail").GetString());
-        Assert.Contains("Microsoft.CodeAnalysis.CSharp.EditorFeatures.UnitTests",
+        Assert.DoesNotContain("disproves",
             fixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Contains("six unproven friend-assembly projects",
             fixture.GetProperty("countsProvenanceDetail").GetString());
@@ -128,21 +154,35 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
         Assert.False(fsharpFixture.TryGetProperty("indexRelativePath", out _));
         Assert.Equal("src/FSharp.Core/option.fs",
             fsharpFixture.GetProperty("target").GetProperty("sourcePath").GetString());
-        Assert.Equal(116170,
+        Assert.Equal(116168,
             fsharpFixture.GetProperty("counts").GetProperty("symbols").GetInt32());
-        Assert.Equal(4140,
+        Assert.Equal(4174,
             fsharpFixture.GetProperty("counts").GetProperty("orphanedFiles").GetInt32());
         Assert.Equal("fresh_isolated_normal_mcp_schema_29_pinned_fsharp_counts",
             fsharpFixture.GetProperty("countsProvenance").GetString());
-        Assert.Contains("four independent database-absent normal MCP startups",
+        Assert.Contains("Pinned indexing inputs are the parent gitlink and checkout commit",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Contains("startupBuildReason startup_missing",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
-        Assert.Contains("supersedes the committed 116168/4174 record",
+        Assert.Contains("verified-empty per-run NUGET_PACKAGES root",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("frameworkRefsAvailable true",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("frameworkRefsSource equal to the exact gate fixture",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("resolvedPackageDllCount 0",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("do not determine index counts",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("116170",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("4140",
+            fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
+        Assert.Contains("PhoenixCodeNav-rswp",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Contains("cold-build/delta parity canary guards stored-output convergence",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
-        Assert.Contains("creates fresh isolated indexes every run",
+        Assert.Contains("fresh isolated indexes are created every run",
             fsharpFixture.GetProperty("countsProvenanceDetail").GetString());
         Assert.Equal("indexed",
             fixture.GetProperty("target").GetProperty("friendRelationshipConfidence").GetString());
@@ -195,12 +235,39 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
             StringComparison.Ordinal);
         Assert.Contains("roslynCountsProvenance = [ordered]@{", script,
             StringComparison.Ordinal);
+        Assert.Contains("$baseline.target.implementationsUnprovenFriendAssemblyProjects", script,
+            StringComparison.Ordinal);
+        Assert.Contains("$baseline.target.typeHierarchyUnprovenFriendAssemblyProjects", script,
+            StringComparison.Ordinal);
+        Assert.Contains("HEAD:external/roslyn", script, StringComparison.Ordinal);
+        Assert.Contains("HEAD:external/fsharp", script, StringComparison.Ordinal);
+        Assert.Contains("checkout HEAD differs from the pinned submodule gitlink", script,
+            StringComparison.Ordinal);
+        Assert.Contains("$probeStart.FileName = (Get-Process -Id $PID).Path", script,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Get-Command pwsh -CommandType Application", script,
+            StringComparison.Ordinal);
+        Assert.Contains("New-IsolatedPackagesRoot", script, StringComparison.Ordinal);
         Assert.Contains(
-            "-ExpectedUnprovenProjects @($baseline.target.implementationsUnprovenFriendAssemblyProjects)",
+            "$start.EnvironmentVariables[\"NUGET_PACKAGES\"] = $script:isolatedPackagesRoot",
             script,
             StringComparison.Ordinal);
         Assert.Contains(
-            "-ExpectedUnprovenProjects @($baseline.target.typeHierarchyUnprovenFriendAssemblyProjects)",
+            "$start.EnvironmentVariables[\"CODENAV_NET472_REFS\"]",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains("Assert-PinnedNet472ReferenceFixture", script,
+            StringComparison.Ordinal);
+        Assert.Contains("Assert-SemanticInputAuthority", script,
+            StringComparison.Ordinal);
+        Assert.Contains("Assert-CapabilitySemanticInputAuthority", script,
+            StringComparison.Ordinal);
+        Assert.Contains("frameworkRefsSource", script, StringComparison.Ordinal);
+        Assert.Contains("resolvedPackageDllCount\"]", script, StringComparison.Ordinal);
+        Assert.Contains("[string]$PinnedNet472ReferenceRoot", script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Isolated integration package root was populated during the no-restore gate",
             script,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -285,6 +352,16 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
             "url = https://github.com/dotnet/fsharp",
             submodules,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "<PinnedNet472ReferenceAssembliesVersion>1.0.3</PinnedNet472ReferenceAssembliesVersion>",
+            testProject,
+            StringComparison.Ordinal);
+        Assert.Contains("PrivateAssets=\"all\"", testProject, StringComparison.Ordinal);
+        Assert.Contains("ExcludeAssets=\"all\"", testProject, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Path.Combine(root, "src", "CodeNav.Core", "bin",
+            "Release", "net10.0", "pinned-frameworks")));
+        Assert.False(Directory.Exists(Path.Combine(root, "src", "CodeNav.Mcp", "bin",
+            "Release", "net10.0", "pinned-frameworks")));
         foreach (string forbidden in new[]
                  {
                      "phoenixBaselineCommit",
@@ -383,7 +460,9 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
             StringComparison.Ordinal);
         Assert.Contains("StderrTask = $process.StandardError.ReadToEndAsync()",
             lifecycleBlock, StringComparison.Ordinal);
-        Assert.Contains("$Client.Process.WaitForExit()", lifecycleBlock,
+        Assert.Contains("$Client.StderrTask.Wait(3000)", lifecycleBlock,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("$Client.Process.WaitForExit()", lifecycleBlock,
             StringComparison.Ordinal);
         Assert.DoesNotContain("Add-Type -TypeDefinition", lifecycleBlock,
             StringComparison.Ordinal);
@@ -406,6 +485,18 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
         string output = await RunSelfTest(
             "-SelfTestFreshIndexLifecycleContract", TimeSpan.FromSeconds(45));
         Assert.Contains("Fresh-index lifecycle contract self-test passed", output,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PinnedFrameworkReferenceFixtureIsExactAndRequired()
+    {
+        string fixtureRoot = Path.Combine(AppContext.BaseDirectory,
+            "pinned-frameworks", "net472");
+        string output = await RunSelfTest(
+            "-SelfTestPinnedFrameworkReferenceContract", TimeSpan.FromSeconds(45),
+            "-PinnedNet472ReferenceRoot", fixtureRoot);
+        Assert.Contains("Pinned framework-reference contract self-test passed", output,
             StringComparison.Ordinal);
     }
 
@@ -436,16 +527,18 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
             $"Readiness-failure cleanup left descendant {grandchildPid} alive:{Environment.NewLine}{output}");
     }
 
-    private static async Task<string> RunSelfTest(string switchName, TimeSpan timeout)
+    private static async Task<string> RunSelfTest(string switchName, TimeSpan timeout,
+        params string[] additionalArguments)
     {
-        (int exitCode, string output) = await RunSelfTestProcess(switchName, timeout);
+        (int exitCode, string output) = await RunSelfTestProcess(
+            switchName, timeout, additionalArguments);
         Assert.True(exitCode == 0,
             $"Roslyn harness self-test {switchName} exited {exitCode}:{Environment.NewLine}{output}");
         return output;
     }
 
     private static async Task<(int ExitCode, string Output)> RunSelfTestProcess(
-        string switchName, TimeSpan timeout)
+        string switchName, TimeSpan timeout, params string[] additionalArguments)
     {
         string root = FindRepositoryRoot();
         string script = Path.Combine(root, "scripts", "test-roslyn-mcp.ps1");
@@ -464,6 +557,7 @@ public sealed class RoslynHarnessLifecycleTests : IDisposable
         start.ArgumentList.Add("-File");
         start.ArgumentList.Add(script);
         start.ArgumentList.Add(switchName);
+        foreach (string argument in additionalArguments) start.ArgumentList.Add(argument);
 
         using var process = Process.Start(start)!;
         Task<string> stdout = process.StandardOutput.ReadToEndAsync();

@@ -196,6 +196,12 @@ under CPM, and disabled VersionOverride authority fails closed. Ambiguous Window
 and unsupported central constructs, including `GlobalPackageReference`, remain explicit. Active `ExcludeAssets`, `IncludeAssets`, or
 `Aliases` metadata fails closed because the bounded evaluator does not model package compile-asset
 filtering or reference aliases.
+An explicit `CODENAV_NET472_REFS` directory is likewise authoritative for net472 compiler metadata:
+Phoenix does not fall through to installed targeting packs or package caches when that override is
+missing or unusable, and availability remains false unless valid assemblies with the expected
+`mscorlib`, `System`, and `System.Core` identities are present. C# semantic coverage reports the
+exact selected `frameworkRefsSource` and counts only package DLLs successfully admitted as compiler
+metadata in `resolvedPackageDllCount`.
 Active package identities are matched against the selected target in the project's existing
 `obj/project.assets.json`; Phoenix never restores or invokes MSBuild. The assets snapshot must name
 the same physical project, selected framework, exact case-insensitive explicit direct package identity set, and evaluated version
@@ -210,8 +216,9 @@ through `major.minor.patch.*`; unsupported shapes fail closed. Central `PackageV
 remains restricted to simple versions.
 Only target packages reachable from the evaluated direct PackageReference roots contribute
 transitive `compile` assets. Each reachable package resolves its containing root once beneath
-declared package folders that match the host-configured/default global NuGet cache or remain inside
-the workspace, bounded by the existing dependency/reference/byte budgets and request cancellation,
+declared package folders that remain inside the workspace or match the explicit `NUGET_PACKAGES`
+root exclusively when it is set; when it is absent, the ordinary user-profile global cache remains
+supported. Resolution is bounded by the existing dependency/reference/byte budgets and request cancellation,
 copied to immutable request-private files, and reverified
 after FCS. Missing, stale, mismatched, changed, non-managed, or path-unsafe package inputs fail with
 explicit `fsharp_semantic_package_*` causes. Project-reference closure remains unsupported.

@@ -2,15 +2,21 @@
   "name": "fsharp-5928e91",
   "fsharpCommit": "5928e91b5f701586690562ce10bd639357fff50b",
   "defaultWorkspace": "external/fsharp",
+  "semanticInputs": {
+    "net472ReferencePackage": "Microsoft.NETFramework.ReferenceAssemblies.net472",
+    "net472ReferencePackageVersion": "1.0.3",
+    "net472Framework": ".NETFramework,Version=v4.7.2",
+    "resolvedPackageDllCount": 0
+  },
   "countsProvenance": "fresh_isolated_normal_mcp_schema_29_pinned_fsharp_counts",
-  "countsProvenanceDetail": "On 2026-08-27, four independent database-absent normal MCP startups—the explicit scratch probe, two implementation validation runs, and the final review validation—used Release build 0.12.69+52aadbe, schema 29, and pinned FSharp commit 5928e91b5f701586690562ce10bd639357fff50b. Every run reported server startupBuildReason startup_missing and produced symbols 116170 and orphanedFiles 4140. This repeated fresh evidence supersedes the committed 116168/4174 record. That losing record came through the prior reusable/repair workflow without retained database-absent startup_missing proof and did not reproduce in any of the four fresh runs. The cold-build/delta parity canary guards stored-output convergence, and the external gate now creates fresh isolated indexes every run instead of repairing or trusting a prior-run index.",
+  "countsProvenanceDetail": "Pinned indexing inputs are the parent gitlink and checkout commit 5928e91b5f701586690562ce10bd639357fff50b plus database-absent startupBuildReason startup_missing; the current baseline expects symbols 116168 and orphanedFiles 4174. The Microsoft.NETFramework.ReferenceAssemblies.net472 1.0.3 gate fixture and verified-empty per-run NUGET_PACKAGES root are separately attested semantic inputs and do not determine index counts: semantic evidence requires frameworkRefsAvailable true, frameworkRefsSource equal to the exact gate fixture, and resolvedPackageDllCount 0. Four earlier fresh runs on the same commit recorded symbols 116170 and orphanedFiles 4140; that unexplained ownership variance is tracked as PhoenixCodeNav-rswp instead of being attributed to semantic inputs. The cold-build/delta parity canary guards stored-output convergence, and fresh isolated indexes are created every run without restoring the external checkout, repairing a prior index, or changing this baseline automatically.",
   "counts": {
     "projects": 112,
     "fsharpProjects": 72,
     "csharpFiles": 243,
     "fsharpFiles": 6432,
-    "symbols": 116170,
-    "orphanedFiles": 4140
+    "symbols": 116168,
+    "orphanedFiles": 4174
   },
   "target": {
     "sourcePath": "src/FSharp.Core/option.fs",

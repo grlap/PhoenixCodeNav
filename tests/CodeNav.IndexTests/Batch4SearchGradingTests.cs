@@ -251,6 +251,47 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("complete compiler identity",
             json.GetProperty("budgets")
                 .GetProperty("indivisibleSemanticIdentity").GetString());
+        JsonElement semantic = json.GetProperty("semantic");
+        string? expectedFrameworkSource = _semantic.FrameworkRefsSource;
+        Assert.Equal(expectedFrameworkSource is not null, _semantic.FrameworkRefsAvailable);
+        if (expectedFrameworkSource is null)
+        {
+            Assert.False(semantic.TryGetProperty("frameworkRefsSource", out _));
+        }
+        else
+        {
+            Assert.True(semantic.TryGetProperty("frameworkRefsSource", out JsonElement source));
+            Assert.Equal(expectedFrameworkSource, source.GetString());
+        }
+    }
+
+    [Fact]
+    public void CapabilitiesExposeTheExactFrameworkReferenceSource()
+    {
+        var health = new IndexHealth("ready", "epoch-29", "indexed", "refreshed", 0,
+            null, 123, "/workspace", "index.db");
+        const string pinnedSource = "/fixtures/net472";
+
+        JsonElement semantic = Parse(NavigationTools.ServerCapabilitiesUncompactedForTest(
+                health, frameworkRefsAvailable: true, frameworkRefsSource: pinnedSource))
+            .GetProperty("semantic");
+
+        Assert.True(semantic.GetProperty("frameworkRefsAvailable").GetBoolean());
+        Assert.Equal(pinnedSource, semantic.GetProperty("frameworkRefsSource").GetString());
+    }
+
+    [Fact]
+    public void CapabilitiesOmitFrameworkReferenceSourceWhenUnavailable()
+    {
+        var health = new IndexHealth("ready", "epoch-29", "indexed", "refreshed", 0,
+            null, 123, "/workspace", "index.db");
+
+        JsonElement semantic = Parse(NavigationTools.ServerCapabilitiesUncompactedForTest(
+                health, frameworkRefsAvailable: false, frameworkRefsSource: null))
+            .GetProperty("semantic");
+
+        Assert.False(semantic.GetProperty("frameworkRefsAvailable").GetBoolean());
+        Assert.False(semantic.TryGetProperty("frameworkRefsSource", out _));
     }
 
     [Fact]
@@ -990,6 +1031,24 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("server_capabilities dispatch", buildDispatchIsolation);
         Assert.Contains("without changing parser concurrency, queue capacity, publication, or authority",
             buildDispatchIsolation);
+        string packageRootAuthority = Summary("semantic-package-root-override-authority");
+        Assert.Contains("v0.12.71", packageRootAuthority);
+        Assert.Contains("exclusive external NuGet authority", packageRootAuthority);
+        Assert.Contains("ordinary user-profile global cache remains supported",
+            packageRootAuthority);
+        string packageInputEvidence = Summary("semantic-package-input-evidence");
+        Assert.Contains("resolvedPackageDllCount", packageInputEvidence);
+        Assert.Contains("frameworkRefsAvailable", packageInputEvidence);
+        Assert.Contains("v0.12.71", packageInputEvidence);
+        Assert.Contains("successfully admitted", packageInputEvidence);
+        string frameworkOverride = Summary("semantic-framework-reference-override-authority");
+        Assert.Contains("v0.12.71", frameworkOverride);
+        Assert.Contains("authoritative", frameworkOverride);
+        Assert.Contains("mscorlib, System, and System.Core", frameworkOverride);
+        string frameworkSource = Summary("semantic-framework-reference-source-evidence");
+        Assert.Contains("v0.12.71", frameworkSource);
+        Assert.Contains("frameworkRefsSource", frameworkSource);
+        Assert.Contains("exact", frameworkSource);
         string defaultBaseline = Summary("review-default-baseline-honesty");
         Assert.Contains("bounded git_index_baseline_unavailable", defaultBaseline);
         Assert.Contains("refresh_index", defaultBaseline);

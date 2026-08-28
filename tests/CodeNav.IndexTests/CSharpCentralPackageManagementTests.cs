@@ -291,7 +291,55 @@ public sealed class CSharpCentralPackageManagementTests
 
             Project project = Assert.Single(lease.Solution.Projects);
             Assert.Empty(lease.Coverage.FailedProjects);
+            Assert.Equal(1, lease.Coverage.ResolvedPackageDllCount);
+            Assert.Equal(net472SourceDuringRedirect, lease.Coverage.FrameworkRefsSource);
             Assert.Contains(project.MetadataReferences.OfType<PortableExecutableReference>(),
+                reference => WorkspacePaths.FileSystemPathComparer.Equals(
+                    reference.FilePath, fixturePath));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", priorPackagesRoot);
+            TestWorkspaceCleanup.DeleteWorkspace(sandbox);
+        }
+    }
+
+    [Fact]
+    public async Task ResolvedButInvalidPackageDllIsNotReportedAsCompilerInput()
+    {
+        const string packageId = "Phoenix.Invalid.Cpm";
+        const string version = "1.2.3";
+        _ = ReferenceAssemblyLocator.Net472References(out _);
+        string sandbox = Directory.CreateTempSubdirectory(
+            "codenav-csharp-cpm-invalid-metadata").FullName;
+        string packagesRoot = Path.Combine(sandbox, "packages");
+        string fixtureDirectory = Path.Combine(packagesRoot, packageId.ToLowerInvariant(),
+            version, "lib", "netstandard2.0");
+        string fixturePath = Path.Combine(fixtureDirectory, "Phoenix.Invalid.Cpm.dll");
+        string workspaceRoot = Path.Combine(sandbox, "workspace");
+        string? priorPackagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        try
+        {
+            Directory.CreateDirectory(fixtureDirectory);
+            File.WriteAllText(fixturePath, "not a portable executable");
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", packagesRoot);
+            Assert.Equal(fixturePath, ReferenceAssemblyLocator.ResolvePackageDllExact(
+                packageId, version, out bool exactVersionDirectoryExists));
+            Assert.True(exactVersionDirectoryExists);
+
+            Directory.CreateDirectory(workspaceRoot);
+            WriteWorkspace(workspaceRoot, version, packageId);
+            string dbPath = IndexBuilder.DefaultDbPath(workspaceRoot);
+            IndexBuilder.Build(workspaceRoot, dbPath);
+
+            using var workspace = new SemanticWorkspace(workspaceRoot, dbPath);
+            using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
+                ["Cpm.Consumer"], CancellationToken.None);
+
+            Project project = Assert.Single(lease.Solution.Projects);
+            Assert.Empty(lease.Coverage.FailedProjects);
+            Assert.Equal(0, lease.Coverage.ResolvedPackageDllCount);
+            Assert.DoesNotContain(project.MetadataReferences.OfType<PortableExecutableReference>(),
                 reference => WorkspacePaths.FileSystemPathComparer.Equals(
                     reference.FilePath, fixturePath));
         }

@@ -698,6 +698,14 @@ public sealed partial class SemanticService
     private bool TryGetFSharpPackageRoots(JsonElement root,
         CancellationToken cancellationToken,
         out List<string>? packageRoots)
+        => TryGetFSharpPackageRootsForEnvironment(root, cancellationToken,
+            _manager.WorkspaceRoot, Environment.GetEnvironmentVariable("NUGET_PACKAGES"),
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), out packageRoots);
+
+    internal static bool TryGetFSharpPackageRootsForEnvironment(JsonElement root,
+        CancellationToken cancellationToken, string workspaceRoot,
+        string? configuredPackagesRoot, string userProfile,
+        out List<string>? packageRoots)
     {
         packageRoots = null;
         if (!root.TryGetProperty("packageFolders", out JsonElement folders) ||
@@ -709,7 +717,9 @@ public sealed partial class SemanticService
             cancellationToken.ThrowIfCancellationRequested();
             if (!Path.IsPathFullyQualified(folder.Name)) return false;
             string rootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder.Name));
-            if (!IsAllowedFSharpPackageRoot(rootPath)) continue;
+            if (!IsAllowedFSharpPackageRootForEnvironment(rootPath, workspaceRoot,
+                    configuredPackagesRoot, userProfile))
+                continue;
             if (!Directory.Exists(rootPath)) continue;
             roots.Add(rootPath);
         }
@@ -717,23 +727,28 @@ public sealed partial class SemanticService
         return packageRoots.Count > 0;
     }
 
-    private bool IsAllowedFSharpPackageRoot(string packageRoot)
+    internal static bool IsAllowedFSharpPackageRootForEnvironment(string packageRoot,
+        string workspaceRoot, string? configuredPackagesRoot, string userProfile)
     {
-        string workspaceRoot = Path.TrimEndingDirectorySeparator(
-            Path.GetFullPath(_manager.WorkspaceRoot));
-        if (packageRoot.Equals(workspaceRoot, PathComparison) ||
-            packageRoot.StartsWith(workspaceRoot + Path.DirectorySeparatorChar, PathComparison))
+        string normalizedWorkspaceRoot = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(workspaceRoot));
+        string normalizedPackageRoot = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(packageRoot));
+        if (normalizedPackageRoot.Equals(normalizedWorkspaceRoot,
+                WorkspacePaths.FileSystemPathComparison) ||
+            normalizedPackageRoot.StartsWith(
+                normalizedWorkspaceRoot + Path.DirectorySeparatorChar,
+                WorkspacePaths.FileSystemPathComparison))
             return true;
 
-        var configuredRoots = new List<string>();
-        if (Environment.GetEnvironmentVariable("NUGET_PACKAGES") is { Length: > 0 } configured)
-            configuredRoots.Add(configured);
-        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (profile.Length > 0)
-            configuredRoots.Add(Path.Combine(profile, ".nuget", "packages"));
-        return configuredRoots.Any(root =>
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(root))
-                .Equals(packageRoot, PathComparison));
+        string? allowedExternalRoot = !string.IsNullOrWhiteSpace(configuredPackagesRoot)
+            ? configuredPackagesRoot
+            : userProfile.Length > 0
+                ? Path.Combine(userProfile, ".nuget", "packages")
+                : null;
+        return allowedExternalRoot is not null &&
+               Path.TrimEndingDirectorySeparator(Path.GetFullPath(allowedExternalRoot))
+                   .Equals(normalizedPackageRoot, WorkspacePaths.FileSystemPathComparison);
     }
 
     private static bool TryGetSafeRelativeFSharpAssetPath(string? value,

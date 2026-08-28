@@ -140,6 +140,7 @@ public sealed partial class SemanticWorkspace
         public required IReadOnlyList<PreparedMetadataCandidate> MetadataCandidates { get; init; }
         public required ProjectResources? Resources { get; init; }
         public required bool UnprovenFriendAssemblyAuthority { get; init; }
+        public required int ResolvedPackageDllCount { get; init; }
         public required long ParseTicks { get; init; }
         public required long ReadTicks { get; init; }
         public required long MetadataTicks { get; init; }
@@ -158,6 +159,7 @@ public sealed partial class SemanticWorkspace
                 MetadataCandidates = [],
                 Resources = null,
                 UnprovenFriendAssemblyAuthority = false,
+                ResolvedPackageDllCount = 0,
                 ParseTicks = 0,
                 ReadTicks = 0,
                 MetadataTicks = 0,
@@ -531,10 +533,22 @@ public sealed partial class SemanticWorkspace
                 }
                 if (_reference is null)
                 {
+                    if (!ReferenceAssemblyLocator.IsManagedAssemblyPath(_key.Path))
+                    {
+                        _retired = true;
+                        _owner.Metadata.TryRemove(
+                            new KeyValuePair<MetadataCacheKey, MetadataCacheEntry>(_key, this));
+                        return null;
+                    }
                     InputReservation split = projectReservation.Split(_key.Size);
                     try
                     {
-                        _reference = MetadataReference.CreateFromFile(_key.Path);
+                        PortableExecutableReference reference =
+                            MetadataReference.CreateFromFile(_key.Path);
+                        // CreateFromFile is lazy. Force metadata acquisition before the candidate
+                        // and its compiler-input evidence are admitted.
+                        _ = reference.GetMetadata();
+                        _reference = reference;
                         _reservation = split;
                     }
                     catch
@@ -1138,6 +1152,7 @@ public sealed partial class SemanticWorkspace
                                     ModelIdentity = project.Identity.ModelIdentity,
                                     UnprovenFriendAssemblyAuthority =
                                         project.UnprovenFriendAssemblyAuthority,
+                                    ResolvedPackageDllCount = project.ResolvedPackageDllCount,
                                     LastUse = 0,
                                     Resources = handle.TransferResources(),
                                     MetadataCandidates = project.MetadataCandidates,
@@ -1272,7 +1287,12 @@ public sealed partial class SemanticWorkspace
                                     .ToList(),
                                 FailedProjectCauses: failureCauses.Count > 0
                                     ? failureCauses
-                                    : null);
+                                    : null,
+                                ResolvedPackageDllCount: requested.Sum(name =>
+                                    _loaded.TryGetValue(name, out LoadedProject? project)
+                                        ? project.ResolvedPackageDllCount
+                                        : 0),
+                                FrameworkRefsSource: referenceDirectory);
                             loadedResult = coverage.LoadedProjects;
                             failedResult = coverage.FailedProjects.Count;
                             SemanticSolutionLease lease = CreateSolutionLease(coverage, requested);
@@ -1556,18 +1576,19 @@ public sealed partial class SemanticWorkspace
                     var leasesByPath = new Dictionary<string, MetadataReferenceLease>(
                         WorkspacePaths.FileSystemPathComparer);
 
-                    void AddCandidate(string? assemblyName, string fullPath)
+                    bool AddCandidate(string? assemblyName, string fullPath)
                     {
                         string key = Path.GetFullPath(fullPath);
                         if (!leasesByPath.TryGetValue(key, out MetadataReferenceLease? lease))
                         {
                             lease = _coldStartRuntime.AcquireMetadata(key, reservation);
-                            if (lease is null) return; // unreadable/missing keeps old skip semantics
+                            if (lease is null) return false; // unreadable/missing keeps old skip semantics
                             leasesByPath[key] = lease;
                             metadataLeases.Add(lease);
                         }
                         candidates.Add(new PreparedMetadataCandidate(
                             assemblyName, key, lease.Reference));
+                        return true;
                     }
 
                     foreach ((string assembly, string? hint) in parsed.AssemblyRefs)
@@ -1577,7 +1598,14 @@ public sealed partial class SemanticWorkspace
                             hint.Replace('/', Path.DirectorySeparatorChar));
                         AddCandidate(assembly, full);
                     }
-                    foreach (string dll in resolvedPackageDlls) AddCandidate(null, dll);
+                    var admittedPackageDlls = new HashSet<string>(
+                        WorkspacePaths.FileSystemPathComparer);
+                    foreach (string dll in resolvedPackageDlls)
+                    {
+                        string fullPath = Path.GetFullPath(dll);
+                        if (AddCandidate(null, fullPath))
+                            admittedPackageDlls.Add(fullPath);
+                    }
                     long metadataTicks = System.Diagnostics.Stopwatch.GetTimestamp() - metadataStarted;
 
                     bool unproven = parsed.InternalsVisibleTo is { Count: > 0 } &&
@@ -1595,6 +1623,7 @@ public sealed partial class SemanticWorkspace
                         MetadataCandidates = candidates,
                         Resources = resources,
                         UnprovenFriendAssemblyAuthority = unproven,
+                        ResolvedPackageDllCount = admittedPackageDlls.Count,
                         ParseTicks = parseTicks,
                         ReadTicks = readTicks,
                         MetadataTicks = metadataTicks,

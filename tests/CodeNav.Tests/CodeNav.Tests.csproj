@@ -5,11 +5,18 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <PinnedNet472ReferenceAssembliesVersion>1.0.3</PinnedNet472ReferenceAssembliesVersion>
+    <PinnedNet472ReferenceAssembliesOutput>$(MSBuildProjectDirectory)/bin/$(Configuration)/$(TargetFramework)/pinned-frameworks/net472</PinnedNet472ReferenceAssembliesOutput>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.2" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472"
+                      Version="$(PinnedNet472ReferenceAssembliesVersion)"
+                      PrivateAssets="all"
+                      ExcludeAssets="all"
+                      GeneratePathProperty="true" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
   </ItemGroup>
@@ -29,5 +36,24 @@
     <Compile Include="..\TestSupport\TestWorkspaceCleanup.cs" Link="TestSupport\TestWorkspaceCleanup.cs" />
     <Compile Include="..\TestSupport\ProcessHeavyTestIsolation.cs" Link="TestSupport\ProcessHeavyTestIsolation.cs" />
   </ItemGroup>
+
+  <Target Name="CopyPinnedNet472ReferenceAssemblies" AfterTargets="Build">
+    <Error Condition="'$(PkgMicrosoft_NETFramework_ReferenceAssemblies_net472)' == ''"
+           Text="The exact Microsoft.NETFramework.ReferenceAssemblies.net472 package path is unavailable. Restore tests/CodeNav.Tests/CodeNav.Tests.csproj explicitly before building." />
+    <ItemGroup>
+      <PinnedNet472ReferenceAssembly Include="$(PkgMicrosoft_NETFramework_ReferenceAssemblies_net472)/build/.NETFramework/v4.7.2/**/*.dll" />
+    </ItemGroup>
+    <Error Condition="'@(PinnedNet472ReferenceAssembly)' == ''"
+           Text="Microsoft.NETFramework.ReferenceAssemblies.net472 $(PinnedNet472ReferenceAssembliesVersion) contains no v4.7.2 reference assemblies." />
+    <RemoveDir Directories="$(PinnedNet472ReferenceAssembliesOutput)" />
+    <MakeDir Directories="$(PinnedNet472ReferenceAssembliesOutput)" />
+    <Copy SourceFiles="@(PinnedNet472ReferenceAssembly)"
+          DestinationFiles="@(PinnedNet472ReferenceAssembly->'$(PinnedNet472ReferenceAssembliesOutput)/%(RecursiveDir)%(Filename)%(Extension)')" />
+    <WriteLinesToFile
+        File="$(PinnedNet472ReferenceAssembliesOutput)/Phoenix.ReferenceAssemblies.manifest"
+        Lines="package=Microsoft.NETFramework.ReferenceAssemblies.net472|version=$(PinnedNet472ReferenceAssembliesVersion)|framework=.NETFramework,Version=v4.7.2"
+        Overwrite="true"
+        Encoding="UTF-8" />
+  </Target>
 
 </Project>

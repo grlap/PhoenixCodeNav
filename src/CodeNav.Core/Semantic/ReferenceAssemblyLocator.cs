@@ -12,6 +12,13 @@ namespace CodeNav.Core.Semantic;
 /// </summary>
 public static class ReferenceAssemblyLocator
 {
+    private static readonly (string FileName, string AssemblyName)[] RequiredNet472References =
+    [
+        ("mscorlib.dll", "mscorlib"),
+        ("System.dll", "System"),
+        ("System.Core.dll", "System.Core"),
+    ];
+
     private static readonly object Gate = new();
     private static IReadOnlyList<MetadataReference>? _net472Cache;
     private static string? _net472Dir;
@@ -39,6 +46,7 @@ public static class ReferenceAssemblyLocator
                     catch (Exception) { /* skip unreadable assembly */ }
                 }
             }
+            if (refs.Count == 0) dir = null;
             _net472Cache = refs;
             _net472Dir = dir;
             sourceDir = dir;
@@ -65,10 +73,8 @@ public static class ReferenceAssemblyLocator
     private static string? ProbeNet472Dir()
     {
         // 1. Explicit override.
-        if (Environment.GetEnvironmentVariable("CODENAV_NET472_REFS") is { Length: > 0 } env && Directory.Exists(env))
-        {
-            return env;
-        }
+        if (TryGetExplicitNet472ReferenceDirectory(out string? explicitDirectory))
+            return explicitDirectory;
 
         // 2. Installed targeting pack (present with VS / Build Tools).
         foreach (var programFiles in new[]
@@ -79,7 +85,7 @@ public static class ReferenceAssemblyLocator
         {
             if (string.IsNullOrEmpty(programFiles)) continue;
             string dir = Path.Combine(programFiles, "Reference Assemblies", "Microsoft", "Framework", ".NETFramework", "v4.7.2");
-            if (Directory.Exists(dir)) return dir;
+            if (IsViableNet472ReferenceDirectory(dir)) return dir;
         }
 
         // 3. NuGet cache (auto-restored by SDK builds targeting net472 without a pack).
@@ -90,7 +96,7 @@ public static class ReferenceAssemblyLocator
             var candidate = Directory.EnumerateDirectories(nuget)
                 .OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase)
                 .Select(d => Path.Combine(d, "build", ".NETFramework", "v4.7.2"))
-                .FirstOrDefault(Directory.Exists);
+                .FirstOrDefault(IsViableNet472ReferenceDirectory);
             if (candidate is not null) return candidate;
         }
 
@@ -99,7 +105,7 @@ public static class ReferenceAssemblyLocator
         foreach (var fw in new[] { "Framework64", "Framework" })
         {
             string dir = Path.Combine(windir, "Microsoft.NET", fw, "v4.0.30319");
-            if (File.Exists(Path.Combine(dir, "mscorlib.dll"))) return dir;
+            if (IsViableNet472ReferenceDirectory(dir)) return dir;
         }
         return null;
     }
@@ -172,6 +178,7 @@ public static class ReferenceAssemblyLocator
                     .Where(IsManagedAssemblyPath)
                     .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                     .ToList();
+            if (paths.Count == 0) dir = null;
             FrameworkPathCache[targetFramework] = (paths, dir);
             sourceDir = dir;
             return paths;
@@ -211,11 +218,14 @@ public static class ReferenceAssemblyLocator
     internal static string GlobalPackagesRoot()
     {
         string? configured = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
-        return string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".nuget", "packages")
-            : configured;
+        return GlobalPackagesRootForEnvironment(configured,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
     }
+
+    internal static string GlobalPackagesRootForEnvironment(string? configured,
+        string userProfile) => string.IsNullOrWhiteSpace(configured)
+        ? Path.Combine(userProfile, ".nuget", "packages")
+        : configured;
 
     private static string? ProbeNetCoreReferenceDir(string targetFramework)
     {
@@ -244,9 +254,8 @@ public static class ReferenceAssemblyLocator
 
     private static string? ProbeStrictNet472Dir()
     {
-        if (Environment.GetEnvironmentVariable("CODENAV_NET472_REFS") is { Length: > 0 } env &&
-            Directory.Exists(env))
-            return env;
+        if (TryGetExplicitNet472ReferenceDirectory(out string? explicitDirectory))
+            return explicitDirectory;
 
         foreach (string programFiles in new[]
                  {
@@ -257,21 +266,73 @@ public static class ReferenceAssemblyLocator
             if (string.IsNullOrEmpty(programFiles)) continue;
             string candidate = Path.Combine(programFiles, "Reference Assemblies", "Microsoft",
                 "Framework", ".NETFramework", "v4.7.2");
-            if (Directory.Exists(candidate)) return candidate;
+            if (IsViableNet472ReferenceDirectory(candidate)) return candidate;
         }
 
-        string packageRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".nuget", "packages", "microsoft.netframework.referenceassemblies.net472");
+        string packageRoot = Path.Combine(GlobalPackagesRoot(),
+            "microsoft.netframework.referenceassemblies.net472");
         if (!Directory.Exists(packageRoot)) return null;
         return Directory.EnumerateDirectories(packageRoot)
             .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
             .Select(path => Path.Combine(path, "build", ".NETFramework", "v4.7.2"))
-            .FirstOrDefault(Directory.Exists);
+            .FirstOrDefault(IsViableNet472ReferenceDirectory);
     }
 
     private static Version? ParseVersion(string value) =>
         Version.TryParse(value.Split('-', 2)[0], out Version? version) ? version : null;
+
+    private static bool TryGetExplicitNet472ReferenceDirectory(out string? directory)
+    {
+        string? configured = Environment.GetEnvironmentVariable("CODENAV_NET472_REFS");
+        if (string.IsNullOrWhiteSpace(configured))
+        {
+            directory = null;
+            return false;
+        }
+        directory = Directory.Exists(configured) &&
+                    IsViableNet472ReferenceDirectory(configured)
+            ? Path.GetFullPath(configured)
+            : null;
+        return true;
+    }
+
+    internal static bool IsViableNet472ReferenceDirectory(string directory)
+    {
+        if (!Directory.Exists(directory)) return false;
+
+        foreach ((string fileName, string assemblyName) in RequiredNet472References)
+        {
+            string path = Path.Combine(directory, fileName);
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new PEReader(stream);
+                if (!reader.HasMetadata) return false;
+                MetadataReader metadata = reader.GetMetadataReader();
+                if (!metadata.IsAssembly) return false;
+                string actualName = metadata.GetString(metadata.GetAssemblyDefinition().Name);
+                if (!actualName.Equals(assemblyName, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    internal static void ResetCachesForTests()
+    {
+        lock (Gate)
+        {
+            _net472Cache = null;
+            _net472Dir = null;
+            FrameworkPathCache.Clear();
+        }
+    }
 
     internal static bool IsManagedAssemblyPath(string path)
     {

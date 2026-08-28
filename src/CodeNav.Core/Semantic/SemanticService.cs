@@ -165,6 +165,15 @@ public sealed partial class SemanticService : IDisposable
         }
     }
 
+    public string? FrameworkRefsSource
+    {
+        get
+        {
+            ReferenceAssemblyLocator.Net472References(out string? dir);
+            return dir;
+        }
+    }
+
     private SemanticWorkspace Workspace
     {
         get

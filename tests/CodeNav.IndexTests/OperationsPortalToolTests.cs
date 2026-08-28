@@ -179,7 +179,7 @@ public sealed class OperationsPortalToolTests
             Assert.False(response.GetProperty("browserOpened").GetBoolean());
             Assert.Contains("Show the url field verbatim", response.GetProperty("instruction").GetString());
             Assert.Equal(Path.GetFullPath(root), launcher.WorkspaceRoot);
-            Assert.StartsWith("0.12.69+",
+            Assert.StartsWith("0.12.71+",
                 response.GetProperty("meta").GetProperty("build").GetString());
             Assert.Equal(
                 "indexed",
@@ -340,7 +340,7 @@ public sealed class OperationsPortalToolTests
                 client,
                 "server_capabilities",
                 timeout.Token);
-            Assert.Equal("0.12.69", capabilities.GetProperty("version").GetString());
+            Assert.Equal("0.12.71", capabilities.GetProperty("version").GetString());
             Assert.Contains(
                 capabilities.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

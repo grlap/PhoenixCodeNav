@@ -7,12 +7,14 @@ param(
     [string]$FSharpIndexDb,
     [string]$FSharpBaselinePath,
     [string]$EvidencePath,
+    [string]$PinnedNet472ReferenceRoot,
     [switch]$SelfTestProcessLifecycle,
     [switch]$SelfTestProcessLifecycleReadinessFailure,
     [switch]$SelfTestProcessHost,
     [switch]$SelfTestProcessGrandchild,
     [switch]$SelfTestSemanticRetryContract,
     [switch]$SelfTestFreshIndexLifecycleContract,
+    [switch]$SelfTestPinnedFrameworkReferenceContract,
     [switch]$SelfTestFreshIndexLeaseProbe,
     [string]$SelfTestLeasePath
 )
@@ -121,11 +123,8 @@ function Stop-McpClient($Client) {
         if (-not $Client.Process.WaitForExit(5000)) {
             throw "$($Client.Label): process tree did not exit after bounded termination"
         }
-        # The timed overload proves the process exited but does not complete .NET's redirected-
-        # stream bookkeeping. The parameterless follow-up is the documented drain barrier; without
-        # it a completed process can leave ReadToEndAsync queued long enough to look like a teardown
-        # failure while the machine is busy finishing an index build.
-        $Client.Process.WaitForExit()
+        # StandardError is consumed with ReadToEndAsync, so that task—not the parameterless
+        # WaitForExit overload—is the actual redirected-stream drain barrier.
         $exitConfirmed = $true
         if (-not $Client.StderrTask.Wait(3000)) {
             throw "$($Client.Label): stderr drain did not complete after process exit"
@@ -289,6 +288,7 @@ $externalIntegrationRoot = [IO.Path]::GetFullPath(
 $freshRun = $null
 $freshIndexRoot = $null
 $freshRunLease = $null
+$isolatedPackagesRoot = $null
 $freshRunLeasePath = Join-Path $externalIntegrationRoot ".fresh-index-gate.lock"
 $usesDefaultRoslynIndex = [string]::IsNullOrWhiteSpace($IndexDb)
 if (-not $usesDefaultRoslynIndex) {
@@ -298,6 +298,15 @@ if ([string]::IsNullOrWhiteSpace($FSharpBaselinePath)) {
     $FSharpBaselinePath = Join-Path $repoRoot "tests\integration\fsharp-mcp-baseline.json"
 }
 $fsharpBaseline = Get-Content -Raw -LiteralPath $FSharpBaselinePath | ConvertFrom-Json
+$pinnedNet472Package = [string]$baseline.semanticInputs.net472ReferencePackage
+$pinnedNet472Version = [string]$baseline.semanticInputs.net472ReferencePackageVersion
+$pinnedNet472Framework = [string]$baseline.semanticInputs.net472Framework
+$expectedResolvedPackageDllCount = [int]$baseline.semanticInputs.resolvedPackageDllCount
+if ([string]::IsNullOrWhiteSpace($PinnedNet472ReferenceRoot)) {
+    $PinnedNet472ReferenceRoot = Join-Path $repoRoot `
+        "tests\CodeNav.Tests\bin\Release\net10.0\pinned-frameworks\net472"
+}
+$pinnedNet472ReferenceRoot = [IO.Path]::GetFullPath($PinnedNet472ReferenceRoot)
 if ([string]::IsNullOrWhiteSpace($FSharpWorkspace)) {
     $FSharpWorkspace = if ([string]::IsNullOrWhiteSpace($env:PHOENIX_FSHARP_WORKSPACE)) {
         Join-Path $repoRoot ([string]$fsharpBaseline.defaultWorkspace)
@@ -431,6 +440,92 @@ function New-FreshIndexRun([string]$AnchorPath, [string]$IntegrationRoot,
         if ($null -ne $lease) { $lease.Dispose() }
         throw
     }
+}
+
+function New-IsolatedPackagesRoot([string]$AnchorPath, [string]$IntegrationRoot,
+    [bool]$FailAfterCreateForTest = $false) {
+    Assert-VerifiedDirectoryChain $AnchorPath $IntegrationRoot `
+        "External integration root" $true
+    $root = Join-Path $IntegrationRoot `
+        ("fresh-packages-" + [Guid]::NewGuid().ToString("N"))
+    try {
+        [IO.Directory]::CreateDirectory($root) | Out-Null
+        if ($FailAfterCreateForTest) {
+            throw "test-only isolated package root verification failure"
+        }
+        Assert-VerifiedDirectoryChain $AnchorPath $root "Isolated integration package root"
+        $entries = @(Get-ChildItem -LiteralPath $root -Force)
+        Assert-Equal 0 $entries.Count "Isolated integration package root was not created empty"
+        return [IO.Path]::GetFullPath($root)
+    } catch {
+        if (Test-Path -LiteralPath $root -PathType Container) {
+            try {
+                Assert-VerifiedDirectoryChain $AnchorPath $root `
+                    "Failed isolated integration package root"
+                [IO.Directory]::Delete($root, $false)
+            } catch { }
+        }
+        throw
+    }
+}
+
+function Remove-IsolatedPackagesRoot([string]$AnchorPath, [string]$PackagesRoot) {
+    Assert-VerifiedDirectoryChain $AnchorPath $PackagesRoot `
+        "Isolated integration package cleanup"
+    $entries = @(Get-ChildItem -LiteralPath $PackagesRoot -Force)
+    Assert-Equal 0 $entries.Count `
+        "Isolated integration package root was populated during the no-restore gate"
+    [IO.Directory]::Delete($PackagesRoot, $false)
+}
+
+function Assert-PinnedNet472ReferenceFixture([string]$AnchorPath, [string]$FixtureRoot,
+    [string]$Package, [string]$Version, [string]$Framework) {
+    Assert-VerifiedDirectoryChain $AnchorPath $FixtureRoot `
+        "Pinned net472 reference fixture"
+    $manifestPath = Join-Path $FixtureRoot "Phoenix.ReferenceAssemblies.manifest"
+    Assert-True (Test-Path -LiteralPath $manifestPath -PathType Leaf) `
+        "Pinned net472 reference fixture manifest is missing: $manifestPath"
+    $manifestItem = Get-Item -LiteralPath $manifestPath -Force
+    Assert-True (-not $manifestItem.PSIsContainer -and
+        ($manifestItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) `
+        "Pinned net472 reference fixture manifest is not a plain file: $manifestPath"
+    $expectedManifest = "package=$Package|version=$Version|framework=$Framework"
+    Assert-Equal $expectedManifest ((Get-Content -Raw -LiteralPath $manifestPath).Trim()) `
+        "Pinned net472 reference fixture identity changed"
+    foreach ($required in @("mscorlib.dll", "System.dll", "System.Core.dll")) {
+        $requiredPath = Join-Path $FixtureRoot $required
+        Assert-True (Test-Path -LiteralPath $requiredPath -PathType Leaf) `
+            "Pinned net472 reference fixture is missing $required"
+        $requiredItem = Get-Item -LiteralPath $requiredPath -Force
+        Assert-True (-not $requiredItem.PSIsContainer -and
+            ($requiredItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) `
+            "Pinned net472 reference fixture contains a linked required assembly: $requiredPath"
+    }
+}
+
+function Assert-SemanticInputAuthority($Payload, [string]$Label) {
+    Assert-True ([bool]$Payload.coverage.frameworkRefsAvailable) `
+        "$Label did not use the pinned net472 framework references"
+    Assert-True ($null -ne $Payload.coverage.PSObject.Properties["frameworkRefsSource"]) `
+        "$Label omitted frameworkRefsSource compiler-input evidence"
+    Assert-Equal $script:pinnedNet472ReferenceRoot `
+        ([IO.Path]::GetFullPath([string]$Payload.coverage.frameworkRefsSource)) `
+        "$Label used a framework-reference source other than the pinned fixture"
+    Assert-True ($null -ne $Payload.coverage.PSObject.Properties["resolvedPackageDllCount"]) `
+        "$Label omitted resolvedPackageDllCount compiler-input evidence"
+    Assert-Equal $script:expectedResolvedPackageDllCount `
+        ([int]$Payload.coverage.resolvedPackageDllCount) `
+        "$Label resolved package-DLL input count changed"
+}
+
+function Assert-CapabilitySemanticInputAuthority($Semantic, [string]$Label) {
+    Assert-True ([bool]$Semantic.frameworkRefsAvailable) `
+        "$Label capabilities did not use the pinned net472 framework references"
+    Assert-True ($null -ne $Semantic.PSObject.Properties["frameworkRefsSource"]) `
+        "$Label capabilities omitted frameworkRefsSource compiler-input evidence"
+    Assert-Equal $script:pinnedNet472ReferenceRoot `
+        ([IO.Path]::GetFullPath([string]$Semantic.frameworkRefsSource)) `
+        "$Label capabilities used a framework-reference source other than the pinned fixture"
 }
 
 function Remove-FreshIndexRun([string]$AnchorPath, [string]$RunRoot,
@@ -572,6 +667,11 @@ function Start-McpClient([string]$Label, [string]$WorkspaceRoot, [string]$Databa
     $start.RedirectStandardError = $true
     $start.CreateNoWindow = $true
     $start.EnvironmentVariables["PHOENIX_TELEMETRY_IPC"] = "0"
+    Assert-True (-not [string]::IsNullOrWhiteSpace($script:isolatedPackagesRoot)) `
+        "Isolated integration package root is unavailable"
+    $start.EnvironmentVariables["NUGET_PACKAGES"] = $script:isolatedPackagesRoot
+    $start.EnvironmentVariables["CODENAV_NET472_REFS"] = `
+        $script:pinnedNet472ReferenceRoot
 
     $telemetryDirectory = Join-Path $WorkspaceRoot ".codenav\telemetry"
     $telemetryFilesBefore = @(
@@ -759,6 +859,9 @@ function Request-McpDaemonRetirement($Client) {
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
     $start.CreateNoWindow = $true
+    $start.EnvironmentVariables["NUGET_PACKAGES"] = $script:isolatedPackagesRoot
+    $start.EnvironmentVariables["CODENAV_NET472_REFS"] = `
+        $script:pinnedNet472ReferenceRoot
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $start
     if (-not $process.Start()) {
@@ -879,12 +982,10 @@ if ($SelfTestFreshIndexLifecycleContract) {
     $leasePath = Join-Path $integrationRoot ".fresh-index-gate.lock"
     $run = New-FreshIndexRun $anchor $integrationRoot $leasePath
     $probeStart = New-Object Diagnostics.ProcessStartInfo
-    $shellCommand = if ($PSVersionTable.PSEdition -eq "Core") {
-        Get-Command pwsh -CommandType Application
-    } else {
-        Get-Command powershell.exe -CommandType Application
-    }
-    $probeStart.FileName = [string]$shellCommand.Source
+    # Reuse the exact host executable. `Get-Command pwsh` can legitimately return both the
+    # Homebrew cellar binary and its /opt/homebrew/bin link; stringifying that array produces one
+    # invalid, space-separated FileName.
+    $probeStart.FileName = (Get-Process -Id $PID).Path
     $probeStart.Arguments = "-NoProfile -ExecutionPolicy Bypass -File $(Quote-ProcessArgument $PSCommandPath) -SelfTestFreshIndexLeaseProbe -SelfTestLeasePath $(Quote-ProcessArgument $leasePath)"
     $probeStart.UseShellExecute = $false
     $probeStart.CreateNoWindow = $true
@@ -920,6 +1021,18 @@ if ($SelfTestFreshIndexLifecycleContract) {
         "Fresh-index cleanup recursively deleted an unknown entry"
     Remove-Item -LiteralPath $unexpected -Force
     Remove-FreshIndexRun $anchor $run.Root @($roslynDb, $fsharpDb)
+    $packageFailureObserved = $false
+    try {
+        New-IsolatedPackagesRoot $anchor $integrationRoot $true | Out-Null
+    } catch {
+        $packageFailureObserved = $_.Exception.Message -match `
+            "test-only isolated package root verification failure"
+    }
+    Assert-True $packageFailureObserved `
+        "Isolated package-root post-create failure was not observed"
+    Assert-Equal 0 (@(Get-ChildItem -LiteralPath $integrationRoot -Force | Where-Object {
+        $_.Name -like "fresh-packages-*"
+    }).Count) "Failed isolated package-root verification leaked its directory"
     $run.Lease.Dispose()
     Remove-Item -LiteralPath $leasePath -Force
     [IO.Directory]::Delete($integrationRoot, $false)
@@ -932,17 +1045,51 @@ if ($SelfTestFreshIndexLifecycleContract) {
     exit 0
 }
 
+if ($SelfTestPinnedFrameworkReferenceContract) {
+    Assert-PinnedNet472ReferenceFixture $repoRoot $pinnedNet472ReferenceRoot `
+        $pinnedNet472Package $pinnedNet472Version $pinnedNet472Framework
+    $missingRejected = $false
+    try {
+        Assert-PinnedNet472ReferenceFixture $repoRoot `
+            (Join-Path $pinnedNet472ReferenceRoot "missing") `
+            $pinnedNet472Package $pinnedNet472Version $pinnedNet472Framework
+    } catch {
+        $missingRejected = $_.Exception.Message -match "directory is missing"
+    }
+    Assert-True $missingRejected "Missing pinned framework fixture was not rejected"
+    Write-Host "Pinned framework-reference contract self-test passed"
+    exit 0
+}
+
 $mcpDllPath = Join-Path $repoRoot "src\CodeNav.Mcp\bin\Release\net10.0\PhoenixCodeNav.Mcp.dll"
 Assert-True (Test-Path -LiteralPath $mcpDllPath -PathType Leaf) "Release MCP binary is missing. Run: dotnet build PhoenixCodeNav.sln -c Release --no-restore"
+Assert-Equal $pinnedNet472Package `
+    ([string]$fsharpBaseline.semanticInputs.net472ReferencePackage) `
+    "Roslyn and FSharp baselines disagree on the pinned net472 reference package"
+Assert-Equal $pinnedNet472Version `
+    ([string]$fsharpBaseline.semanticInputs.net472ReferencePackageVersion) `
+    "Roslyn and FSharp baselines disagree on the pinned net472 reference package version"
+Assert-Equal $pinnedNet472Framework `
+    ([string]$fsharpBaseline.semanticInputs.net472Framework) `
+    "Roslyn and FSharp baselines disagree on the pinned net472 framework"
+Assert-Equal $expectedResolvedPackageDllCount `
+    ([int]$fsharpBaseline.semanticInputs.resolvedPackageDllCount) `
+    "Roslyn and FSharp baselines disagree on the resolved package-DLL count"
+Assert-PinnedNet472ReferenceFixture $repoRoot $pinnedNet472ReferenceRoot `
+    $pinnedNet472Package $pinnedNet472Version $pinnedNet472Framework
 Assert-True (Test-Path -LiteralPath $Workspace -PathType Container) "Frozen Roslyn workspace is missing: $Workspace"
+$roslynGitlink = [string](@(Invoke-Git $repoRoot @("rev-parse", "HEAD:external/roslyn"))[0])
 $roslynHead = [string](@(Invoke-Git $Workspace @("rev-parse", "HEAD"))[0])
-Assert-Equal ([string]$baseline.roslynCommit) $roslynHead "Roslyn HEAD differs from the locked integration baseline"
+Assert-Equal ([string]$baseline.roslynCommit) $roslynGitlink "Roslyn gitlink differs from the locked integration baseline"
+Assert-Equal $roslynGitlink $roslynHead "Roslyn checkout HEAD differs from the pinned submodule gitlink"
 $unexpectedStatus = @(Invoke-Git $Workspace @("--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all") |
     Where-Object { $_ -and $_ -notmatch '^\?\? \.codenav/' })
 Assert-Equal 0 $unexpectedStatus.Count "Frozen Roslyn workspace contains changes outside .codenav"
 Assert-True (Test-Path -LiteralPath $FSharpWorkspace -PathType Container) "Frozen FSharp workspace is missing: $FSharpWorkspace"
+$fsharpGitlink = [string](@(Invoke-Git $repoRoot @("rev-parse", "HEAD:external/fsharp"))[0])
 $fsharpHead = [string](@(Invoke-Git $FSharpWorkspace @("rev-parse", "HEAD"))[0])
-Assert-Equal ([string]$fsharpBaseline.fsharpCommit) $fsharpHead "FSharp HEAD differs from the locked integration baseline"
+Assert-Equal ([string]$fsharpBaseline.fsharpCommit) $fsharpGitlink "FSharp gitlink differs from the locked integration baseline"
+Assert-Equal $fsharpGitlink $fsharpHead "FSharp checkout HEAD differs from the pinned submodule gitlink"
 $unexpectedFSharpStatus = @(Invoke-Git $FSharpWorkspace @("--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all") |
     Where-Object { $_ -and $_ -notmatch '^\?\? \.codenav/' })
 Assert-Equal 0 $unexpectedFSharpStatus.Count "Frozen FSharp workspace contains changes outside .codenav"
@@ -977,8 +1124,13 @@ try {
 
     Initialize-FreshIndexPath "Roslyn" $IndexDb
     Initialize-FreshIndexPath "FSharp" $FSharpIndexDb
+    $isolatedPackagesRoot = New-IsolatedPackagesRoot $repoRoot $externalIntegrationRoot
 } catch {
     $setupFailure = $_.Exception
+    if ($null -ne $isolatedPackagesRoot -and
+        (Test-Path -LiteralPath $isolatedPackagesRoot -PathType Container)) {
+        try { Remove-IsolatedPackagesRoot $repoRoot $isolatedPackagesRoot } catch { }
+    }
     if ($null -ne $freshIndexRoot -and
         (Test-Path -LiteralPath $freshIndexRoot -PathType Container)) {
         try {
@@ -1034,6 +1186,7 @@ function Get-FSharpOverviewCounts($Overview) {
 $evidence = [ordered]@{
     baseline = $baseline.name
     phoenixBuild = $null
+    roslynGitlink = $roslynGitlink
     roslynHead = $roslynHead
     workspace = $Workspace
     indexDb = $IndexDb
@@ -1044,12 +1197,23 @@ $evidence = [ordered]@{
             leasePath = [string]$freshRun.LeasePath
         }
     } else { $null }
+    isolatedPackagesRoot = $isolatedPackagesRoot
+    packageResolutionMode = "verified_empty_isolated_global_packages_root"
+    frameworkReferences = [ordered]@{
+        package = $pinnedNet472Package
+        version = $pinnedNet472Version
+        framework = $pinnedNet472Framework
+        source = $pinnedNet472ReferenceRoot
+        expectedAvailable = $true
+        resolvedPackageDllCount = $expectedResolvedPackageDllCount
+    }
     roslynFreshIndex = $null
     roslynCountsProvenance = [ordered]@{
         id = [string]$baseline.countsProvenance
         detail = [string]$baseline.countsProvenanceDetail
     }
     fsharpBaseline = $fsharpBaseline.name
+    fsharpGitlink = $fsharpGitlink
     fsharpHead = $fsharpHead
     fsharpWorkspace = $FSharpWorkspace
     fsharpIndexDb = $FSharpIndexDb
@@ -1106,6 +1270,7 @@ try {
         Assert-True (@($writerSession.Tools.tools).Count -gt 0) "MCP advertised no tools"
         Assert-Equal ([string]$baseline.roslynCommit) ([string]$overview.git.indexedCommit) "Indexed commit changed"
         Assert-Equal ([string]$overview.meta.indexVersion) ([string]$writerCapabilities.index.indexVersion) "Roslyn capabilities evidence is stale for the judged index epoch"
+        Assert-CapabilitySemanticInputAuthority $writerCapabilities.semantic "Roslyn"
     }
 
     $evidence.results.repoOverview = $overview
@@ -1165,6 +1330,7 @@ try {
     $evidence.results.references = $references
     Test-IntegrationCase "semantic references" {
         Assert-True ($null -eq $references.error) "references returned $($references.error): $($references.reason)"
+        Assert-SemanticInputAuthority $references "references"
         Assert-FriendRelationshipAuthority $references "references" `
             -ExpectedUnprovenProjects @($baseline.target.referencesUnprovenFriendAssemblyProjects)
         Assert-Equal ([int]$baseline.target.referenceCount) ([int]$references.totalReferences) "Reference count changed"
@@ -1175,6 +1341,7 @@ try {
     $evidence.results.referencesWarm = $referencesWarm
     Test-IntegrationCase "warm semantic references parity" {
         Assert-True ($null -eq $referencesWarm.error) "warm references returned $($referencesWarm.error): $($referencesWarm.reason)"
+        Assert-SemanticInputAuthority $referencesWarm "warm references"
         Assert-FriendRelationshipAuthority $referencesWarm "warm references" `
             -ExpectedUnprovenProjects @($baseline.target.referencesUnprovenFriendAssemblyProjects)
         Assert-Equal (Get-ReferenceContractSignature $references) (Get-ReferenceContractSignature $referencesWarm) "Cold/warm reference contract diverged"
@@ -1302,12 +1469,13 @@ try {
     $implementationNames = @($implementations.implementations | ForEach-Object { Get-TypeResultName $_ })
     Test-IntegrationCase "compiler implementations" {
         Assert-True ($null -eq $implementations.error) "implementations returned $($implementations.error): $($implementations.reason)"
+        Assert-SemanticInputAuthority $implementations "implementations"
         Assert-FriendRelationshipAuthority $implementations "implementations" `
             -ExpectedUnprovenProjects @($baseline.target.implementationsUnprovenFriendAssemblyProjects)
-        # A fresh index resolves both implementers through Roslyn. The heuristic-only split fields
-        # must stay absent; their presence would mean this canary fell back to indexed base lists.
-        Assert-True ($null -eq $implementations.PSObject.Properties["symbolConfidence"]) "implementations unexpectedly used mixed fallback identity"
-        Assert-True ($null -eq $implementations.PSObject.Properties["implementationsConfidence"]) "implementations unexpectedly used heuristic fallback results"
+        Assert-True ($null -eq $implementations.PSObject.Properties["symbolConfidence"]) `
+            "implementations unexpectedly used mixed fallback identity"
+        Assert-True ($null -eq $implementations.PSObject.Properties["implementationsConfidence"]) `
+            "implementations unexpectedly used heuristic fallback results"
         foreach ($expected in @($baseline.target.expectedImplementations)) {
             Assert-Contains $implementationNames ([string]$expected.name) "Expected implementation is absent"
         }
@@ -1318,9 +1486,11 @@ try {
     $derivedNames = @($hierarchy.derivedOrImplementing | ForEach-Object { Get-TypeResultName $_ })
     Test-IntegrationCase "compiler type hierarchy" {
         Assert-True ($null -eq $hierarchy.error) "type_hierarchy returned $($hierarchy.error): $($hierarchy.reason)"
+        Assert-SemanticInputAuthority $hierarchy "type_hierarchy"
         Assert-FriendRelationshipAuthority $hierarchy "type_hierarchy" `
             -ExpectedUnprovenProjects @($baseline.target.typeHierarchyUnprovenFriendAssemblyProjects)
-        Assert-True ($null -eq $hierarchy.PSObject.Properties["derivedConfidence"]) "type_hierarchy unexpectedly used heuristic derived results"
+        Assert-True ($null -eq $hierarchy.PSObject.Properties["derivedConfidence"]) `
+            "type_hierarchy unexpectedly used heuristic derived results"
         foreach ($expected in @($baseline.target.expectedImplementations)) {
             Assert-Contains $derivedNames ([string]$expected.name) "Expected hierarchy descendant is absent"
         }
@@ -1544,6 +1714,7 @@ try {
         Assert-Equal ([string]$fsharpBaseline.fsharpCommit) ([string]$fsharpOverview.git.indexedCommit) "FSharp indexed commit changed"
         Assert-True ([bool]$fsharpOverview.git.headMatchesIndex) "FSharp HEAD no longer matches the fresh integration index"
         Assert-Equal ([string]$fsharpOverview.meta.indexVersion) ([string]$fsharpCapabilities.index.indexVersion) "FSharp capabilities evidence is stale for the judged index epoch"
+        Assert-CapabilitySemanticInputAuthority $fsharpCapabilities.semantic "FSharp"
     }
 
     Test-IntegrationCase "official FSharp repository counts" {
@@ -1675,6 +1846,14 @@ try {
     try { Stop-McpClient $writer } catch { $stopErrors.Add($_.Exception.Message) }
     foreach ($client in @($fsharpWriter, $secondClient, $writer)) {
         try { Request-McpDaemonRetirement $client } catch { $stopErrors.Add($_.Exception.Message) }
+    }
+    if ($null -ne $isolatedPackagesRoot -and
+        (Test-Path -LiteralPath $isolatedPackagesRoot -PathType Container)) {
+        try {
+            Remove-IsolatedPackagesRoot $repoRoot $isolatedPackagesRoot
+        } catch {
+            $stopErrors.Add("isolated integration package cleanup failed: $($_.Exception.Message)")
+        }
     }
     if ($null -ne $freshIndexRoot -and
         (Test-Path -LiteralPath $freshIndexRoot -PathType Container)) {

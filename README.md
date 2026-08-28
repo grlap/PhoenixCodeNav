@@ -175,8 +175,10 @@ mechanics in full.
 ## Install (work machine)
 
 Prerequisites: **none** for the self-contained build. For semantic (`exact`) results the
-machine needs net472 reference assemblies from any of (probed in this order):
-`CODENAV_NET472_REFS` env var → VS/Build Tools targeting pack → NuGet
+machine needs net472 reference assemblies. When `CODENAV_NET472_REFS` is set, that directory is
+authoritative and must contain valid, correctly named `mscorlib`, `System`, and `System.Core`
+assemblies; an absent, partial, or corrupt fixture degrades explicitly instead of falling through
+to host state. Without the override, Phoenix probes in this order: VS/Build Tools targeting pack → NuGet
 `Microsoft.NETFramework.ReferenceAssemblies.net472` package cache → installed .NET Framework
 runtime. Any machine with Visual Studio qualifies automatically. Without them, tools degrade
 to `indexed` confidence and say so.
@@ -335,12 +337,18 @@ launching a Git subprocess.
 `--db` plus `--build-only` indexes the real workspace into an explicit scratch database and exits
 after reporting phase time, total time, symbol count, and database size.
 
-The external MCP gate requires the pinned Roslyn and F# submodules to be checked out at the exact
-commits recorded by their baselines. It checks those commits before starting Phoenix, builds new
-isolated indexes through normal MCP startup, and runs every integration assertion against those
-fresh indexes. The gate never updates a submodule, repairs or trusts an index from an earlier run,
-or changes a baseline automatically. A commit mismatch, pre-existing explicit index path, or fresh
-result that disagrees with the pinned baseline stops the gate for an agent to investigate.
+The external MCP gate requires each parent-repository gitlink, locked baseline commit, and checked-
+out Roslyn/F# submodule HEAD to identify the same exact commit. Its ordinary solution build must
+already have restored the exact `Microsoft.NETFramework.ReferenceAssemblies.net472` 1.0.3 package
+declared by the pinned Roslyn checkout; the test build copies that package's v4.7.2 metadata into a
+private fixture, and the gate fails rather than restoring when the fixture is missing or mismatched.
+Every MCP process receives that exact `CODENAV_NET472_REFS` directory plus a verified-empty per-run
+`NUGET_PACKAGES` directory. The gate requires `frameworkRefsAvailable:true`, an exact
+`frameworkRefsSource` match to that fixture, and `resolvedPackageDllCount:0` (counting only package
+DLLs admitted as compiler metadata). It builds fresh isolated indexes through normal MCP startup and
+evaluates the semantic canaries only under those pinned compiler inputs. It never updates a submodule, repairs or
+trusts an earlier index, restores an external checkout, or changes a baseline automatically. An
+identity, fixture, compiler-input, or fresh-result mismatch stops the gate for investigation.
 
 Projects: `CodeNav.Core` (discovery, index, semantic layer), `CodeNav.FSharp` (isolated FCS syntax
 and bounded semantic adapter), `CodeNav.Mcp` (server, ships as `PhoenixCodeNav.Mcp.exe`),

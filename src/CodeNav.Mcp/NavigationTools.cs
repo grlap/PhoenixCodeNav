@@ -53,15 +53,16 @@ public sealed partial class NavigationTools
     [McpServerTool(Name = "server_capabilities")]
     [Description("Reports supported languages, available tools, index status, and response budgets. Call this first if unsure what is available or whether the index is ready.")]
     public string ServerCapabilities() => ServerCapabilitiesJson(_manager.Health(),
-        _semantic.FrameworkRefsAvailable);
+        _semantic.FrameworkRefsAvailable, _semantic.FrameworkRefsSource);
 
     internal static string ServerCapabilitiesForTest(IndexHealth health,
-        bool frameworkRefsAvailable = true) =>
-        ServerCapabilitiesJson(health, frameworkRefsAvailable);
+        bool frameworkRefsAvailable = true, string? frameworkRefsSource = null) =>
+        ServerCapabilitiesJson(health, frameworkRefsAvailable, frameworkRefsSource);
 
     internal static string ServerCapabilitiesUncompactedForTest(IndexHealth health,
-        bool frameworkRefsAvailable = true) =>
-        ServerCapabilitiesJson(health, frameworkRefsAvailable, applyBudget: false);
+        bool frameworkRefsAvailable = true, string? frameworkRefsSource = null) =>
+        ServerCapabilitiesJson(health, frameworkRefsAvailable, frameworkRefsSource,
+            applyBudget: false);
 
     internal static string[] CapabilityFeatureIds(IndexHealth health)
     {
@@ -77,7 +78,7 @@ public sealed partial class NavigationTools
     }
 
     private static string ServerCapabilitiesJson(IndexHealth h, bool frameworkRefsAvailable,
-        bool applyBudget = true)
+        string? frameworkRefsSource = null, bool applyBudget = true)
     {
         string state = CapabilityText(h.State, CapabilityIdentityTextBytes,
             out bool stateTruncated, out int? stateBytes)!;
@@ -163,6 +164,10 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-semantic-directory-build-reference-evaluation", summary = "v0.12.8 nearest indexed ancestor Directory.Build.props/targets are evaluated around one F# project for bounded properties, conditions, and Reference Include/Remove item-list mutations; irrelevant chained targets are ignored while reference-affecting targets/tasks remain fail-closed" },
                 new { id = "fsharp-semantic-package-asset-closure", summary = "v0.12.56 active F# PackageReference identities, including conditional PackageVersion authority from the nearest indexed Directory.Packages.props, are matched since v0.12.67 as an exact case-insensitive explicit direct identity set to one already-restored project.assets.json target while well-formed SDK auto-referenced packages are validated separately; reachable transitive compile assets from trusted declared package folders are verified, bounded, copied into request-private immutable snapshots, and reverified after FCS; missing, stale, mismatched, changed, ambiguous, or unsafe closure fails explicitly without restore or MSBuild execution" },
                 new { id = "csharp-semantic-central-package-management", summary = "v0.12.57 C# semantic project loading resolves versionless PackageReference compiler inputs from unconditional literal PackageVersion entries in the nearest indexed Directory.Packages.props; centrally selected versions use exact global-cache directories and central authority participates in warm model identity, while shapes requiring MSBuild evaluation retain established unresolved-reference behavior without guessing or executing restore" },
+                new { id = "semantic-package-root-override-authority", summary = "v0.12.71 an explicit NUGET_PACKAGES root is the exclusive external NuGet authority for C# and F# semantic package inputs and strict F# net472 probing; when absent, the ordinary user-profile global cache remains supported" },
+                new { id = "semantic-package-input-evidence", summary = "v0.12.71 C# semantic coverage reports resolvedPackageDllCount alongside frameworkRefsAvailable and counts only package-DLL metadata references successfully admitted across requested loaded projects" },
+                new { id = "semantic-framework-reference-override-authority", summary = "v0.12.71 an explicit CODENAV_NET472_REFS path is authoritative rather than falling through to host targeting packs or caches and is accepted only when mscorlib, System, and System.Core are valid matching managed assemblies" },
+                new { id = "semantic-framework-reference-source-evidence", summary = "v0.12.71 C# semantic capabilities and per-request coverage expose the exact frameworkRefsSource directory so integration gates can attest the selected compiler input authority rather than infer it from availability" },
                 new { id = "csharp-semantic-central-package-property-expansion", summary = "v0.12.58 C# central PackageVersion entries support bounded simple local-property expansion with assignment-time chaining and reassignment; project overrides, later imported property authority, unsupported expressions, and exceeded limits retain established unresolved-reference behavior" },
                 new { id = "shared-mcp-daemon", summary = "v0.12.59 shared daemon transport gives one current-user, physical-worktree index/watcher/Roslyn/FCS owner to multiple lightweight stdio MCP proxies over an authority-checked named pipe or Unix socket; exact tool/schema negotiation, typed unavailable shims, client-fair admission, cancellation isolation, and graceful replacement preserve honest failure" },
                 new { id = "shared-mcp-daemon-default", summary = "since v0.12.60 every ordinary Phoenix MCP launch transparently joins or elects the shared physical-worktree daemon with no flag or environment opt-in; --shared-daemon is a compatibility alias, --standalone is explicit diagnostics only, and failures never fall back to an alternate service topology" },
@@ -319,6 +324,7 @@ public sealed partial class NavigationTools
             {
                 engine = "Roslyn ad hoc for C#; bounded FCS for compile-owned .fs/.fsi",
                 frameworkRefsAvailable,
+                frameworkRefsSource,
                 exactTools = new[] { "definition", "references", "implementations" },
                 exactToolsLanguage = "cs",
                 csharpExactTools = new[] { "definition", "references", "implementations" },
@@ -2690,6 +2696,8 @@ public sealed partial class NavigationTools
                 ? true
                 : (bool?)null,
             frameworkRefsAvailable = c.FrameworkRefsAvailable,
+            resolvedPackageDllCount = c.ResolvedPackageDllCount,
+            frameworkRefsSource = c.FrameworkRefsSource,
         };
     }
 
