@@ -85,7 +85,8 @@ public class Batch57TransitiveImplementationsTests
             try
             {
                 m.Start();
-                Assert.True(WaitUntil(() => m.IsQueryable, 30_000));
+                IndexManagerTestSupport.WaitUntilReady(m, TimeSpan.FromSeconds(30),
+                    "transitive-implementations index did not become fresh");
                 if (!semantic.FrameworkRefsAvailable) return; // env guard, same as siblings
 
                 var tools = new NavigationTools(m, semantic);
@@ -177,7 +178,8 @@ public class Batch57TransitiveImplementationsTests
             }
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000));
+            IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
+                "capped transitive-implementations index did not become fresh");
             using (var probe = new SemanticService(manager))
             {
                 if (!probe.FrameworkRefsAvailable) return;

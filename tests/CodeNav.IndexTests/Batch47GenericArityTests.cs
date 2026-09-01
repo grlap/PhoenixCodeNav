@@ -131,9 +131,15 @@ public class Batch47GenericArityTests
     {
         using var fixture = new GenericArityFixture();
 
-        using JsonDocument hierarchy = JsonDocument.Parse(fixture.Tools.TypeHierarchy(
-            name: "IFallback", path: "Orphan.cs", line: 2,
-            maxProjects: 0, timeoutMs: 120_000));
+        using JsonDocument hierarchy = JsonDocument.Parse(SemanticRetry.ParseWithRetry( // n7ly sweep
+            () => fixture.Tools.TypeHierarchy(
+                name: "IFallback", path: "Orphan.cs", line: 2,
+                maxProjects: 0, timeoutMs: 120_000),
+            j => !j.TryGetProperty("error", out var error) ||
+                 error.GetString() != "semantic_unavailable" ||
+                 !j.TryGetProperty("partialReason", out var reason) ||
+                 reason.GetString() != "index_snapshot_unavailable",
+            "not the transient index_snapshot_unavailable degrade").GetRawText());
         JsonElement response = hierarchy.RootElement;
 
         Assert.False(response.TryGetProperty("error", out _));

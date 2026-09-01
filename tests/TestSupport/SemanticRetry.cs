@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace CodeNav.Tests;
@@ -5,7 +6,8 @@ namespace CodeNav.Tests;
 /// <summary>
 /// Owns: bounded retry for semantic-layer test calls (n7ly family). Under full-suite CPU load
 /// the semantic path can transiently degrade (cluster_cold_load / index_snapshot_unavailable /
-/// semantic_timeout) and auto mode honestly falls back to indexed/heuristic shapes; tests that
+/// semantic_timeout / refresh_sweep_pending) and auto mode honestly falls back to
+/// indexed/heuristic shapes; tests that
 /// assert the SEMANTIC shape then die on missing properties or 'indexed' confidence — the
 /// suite's dominant rotating one-off family. The documented recovery for those transient
 /// reasons IS an immediate retry, so: retry until the caller's predicate accepts the response,
@@ -14,23 +16,52 @@ namespace CodeNav.Tests;
 /// NOT a confidence-based skip: every substantive assertion still runs against the accepted
 /// response, and a DETERMINISTIC wrong shape (a pinned regression resurfacing) fails every
 /// attempt and stays red — only transient degrades are ridden out.
-/// Deliberately does not own: tolerance for wrong-but-stable answers, or watcher/timing waits
-/// (WaitUntil owns those).
+/// Deliberately does not own: tolerance for wrong-but-stable answers or general watcher/timing
+/// waits (WaitUntil owns those). It does own bounded convergence polling when the response itself
+/// explicitly reports refresh_sweep_pending.
 /// </summary>
 internal static class SemanticRetry
 {
+    private static readonly TimeSpan DefaultRefreshSweepConvergenceTimeout =
+        TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DefaultRetryDelay = TimeSpan.FromMilliseconds(250);
+
     internal static JsonElement ParseWithRetry(Func<string> call, Func<JsonElement, bool> accept,
-        string expectation, int attempts = 3)
+        string expectation, int attempts = 3,
+        TimeSpan? refreshSweepConvergenceTimeout = null,
+        Action<TimeSpan>? delay = null,
+        Func<TimeSpan>? convergenceElapsed = null)
     {
         string last = "";
-        for (int i = 0; i < attempts; i++)
+        int ordinaryAttempts = 0;
+        int totalCalls = 0;
+        var convergenceWait = Stopwatch.StartNew();
+        TimeSpan convergenceTimeout = refreshSweepConvergenceTimeout ??
+            DefaultRefreshSweepConvergenceTimeout;
+        delay ??= Thread.Sleep;
+        convergenceElapsed ??= () => convergenceWait.Elapsed;
+
+        while (ordinaryAttempts < attempts)
         {
-            if (i > 0) Thread.Sleep(250);
+            if (totalCalls > 0) delay(DefaultRetryDelay);
+            totalCalls++;
             last = call();
-            var parsed = JsonDocument.Parse(last).RootElement;
+            using JsonDocument document = JsonDocument.Parse(last);
+            JsonElement parsed = document.RootElement.Clone();
             if (accept(parsed)) return parsed;
+
+            // A manager can legitimately re-enter stale after its initial ready state while a
+            // watcher convergence sweep is pending. Poll only that explicit lifecycle state;
+            // every other rejected response still consumes the caller's ordinary retry budget.
+            if (IsRefreshSweepPending(parsed) &&
+                convergenceElapsed() < convergenceTimeout)
+                continue;
+
+            ordinaryAttempts++;
         }
-        Assert.Fail($"response never satisfied '{expectation}' in {attempts} attempts — " +
+
+        Assert.Fail($"response never satisfied '{expectation}' in {ordinaryAttempts} attempts " +
+                    $"({totalCalls} total calls including refresh-sweep convergence) — " +
                     $"last response: {last}");
         return default; // unreachable
     }
@@ -72,9 +103,15 @@ internal static class SemanticRetry
         reason is "index_snapshot_unavailable" or "cluster_cold_load";
 
     internal static JsonElement ParseExactWithRetry(Func<string> call, int attempts = 3) =>
-        ParseWithRetry(call,
-            j => j.TryGetProperty("meta", out var meta) &&
-                 meta.TryGetProperty("confidence", out var confidence) &&
-                 confidence.GetString() == "exact",
-            "meta.confidence == 'exact'", attempts);
+        ParseWithRetry(call, IsExact, "meta.confidence == 'exact'", attempts);
+
+    private static bool IsExact(JsonElement response) =>
+        response.TryGetProperty("meta", out JsonElement meta) &&
+        meta.TryGetProperty("confidence", out JsonElement confidence) &&
+        confidence.GetString() == "exact";
+
+    private static bool IsRefreshSweepPending(JsonElement response) =>
+        response.TryGetProperty("meta", out JsonElement meta) &&
+        meta.TryGetProperty("partialReason", out JsonElement reason) &&
+        reason.GetString() == "refresh_sweep_pending";
 }

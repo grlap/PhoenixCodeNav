@@ -318,6 +318,7 @@ dotnet test tests/CodeNav.LifecycleTests                         # leases, publi
 dotnet test PhoenixCodeNav.sln                                   # complete solution suite
 pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1              # external Roslyn/F# MCP gate
 node ./website/verify.mjs                                        # static-site contract gate
+pwsh -NoProfile -File ./scripts/cleanup-beads-migration.ps1      # one-time cleanup for pre-Engram clones
 dotnet run --project src/CodeNav.WorkspaceGen -- --out C:/temp/acme-2k \
     --projects 2000 --density 6 --clean                          # synthetic enterprise repo
 dotnet run --project src/CodeNav.Bench -c Release -- --workspace C:/temp/acme-2k --rebuild
@@ -326,6 +327,10 @@ dotnet run --project src/CodeNav.Bench -c Release -- --workspace C:/src/runtime 
 dotnet run --project src/CodeNav.Bench -c Release -- --workspace C:/temp/acme-2k --semantic
 bash scripts/smoke-mcp.sh C:/temp/acme-2k                        # stdio protocol smoke test
 ```
+
+Clones that previously used Beads may retain a repository-local `core.hooksPath` pointing at the
+removed `.beads/hooks` directory. The cleanup script removes that setting only when it resolves to
+this repository's legacy Beads hook directory; custom hook paths are reported and left unchanged.
 
 The complete suite requires directory-link support: NTFS junction creation on Windows
 (ordinary non-elevated NTFS is sufficient; Developer Mode is not required) and directory

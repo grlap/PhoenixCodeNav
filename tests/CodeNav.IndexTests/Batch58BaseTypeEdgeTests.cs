@@ -257,8 +257,8 @@ public class Batch58BaseTypeEdgeTests
 
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000),
-                "manager did not become queryable");
+            IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
+                "base-type edge index did not become fresh");
             using var semantic = new SemanticService(manager);
             if (!semantic.FrameworkRefsAvailable) return; // deterministic index assertions above still run
             var tools = new NavigationTools(manager, semantic);

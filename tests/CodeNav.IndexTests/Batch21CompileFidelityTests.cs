@@ -178,8 +178,8 @@ public class Batch21CompileFidelityTests
             try
             {
                 manager.Start();
-                for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-                Assert.True(manager.IsQueryable);
+                IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
+                    "compile-fidelity index did not become fresh");
                 if (!semantic.FrameworkRefsAvailable) return; // env guard: no net472 reference assemblies
                 var tools = new NavigationTools(manager, semantic);
 

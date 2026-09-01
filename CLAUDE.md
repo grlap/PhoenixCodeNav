@@ -2,61 +2,65 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
-## Beads Issue Tracker
+## Work Tracking
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
-
-### Quick Reference
+This repository tracks its work in Engram. In a TermAl-hosted session the
+injected `engram` MCP tools (next, ls, show, add, claim, update, note,
+done, handoff, search) ARE the words — use them directly. The shell form
+below serves humans and hosts; it needs `engram` on PATH and the host
+environment (`ENGRAM_HOME`, `ENGRAM_ACTOR_ID`, `ENGRAM_SESSION_ID`,
+`ENGRAM_WORK_AUTHORITY_GRANT` — the grant value comes from a host-private
+file and is never typed or logged):
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
+engram work next                  # what you hold, what is ready, what changed
+engram work ls | show REF
+engram work add "Title" [--under REF]
+engram work claim REF
+engram work note "what you found or decided"
+engram work done ["what was delivered"]
 ```
 
-### Rules
+- Claim before you change anything; note decisions and evidence once;
+  `done` tells you what is still owed. Receipts carry `next:` commands —
+  follow them.
+- File follow-up work with `engram work add`; findings and decisions go
+  into `note` on the item they concern.
+- Never place work refs in source comments, identifiers, or docs prose.
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+At session end: run the quality gates if code changed, update your Engram
+items (`note`, `done`), report changed files and validation, and wait for
+explicit authority before any commit or push.
 
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 
-## Agent Context Profiles
+## Standing Directives & Known Facts
 
-The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
+Carried from the previous tracker's memories; Greg's directives unless
+marked as facts.
 
-- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
-- **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
-- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
-
-## Session Completion
-
-This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
-
-1. **File issues for remaining work** - Create beads for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **Handle git/sync by active profile**:
-   ```bash
-   # Conservative/minimal/default: report status and proposed commands; wait for approval.
-   git status
-
-   # Team-maintainer opt-in only, unless current instructions forbid it:
-   git pull --rebase
-   git push
-   git status
-   ```
-5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
-
-**Critical rules:**
-- Explicit user or orchestrator instructions override this Beads block.
-- Do not commit or push without clear authority from the active profile or the current user request.
-- If a required sync or push is blocked, stop and report the exact command and error.
-<!-- END BEADS INTEGRATION -->
-
+- For design/API decisions and meaningful implementation choices,
+  proactively consult an independent opinion before implementing.
+- Never create feature, fix, review, or temporary Git branches for this
+  repository; work on the default branch.
+- Do not introduce or lower any MCP or internal count, byte, transfer,
+  response, result, file, project, candidate, or scan limit without
+  explicit approval.
+- PhoenixCodeNav is assumed to run in a safe, trusted environment;
+  usability outranks defensive hardening.
+- Paired legacy `project.<ext>` and SDK-style `project.Net.<ext>` files:
+  resolution authority follows the architecture directive — the pair is
+  one project, never two competing ones.
+- features[] manifest discipline: every new feature that reuses an
+  existing envelope gets its own `features[]` entry.
+- Fact: `dotnet build projA projB` fails with MSB1008 and builds
+  NOTHING — build projects separately.
+- Fact: the Grep/ripgrep regex engine has no lookahead; `(?!…)`/`(?=…)`
+  patterns silently match nothing.
+- Fact: reusable live F# MCP canary lives at
+  `C:\Temp\PhoenixFSharpParseContextCanary` (covers legacy
+  `Project.fsproj` parse context).
+- Fact: RavenDB build profile reference (24-core, Release): ~9.6 s wall
+  dominated by the single SQLite writer thread.
 
 ## Commit Discipline — NEVER check in without review
 
@@ -88,7 +92,7 @@ The loop, in order — no step skipped or reordered:
    silent green containment result.
 4. **Adversarial subagent review of the full uncommitted implementation diff**, with empirical
    reproduction required for findings. Critical/High findings → fix → verification round with
-   the same reviewer. Medium/Low findings → reconcile in Beads; they do not block check-in.
+   the same reviewer. Medium/Low findings → record in Engram; they do not block check-in.
 5. Only after both reviewers complete and no Critical or High finding remains: commit.
    (Autonomous commit after the gate passes was EXPLICITLY
    pre-authorized by Greg for this repository's batch loop — "when review is clean, check-in
@@ -96,13 +100,27 @@ The loop, in order — no step skipped or reordered:
    do-not-commit rule here; in any session where Greg has not affirmed this workflow, the
    global rule wins and every commit needs his explicit word.
    **Push always needs explicit per-changeset approval from Greg — no standing grant exists.**)
-6. Close/annotate beads in the same commit. Bump `BuildInfo.Version` when the tool surface or
+6. Update the Engram items (`note`, `done`) with the commit. Bump `BuildInfo.Version` when the tool surface or
    a user-visible capability changes; bump `IndexBuilder.SchemaVersion` whenever the schema
    **or the indexer's stored output** changes (it forces the rebuild deployments rely on —
    edge content and classification results count as stored output).
 
 If the reviewer dies mid-pass (session limits), the batch is **not reviewed** — do not commit
 on a self-performed probe run; wait for capacity or ask Greg.
+
+**Failed gates are an investigation, never a stop.** When the build, the suite, or an external
+gate fails, classify every failure in the same session and act:
+
+- **Test or environment defect** (wrong assertion, stale fixture, host contention, missing
+  prerequisite, an unpinned submodule): fix it in the current changeset and rerun the gates.
+- **Product defect**: file one Engram item per defect with the failing test as the acceptance
+  criterion (`engram work add "…" --accept "<test> passes" --kind bug --under <current item>`),
+  mark the current item blocked on it when check-in depends on it, and fix it now when it is in
+  scope. Never delete, skip, or loosen a test to make it pass.
+
+Report the classification of every failure — test names, cause, action — before asking Greg for
+a decision. "The suite failed" alone is not a report, and an INCONCLUSIVE review with unclassified
+failures is not a finished turn.
 
 ## Build & Test
 
@@ -133,16 +151,12 @@ a durable fan-in.
 - Invoke `/review-changes` directly in the active writable parent session; never spawn it
   as a reviewer. Only its `/review-code` children use `writePolicy: readOnly`.
 - Both commands are review-only. They never edit source, mutate Git, commit, push, or run
-  Dolt remote sync. The parent may reconcile local Beads findings after fan-in.
-- Generated `.beads/interactions.jsonl`, `.beads/issues.jsonl`, and `.beads/events.jsonl`
-  are tracker bookkeeping outside the implementation review target. Beads actions that only
-  update those ledgers never invalidate an otherwise completed review. Other tracked `.beads`
-  configuration, metadata, and hooks remain ordinary review targets.
+  tracker sync. The parent may record findings in Engram after fan-in.
 - The parent compares implementation path inventories around validation, delegation, and
   fan-in. Reviewers do not compute or report Git-object, patch, or content hashes.
 - A failed, missing, or dead reviewer or an incomplete packet makes the review INCONCLUSIVE.
-- Critical and High findings block check-in. Medium and Low findings must be reconciled in
-  Beads but do not block check-in.
+- Critical and High findings block check-in. Medium and Low findings must be recorded in
+  Engram but do not block check-in.
 - Changes to review commands, reviewer lenses, repository instructions, and their contract tests
   are ordinary implementation review targets; they do not disable the review gate.
 - If the TermAl MCP bridge is unavailable, stop and report it; a self-review does not

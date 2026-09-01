@@ -76,8 +76,8 @@ public class Batch19ReferenceKindsTests
             try
             {
                 manager.Start();
-                for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-                Assert.True(manager.IsQueryable);
+                IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
+                    "reference-kinds index did not become fresh");
                 var tools = new NavigationTools(manager, semantic);
 
                 if (!semantic.FrameworkRefsAvailable) return; // review C2: deterministic env skip (fast), retry handles transients

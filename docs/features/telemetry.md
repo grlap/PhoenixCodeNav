@@ -1,6 +1,6 @@
 # Semantic Operation Telemetry (epuc.1, epuc.3, epuc.4, epuc.5, epuc.10)
 
-Beads: `PhoenixCodeNav-epuc.1`, `PhoenixCodeNav-epuc.3`, `PhoenixCodeNav-epuc.4`, `PhoenixCodeNav-epuc.5`, `PhoenixCodeNav-epuc.10` · Consumed live by: [`../internal-operations-portal.md`](../internal-operations-portal.md)
+Consumed live by: [`../internal-operations-portal.md`](../internal-operations-portal.md)
 
 Phoenix writes one JSONL record per semantic operation to a bounded, privacy-safe,
 per-process file. This is the live semantic-operations data layer consumed by the local Operations

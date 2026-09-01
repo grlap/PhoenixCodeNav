@@ -498,7 +498,9 @@ public sealed class Batch45IndexFollowerTests
             IndexBuilder.Build(root, database);
             using var writer = new IndexManager(root, database);
             writer.Start();
-            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000),
+            Assert.True(WaitUntil(() => writer.IsQueryable &&
+                IndexDestinationClaim.ReadState(root, database) ==
+                    IndexDestinationClaimState.Ready, 20_000),
                 writer.Health().Error);
 
             using var semantic = new SemanticService(recovering);
@@ -598,7 +600,9 @@ public sealed class Batch45IndexFollowerTests
 
             using var writer = new IndexManager(root, database);
             writer.Start();
-            Assert.True(WaitUntil(() => writer.IsQueryable, 20_000), writer.Health().Error);
+            Assert.True(WaitUntil(() => writer.IsQueryable &&
+                IndexDestinationClaim.ReadState(root, database) ==
+                    IndexDestinationClaimState.Ready, 20_000), writer.Health().Error);
             Assert.True(writer.IsWriter);
             Assert.Equal("writer", writer.AccessMode);
             Assert.Equal("writer", writer.Health().AccessMode);

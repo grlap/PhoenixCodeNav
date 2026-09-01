@@ -422,7 +422,8 @@ public class Batch37Tests
         IndexBuilder.Build(root, dbPath);
         var m = new IndexManager(root, dbPath);
         m.Start();
-        Assert.True(WaitUntil(() => m.IsQueryable, 20000));
+        IndexManagerTestSupport.WaitUntilReady(m, TimeSpan.FromSeconds(30),
+            "batch-37 semantic index did not become fresh");
         return m;
     }
 

@@ -41,7 +41,8 @@ public class Batch51TelemetryTests
             try
             {
                 m.Start();
-                Assert.True(WaitUntil(() => m.IsQueryable, 30_000));
+                IndexManagerTestSupport.WaitUntilReady(m, TimeSpan.FromSeconds(30),
+                    "telemetry index did not become fresh");
                 if (!semantic.FrameworkRefsAvailable) return;
 
                 // One cold semantic op (retry rides transients, per the n7ly family).

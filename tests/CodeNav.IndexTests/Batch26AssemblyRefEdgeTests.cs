@@ -181,7 +181,8 @@ public class Batch26AssemblyRefEdgeTests
             try
             {
                 m.Start();
-                Assert.True(WaitUntil(() => m.IsQueryable, 20000));
+                IndexManagerTestSupport.WaitUntilReady(m, TimeSpan.FromSeconds(30),
+                    "assembly-reference semantic index did not become fresh");
 
                 // REFERENCES FIRST, on its own SemanticService: implementations' seed loading
                 // would otherwise leave the implementer projects sitting in the shared workspace
@@ -306,7 +307,8 @@ public class Batch26AssemblyRefEdgeTests
             try
             {
                 m.Start();
-                Assert.True(WaitUntil(() => m.IsQueryable, 20000));
+                IndexManagerTestSupport.WaitUntilReady(m, TimeSpan.FromSeconds(30),
+                    "mutual-reference semantic index did not become fresh");
                 if (!semantic.FrameworkRefsAvailable) return;
                 var tools = new NavigationTools(m, semantic);
 

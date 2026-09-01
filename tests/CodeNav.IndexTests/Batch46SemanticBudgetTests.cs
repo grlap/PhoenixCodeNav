@@ -481,8 +481,8 @@ public class Batch46SemanticBudgetTests
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000),
-                manager.Health().Error);
+            IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
+                "declaration-budget index did not become fresh");
             using var semantic = new SemanticService(manager);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);

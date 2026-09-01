@@ -11,9 +11,9 @@ Review the current staged, unstaged, and untracked implementation changes by run
 
 **IMPORTANT: Run `/review-changes` directly in the existing active, writable parent session. Never delegate or spawn `/review-changes` itself. The coordinator must be able to create normal build/test artifacts; only the `/review-code` children are delegated with `writePolicy: readOnly`.**
 
-**IMPORTANT: This is a review-only command. Do not modify source files, stage, stash, checkout, reset, commit, push, run `bd dolt push`, or run any other mutating Git/remote-sync operation. Parent validation may create normal ignored build/test artifacts; parent-session local Beads reconciliation is the only permitted tracked/project workflow mutation. This command grants no commit authority; after the review gate passes the outer workflow must still follow `CLAUDE.md` / `AGENTS.md`. Push always requires explicit per-changeset approval.**
+**IMPORTANT: This is a review-only command. Do not modify source files, stage, stash, checkout, reset, commit, push, or run any other mutating Git/remote-sync operation. Parent validation may create normal ignored build/test artifacts; recording findings in Engram from the parent session is the only permitted project-workflow mutation. This command grants no commit authority; after the review gate passes the outer workflow must still follow `CLAUDE.md` / `AGENTS.md`. Push always requires explicit per-changeset approval.**
 
-**IMPORTANT: Beads (`bd`) is the canonical tracker for findings. Do not create markdown bug lists. Delegated read-only reviewers propose Beads actions; this parent command performs deduplicated reconciliation after fan-in. Generated `.beads/interactions.jsonl`, `.beads/issues.jsonl`, and `.beads/events.jsonl` ledgers are workflow bookkeeping, not part of the implementation review target, and their mutation never invalidates an otherwise completed implementation review. Other tracked `.beads` configuration, metadata, and hooks remain ordinary review targets.**
+**IMPORTANT: Engram is the canonical tracker for findings. Do not create markdown bug lists. Delegated read-only reviewers propose tracker actions; this parent command records the deduplicated findings after fan-in with the Engram words.**
 
 **IMPORTANT: Attempt exactly two reviewer spawns through the TermAl MCP bridge: one Codex and one Claude. Do not use platform subagents, Claude Task agents, Codex collaboration agents, shell-launched agents, raw HTTP, synchronous shell polling, or nested TermAl delegation for this command. `/review-code` is deliberately non-nesting. If the TermAl delegation tools are unavailable, stop and report that the bridge is required.**
 
@@ -26,18 +26,18 @@ Required TermAl MCP tools:
 
 ## Step 1: Confirm the implementation review target
 
-Run this path-only inventory from the repository root. Exclude only the generated Beads JSONL ledgers from every inventory. Do not emit patch content yet:
+Run this path-only inventory from the repository root. Do not emit patch content yet:
 
 ```text
-git --no-optional-locks status --short -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
-git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
-git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
-git ls-files --others --exclude-standard -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
+git --no-optional-locks status --short
+git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only
+git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only
+git ls-files --others --exclude-standard
 ```
 
 If any inventory command fails or its path output is truncated or malformed, return INCONCLUSIVE before reading content or spawning reviewers.
 
-The implementation review target is the sorted union of staged, unstaged, and ordinary untracked paths after those three generated ledgers are removed. If that target is empty, tell the user there is nothing to review and stop. Review-policy, instruction, and tracked Beads configuration files are ordinary review targets: do not exclude or short-circuit them; include their changed paths and content in validation and both delegated reviews.
+The implementation review target is the sorted union of staged, unstaged, and ordinary untracked paths. If that target is empty, tell the user there is nothing to review and stop. Review-policy and instruction files are ordinary review targets: do not exclude or short-circuit them; include their changed paths and content in validation and both delegated reviews.
 
 Record the absolute repository root from `git rev-parse --show-toplevel`; pass it as `cwd` to both TermAl sessions so the local slash command resolves from this repository.
 
@@ -46,8 +46,8 @@ Before diffing or opening target content, inspect changed-entry metadata without
 Only after the containment checks pass, run:
 
 ```text
-git --no-pager diff --no-ext-diff --no-textconv --no-color --check -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
-git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --check -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
+git --no-pager diff --no-ext-diff --no-textconv --no-color --check
+git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --check
 ```
 
 If either diff check reports an error, stop and report it before delegation. Preserve the sorted implementation path inventory for comparison after validation and fan-in. Do not calculate or require Git-object, patch, or content hashes from either reviewer.
@@ -63,7 +63,12 @@ Validation belongs in the writable parent, not in read-only reviewer children.
 5. Require the external MCP integration harness to exit successfully with zero failed cases. Missing submodules, mismatched external commits, pre-existing explicit index paths, fresh-index baseline drift, or any harness failure stop the review gate; do not restore or update submodules implicitly.
 6. Run `node ./website/verify.mjs` and require every static-site contract check to pass.
 
-If the build, solution tests, external MCP integration harness, or website verifier fail, stop and report the output. The sole documented exception is `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep`: when it is the only solution-test failure, rerun that exact test in isolation. Continue only if the isolated rerun passes, and carry the flake note into the final review. Do not silently bless any other intermittent failure.
+If the build, solution tests, external MCP integration harness, or website verifier fail, do not spawn reviewers or modify source files. A failed gate still requires investigation in this same turn: classify every failing test or check using read-only evidence.
+
+- Test or environment defect (wrong assertion, stale fixture, host contention, missing prerequisite, an unpinned submodule): report the cause, the evidence, and the remediation the writable implementation workflow should perform.
+- Product defect: record one Engram item per defect with the failing test as its acceptance criterion (`engram work add "…" --accept "<test> passes" --kind bug --under <item under review>`), and mark the item under review blocked on it when check-in depends on the fix. Never delete, skip, or loosen a test to make it pass.
+
+After classification and any required Engram recording, hand remediation back to the writable implementation workflow and end the turn with every test name, cause, and action. "The suite failed" alone is not a report. The sole documented exception is `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep`: when it is the only solution-test failure, rerun that exact test in isolation. Continue the review only if the isolated rerun passes, and carry the flake note into the final review. Do not silently bless any other intermittent failure.
 
 After validation, restart all of Step 1 from its path-only inventories. Reapply no-follow containment before any diff check, content read, or spawn; scan reviewable untracked text files for conflict markers and whitespace errors only after those checks pass. If the sorted implementation path inventory changed, repeat Step 2 against the new inventory and restart Step 1. If it changes again, return INCONCLUSIVE. Never validate one implementation path set and send a different one to reviewers.
 
@@ -108,7 +113,7 @@ For each successful delegation id:
 
 TermAl lifecycle status and review verdict are different fields. A healthy child packet uses lifecycle `Status: completed`; derive the review verdict from `Review verdict: CLEAN|NOT CLEAN|INCONCLUSIVE` in its `Summary:` section plus its structured findings. Never interpret lifecycle `completed` as review CLEAN.
 
-Require both requested reviewers to return complete non-truncated packets that list the reviewed implementation paths. Do not require reviewer-computed hashes or identities. Before accepting the packets, rerun the Step 1 path-only inventories in the parent. If the sorted implementation path inventory differs from the pre-spawn inventory, return INCONCLUSIVE. Changes confined to the three generated Beads JSONL ledgers do not count as implementation drift.
+Require both requested reviewers to return complete non-truncated packets that list the reviewed implementation paths. Do not require reviewer-computed hashes or identities. Before accepting the packets, rerun the Step 1 path-only inventories in the parent. If the sorted implementation path inventory differs from the pre-spawn inventory, return INCONCLUSIVE.
 
 Deduplicate findings without erasing independent agreement. If both reviewers found the same root issue, merge it and state that both caught it. Resolve severity disagreements explicitly. Owner severity decisions govern the consolidated severity.
 
@@ -146,39 +151,29 @@ Use this shape:
 - CLEAN | NOT CLEAN | INCONCLUSIVE
 ```
 
-`CLEAN` requires both requested reviewers to complete successfully, return complete non-truncated packets, and leave no unresolved Critical or High finding. Medium and Low findings are allowed when they are reconciled in Beads and reported in the final packet. A missing/dead reviewer, incomplete packet, or serious unverified risk makes the result `INCONCLUSIVE`, never CLEAN. `NOT CLEAN` is reserved for unresolved Critical or High findings.
+`CLEAN` requires both requested reviewers to complete successfully, return complete non-truncated packets, and leave no unresolved Critical or High finding. Medium and Low findings are allowed when they are recorded in Engram and reported in the final packet. A missing/dead reviewer, incomplete packet, or serious unverified risk makes the result `INCONCLUSIVE`, never CLEAN. `NOT CLEAN` is reserved for unresolved Critical or High findings.
 
-## Step 6: Reconcile Beads in the parent
+## Step 6: Record findings in Engram from the parent
 
 For every consolidated actionable finding:
 
-1. Search before creating:
-   - `bd search "<short finding title>" --status all`
-   - `bd search --desc-contains "<file:line or unique phrase>" --status all` when useful.
-2. Update an existing open issue with `bd update <id> --append-notes "<review evidence>"` when it tracks the same root cause.
-3. Reopen a regressed closed issue or create a `discovered-from:<active-id>` follow-up when history should remain intact.
-4. Create a new issue only when no existing Bead covers it. Include literal `## Problem`, `## Steps to Reproduce`, and `## Acceptance Criteria` sections, design guidance, and use `bd create --validate`.
-5. Close an open issue only when the reviewed implementation satisfies its acceptance criteria or the owner explicitly accepts or defers the finding.
+1. Search before creating: `engram work ls --search "<short finding title or file:line>" --all`.
+2. When an existing item tracks the same root cause, `engram work note <ref> "<review evidence>"` (claim it first if you hold nothing on it).
+3. Create a new item only when nothing covers it: `engram work add "<finding title>" --outcome "<what correct behaviour looks like>" --accept "<the check that proves it>" --kind bug --priority <N> --label review --label <domain> --under <item under review>`.
+4. Complete an item only when the reviewed implementation satisfies its acceptance criteria or the owner explicitly accepts or defers the finding.
 
-Severity mapping:
+Severity mapping: Critical -> priority 0, High -> 1, Medium -> 2, Low -> 3.
 
-- Critical -> `P0`
-- High -> `P1`
-- Medium -> `P2`
-- Low -> `P3`
+Use kind `bug` for correctness, security, data-loss, freshness, concurrency, protocol, or lifecycle defects and `task` for pure tests or documentation. Add labels `review` and a domain label such as `git`, `indexing`, `semantic`, `mcp-contract`, `security`, `performance`, or `testing`.
 
-Use `bug` for correctness, security, data-loss, freshness, concurrency, protocol, or lifecycle defects. Use `task` for pure tests or documentation. Add labels `review`, `severity-critical|high|medium|low`, and a domain label such as `git`, `indexing`, `semantic`, `mcp-contract`, `security`, `performance`, or `testing`.
+Do not modify source files while recording. If no changes are required, state `Engram is up to date - no changes needed.` Report every Engram action and confirm the resulting state with `engram work show <ref>`.
 
-Do not modify source files during reconciliation. If no changes are required, state `Beads is up to date - no changes needed.`
-
-Generated `.beads/interactions.jsonl`, `.beads/issues.jsonl`, and `.beads/events.jsonl` changes are tracker bookkeeping outside the implementation review target. Report every Beads action and confirm the resulting issue state with read-only `bd show`, but do not hash, prefix-validate, parse, or compare those generated ledgers as a condition of the implementation review verdict.
-
-After reconciliation, rerun the Step 1 implementation path inventory. If another implementation path was added, removed, staged, or unstaged during reconciliation, return INCONCLUSIVE. Generated-ledger-only changes preserve the review verdict.
+After recording, rerun the Step 1 implementation path inventory. If another implementation path was added, removed, staged, or unstaged meanwhile, return INCONCLUSIVE.
 
 ## Step 7: Hand off
 
-- `NOT CLEAN`: list blocking Critical/High Beads ids and tell the implementer to fix, re-run focused tests and quality gates, then request verification from the original Codex and Claude child sessions through the TermAl UI. If those sessions cannot be continued, stop and ask for explicit direction; a fresh review is additional evidence but does not satisfy literal same-session verification.
-- `INCONCLUSIVE`: report the missing reviewer/tool/packet condition. It does not satisfy the commit discipline.
-- `CLEAN`: state that the review gate passed, including any reconciled Medium/Low Beads. Do not commit or push inside this command; return control to the outer workflow.
+- `NOT CLEAN`: list blocking Critical/High Engram refs and tell the implementer to fix, re-run focused tests and quality gates, then request verification from the original Codex and Claude child sessions through the TermAl UI. If those sessions cannot be continued, stop and ask for explicit direction; a fresh review is additional evidence but does not satisfy literal same-session verification.
+- `INCONCLUSIVE`: report the missing reviewer/tool/packet condition — and, when gates failed, the classification of every failure and the Engram refs filed for product defects. It does not satisfy the commit discipline.
+- `CLEAN`: state that the review gate passed, including any recorded Medium/Low Engram refs. Do not commit or push inside this command; return control to the outer workflow.
 
 Current TermAl MCP does not expose a follow-up call to an existing child session. Re-running this command creates fresh Codex/Claude reviewer sessions and therefore cannot claim literal same-session verification of a fixed Critical/High finding. Continue with the original child sessions through the TermAl UI or stop and ask for direction; do not silently claim compliance.

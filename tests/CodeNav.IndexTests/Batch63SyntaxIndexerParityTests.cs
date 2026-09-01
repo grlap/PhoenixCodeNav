@@ -419,8 +419,8 @@ public sealed class Batch63SyntaxIndexerParityTests
             using var semantic = new SemanticService(manager);
             if (!semantic.FrameworkRefsAvailable) return;
             manager.Start();
-            for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50);
-            Assert.True(manager.IsQueryable, "conversion-handle index did not become queryable");
+            IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
+                "conversion-handle index did not become fresh");
             var tools = new NavigationTools(manager, semantic);
 
             // Every handle must survive both semantic entry points and pin the same declaration.

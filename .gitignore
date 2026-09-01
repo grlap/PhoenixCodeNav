@@ -487,8 +487,7 @@ artifacts/
 # Phoenix workspace-local runtime index and telemetry.
 .codenav/
 
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key
-.beads/proxieddb/
+# Legacy Beads/Dolt runtime state retained for existing clones during the Engram migration.
+/.beads/
+/.dolt/
+/.beads-credential-key

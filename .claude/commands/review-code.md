@@ -15,57 +15,34 @@ Review the current PhoenixCodeNav staged, unstaged, and untracked changes throug
 
 When the session context says `You are a delegated child session for TermAl delegation`, state in the result that nested reviewer spawning was intentionally skipped, then apply all lenses inline.
 
-**IMPORTANT: Beads is canonical. In a delegated/read-only session, do not run mutating `bd` commands. Return exact proposed creates, updates, reopens, or closes for the parent `/review-changes` session to reconcile.**
+**IMPORTANT: Engram is the canonical tracker. In a delegated/read-only session, do not run mutating Engram words (`add`, `claim`, `update`, `note`, `done`, `handoff`); `show`, `ls`, and `search` are fine. Return exact proposed adds, notes, or completions for the parent `/review-changes` session to record.**
 
 ## Phase 1: Establish the implementation change set
 
-Run this path-only inventory. Exclude only generated Beads JSONL ledgers because they are workflow bookkeeping, not implementation. Do not emit patch content yet.
+Run this path-only inventory. Do not emit patch content yet:
 
-On PowerShell, use this exact argument-array form. Keep the three pathspec strings quoted inside the array and splat the array into Git; never execute a bare `:(exclude)...` token because PowerShell parses it before Git:
-
-```powershell
-$beadsLedgerExcludes = @(
-    ':(exclude).beads/interactions.jsonl'
-    ':(exclude).beads/issues.jsonl'
-    ':(exclude).beads/events.jsonl'
-)
-git --no-optional-locks status --short -- . @beadsLedgerExcludes
-git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only -- . @beadsLedgerExcludes
-git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only -- . @beadsLedgerExcludes
-git ls-files --others --exclude-standard -- . @beadsLedgerExcludes
-```
-
-On a POSIX shell, use the quoted pathspec form below. Do not use this block from PowerShell:
-
-```sh
-git --no-optional-locks status --short -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
-git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
-git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
-git ls-files --others --exclude-standard -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
+```text
+git --no-optional-locks status --short
+git --no-pager diff --no-ext-diff --no-textconv --no-color --name-only
+git --no-pager diff --cached --no-ext-diff --no-textconv --no-color --name-only
+git ls-files --others --exclude-standard
 ```
 
 If any inventory command fails or its path output is truncated or malformed, return a lifecycle `Status: completed` packet with `Review verdict: INCONCLUSIVE` and stop before reading target content.
 
-The target is the sorted union of staged, unstaged, and ordinary untracked implementation paths after `.beads/interactions.jsonl`, `.beads/issues.jsonl`, and `.beads/events.jsonl` are removed. Preserve that path inventory for a final comparison. If the target is empty, return a `## Result` packet with lifecycle `Status: completed`, `Review verdict: INCONCLUSIVE` in `Summary:`, and an explanation that no implementation changes were visible to the child even though the parent requested review, then stop. Review-policy, instruction, and tracked Beads configuration files are ordinary review targets: inspect their changed content instead of refusing the review.
+The target is the sorted union of staged, unstaged, and ordinary untracked implementation paths. Preserve that path inventory for a final comparison. If the target is empty, return a `## Result` packet with lifecycle `Status: completed`, `Review verdict: INCONCLUSIVE` in `Summary:`, and an explanation that no implementation changes were visible to the child even though the parent requested review, then stop. Review-policy and instruction files are ordinary review targets: inspect their changed content instead of refusing the review.
 
 Record the absolute repository root with `git rev-parse --show-toplevel`.
 
 Before diffing or opening target content, inspect changed-entry metadata without following links or reparse points; apply the same lstat/containment check to the instruction files about to be read. Require every path and traversed ancestor to remain inside the repository root. Treat tracked symlinks as Git link metadata and never dereference them; if an untracked symlink/junction/reparse point or any resolved path can escape the root, return `Review verdict: INCONCLUSIVE` without reading it.
 
-Read the current `CLAUDE.md` and `AGENTS.md`; their commit, Beads, build, and repository-safety rules govern the remaining review. If either file is dirty, it is also part of the review target and must be inspected adversarially.
+Read the current `CLAUDE.md` and `AGENTS.md`; their commit, tracker, build, and repository-safety rules govern the remaining review. If either file is dirty, it is also part of the review target and must be inspected adversarially.
 
-Only after the containment checks pass, run the content-bearing diffs. On PowerShell, reuse the exact `$beadsLedgerExcludes` array from the inventory:
+Only after the containment checks pass, run the content-bearing diffs:
 
-```powershell
-git --no-pager diff --binary --no-ext-diff --no-textconv --no-color -- . @beadsLedgerExcludes
-git --no-pager diff --cached --binary --no-ext-diff --no-textconv --no-color -- . @beadsLedgerExcludes
-```
-
-On a POSIX shell, use:
-
-```sh
-git --no-pager diff --binary --no-ext-diff --no-textconv --no-color -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
-git --no-pager diff --cached --binary --no-ext-diff --no-textconv --no-color -- . ':(exclude).beads/interactions.jsonl' ':(exclude).beads/issues.jsonl' ':(exclude).beads/events.jsonl'
+```text
+git --no-pager diff --binary --no-ext-diff --no-textconv --no-color
+git --no-pager diff --cached --binary --no-ext-diff --no-textconv --no-color
 ```
 
 Do not calculate or report Git-object, patch, or content hashes. Inspect every untracked implementation entry and read every reviewable text/source file plus relevant surrounding implementation/tests; untracked content is not present in `git diff`. For a binary or path too large to read safely, record its metadata and make the review INCONCLUSIVE unless it is demonstrably irrelevant or intentionally generated.
@@ -173,8 +150,8 @@ Lens Summaries:
 - Performance and Concurrency: ...
 - Testing: ...
 
-Proposed Beads Updates:
-- Search/update/create/reopen/close: ...
+Proposed Engram Updates:
+- Search/note/add/complete: ...
 
 Commands Run:
 - ...
@@ -192,18 +169,18 @@ Findings:
 
 Every actionable finding must be one physical list line beginning with the plain severity token (`Critical`, `High`, `Medium`, or `Low`); Markdown decoration around the severity and indented evidence bullets are parser-incompatible. Put any additional supporting detail under `Notes:` instead.
 
-The `Review verdict` is CLEAN when there is no actionable Critical or High finding. Medium and Low findings are allowed, but must remain visible in `Findings:` and receive proposed Beads reconciliation. Use `Review verdict: NOT CLEAN` for any Critical or High finding. Immediately before returning, rerun the path-only inventory; if the sorted implementation path set changed during review, or if the available diff/context is incomplete, a required lens is missing, or a serious risk remains unverified because read-only policy blocked the required probe, use `Review verdict: INCONCLUSIVE`, not CLEAN. Changes confined to the three generated Beads JSONL ledgers do not affect the verdict. Keep lifecycle `Status: completed` when the command itself completed successfully; use `Status: failed` only when command execution failed.
+The `Review verdict` is CLEAN when there is no actionable Critical or High finding. Medium and Low findings are allowed, but must remain visible in `Findings:` and receive proposed Engram updates. Use `Review verdict: NOT CLEAN` for any Critical or High finding. Immediately before returning, rerun the path-only inventory; if the sorted implementation path set changed during review, or if the available diff/context is incomplete, a required lens is missing, or a serious risk remains unverified because read-only policy blocked the required probe, use `Review verdict: INCONCLUSIVE`, not CLEAN. Keep lifecycle `Status: completed` when the command itself completed successfully; use `Status: failed` only when command execution failed.
 
-## Phase 6: Propose Beads reconciliation
+## Phase 6: Propose Engram updates
 
-Search read-only with `bd search ... --status all` when available. Do not mutate Beads in delegated reviewer mode.
+Search read-only with `engram work ls --search "<phrase>" --all` when available. Do not run mutating Engram words in delegated reviewer mode.
 
 For each remaining actionable finding, propose one exact action with:
 
-- existing Bead id to update/reopen, or a deduplicated new title;
-- issue type (`bug` or `task`);
-- priority derived from severity;
+- existing Engram ref to note, or a deduplicated new title;
+- kind (`bug` or `task`);
+- priority derived from severity (Critical 0, High 1, Medium 2, Low 3);
 - `file:line`, why it matters, reproduction status, and suggested fix;
-- labels `review`, severity, and reviewer domain.
+- labels `review` and the reviewer domain.
 
-If the diff demonstrably fixes an open issue, propose closure with the acceptance evidence. If no reconciliation is needed, state `Beads is up to date - no changes needed.`
+If the diff demonstrably satisfies an open item's acceptance criteria, propose its completion with the evidence. If no update is needed, state `Engram is up to date - no changes needed.`

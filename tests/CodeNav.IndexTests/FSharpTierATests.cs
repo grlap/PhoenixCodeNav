@@ -729,7 +729,8 @@ public class FSharpTierATests
 
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
+                "mixed-language collision index did not become fresh");
             using var semantic = new SemanticService(manager);
             var tools = new NavigationTools(manager, semantic);
             JsonElement graph = Parse(tools.ProjectGraph("Shared.Logical", 1, "both"));
