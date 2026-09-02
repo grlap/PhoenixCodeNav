@@ -11,11 +11,14 @@ namespace CodeNav.Mcp;
 internal static class McpApplication
 {
     private const string Instructions =
-        "Code navigation for a large C# workspace. Prefer these tools over shell grep for source navigation: " +
-        "start with repo_overview; use search_symbol/definition/references for code identifiers; " +
-        "search_text for literals and config keys; ALWAYS outline a large file before reading it, " +
-        "then fetch only needed spans with source_context. Results carry confidence 'indexed' " +
-        "(syntax/index-backed, not compiler-verified) and index freshness metadata. When the " +
+        "Agent-first code navigation for large C# and mixed C#/F# workspaces. Prefer Phoenix over broad shell grep: " +
+        "start with repo_overview; use search_symbol then context_pack to orient on an identifier; " +
+        "use definition/references/implementations for exact C# evidence; use impact and related_tests before risky changes; " +
+        "use review_pack for a bounded change-set surface; use search_text for literals and config keys; " +
+        "outline a large file before fetching only needed spans with source_context. A transport-successful call can " +
+        "still contain a structured domain error, so inspect error, coverage, confidence, partial, and truncation fields. " +
+        "When retryRecommended is true, follow retryHint without inventing an unbounded retry loop. " +
+        "F# semantic navigation is intentionally narrower and reports unsupported or partial boundaries explicitly. When the " +
         "user explicitly asks to open the Operations Portal, call open_operations_portal and " +
         "show its returned url field verbatim as a clickable link; never call it proactively.";
 

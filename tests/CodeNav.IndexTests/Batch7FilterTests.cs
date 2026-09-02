@@ -8,7 +8,7 @@ namespace CodeNav.Tests;
 /// <summary>
 /// Small synthetic workspace with checked-in third-party source under 3rdparty/ (a directory the
 /// scanner indexes, unlike bin/obj/packages) plus a first-party user of the same type. Gives the
-/// Batch 7 vendor/first-party filters — excludePath, firstPartyOnly, the per-hit noise flag, and
+/// Batch 7 vendor/first-party filters — excludePath, queryScope, the per-hit noise flag, and
 /// repo_overview.suggestedExcludes — something real to discriminate. Its own fixture so the
 /// mutation-free tests stay isolated from the shared IndexFixture.
 /// </summary>
@@ -144,7 +144,7 @@ public class Batch7FilterTests : IClassFixture<VendorFixture>
     [Fact]
     public void VendorExcludeGlobsMatchWhatIsVendorPathFlags()
     {
-        // firstPartyOnly's globs must cover exactly the paths the noise flag reports, at any depth.
+        // first_party's globs must cover exactly the paths the noise flag reports, at any depth.
         var globs = IndexQueries.VendorExcludeGlobs();
         Assert.Contains("3rdparty/**", globs);
         Assert.Contains("**/external/**", globs);
@@ -154,7 +154,7 @@ public class Batch7FilterTests : IClassFixture<VendorFixture>
     // ---------------------------------------------------------------- search_symbol (o09b)
 
     [Fact]
-    public void SearchSymbolFlagsNoiseAndFirstPartyOnlyDropsVendor()
+    public void SearchSymbolFlagsNoiseAndFirstPartyScopeDropsVendor()
     {
         var tools = Tools();
 
@@ -163,32 +163,32 @@ public class Batch7FilterTests : IClassFixture<VendorFixture>
         Assert.Equal(VendorFixture.VendorFile, all[0].GetProperty("path").GetString());
         Assert.True(all[0].GetProperty("noise").GetBoolean());                 // vendored hit is flagged
 
-        // firstPartyOnly and an equivalent excludePath both drop the vendored hit.
-        Assert.Equal(0, Parse(tools.SearchSymbol("PhoenixVendorType", match: "exact", firstPartyOnly: true))
+        // first_party and an equivalent excludePath both drop the vendored hit.
+        Assert.Equal(0, Parse(tools.SearchSymbol("PhoenixVendorType", match: "exact", queryScope: "first_party"))
             .GetProperty("symbols").GetArrayLength());
         Assert.Equal(0, Parse(tools.SearchSymbol("PhoenixVendorType", match: "exact", excludePath: "3rdparty/**"))
             .GetProperty("symbols").GetArrayLength());
 
-        // A first-party hit survives firstPartyOnly and carries NO noise flag (null → omitted).
-        var shared = Parse(tools.SearchSymbol("PhoenixSharedType", match: "exact", firstPartyOnly: true))
+        // A first-party hit survives first_party and carries NO noise flag (null → omitted).
+        var shared = Parse(tools.SearchSymbol("PhoenixSharedType", match: "exact", queryScope: "first_party"))
             .GetProperty("symbols");
         Assert.True(shared.GetArrayLength() >= 1);
         Assert.False(shared[0].TryGetProperty("noise", out _));
     }
 
     [Fact]
-    public void FirstPartyOnlyExcludesVendorNestedAtAnyDepth()
+    public void FirstPartyScopeExcludesVendorNestedAtAnyDepth()
     {
         var tools = Tools();
 
         // A vendor dir nested well below the root ('src/Deep/external/') is flagged AND excluded —
-        // firstPartyOnly is complete at any depth, not just for root-level vendor dirs.
+        // first_party is complete at any depth, not just for root-level vendor dirs.
         var all = Parse(tools.SearchSymbol("PhoenixNestedVendorType", match: "exact")).GetProperty("symbols");
         Assert.Equal(1, all.GetArrayLength());
         Assert.Equal(VendorFixture.NestedVendorFile, all[0].GetProperty("path").GetString());
         Assert.True(all[0].GetProperty("noise").GetBoolean());
 
-        Assert.Equal(0, Parse(tools.SearchSymbol("PhoenixNestedVendorType", match: "exact", firstPartyOnly: true))
+        Assert.Equal(0, Parse(tools.SearchSymbol("PhoenixNestedVendorType", match: "exact", queryScope: "first_party"))
             .GetProperty("symbols").GetArrayLength());
     }
 
@@ -204,8 +204,8 @@ public class Batch7FilterTests : IClassFixture<VendorFixture>
             .Single(h => h.GetProperty("path").GetString() == VendorFixture.VendorFile);
         Assert.True(vendorHit.GetProperty("noise").GetBoolean());
 
-        // firstPartyOnly and excludePath both remove the vendored line.
-        Assert.DoesNotContain(Parse(tools.SearchText("PhoenixVendorType", firstPartyOnly: true))
+        // first_party and excludePath both remove the vendored line.
+        Assert.DoesNotContain(Parse(tools.SearchText("PhoenixVendorType", queryScope: "first_party"))
             .GetProperty("hits").EnumerateArray(), h => h.GetProperty("path").GetString() == VendorFixture.VendorFile);
         Assert.DoesNotContain(Parse(tools.SearchText("PhoenixVendorType", excludePath: "3rdparty/**"))
             .GetProperty("hits").EnumerateArray(), h => h.GetProperty("path").GetString() == VendorFixture.VendorFile);

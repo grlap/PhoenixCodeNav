@@ -64,6 +64,17 @@ public sealed class McpArgumentValidationTests
                 transport,
                 cancellationToken: timeout.Token);
 
+            string instructions = Assert.IsType<string>(client.ServerInstructions);
+            foreach (string token in new[]
+                     {
+                         "repo_overview", "context_pack", "impact", "related_tests",
+                         "review_pack", "structured domain error", "retryRecommended",
+                         "retryHint", "C#", "F#",
+                     })
+            {
+                Assert.Contains(token, instructions, StringComparison.Ordinal);
+            }
+
             IList<McpClientTool> tools = await client.ListToolsAsync(
                 cancellationToken: timeout.Token);
             Assert.Equal(27, tools.Count);

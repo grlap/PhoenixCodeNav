@@ -33,12 +33,29 @@ public sealed partial class NavigationTools
             return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
         }
 
-        var (target, hint) = ResolveSemanticTarget(name, null, "method,property,constructor", path, line, column);
+        var (target, hint) = ResolveSemanticTarget(name, null,
+            ["method", "property", "constructor"], path, line, column);
         if (target is { } t)
         {
-            var (result, coverage, skippedCandidateProjects, projectModelUnproven, reason) = _semantic
-                .CallersAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
-                .GetAwaiter().GetResult();
+            List<SemanticCaller>? result;
+            ClusterCoverage? coverage;
+            List<string>? skippedCandidateProjects;
+            bool projectModelUnproven;
+            string? reason;
+            if (TestOnlySemanticFailureReason is { } forcedFailure)
+            {
+                result = null;
+                coverage = null;
+                skippedCandidateProjects = null;
+                projectModelUnproven = false;
+                reason = forcedFailure;
+            }
+            else
+            {
+                (result, coverage, skippedCandidateProjects, projectModelUnproven, reason) = _semantic
+                    .CallersAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
+                    .GetAwaiter().GetResult();
+            }
             reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
             if (result is not null)
             {
@@ -74,13 +91,17 @@ public sealed partial class NavigationTools
                         skippedCandidateProjectsTruncated = skippedTruncated ? true : (bool?)null,
                         partial = partial ? true : (bool?)null,
                         partialReason = partialCause,
+                        retryRecommended = SemanticRetryRecommended(partialCause)
+                            ? true
+                            : (bool?)null,
+                        retryHint = SemanticRetryHint(partialCause, "callers"),
                         truncated,
                         meta,
                     });
             }
-            return IndexedReferencesFallback(name ?? hint, reason);
+            return IndexedReferencesFallback(name ?? hint, reason, "callers");
         }
-        return IndexedReferencesFallback(name, "target_not_found_in_index");
+        return IndexedReferencesFallback(name, "target_not_found_in_index", "callers");
     }
 
     [McpServerTool(Name = "callees")]
@@ -100,14 +121,29 @@ public sealed partial class NavigationTools
             return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
         }
 
-        var (target, hint) = ResolveSemanticTarget(name, null, "method,constructor", path, line, column);
+        var (target, hint) = ResolveSemanticTarget(name, null,
+            ["method", "constructor"], path, line, column);
         if (target is not { } t)
         {
             return Json.Serialize(new { error = "target_not_found_in_index", name });
         }
-        var (result, coverage, projectModelUnproven, reason) = _semantic
-            .CalleesAsync(t.Path, t.Line, t.Column, hint, timeoutMs)
-            .GetAwaiter().GetResult();
+        List<SemanticCallee>? result;
+        ClusterCoverage? coverage;
+        bool projectModelUnproven;
+        string? reason;
+        if (TestOnlySemanticFailureReason is { } forcedFailure)
+        {
+            result = null;
+            coverage = null;
+            projectModelUnproven = false;
+            reason = forcedFailure;
+        }
+        else
+        {
+            (result, coverage, projectModelUnproven, reason) = _semantic
+                .CalleesAsync(t.Path, t.Line, t.Column, hint, timeoutMs)
+                .GetAwaiter().GetResult();
+        }
         reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
         if (result is null)
         {
@@ -115,6 +151,8 @@ public sealed partial class NavigationTools
             {
                 error = "semantic_unavailable",
                 partialReason = reason,
+                retryRecommended = SemanticRetryRecommended(reason) ? true : (bool?)null,
+                retryHint = SemanticRetryHint(reason, "callees"),
                 meta = Meta.From(_manager.Health(), "indexed", "semantic"),
             });
         }
@@ -136,6 +174,8 @@ public sealed partial class NavigationTools
             coverage = coverage is null ? null : CoverageJson(coverage),
             partial = partial ? true : (bool?)null,
             partialReason = partialCause,
+            retryRecommended = SemanticRetryRecommended(partialCause) ? true : (bool?)null,
+            retryHint = SemanticRetryHint(partialCause, "callees"),
             truncated,
             meta = meta0,
         });
@@ -171,14 +211,29 @@ public sealed partial class NavigationTools
         int deadlineMs = Math.Clamp(timeoutMs, 500, 120000); // mirrors TypeHierarchyAsync's clamp
         var swSem = System.Diagnostics.Stopwatch.StartNew();
         var (target, hint) = ResolveSemanticTarget(
-            name, null, "class,interface,struct,record,enum", path, line, column, arity);
+            name, null, ["class", "interface", "struct", "record", "enum"], path,
+            line, column, arity);
         if (target is not { } t)
         {
             return Json.Serialize(new { error = "target_not_found_in_index", name });
         }
-        var (result, coverage, skippedCandidateProjects, reason) = _semantic
-            .TypeHierarchyAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs, arity)
-            .GetAwaiter().GetResult();
+        SemanticTypeHierarchy? result;
+        ClusterCoverage? coverage;
+        List<string>? skippedCandidateProjects;
+        string? reason;
+        if (TestOnlySemanticFailureReason is { } forcedFailure)
+        {
+            result = null;
+            coverage = null;
+            skippedCandidateProjects = null;
+            reason = forcedFailure;
+        }
+        else
+        {
+            (result, coverage, skippedCandidateProjects, reason) = _semantic
+                .TypeHierarchyAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs, arity)
+                .GetAwaiter().GetResult();
+        }
         reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
         if (result is null)
         {
@@ -208,6 +263,8 @@ public sealed partial class NavigationTools
                     derivedConfidence = "heuristic",
                     noteId = NoteIds.HierarchyHeuristicFallback, // a0b: stable, machine-matchable
                     partialReason = reason,
+                    retryRecommended = SemanticRetryRecommended(reason) ? true : (bool?)null,
+                    retryHint = SemanticRetryHint(reason, "type_hierarchy"),
                     note = "Semantic resolution unavailable (see partialReason) — these types name it in their base list (confidence heuristic). baseTypes/interfaces are omitted: they need the compiler. Verify with source_context, or retry for exact.",
                     timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
                     truncated = truncated || candidates.Count >= 50,
@@ -218,6 +275,8 @@ public sealed partial class NavigationTools
             {
                 error = "semantic_unavailable",
                 partialReason = reason,
+                retryRecommended = SemanticRetryRecommended(reason) ? true : (bool?)null,
+                retryHint = SemanticRetryHint(reason, "type_hierarchy"),
                 hint = "Use 'implementations' for its indexed fallback, or search_symbol.",
                 timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
                 meta = Meta.From(_manager.Health(), "indexed", "semantic"),
@@ -377,14 +436,26 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "dependency_path")]
-    [Description("Shortest project-reference chains explaining why one project depends on another.")]
+    [Description("Shortest project-reference chains explaining why one project depends on another. Project selectors accept an exact project-file path, project-file name, or AssemblyName metadata; ambiguous logical names return every physical match instead of choosing one.")]
     public string DependencyPath(
-        [Description("Depending project name.")] string fromProject,
-        [Description("Dependency project name.")] string toProject,
+        [Description("Depending project selector: exact .csproj/.fsproj path, project-file name, or AssemblyName.")] string fromProject,
+        [Description("Dependency project selector: exact .csproj/.fsproj path, project-file name, or AssemblyName.")] string toProject,
         [Description("Max distinct shortest paths (default 3).")] int maxPaths = 3)
     {
         if (NotReady() is { } notReady) return notReady;
         using var q = _manager.OpenQueries();
+        string fromSelector = fromProject;
+        string toSelector = toProject;
+        (ResolvedProjectSelector? fromSelection, string? fromError) =
+            ResolveProjectSelector(q, fromSelector, "fromProject", "dependency_path");
+        if (fromError is not null) return fromError;
+        (ResolvedProjectSelector? toSelection, string? toError) =
+            ResolveProjectSelector(q, toSelector, "toProject", "dependency_path");
+        if (toError is not null) return toError;
+        ProjectRow from = fromSelection!.Project;
+        ProjectRow to = toSelection!.Project;
+        fromProject = from!.Name;
+        toProject = to!.Name;
         var paths = q.DependencyPaths(fromProject, toProject, Math.Clamp(maxPaths, 1, 10));
         // Edge provenance per hop (bxw, schema v10): 'projectReference' = a real
         // <ProjectReference>; 'hintPathReference' = recovered from <Reference>+HintPath / bare
@@ -415,20 +486,74 @@ public sealed partial class NavigationTools
         // omitted on every normal query (house style: silent when nothing to say).
         bool? sameProject = fromProject.Equals(toProject, StringComparison.OrdinalIgnoreCase) ? true : null;
         var meta = Meta.From(_manager.Health(), "indexed", "text");
-        string BuildJson(bool dropStructured) => Json.WithListBudget(pathItems, (items, truncated) => new
-        {
-            fromProject,
-            toProject,
-            found,
-            sameProject,
-            paths = items.Select(i => i.display),
-            structuredPaths = dropStructured ? null : (object?)items.Select(i => i.hops),
-            structuredPathsOmitted = dropStructured
-                ? "a single path exceeded the byte budget — structured hops dropped; the 'paths' strings carry the full chains"
-                : null,
-            truncated,
-            meta,
-        });
+        var selectorShadows = fromSelection.ShadowedMatches
+            .Select(match => new ProjectSelectorShadow("fromProject", match))
+            .Concat(toSelection.ShadowedMatches.Select(match =>
+                new ProjectSelectorShadow("toProject", match)))
+            .ToList();
+        string BuildPayload(bool dropStructured,
+            string boundedFromSelector, bool fromSelectorTruncated,
+            string boundedToSelector, bool toSelectorTruncated) =>
+            Json.WithDiagnosticListBudget(pathItems, selectorShadows,
+                (items, truncated, shadowed, _) =>
+                {
+                    List<ProjectSelectorMatch> fromShadowed = shadowed
+                        .Where(item => item.Field == "fromProject")
+                        .Select(item => item.Match).ToList();
+                    List<ProjectSelectorMatch> toShadowed = shadowed
+                        .Where(item => item.Field == "toProject")
+                        .Select(item => item.Match).ToList();
+                    return new
+                    {
+                        fromProject,
+                        toProject,
+                        fromProjectSelector = boundedFromSelector,
+                        fromProjectSelectorTruncated = fromSelectorTruncated
+                            ? true
+                            : (bool?)null,
+                        fromProjectSelectorBytes = fromSelectorTruncated
+                            ? Json.Utf8Bytes(fromSelector)
+                            : (int?)null,
+                        toProjectSelector = boundedToSelector,
+                        toProjectSelectorTruncated = toSelectorTruncated
+                            ? true
+                            : (bool?)null,
+                        toProjectSelectorBytes = toSelectorTruncated
+                            ? Json.Utf8Bytes(toSelector)
+                            : (int?)null,
+                        fromProjectSelectorResolution = ProjectSelectorResolutionJson(
+                            fromSelection.ShadowedMatches.Count, fromShadowed,
+                            shadowedMatchesTruncated: false),
+                        toProjectSelectorResolution = ProjectSelectorResolutionJson(
+                            toSelection.ShadowedMatches.Count, toShadowed,
+                            shadowedMatchesTruncated: false),
+                        found,
+                        sameProject,
+                        paths = items.Select(i => i.display),
+                        structuredPaths = dropStructured
+                            ? null
+                            : (object?)items.Select(i => i.hops),
+                        structuredPathsOmitted = dropStructured
+                            ? "a single path exceeded the byte budget — structured hops dropped; the 'paths' strings carry the full chains"
+                            : null,
+                        truncated,
+                        meta,
+                    };
+                }, TestOnlyProjectSelectorResponseMaxBytes);
+        string BuildToSelector(bool dropStructured,
+            string boundedFromSelector, bool fromSelectorTruncated) =>
+            Json.WithStringBudget(toSelector, Json.HardBudgetBytes,
+                (boundedToSelector, toSelectorTruncated) =>
+                    System.Text.Json.Nodes.JsonNode.Parse(BuildPayload(
+                        dropStructured, boundedFromSelector, fromSelectorTruncated,
+                        boundedToSelector, toSelectorTruncated))!,
+                TestOnlyProjectSelectorResponseMaxBytes);
+        string BuildJson(bool dropStructured) =>
+            Json.WithStringBudget(fromSelector, Json.HardBudgetBytes,
+                (boundedFromSelector, fromSelectorTruncated) =>
+                    System.Text.Json.Nodes.JsonNode.Parse(BuildToSelector(
+                        dropStructured, boundedFromSelector, fromSelectorTruncated))!,
+                TestOnlyProjectSelectorResponseMaxBytes);
         string json = BuildJson(dropStructured: false);
         // Lone-item overflow (review, verification round): a single very deep path's hops array
         // ALONE can breach the hard cap (repro: a 300-hop chain with ~90-char names → over 64KB).
@@ -760,11 +885,17 @@ public sealed partial class NavigationTools
 
     // ---------------------------------------------------------------- shared fallback
 
-    private string IndexedReferencesFallback(string? name, string? reason)
+    private string IndexedReferencesFallback(string? name, string? reason, string operation)
     {
         if (string.IsNullOrEmpty(name))
         {
-            return Json.Serialize(new { error = "symbol_not_resolved", partialReason = reason });
+            return Json.Serialize(new
+            {
+                error = "symbol_not_resolved",
+                partialReason = reason,
+                retryRecommended = SemanticRetryRecommended(reason) ? true : (bool?)null,
+                retryHint = SemanticRetryHint(reason, operation),
+            });
         }
         using var q = _manager.OpenQueries();
         var (total, _, _, groups) = q.ReferenceCandidates(name, 300, 2);
@@ -773,6 +904,8 @@ public sealed partial class NavigationTools
         {
             name,
             partialReason = reason,
+            retryRecommended = SemanticRetryRecommended(reason) ? true : (bool?)null,
+            retryHint = SemanticRetryHint(reason, operation),
             note = "Semantic resolution unavailable — indexed whole-identifier candidates instead.",
             totalCandidates = total,
             groups = items.Select(g => new

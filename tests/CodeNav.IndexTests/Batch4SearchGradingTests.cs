@@ -193,7 +193,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
     public void CapabilitiesAdvertiseHeuristicConfidence()
     {
         var tools = new NavigationTools(_manager, _semantic);
-        var json = Parse(tools.ServerCapabilities());
+        var json = Parse(tools.ServerCapabilities(detail: true));
         // confidenceModel is an object mapping each tier to its meaning (r2o steering).
         var model = json.GetProperty("confidenceModel");
         Assert.False(string.IsNullOrEmpty(model.GetProperty("heuristic").GetString()));
@@ -730,8 +730,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
     [Fact]
     public void CapabilitiesAdvertiseV0111ReviewContractsAsSingularFeatures()
     {
-        var tools = new NavigationTools(_manager, _semantic);
-        var json = Parse(tools.ServerCapabilities());
+        var json = Parse(NavigationTools.ServerCapabilitiesUncompactedForTest(_manager.Health()));
         var features = json.GetProperty("features").EnumerateArray().ToList();
         var ids = features.Select(feature => feature.GetProperty("id").GetString()!).ToList();
         Assert.Equal(ids.Count, ids.Distinct(StringComparer.Ordinal).Count());
@@ -1178,7 +1177,26 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.True(uncompactedMargin >= 2 * 1024,
             $"uncompacted capabilities retained only {uncompactedMargin} bytes of growth margin");
         string budgetedHealthyJson = NavigationTools.ServerCapabilitiesForTest(healthy);
-        Assert.False(Parse(budgetedHealthyJson).TryGetProperty("featuresCompacted", out _));
+        JsonElement compact = Parse(budgetedHealthyJson);
+        Assert.False(compact.TryGetProperty("featuresCompacted", out _));
+        Assert.False(compact.TryGetProperty("featureSummariesReturned", out _));
+        Assert.Equal("ids", compact.GetProperty("featureSummaryMode").GetString());
+        Assert.All(compact.GetProperty("features").EnumerateArray(), feature =>
+            Assert.False(feature.TryGetProperty("summary", out _)));
+        foreach (string retained in new[]
+                 {
+                     "languages", "budgets", "confidenceModel", "index",
+                 })
+        {
+            Assert.True(compact.TryGetProperty(retained, out _), retained);
+        }
+
+        string detailedJson = NavigationTools.ServerCapabilitiesForTest(healthy, detail: true);
+        JsonElement detailed = Parse(detailedJson);
+        Assert.Equal("detail", detailed.GetProperty("featureSummaryMode").GetString());
+        Assert.Contains(detailed.GetProperty("features").EnumerateArray(), feature =>
+            feature.TryGetProperty("summary", out _));
+        Assert.True(Json.Utf8Bytes(budgetedHealthyJson) < Json.Utf8Bytes(detailedJson));
 
         string exactRoot = new('é', NavigationTools.CapabilityDynamicTextBytes / 2);
         string exactJson = NavigationTools.ServerCapabilitiesForTest(Health(exactRoot));

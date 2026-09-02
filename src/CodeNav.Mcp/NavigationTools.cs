@@ -22,27 +22,50 @@ public sealed partial class NavigationTools
     internal const int CapabilityIdentityTextBytes = 96;
     internal const int ExplicitPathInputLimit = 256;
     internal const int PathListInputByteLimit = 64 * 1024;
+    internal const int DefaultResultLimit = 20;
+    internal const int DefinitionDeadlineMaxMs = 60_000;
+    internal const int SemanticNavigationDeadlineMaxMs = 120_000;
 
     private readonly IndexManager _manager;
     private readonly SemanticService _semantic;
     private readonly IOperationsPortalLauncher _operationsPortalLauncher;
+    private readonly string _defaultQueryScope;
 
     internal string? TestOnlySemanticFailureReason { get; set; }
+    internal bool TestOnlyDocumentationIdSeedTimeout { get; set; }
+    internal Func<DocumentationIdResolutionResult, DocumentationIdResolutionResult>?
+        TestOnlyDocumentationIdResolutionTransform { get; set; }
+    internal Func<SemanticImplementations, SemanticImplementations>?
+        TestOnlyImplementationsResultTransform { get; set; }
+    internal Func<ProjectSelectorResolution, ProjectSelectorResolution>?
+        TestOnlyProjectSelectorResolutionTransform { get; set; }
+    internal Func<long, long>? TestOnlyReviewBaseBlobElapsedMilliseconds { get; set; }
+    internal int? TestOnlySearchSymbolResponseMaxBytes { get; set; }
     internal int? TestOnlyReferencesResponseMaxBytes { get; set; }
+    internal int? TestOnlyProjectSelectorResponseMaxBytes { get; set; }
 
     public NavigationTools(IndexManager manager, SemanticService semantic)
         : this(manager, semantic, new OperationsPortalLauncher())
     {
     }
 
+    internal NavigationTools(IndexManager manager, SemanticService semantic,
+        string defaultQueryScope)
+        : this(manager, semantic, new OperationsPortalLauncher(), defaultQueryScope)
+    {
+    }
+
     internal NavigationTools(
         IndexManager manager,
         SemanticService semantic,
-        IOperationsPortalLauncher operationsPortalLauncher)
+        IOperationsPortalLauncher operationsPortalLauncher,
+        string? defaultQueryScope = null)
     {
         _manager = manager;
         _semantic = semantic;
         _operationsPortalLauncher = operationsPortalLauncher;
+        _defaultQueryScope = NormalizeDefaultQueryScope(defaultQueryScope ??
+            Environment.GetEnvironmentVariable("CODENAV_DEFAULT_QUERY_SCOPE"));
     }
 
     private static readonly IReadOnlyList<string> TypeKinds =
@@ -51,13 +74,18 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- capabilities / overview
 
     [McpServerTool(Name = "server_capabilities")]
-    [Description("Reports supported languages, available tools, index status, and response budgets. Call this first if unsure what is available or whether the index is ready.")]
-    public string ServerCapabilities() => ServerCapabilitiesJson(_manager.Health(),
-        _semantic.FrameworkRefsAvailable, _semantic.FrameworkRefsSource);
+    [Description("Reports supported languages, available tools, feature ids, index status, and response budgets. The compact default omits feature summaries; set detail=true only when their prose is needed.")]
+    public string ServerCapabilities(
+        [Description("Include verbose feature summaries (default false). Stable feature ids are always returned.")] bool detail = false) =>
+        ServerCapabilitiesJson(_manager.Health(), _semantic.FrameworkRefsAvailable,
+            _semantic.FrameworkRefsSource, includeFeatureSummaries: detail,
+            defaultQueryScope: _defaultQueryScope);
 
     internal static string ServerCapabilitiesForTest(IndexHealth health,
-        bool frameworkRefsAvailable = true, string? frameworkRefsSource = null) =>
-        ServerCapabilitiesJson(health, frameworkRefsAvailable, frameworkRefsSource);
+        bool frameworkRefsAvailable = true, string? frameworkRefsSource = null,
+        bool detail = false) =>
+        ServerCapabilitiesJson(health, frameworkRefsAvailable, frameworkRefsSource,
+            includeFeatureSummaries: detail);
 
     internal static string ServerCapabilitiesUncompactedForTest(IndexHealth health,
         bool frameworkRefsAvailable = true, string? frameworkRefsSource = null) =>
@@ -78,7 +106,8 @@ public sealed partial class NavigationTools
     }
 
     private static string ServerCapabilitiesJson(IndexHealth h, bool frameworkRefsAvailable,
-        string? frameworkRefsSource = null, bool applyBudget = true)
+        string? frameworkRefsSource = null, bool applyBudget = true,
+        bool includeFeatureSummaries = false, string defaultQueryScope = "all")
     {
         string state = CapabilityText(h.State, CapabilityIdentityTextBytes,
             out bool stateTruncated, out int? stateBytes)!;
@@ -128,6 +157,14 @@ public sealed partial class NavigationTools
                 processId = Environment.ProcessId,
             },
             languages = new[] { "csharp", "fsharp", "markdown", "sql" },
+            queryDefaults = new
+            {
+                scope = defaultQueryScope,
+                configuredBy = "CODENAV_DEFAULT_QUERY_SCOPE",
+                appliesTo = new[] { "find_file", "search_text", "search_symbol" },
+                explicitAll = new { queryScope = "all" },
+                exactSemanticOperations = "always search all indexed candidates and are never silently narrowed by this default",
+            },
             languageLayers = new
             {
                 csharp = new[] { "text", "syntax", "semantic" },
@@ -140,7 +177,18 @@ public sealed partial class NavigationTools
             // trigger its (often silent-when-clean) response fields — grep an id to verify a deploy.
             features = new object[]
             {
-                new { id = "capabilities-hard-budget", summary = "UTF-8 hardBytes is the ordinary response target; *Truncated/*Bytes and featuresCompacted/featureSummariesReturned disclose compaction; every singular feature id remains, while an indivisible complete semantic identity uses the separately declared measured exception" },
+                new { id = "agent-first-server-instructions", summary = "MCP initialize instructions route agents through repo_overview, context_pack, exact semantic tools, impact/related_tests, and review_pack while naming structured domain errors and bounded retry guidance" },
+                new { id = "compact-capability-discovery", summary = "server_capabilities returns every stable feature id plus status, language, budget, and confidence contracts by default; detail=true adds bounded feature summaries" },
+                new { id = "language-scoped-symbol-search", summary = "search_symbol lang=csharp|fsharp limits declarations and computes partiality from the effective language and path scope, so unrelated language failures do not poison authoritative scoped misses" },
+                new { id = "agent-zero-hit-recovery", summary = "project and symbol misses disclose effective scope plus bounded ranked suggestions and retry arguments without silently substituting a candidate; project selectors use strict path/filename/stem/AssemblyName precedence, preserve physical ambiguity, and byte-budget selector echoes plus shadow evidence with truthful counts" },
+                new { id = "agent-request-patch-recovery", summary = "caller-dependent recovery emits replayOriginalRequest plus an explicit selector-removal list and replacement arguments, preserving the original filters, limits, and budgets without reflecting or truncating them into a different request" },
+                new { id = "dual-list-string-inputs", summary = "list-like string arguments accept their established comma-separated form or a JSON-array encoded string while retaining host-compatible string schemas" },
+                new { id = "documentation-comment-selectors", summary = "definition, references, and implementations accept stable C# T:/M:/P:/F:/E: documentationCommentId selectors, preserve assembly ambiguity, and refuse unsupported implementation targets without retargeting" },
+                new { id = "semantic-retry-guidance", summary = "definition, references, implementations, callers, callees, and type_hierarchy use the same bounded retry recommendation and hint contract for cluster_cold_load and semantic_timeout" },
+                new { id = "default-query-scope", summary = "CODENAV_DEFAULT_QUERY_SCOPE configures all or first_party for broad indexed find/search tools; queryScope='all' overrides it, affected responses echo the effective scope, and exact semantic operations remain unscoped" },
+                new { id = "dependency-direction-aliases", summary = "project_graph accepts dependencies as downstream and dependents as upstream while echoing the canonical direction and preserving established names" },
+                new { id = "review-pack-actionable-budget-gaps", summary = "review_pack discloses a separately bounded affected-path sample with total/returned/truncated coverage, stable reason ids, and explicit recovery when evidence is clipped" },
+                new { id = "capabilities-hard-budget", summary = "UTF-8 hardBytes is the ordinary response target; *Truncated/*Bytes and featuresCompacted/featureSummariesReturned disclose compaction; every singular feature id remains, while one indivisible complete semantic identity or documentation-id ambiguity candidate uses the separately declared measured exception" },
                 new { id = "review-ref-resolution", summary = "Hex-only branch/tag names, abbreviations, and object ids are Git-validated and peeled to full commits; repository-format-width objects retain object precedence and distinct short-hex ambiguity is refused" },
                 new { id = "confidence-honesty", summary = "every result carries confidence exact|indexed|heuristic; confidenceNote only when heuristic (tier meanings live in confidenceModel here); meta.statusNote explains refreshing/stale; meta.build stamps every result meta with version+commit" },
                 new { id = "hierarchy-ranking", summary = "implementations ranks concrete hits first; conditional likelyImplementation names the sole concrete hit and via identifies indirect base derivation. implementations wraps hit metadata; type_hierarchy returns flat symbols" },
@@ -227,7 +275,7 @@ public sealed partial class NavigationTools
                 new { id = "review-fsharp-file-coverage", summary = "review_pack: F# changes in unsupportedLanguageFiles" },
                 new { id = "compiled-awareness", summary = "search_symbol orphaned; repo_overview.orphanedFiles; compiled ownership guides semantic resolution, impact, and context_pack" },
                 new { id = "git-awareness", summary = "v0.12.28 index tracks the workspace's indexed commit and branch; serialized HEAD snapshot acquisition, ordered recovery publication, rebuild-generation retirement, and execution-time diffs make same-commit attachment changes and rapid inverse transitions preserve final rows and attachment state, detached HEAD clears the indexed branch, unavailable recovery snapshots force older queued Git tuples to revalidate with only a resolved generation at or after the latest unavailable sample allowed to publish ready, and full rebuilds reject ordered recovery publications sampled for the replaced database. repo_overview.git reports indexed vs HEAD state and whether commits match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is logged, never silent" },
-                new { id = "vendor-noise", summary = "firstPartyOnly / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
+                new { id = "vendor-noise", summary = "queryScope='first_party' / excludePath / per-hit 'noise' flag / repo_overview.suggestedExcludes" },
                 new { id = "text-search", summary = "search_text: whole-word tokens, context, containingSymbol, precise/partial grading; bounded line-based .NET regex narrowed by FTS; filesTotal/budgetHit/timedOut disclose coverage. Zero hits probe elsewhere/didYouMean; suggestions are probed, never substituted, with path/line/owner samples" },
                 new { id = "reference-kinds", summary = "references (exact path): per-location execution, declaration, documentation, and conversion-operation kinds with a kinds breakdown, usageKinds filter (validated), and publicConsumersOnly (usages outside the symbol's declaring project); indexed fallback stays unclassified and says so" },
                 new { id = "symbol-handles", summary = "Reindex-detecting idx handles pin source_context, definition, references, impact, implementations, and type_hierarchy" },
@@ -311,8 +359,8 @@ public sealed partial class NavigationTools
             {
                 softBytes = Json.SoftBudgetBytes,
                 hardBytes = Json.HardBudgetBytes,
-                defaultLimit = 20,
-                indivisibleSemanticIdentity = "definition/references may exceed hardBytes only to preserve one complete compiler identity; responseBudget reports the measured exception",
+                defaultLimit = DefaultResultLimit,
+                indivisibleSemanticIdentity = "definition/references/implementations and a documentation-id ambiguity floor may exceed hardBytes only to preserve one complete compiler identity or exact recovery candidate; responseBudget reports the measured exception",
             },
             confidenceModel = new
             {
@@ -388,7 +436,7 @@ public sealed partial class NavigationTools
             },
         };
         return applyBudget
-            ? Json.WithCapabilitiesBudget(envelope)
+            ? Json.WithCapabilitiesBudget(envelope, includeFeatureSummaries)
             : Json.Serialize(envelope);
     }
 
@@ -464,7 +512,7 @@ public sealed partial class NavigationTools
             orphanedFiles = stats.OrphanedFiles,
             targetFrameworks = stats.TfmBreakdown,
             // Vendored/generated directory globs detected in the index — pass to search_symbol /
-            // search_text excludePath (or firstPartyOnly) to drop third-party noise. [] when none.
+            // search_text excludePath (or queryScope='first_party') to drop third-party noise. [] when none.
             suggestedExcludes = q.SuggestedExcludes(),
             git,
             meta = Meta.From(h, "indexed", "text"),
@@ -479,12 +527,16 @@ public sealed partial class NavigationTools
         [Description("File name or glob pattern. '*' matches any characters including '/'.")] string nameOrGlob,
         [Description("Exclude paths matching this glob (e.g. '3rdparty/**' to drop vendored third-party files).")] string? excludePath = null,
         [Description("Max results (default 20, max 100).")] int limit = 20,
-        [Description("Opaque cursor from a previous call to fetch the next page.")] string? cursor = null)
+        [Description("Opaque cursor from a previous call to fetch the next page.")] string? cursor = null,
+        [Description("'default' uses CODENAV_DEFAULT_QUERY_SCOPE; 'all' overrides it; 'first_party' excludes known vendor/generated directory segments without changing the index. Empty means default; whitespace-only is bad_request.")] string queryScope = "default")
     {
         if (NotReady() is { } notReady) return notReady;
+        var (scopeSelection, scopeError) = ResolveQueryScope(queryScope);
+        if (scopeError is not null) return scopeError;
         (limit, int offset, _) = Page(limit, cursor);
         using var q = _manager.OpenQueries();
-        var excludes = excludePath is { Length: > 0 } ex ? new[] { ex } : null;
+        var excludes = BuildExcludes(excludePath,
+            scopeSelection!.Applied == "first_party");
         var files = q.FindFiles(nameOrGlob, limit + 1, excludes, offset);
         bool hadMore = files.Count > limit;
         if (hadMore) files.RemoveAt(files.Count - 1);
@@ -510,6 +562,7 @@ public sealed partial class NavigationTools
                 }),
                 nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
                 truncated,
+                queryScope = scopeSelection,
                 pathSuggestions = PathSuggestionsJson(
                     suggestions.Total,
                     suggestionPaths,
@@ -524,7 +577,6 @@ public sealed partial class NavigationTools
         [Description("Text to find. Multi-word queries are AND-ed by token; a line with all tokens is 'precise'.")] string query,
         [Description("Restrict to paths matching this glob (e.g. 'src/Billing/**').")] string? pathGlob = null,
         [Description("Exclude paths matching this glob (e.g. '3rdparty/**' to drop vendored third-party source).")] string? excludePath = null,
-        [Description("Drop hits under known vendor/generated dir names (3rdparty, vendor, external, generated...) at ANY depth. Matches the per-hit noise flag; convenience over excludePath.")] bool firstPartyOnly = false,
         [Description("Restrict to files compiled by this project name.")] string? project = null,
         [Description("'all' (default), 'production' (exclude tests), or 'tests'.")] string scope = "all",
         [Description("Restrict by file language: cs | fs | md | sql | csproj | fsproj | sln | config.")] string? lang = null,
@@ -535,9 +587,13 @@ public sealed partial class NavigationTools
         [Description("Context lines AFTER each hit (grep -A); overrides 'context' when set.")] int? contextAfter = null,
         [Description("Treat 'query' as a .NET regex instead of tokens — NOT rust/ripgrep syntax. LINE-BASED: a pattern spanning multiple lines matches NOTHING. Case-sensitive; prefix (?i) for insensitive. Scope with pathGlob; ReDoS-guarded (per-match timeout + overall budget) with honest coverage (filesTotal/budgetHit/timedOut). Overrides whole-word/partials.")] bool regex = false,
         [Description("Max hits (default 20, max 100).")] int limit = 20,
-        [Description("Opaque cursor from a previous call.")] string? cursor = null)
+        [Description("Opaque cursor from a previous call.")] string? cursor = null,
+        [Description("'default' uses CODENAV_DEFAULT_QUERY_SCOPE; 'all' overrides it; 'first_party' excludes known vendor/generated directory segments. Empty means default; whitespace-only is bad_request.")] string queryScope = "default")
     {
         if (NotReady() is { } notReady) return notReady;
+        var (scopeSelection, scopeError) = ResolveQueryScope(queryScope);
+        if (scopeError is not null) return scopeError;
+        bool firstPartyScope = scopeSelection!.Applied == "first_party";
         (limit, int offset, _) = Page(limit, cursor);
         // Fail-safe: an unrecognized value falls back to the precise-only default, not the more
         // permissive "auto" — a typo must not silently reintroduce the noisy partial bucket.
@@ -546,14 +602,15 @@ public sealed partial class NavigationTools
         int ctxAfter = Math.Clamp(contextAfter ?? context, 0, 20);
         using var q = _manager.OpenQueries();
         if (regex)
-            return RegexResponse(q, query, pathGlob, excludePath, firstPartyOnly, project, scope, lang, includeGenerated, limit, offset, ctxBefore, ctxAfter);
+            return RegexResponse(q, query, pathGlob, excludePath, firstPartyScope, project, scope,
+                lang, includeGenerated, limit, offset, ctxBefore, ctxAfter, scopeSelection);
         var filter = new IndexQueries.TextFilter(
             PathGlob: pathGlob,
             Project: project,
             IncludeGenerated: includeGenerated,
             TestsOnly: scope switch { "tests" => true, "production" => false, _ => null },
             Lang: lang,
-            ExcludePaths: BuildExcludes(excludePath, firstPartyOnly));
+            ExcludePaths: BuildExcludes(excludePath, firstPartyScope));
         var result = q.SearchTextGraded(query, limit + 1, filter, maxCandidateFiles: 300, offset: offset, partialsMode: mode, ctxBefore: ctxBefore, ctxAfter: ctxAfter);
         var hits = result.Hits;
         bool hadMore = hits.Count > limit;
@@ -630,7 +687,7 @@ public sealed partial class NavigationTools
         }
         if (result.TotalPrecise == 0 && result.TotalPartial == 0 && offset == 0)
         {
-            bool scoped = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 } || firstPartyOnly
+            bool scoped = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 } || firstPartyScope
                 || project is not null || scope != "all" || lang is not null;
             if (IndexQueries.FtsQuery(query).Length == 0)
             {
@@ -745,6 +802,7 @@ public sealed partial class NavigationTools
             partialReason = result.CandidateFilesTruncated
                 ? "candidate_file_cap"
                 : null,
+            queryScope = scopeSelection,
             // Contextual, not verbatim (feedback: the fixed explainer was duplicated token waste; the
             // whole-word/precise semantics live in the tool description). Present only when it changes
             // the caller's next move: redirect, absent, partial-leads, or common-term steering.
@@ -770,13 +828,14 @@ public sealed partial class NavigationTools
     // literals when possible, else a bounded scan; ReDoS-guarded. Mirrors the token response shape
     // (context lines, containingSymbol, noise) so callers get one consistent hit format.
     private string RegexResponse(IndexQueries q, string pattern, string? pathGlob, string? excludePath,
-        bool firstPartyOnly, string? project, string scope, string? lang, bool includeGenerated,
-        int limit, int offset, int ctxBefore, int ctxAfter)
+        bool firstPartyScope, string? project, string scope, string? lang, bool includeGenerated,
+        int limit, int offset, int ctxBefore, int ctxAfter,
+        QueryScopeSelection queryScope)
     {
         var filter = new IndexQueries.TextFilter(
             PathGlob: pathGlob, Project: project, IncludeGenerated: includeGenerated,
             TestsOnly: scope switch { "tests" => true, "production" => false, _ => null },
-            Lang: lang, ExcludePaths: BuildExcludes(excludePath, firstPartyOnly));
+            Lang: lang, ExcludePaths: BuildExcludes(excludePath, firstPartyScope));
         var res = q.SearchRegex(pattern, filter, maxCandidateFiles: 300, offset, limit + 1, ctxBefore, ctxAfter);
         if (res.Error is not null)
             return Json.Serialize(new { error = "bad_request", detail = res.Error, meta = Meta.From(_manager.Health(), "indexed", "text") });
@@ -790,7 +849,7 @@ public sealed partial class NavigationTools
 
         // Contextual note — only when it changes the caller's next move (timeout, clipped coverage, or
         // a zero-hit that needs the line-based/case-sensitivity reminder). Silent on a clean success.
-        bool scoped = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 } || firstPartyOnly
+        bool scoped = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 } || firstPartyScope
             || project is not null || scope != "all" || lang is not null;
         bool coverageClipped = res.FilesTotal > res.FilesScanned;
         string? note = res.TimedOut
@@ -828,6 +887,7 @@ public sealed partial class NavigationTools
             }),
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
             truncated,
+            queryScope,
             note,
             meta,
         });
@@ -986,14 +1046,14 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "source_context")]
-    [Description("Bounded live source read around one or more line spans (the bridge from navigation results to actual code). A file_not_found response may include pathSuggestions with up to three ranked pinned-index paths plus total/truncated coverage. Use canonical spans from outline/definition/search results instead of reading whole files; range is accepted as a compatibility alias when spans is omitted.")]
+    [Description("Bounded live source read around one or more line spans (the bridge from navigation results to actual code). A file_not_found response may include pathSuggestions with up to three ranked pinned-index paths plus total/truncated coverage. Use canonical spans from outline/definition/search results instead of reading whole files; range is accepted as a compatibility alias when spans is omitted. Explicit whitespace, empty CSV items, and empty JSON arrays are bad_request.")]
     public string SourceContext(
         [Description("Workspace-relative file path. Optional when symbolId is given.")] string? path = null,
-        [Description("Spans as 'start-end' or 'line', comma-separated (e.g. '42-88,120'). Optional when symbolId is given (defaults to the symbol's own declaration span).")] string spans = "",
+        [Description("Spans as 'start-end' or 'line'. Accepts CSV ('42-88,120') or a JSON-array encoded string ('[\"42-88\",\"120\"]'). Empty CSV items, empty JSON arrays, and whitespace-only values are rejected. Optional when symbolId is given (defaults to the symbol's declaration span).")] string spans = "",
         [Description("Extra context lines around each span (default 2).")] int contextLines = 2,
         [Description("Byte budget for returned source (default 8192, max 65536).")] int maxBytes = 8192,
         [Description("Show one symbol's source by handle instead of path+spans: 'idx:NNN' from a prior result. Overrides path/spans/range with the symbol's declaration span. Note: 'idx:' handles are index-local and change on reindex.")] string? symbolId = null,
-        [Description("Compatibility alias for spans. Use only when spans is omitted; conflicting simultaneous values return bad_request.")] string? range = null)
+        [Description("Compatibility alias for spans. Use only when spans is omitted; conflicting simultaneous values, whitespace-only values, empty CSV items, and empty JSON arrays return bad_request.")] string? range = null)
     {
         if (NotReady() is { } notReady) return notReady;
         if (symbolId is { Length: > 0 })
@@ -1002,6 +1062,12 @@ public sealed partial class NavigationTools
             if (error is not null) return error;
             path = hit!.FilePath;
             spans = $"{hit.StartLine}-{hit.EndLine}";
+        }
+        else if ((spans.Length > 0 && string.IsNullOrWhiteSpace(spans)) ||
+                 (range is { Length: > 0 } && string.IsNullOrWhiteSpace(range)))
+        {
+            return StringListBadRequest("spans",
+                "spans and range must not be whitespace-only.");
         }
         else if (!string.IsNullOrEmpty(range))
         {
@@ -1033,8 +1099,10 @@ public sealed partial class NavigationTools
         // of the file we ever materialize. Unparsable specs are skipped. Zero/negative starts are
         // CLAMPED to line 1, not rejected — the old code accepted them ("0-10" rendered lines
         // 1..12) and 0-based callers are common; rejecting would be a silent-empty (review).
+        if (!TryParseStringList(spans, "spans", out List<string>? spanSpecs, out string? spansError))
+            return StringListBadRequest("spans", spansError);
         var ranges = new List<(int Start, int End)>();
-        foreach (var spec in spans.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (string spec in spanSpecs!)
         {
             var parts = spec.Split('-');
             if (!int.TryParse(parts[0], out int start)) continue;
@@ -1180,17 +1248,21 @@ public sealed partial class NavigationTools
     [Description("Find C# and F# declared symbols by name across the workspace (types, methods, properties, modules, functions, values, union cases...). Exact-name type declarations receive a soft relevance preference over same-named members. A first-page empty result remains successful and reports existsUnfiltered plus appliedFilters; when filters hid declarations, unfilteredKinds says what exists. C# plus F# .fs/.fsi path scopes are indexed; .fsx and other text-only languages are refused when exclusive and disclosed when mixed. Failed or truncated FCS parse contexts and unavailable/unevaluated F# project options make results explicitly partial and expose fsharpParseCoverage or fsharpProjectOptionCoverage; stored F# indexing processes at most 64 deterministic owner/TFM contexts per file, reserving one per valid compile owner while capacity remains, while ordinary SDK/import limitations remain advisory structured coverage rather than making every search partial. Scope with pathGlob / excludePath / namespace (e.g. excludePath='3rdparty/**' to drop vendored source). Hits carry an 'orphaned' flag (present only when true) for files in NO project's compile set — dead code the compiler never builds (Compile Include globs expanded, Compile Remove honored).")]
     public string SearchSymbol(
         [Description("Symbol name. Match behavior set by 'match'. Empty (or '*') with a 'namespace' or 'pathGlob' ENUMERATES that scope's symbols instead — kind-filterable, paged.")] string query = "",
-        [Description("Comma-separated kind filter. C#: class,interface,struct,record,record_struct,enum,delegate,method,constructor,property,field,event,enum_member. F#: namespace,module,class,interface,struct,record,union,type,exception,delegate,function,value,method,constructor,property,field,union_case,enum_member. Empty = all.")] string? kinds = null,
+        [Description("Comma-separated kind filter or JSON-array encoded string. C#: class,interface,struct,record,record_struct,enum,delegate,method,constructor,property,field,event,enum_member. F#: namespace,module,class,interface,struct,record,union,type,exception,delegate,function,value,method,constructor,property,field,union_case,enum_member. Null or an empty string = all; whitespace-only values, empty CSV items, and empty JSON arrays are bad_request.")] string? kinds = null,
         [Description("'auto' (exact, then prefix, then substring), 'exact', 'prefix', or 'substring'.")] string match = "auto",
         [Description("Include symbols in generated files (default false).")] bool includeGenerated = false,
         [Description("Restrict to file paths matching this glob (e.g. 'SOAPAPI/**'); a bare name matches at any depth.")] string? pathGlob = null,
         [Description("Exclude file paths matching this glob (e.g. '3rdparty/**' to drop vendored third-party source).")] string? excludePath = null,
-        [Description("Drop hits under known vendor/generated dir names (3rdparty, vendor, external, generated...) at ANY depth. Matches the per-hit noise flag; convenience over excludePath. See repo_overview.suggestedExcludes for the dirs actually present.")] bool firstPartyOnly = false,
         [Description("Restrict to a namespace subtree: the exact namespace or anything nested under it (e.g. 'ExactTarget.Integration'). Distinct from a containing type.")] string? @namespace = null,
+        [Description("Optional language scope: 'csharp' or 'fsharp'. Empty searches both and reports mixed-language coverage.")] string? lang = null,
         [Description("Max results (default 20, max 100).")] int limit = 20,
-        [Description("Opaque cursor from a previous call.")] string? cursor = null)
+        [Description("Opaque cursor from a previous call.")] string? cursor = null,
+        [Description("'default' uses CODENAV_DEFAULT_QUERY_SCOPE; 'all' overrides it; 'first_party' excludes known vendor/generated directory segments. Empty means default; whitespace-only is bad_request.")] string queryScope = "default")
     {
         if (NotReady() is { } notReady) return notReady;
+        var (scopeSelection, scopeError) = ResolveQueryScope(queryScope);
+        if (scopeError is not null) return scopeError;
+        bool firstPartyScope = scopeSelection!.Applied == "first_party";
         query ??= "";
         const string routingPrefix = "select:";
         string trimmedQuery = query.TrimStart();
@@ -1204,10 +1276,37 @@ public sealed partial class NavigationTools
                 meta = Meta.From(_manager.Health(), "indexed", "syntax"),
             });
         }
+        string? indexedLanguage = lang?.Trim().ToLowerInvariant() switch
+        {
+            null or "" => null,
+            "csharp" => "cs",
+            "fsharp" => "fs",
+            _ => "invalid",
+        };
+        if (indexedLanguage == "invalid")
+        {
+            return Json.Serialize(new
+            {
+                error = "bad_request",
+                field = "lang",
+                value = lang,
+                validValues = new[] { "csharp", "fsharp" },
+                detail = "lang must be 'csharp' or 'fsharp'.",
+                meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+            });
+        }
+        string languageScope = indexedLanguage switch
+        {
+            "cs" => "csharp",
+            "fs" => "fsharp",
+            _ => "all",
+        };
         (limit, int offset, string? cursorMode) = Page(limit, cursor);
-        var kindList = SplitCsv(kinds);
+        if (!TryParseStringList(kinds, "kinds", out List<string>? kindList,
+                out string? kindsDetail))
+            return StringListBadRequest("kinds", kindsDetail);
         using var q = _manager.OpenQueries();
-        var excludes = BuildExcludes(excludePath, firstPartyOnly);
+        var excludes = BuildExcludes(excludePath, firstPartyScope);
         if (pathGlob is { Length: > 0 } exactPath &&
             exactPath.IndexOfAny(new[] { '*', '?', '[' }) < 0 &&
             q.FileByPath(NormalizePath(exactPath)) is { } exactFile &&
@@ -1234,10 +1333,12 @@ public sealed partial class NavigationTools
             return UnsupportedLanguage(unsupportedScope,
                 string.Join(',', unsupportedScopeLanguages), "search_symbol");
         }
-        bool unsupportedLanguageFilesSkipped = scopeHasSupportedLanguage &&
+        bool unsupportedLanguageFilesSkipped = indexedLanguage is null &&
+            scopeHasSupportedLanguage &&
             unsupportedScopeLanguages.Count > 0;
-        FSharpParseCoverage fsharpParseCoverage = q.FSharpParseCoverageForScope(
-            pathGlob, excludes, includeGenerated);
+        FSharpParseCoverage fsharpParseCoverage = indexedLanguage == "cs"
+            ? new FSharpParseCoverage(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, [])
+            : q.FSharpParseCoverageForScope(pathGlob, excludes, includeGenerated);
         bool fsharpParseIncomplete = fsharpParseCoverage.IsIncomplete;
         string[] blockingOptionReasons = fsharpParseCoverage.OptionPartialReasons
             .Where(reason => !reason.Equals("fsharp_project_options_imported",
@@ -1270,7 +1371,8 @@ public sealed partial class NavigationTools
                     meta = Meta.From(_manager.Health(), "indexed", "syntax"),
                 });
             }
-            hits = q.SearchSymbols("", "prefix", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+            hits = q.SearchSymbols("", "prefix", kindList, limit + 1, includeGenerated,
+                offset, pathGlob, excludes, @namespace, language: indexedLanguage);
             effectiveMatch = "enumerate";
         }
         else if (match == "auto" && cursorMode is "exact" or "prefix" or "substring")
@@ -1279,26 +1381,33 @@ public sealed partial class NavigationTools
             // later page fails: the fallback is gated to offset==0, so exact-at-offset returns [] and the
             // page comes back empty, losing the prefix/substring results (bug cli).
             effectiveMatch = cursorMode;
-            hits = q.SearchSymbols(query, cursorMode, kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+            hits = q.SearchSymbols(query, cursorMode, kindList, limit + 1, includeGenerated,
+                offset, pathGlob, excludes, @namespace, language: indexedLanguage);
         }
         else if (match == "auto")
         {
-            hits = q.SearchSymbols(query, "exact", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+            hits = q.SearchSymbols(query, "exact", kindList, limit + 1, includeGenerated,
+                offset, pathGlob, excludes, @namespace, language: indexedLanguage);
             effectiveMatch = "exact";
             if (hits.Count == 0 && offset == 0)
             {
-                hits = q.SearchSymbols(query, "prefix", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+                hits = q.SearchSymbols(query, "prefix", kindList, limit + 1,
+                    includeGenerated, offset, pathGlob, excludes, @namespace,
+                    language: indexedLanguage);
                 effectiveMatch = "prefix";
             }
             if (hits.Count == 0 && offset == 0)
             {
-                hits = q.SearchSymbols(query, "substring", kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+                hits = q.SearchSymbols(query, "substring", kindList, limit + 1,
+                    includeGenerated, offset, pathGlob, excludes, @namespace,
+                    language: indexedLanguage);
                 effectiveMatch = "substring";
             }
         }
         else
         {
-            hits = q.SearchSymbols(query, match, kindList, limit + 1, includeGenerated, offset, pathGlob, excludes, @namespace);
+            hits = q.SearchSymbols(query, match, kindList, limit + 1, includeGenerated,
+                offset, pathGlob, excludes, @namespace, language: indexedLanguage);
         }
 
         // Flag hits in files that no project compiles — the "really compiled?" signal grep can't give
@@ -1315,10 +1424,16 @@ public sealed partial class NavigationTools
         bool? existsUnfiltered = null;
         List<string>? unfilteredKinds = null;
         object? appliedFilters = null;
+        string? zeroResultReason = null;
+        string? zeroResultPrefix = null;
+        List<SymbolHit> zeroResultSuggestions = [];
+        bool zeroResultProbeTruncated = false;
+        int zeroResultProbedCount = 0;
         if (hits.Count == 0 && offset == 0 &&
             !string.IsNullOrWhiteSpace(query) && query.Trim() != "*")
         {
-            List<string> matchingKinds = q.UnfilteredSymbolKinds(query, effectiveMatch);
+            List<string> matchingKinds = q.UnfilteredSymbolKinds(
+                query, effectiveMatch, indexedLanguage);
             existsUnfiltered = matchingKinds.Count > 0;
             unfilteredKinds = matchingKinds.Count > 0 ? matchingKinds : null;
 
@@ -1327,8 +1442,9 @@ public sealed partial class NavigationTools
                 !includeGenerated ||
                 pathGlob is { Length: > 0 } ||
                 excludePath is { Length: > 0 } ||
-                firstPartyOnly ||
-                @namespace is { Length: > 0 };
+                firstPartyScope ||
+                @namespace is { Length: > 0 } ||
+                indexedLanguage is not null;
             if (hasAppliedFilters)
             {
                 appliedFilters = new
@@ -1337,9 +1453,29 @@ public sealed partial class NavigationTools
                     includeGenerated = includeGenerated ? (bool?)null : false,
                     pathGlob,
                     excludePath,
-                    firstPartyOnly = firstPartyOnly ? true : (bool?)null,
+                    queryScope = firstPartyScope ? "first_party" : null,
                     @namespace,
+                    lang = indexedLanguage is null ? null : languageScope,
                 };
+            }
+
+            zeroResultReason = existsUnfiltered == true ? "filtered_out" : "symbol_not_found";
+            zeroResultPrefix = query.Trim();
+            if (zeroResultPrefix.Length > 1)
+            {
+                List<SymbolHit> probedSuggestions = q.SearchSymbols(
+                    zeroResultPrefix[..Math.Min(2, zeroResultPrefix.Length)], "prefix", kindList,
+                    limit + 1, includeGenerated, pathGlob: pathGlob,
+                    excludePaths: excludes, ns: @namespace, language: indexedLanguage);
+                zeroResultProbeTruncated = probedSuggestions.Count > limit;
+                if (zeroResultProbeTruncated)
+                    probedSuggestions.RemoveAt(probedSuggestions.Count - 1);
+                zeroResultProbedCount = probedSuggestions.Count;
+                zeroResultSuggestions = probedSuggestions
+                    .GroupBy(hit => (hit.Name, hit.Kind))
+                    .Select(group => group.First())
+                    .Take(limit)
+                    .ToList();
             }
         }
 
@@ -1347,13 +1483,73 @@ public sealed partial class NavigationTools
         if (hadMore) hits.RemoveAt(hits.Count - 1);
 
         var meta = Meta.From(_manager.Health(), "indexed", "syntax");
-        return Json.WithListBudget(hits, (items, truncated) => new
+        object BuildZeroResult(List<SymbolHit> suggestions, bool budgetTruncated) => new
+        {
+            reason = zeroResultReason,
+            effectiveScope = new
+            {
+                language = languageScope,
+                availableLanguages = scopeLanguages.Count > 0 ? scopeLanguages : null,
+                pathGlob,
+                excludePath,
+                queryScope = scopeSelection.Applied,
+                @namespace,
+            },
+            suggestions = suggestions.Count > 0
+                ? suggestions.Select(hit => new
+                {
+                    hit.Name,
+                    hit.Kind,
+                    path = hit.FilePath,
+                    rationale = "same-prefix indexed declaration in the effective scope",
+                })
+                : null,
+            suggestionCoverage = zeroResultPrefix is { Length: > 1 }
+                ? new
+                {
+                    probed = zeroResultProbedCount,
+                    probeLimit = limit,
+                    returned = suggestions.Count,
+                    probeTruncated = zeroResultProbeTruncated ? true : (bool?)null,
+                    truncated = zeroResultProbeTruncated ||
+                                zeroResultSuggestions.Count > suggestions.Count ||
+                                zeroResultProbedCount > zeroResultSuggestions.Count
+                        ? true
+                        : (bool?)null,
+                    budgetTruncated = budgetTruncated ? true : (bool?)null,
+                }
+                : null,
+            retry = suggestions.Count > 0
+                ? new
+                {
+                    tool = "search_symbol",
+                    arguments = new
+                    {
+                        query = suggestions[0].Name,
+                        match = "exact",
+                        lang = indexedLanguage is null ? null : languageScope,
+                        kinds = kindList is { Count: > 0 }
+                            ? string.Join(',', kindList)
+                            : null,
+                        includeGenerated,
+                        pathGlob,
+                        excludePath,
+                        @namespace,
+                        queryScope = scopeSelection.Applied,
+                    },
+                }
+                : null,
+        };
+
+        object BuildResponse(List<SymbolHit> items, bool truncated, object? zeroResult) => new
         {
             matchMode = effectiveMatch,
+            languageScope,
             symbols = items.Select(SymbolJson),
             existsUnfiltered,
             unfilteredKinds,
             appliedFilters,
+            zeroResult,
             // Carry the resolved mode so a later page continues it (bug cli); resume at the returned
             // count so a byte-budget shrink doesn't skip the dropped tail (bug e2q).
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}:{effectiveMatch}" : null,
@@ -1365,6 +1561,7 @@ public sealed partial class NavigationTools
                 ? string.Join("; ", partialReasons)
                 : null,
             partialReasons = partialReasons.Count > 0 ? partialReasons : null,
+            queryScope = scopeSelection,
             fsharpParseCoverage = fsharpParseCoverage.FailedFiles > 0 ||
                                   fsharpParseCoverage.TruncatedFiles > 0
                 ? new
@@ -1401,7 +1598,18 @@ public sealed partial class NavigationTools
                 ? "Next: source_context(path, 'startLine-endLine') for indexed source. C#: references(name) for usages or definition(name, includeBody:true). F#: definition(path+line+column) for compiler-backed declaration evidence."
                 : null,
             meta,
-        });
+        };
+
+        if (zeroResultReason is not null)
+        {
+            return Json.WithListBudget(zeroResultSuggestions,
+                (suggestions, suggestionsTruncated) => BuildResponse([], false,
+                    BuildZeroResult(suggestions, suggestionsTruncated)),
+                TestOnlySearchSymbolResponseMaxBytes);
+        }
+        return Json.WithListBudget(hits,
+            (items, truncated) => BuildResponse(items, truncated, null),
+            TestOnlySearchSymbolResponseMaxBytes);
     }
 
     [McpServerTool(Name = "symbol_at")]
@@ -1447,24 +1655,93 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "definition")]
-    [Description("Declaration site(s) for a symbol — all partial declarations included. Target by exact name (optionally 'container' to disambiguate) OR by position (path+line[,column]) from a usage site. C# tries compiler-exact resolution first and can fall back to the name index. F# semantic definition is position-only and returns declarations inside one selected physical .fsproj + TFM; it never falls back to an indexed F# guess. includeBody is C# only.")]
+    [Description("Declaration site(s) for a symbol — all partial declarations included. Target by stable C# documentationCommentId, exact name (optionally 'container' to disambiguate), symbolId, or position (path+line[,column]) from a usage site. A documentationCommentId is semantic-only and never falls back to a name lookup. Other C# selectors try compiler-exact resolution first and can fall back to the name index. F# semantic definition is position-only and returns declarations inside one selected physical .fsproj + TFM; it never falls back to an indexed F# guess. includeBody is C# only.")]
     public string Definition(
         [Description("Exact symbol name (case-insensitive). Optional when path+line given.")] string? name = null,
         [Description("Optional containing type or namespace fragment to disambiguate.")] string? container = null,
-        [Description("Comma-separated kind filter (defaults to all kinds).")] string? kinds = null,
+        [Description("Comma-separated kind filter or JSON-array encoded string. Null or an empty string defaults to all kinds; whitespace-only values, empty CSV items, and empty JSON arrays are bad_request.")] string? kinds = null,
         [Description("Workspace-relative file path of a usage or declaration site (position mode).")] string? path = null,
         [Description("1-based line for position mode.")] int line = 0,
         [Description("1-based column for position mode (optional).")] int column = 0,
         [Description("'auto' (semantic first, indexed fallback), 'semantic', or 'indexed'.")] string mode = "auto",
-        [Description("Semantic resolution deadline in ms (default 10000).")] int timeoutMs = 10000,
+        [Description("Semantic resolution deadline in ms (default 10000, max 60000).")] int timeoutMs = 10000,
         [Description("Also return the primary declaration's source body (numbered lines, budget-bounded).")] bool includeBody = false,
         [Description("Byte budget for the inline body (default 12288, max 16384).")] int bodyMaxBytes = 12288,
-        [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex; a documentationCommentId is not yet accepted here.")] string? symbolId = null,
+        [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex; use documentationCommentId for a compiler-stable C# selector.")] string? symbolId = null,
         [Description("F# position mode only: workspace-relative physical .fsproj path. Required with targetFramework when the file has more than one type-check context.")] string? projectPath = null,
-        [Description("F# position mode only: exact target framework. Required with projectPath when the file has more than one type-check context.")] string? targetFramework = null)
+        [Description("F# position mode only: exact target framework. Required with projectPath when the file has more than one type-check context.")] string? targetFramework = null,
+        [Description("Stable C# Roslyn declaration id (T:/M:/P:/F:/E:). Empty means omitted; whitespace-only is bad_request. Mutually exclusive with symbolId, name, and path+line. A successful response echoes the compiler-canonical id, which is safe to reuse directly; failures echo a bounded form of the caller input.")] string? documentationCommentId = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        if (NormalizeDocumentationCommentId(ref documentationCommentId) is { } idError)
+            return idError;
+        mode = string.IsNullOrWhiteSpace(mode) ? "auto" : mode.Trim().ToLowerInvariant();
+        if (mode is not ("auto" or "semantic" or "indexed"))
+        {
+            return Json.Serialize(new
+            {
+                error = "bad_request",
+                field = "mode",
+                validValues = new[] { "auto", "semantic", "indexed" },
+                detail = "mode must be 'auto', 'semantic', or 'indexed'.",
+                meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+            });
+        }
+        int deadlineMs = Math.Clamp(timeoutMs, 500, DefinitionDeadlineMaxMs);
+        var swSem = System.Diagnostics.Stopwatch.StartNew();
+        using var semanticDeadline = new CancellationTokenSource(deadlineMs);
+        if (!TryParseStringList(kinds, "kinds", out List<string>? parsedKinds,
+                out string? kindsDetail))
+            return StringListBadRequest("kinds", kindsDetail);
+        string? requestedDocumentationCommentId = null;
+        DocumentationIdResolutionCoverage? documentationIdCoverage = null;
+        IndexSnapshotIdentity? documentationIdSnapshotIdentity = null;
+        long? documentationIdResolutionMs = null;
         string? semanticDeclarationKey = null;
+        if (!string.IsNullOrEmpty(documentationCommentId))
+        {
+            if (symbolId is { Length: > 0 } || name is { Length: > 0 } ||
+                path is { Length: > 0 } || line > 0 || column > 0)
+            {
+                return Json.Serialize(new
+                {
+                    error = "bad_request",
+                    field = "documentationCommentId",
+                    detail = "documentationCommentId is mutually exclusive with symbolId, name, path, line, and column.",
+                });
+            }
+            if (mode == "indexed")
+            {
+                return DocumentationIdError(documentationCommentId,
+                    (boundedId, truncated) => new
+                {
+                    error = "semantic_required",
+                    operation = "definition",
+                    documentationCommentId = boundedId,
+                    documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                    documentationCommentIdBytes = truncated
+                        ? Json.Utf8Bytes(documentationCommentId)
+                        : (int?)null,
+                    detail = "documentationCommentId is compiler identity and requires mode='auto' or mode='semantic'.",
+                    meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                });
+            }
+            var (documentedTarget, documentedError) = ResolveDocumentationTarget(
+                documentationCommentId, "definition", deadlineMs, implementationsOnly: false,
+                DefinitionDeadlineMaxMs, semanticDeadline.Token, swSem);
+            if (documentedError is not null) return documentedError;
+            requestedDocumentationCommentId = documentedTarget!.CanonicalDocumentationCommentId;
+            documentationIdCoverage = documentedTarget.Coverage;
+            documentationIdSnapshotIdentity = documentedTarget.SnapshotIdentity;
+            documentationIdResolutionMs = documentedTarget.ResolutionElapsedMs;
+            name = documentedTarget!.Name;
+            path = documentedTarget.Path;
+            line = documentedTarget.Line;
+            column = documentedTarget.Column;
+            semanticDeclarationKey = null;
+            container = null;
+            parsedKinds = null;
+        }
         SymbolHit? resolvedHandleHit = null;
         if (symbolId is { Length: > 0 })
         {
@@ -1475,7 +1752,7 @@ public sealed partial class NavigationTools
             semanticDeclarationKey = OperatorDeclarationKey(hit);
             // The handle already disambiguated the symbol — caller kinds/container filters exist to
             // narrow a bare name, so applying them here can only wrongly suppress the resolved hit.
-            kinds = null; container = null;
+            parsedKinds = null; container = null;
         }
         if (!string.IsNullOrWhiteSpace(path))
         {
@@ -1537,9 +1814,7 @@ public sealed partial class NavigationTools
         string? failReason = null;
         if (mode is "auto" or "semantic")
         {
-            int deadlineMs = Math.Clamp(timeoutMs, 500, 60000); // mirror DefinitionAsync's clamp (24n)
-            var swSem = System.Diagnostics.Stopwatch.StartNew();
-            var (target, hint) = ResolveSemanticTarget(name, container, kinds, path, line, column);
+            var (target, hint) = ResolveSemanticTarget(name, container, parsedKinds, path, line, column);
             if (TestOnlySemanticFailureReason is { } forcedFailure)
             {
                 failReason = forcedFailure;
@@ -1547,11 +1822,26 @@ public sealed partial class NavigationTools
             else if (target is { } t)
             {
                 var (decl, reason, _, semanticPartialReason) = _semantic
-                    .DefinitionAsync(t.Path, t.Line, t.Column, hint, timeoutMs,
-                        semanticDeclarationKey)
+                    .DefinitionAsync(t.Path, t.Line, t.Column, hint,
+                        RemainingDeadlineMilliseconds(deadlineMs, swSem),
+                        semanticDeclarationKey, semanticDeadline.Token,
+                        documentationIdSnapshotIdentity)
                     .GetAwaiter().GetResult();
                 if (decl is not null)
                 {
+                    if (requestedDocumentationCommentId is not null &&
+                        !string.Equals(decl.DocumentationCommentId,
+                            requestedDocumentationCommentId, StringComparison.Ordinal))
+                    {
+                        return DocumentationIdIdentityMismatch(documentationCommentId!,
+                            requestedDocumentationCommentId,
+                            decl.DocumentationCommentId,
+                            "definition",
+                            documentationIdCoverage,
+                            deadlineMs,
+                            swSem,
+                            documentationIdResolutionMs);
+                    }
                     // Order declarations largest-span-first (partial stubs lose), path as the
                     // deterministic tie-break — so the body's declaration (d0) is always the first
                     // shown and never trimmed out of the displayed set.
@@ -1568,13 +1858,26 @@ public sealed partial class NavigationTools
                     string BuildSemantic(object? body) => Json.WithListBudget(shown, (items, listTrunc) => new
                     {
                         name = name ?? decl.SymbolDisplay,
+                        documentationCommentId = requestedDocumentationCommentId,
+                        documentationIdCoverage = documentationIdCoverage is null
+                            ? null
+                            : DocumentationIdCoverageJson(documentationIdCoverage),
                         symbol = SemanticIdentityJson(decl),
                         declarations = items.Select(d => new { d.Path, d.StartLine, d.EndLine }),
                         declarationsTruncated = (listTrunc || totalDecls > MaxDeclarationSites) ? true : (bool?)null,
                         body,
                         partial = semanticPartialReason is not null ? true : (bool?)null,
                         partialReason = semanticPartialReason,
-                        timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds }, // 24n
+                        retryRecommended = SemanticRetryRecommended(semanticPartialReason)
+                            ? true
+                            : (bool?)null,
+                        retryHint = SemanticRetryHint(semanticPartialReason, "definition"),
+                        timing = new
+                        {
+                            deadlineMs,
+                            elapsedMs = swSem.ElapsedMilliseconds,
+                            documentationIdResolutionMs,
+                        },
                         meta = Meta.From(_manager.Health(),
                             semanticPartialReason is not null ? "indexed" : "exact", "semantic"),
                     });
@@ -1592,16 +1895,43 @@ public sealed partial class NavigationTools
             {
                 failReason = "target_not_found_in_index";
             }
-            if (mode == "semantic")
+            if (mode == "semantic" || requestedDocumentationCommentId is not null)
             {
-                return Json.Serialize(new
+                object Error(string boundedId, bool truncated) => new
                 {
                     error = "semantic_unavailable",
+                    operation = "definition",
+                    documentationCommentId = requestedDocumentationCommentId is null
+                        ? null
+                        : boundedId,
+                    documentationCommentIdTruncated = requestedDocumentationCommentId is not null &&
+                                                      truncated
+                        ? true
+                        : (bool?)null,
                     partialReason = failReason,
-                    hint = "Retry with mode='indexed' for name-index declarations.",
-                    timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds }, // 24n: was the deadline the cause?
+                    retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+                    retryHint = SemanticRetryHint(failReason, "definition"),
+                    retry = requestedDocumentationCommentId is null
+                        ? null
+                        : new
+                        {
+                            tool = "search_symbol",
+                            arguments = new { query = name, match = "exact", lang = "csharp" },
+                        },
+                    documentationIdCoverage = documentationIdCoverage is null
+                        ? null
+                        : DocumentationIdCoverageJson(documentationIdCoverage),
+                    timing = new
+                    {
+                        deadlineMs,
+                        elapsedMs = swSem.ElapsedMilliseconds,
+                        documentationIdResolutionMs,
+                    },
                     meta = Meta.From(_manager.Health(), "indexed", "semantic"),
-                });
+                };
+                return requestedDocumentationCommentId is null
+                    ? Json.Serialize(Error("", false))
+                    : DocumentationIdError(documentationCommentId!, Error);
             }
         }
 
@@ -1615,7 +1945,7 @@ public sealed partial class NavigationTools
         }
         var hits = resolvedHandleHit is not null
             ? new List<SymbolHit> { resolvedHandleHit }
-            : q.SearchSymbols(lookupName, "exact", SplitCsv(kinds), 100,
+            : q.SearchSymbols(lookupName, "exact", parsedKinds, 100,
                 includeGenerated: true, language: "cs");
         if (container is { } c)
         {
@@ -1641,6 +1971,8 @@ public sealed partial class NavigationTools
             declarations = items.Select(SymbolJson),
             body,
             partialReason = failReason,
+            retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+            retryHint = SemanticRetryHint(failReason, "definition"),
             hint = items.Count == 0
                 ? "No declaration found. Try search_symbol with match='substring', or the name may come from a package/generated source."
                 : null,
@@ -1743,18 +2075,54 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "implementations")]
-    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). Generic declarations may be selected by arity or symbolId; a bare name spanning multiple arities returns symbol_ambiguous. Operator symbolId handles are rejected as unsupported; use definition or references for them. A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Compiler-exact within the loaded cluster; falls back to arity-aware base-list syntax matching (confidence 'heuristic', unranked). A transient cold-load or semantic timeout fallback exposes retryRecommended and retryHint without changing the requested deadline. For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead.")]
+    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). Stable C# documentationCommentId, generic arity, and symbolId selectors are supported; a bare name spanning multiple arities returns symbol_ambiguous. A documentationCommentId is semantic-only and never uses the heuristic fallback. Constructor, field, and operator documentation ids return unsupported_symbol_kind instead of retargeting. A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Other selectors are compiler-exact within the loaded cluster and may fall back to arity-aware base-list syntax matching (confidence 'heuristic', unranked). A transient cold-load or semantic timeout fallback exposes retryRecommended and retryHint without changing the requested deadline. For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead.")]
     public string Implementations(
         [Description("Interface/type/member name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration or a usage (position mode).")] string? path = null,
         [Description("1-based line for position mode.")] int line = 0,
         [Description("1-based column for position mode (optional).")] int column = 0,
         [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
-        [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000,
+        [Description("Semantic deadline in ms (default 15000, max 120000).")] int timeoutMs = 15000,
         [Description("Optional generic type-parameter count. Use 0 for a non-generic declaration, 1 for Foo<T>, etc. A bare name with multiple available arities is refused.")] int? arity = null,
-        [Description("Resolve by a search_symbol candidate's current idx: handle. Takes precedence over name, path+line, and arity. Operator handles return unsupported_symbol_kind.")] string? symbolId = null)
+        [Description("Resolve by a search_symbol candidate's current idx: handle. Takes precedence over name, path+line, and arity. Operator handles return unsupported_symbol_kind.")] string? symbolId = null,
+        [Description("Stable C# Roslyn declaration id (T:/M:/P:/E:; constructors, fields, and operators are unsupported here). Empty means omitted; whitespace-only is bad_request. Mutually exclusive with other selectors. A successful response echoes the compiler-canonical id, which is safe to reuse directly; failures echo a bounded form of the caller input.")] string? documentationCommentId = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        if (NormalizeDocumentationCommentId(ref documentationCommentId) is { } idError)
+            return idError;
+        int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
+        var swSem = System.Diagnostics.Stopwatch.StartNew();
+        using var semanticDeadline = new CancellationTokenSource(deadlineMs);
+        string? requestedDocumentationCommentId = null;
+        DocumentationIdResolutionCoverage? documentationIdCoverage = null;
+        IndexSnapshotIdentity? documentationIdSnapshotIdentity = null;
+        long? documentationIdResolutionMs = null;
+        if (!string.IsNullOrEmpty(documentationCommentId))
+        {
+            if (symbolId is { Length: > 0 } || name is { Length: > 0 } ||
+                path is { Length: > 0 } || line > 0 || column > 0 || arity is not null)
+            {
+                return Json.Serialize(new
+                {
+                    error = "bad_request",
+                    field = "documentationCommentId",
+                    detail = "documentationCommentId is mutually exclusive with symbolId, name, path, line, column, and arity.",
+                });
+            }
+            var (documentedTarget, documentedError) = ResolveDocumentationTarget(
+                documentationCommentId, "implementations", deadlineMs,
+                implementationsOnly: true, SemanticNavigationDeadlineMaxMs,
+                semanticDeadline.Token, swSem);
+            if (documentedError is not null) return documentedError;
+            requestedDocumentationCommentId = documentedTarget!.CanonicalDocumentationCommentId;
+            documentationIdCoverage = documentedTarget.Coverage;
+            documentationIdSnapshotIdentity = documentedTarget.SnapshotIdentity;
+            documentationIdResolutionMs = documentedTarget.ResolutionElapsedMs;
+            name = documentedTarget!.Name;
+            path = documentedTarget.Path;
+            line = documentedTarget.Line;
+            column = documentedTarget.Column;
+        }
         if (symbolId is not { Length: > 0 } &&
             UnsupportedLanguageAtPath(path, "implementations") is { } unsupportedLanguage)
             return unsupportedLanguage;
@@ -1766,7 +2134,8 @@ public sealed partial class NavigationTools
         line = selection.Line;
         column = selection.Column;
         arity = selection.Arity;
-        bool allowHeuristicFallback = selection.AllowHeuristicFallback;
+        bool allowHeuristicFallback = requestedDocumentationCommentId is null &&
+                                      selection.AllowHeuristicFallback;
 
         string? failReason = null;
         // dve (b): when the compiler RESOLVED the symbol but found no implementers, the fallback
@@ -1774,15 +2143,40 @@ public sealed partial class NavigationTools
         // mixed-section honesty (symbol exact, list heuristic), mirroring type_hierarchy's
         // derivedConfidence split.
         SemanticDeclaration? resolvedSymbol = null;
-        int deadlineMs = Math.Clamp(timeoutMs, 500, 120000); // mirror the service clamp (24n)
-        var swSem = System.Diagnostics.Stopwatch.StartNew();
         var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column, arity);
         if (target is { } t)
         {
-            var (result, reason) = _semantic
-                .ImplementationsAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs, arity)
-                .GetAwaiter().GetResult();
+            SemanticImplementations? result;
+            string? reason;
+            if (TestOnlySemanticFailureReason is { } forcedFailure)
+            {
+                result = null;
+                reason = forcedFailure;
+            }
+            else
+            {
+                (result, reason) = _semantic
+                    .ImplementationsAsync(t.Path, t.Line, t.Column, hint, maxProjects,
+                        RemainingDeadlineMilliseconds(deadlineMs, swSem), arity,
+                        semanticDeadline.Token, documentationIdSnapshotIdentity)
+                    .GetAwaiter().GetResult();
+            }
+            if (result is not null && TestOnlyImplementationsResultTransform is not null)
+                result = TestOnlyImplementationsResultTransform(result);
             resolvedSymbol = result?.Symbol;
+            if (result is not null && requestedDocumentationCommentId is not null &&
+                !string.Equals(result.Symbol.DocumentationCommentId,
+                    requestedDocumentationCommentId, StringComparison.Ordinal))
+            {
+                return DocumentationIdIdentityMismatch(documentationCommentId!,
+                    requestedDocumentationCommentId,
+                    result.Symbol.DocumentationCommentId,
+                    "implementations",
+                    documentationIdCoverage,
+                    deadlineMs,
+                    swSem,
+                    documentationIdResolutionMs);
+            }
             if (result is { Implementations.Count: > 0 })
             {
                 var impls = result.Implementations; // already ranked concrete-first by the semantic layer
@@ -1804,10 +2198,18 @@ public sealed partial class NavigationTools
                         ? "indexed"
                         : "exact", "semantic");
                 long elapsedMs = swSem.ElapsedMilliseconds;
-                return Json.WithAuxiliaryListBudget(impls, result.SkippedCandidateProjects,
+                string? likelyImplementation = concreteCount == 1 && !partial
+                    ? impls.First(r => !r.Declaration.IsAbstract).Declaration.SymbolDisplay
+                    : null;
+                string BuildImplementations(string? likely, bool likelyOmitted) =>
+                    Json.WithAuxiliaryListBudget(impls, result.SkippedCandidateProjects,
                     (items, truncated, skippedItems, skippedTruncated) => new
                     {
                         symbol = SemanticSymbolJson(result.Symbol),
+                        documentationCommentId = requestedDocumentationCommentId,
+                        documentationIdCoverage = documentationIdCoverage is null
+                            ? null
+                            : DocumentationIdCoverageJson(documentationIdCoverage),
                         implementations = items.Select(r => new
                         {
                             symbol = SemanticSymbolJson(r.Declaration),
@@ -1819,9 +2221,11 @@ public sealed partial class NavigationTools
                         // High-signal case: exactly one instantiable implementation is very likely THE
                         // runtime type; anything else is abstract scaffolding. Never claimed when the
                         // deadline cut the search short — the "one" may just be the one found in time.
-                        likelyImplementation = concreteCount == 1 && !partial
-                        ? impls.First(r => !r.Declaration.IsAbstract).Declaration.SymbolDisplay
-                        : null,
+                        likelyImplementation = likely,
+                        likelyImplementationTruncated = likelyOmitted ? true : (bool?)null,
+                        likelyImplementationBytes = likelyOmitted && likelyImplementation is not null
+                            ? Json.Utf8Bytes(likelyImplementation)
+                            : (int?)null,
                         coverage = CoverageJson(result.Coverage),
                         skippedCandidateProjects = skippedItems.Count > 0
                         ? skippedItems
@@ -1835,15 +2239,107 @@ public sealed partial class NavigationTools
                         retryRecommended = SemanticRetryRecommended(partialCause)
                             ? true
                             : (bool?)null,
-                        retryHint = SemanticRetryHint(partialCause),
+                        retryHint = SemanticRetryHint(partialCause, "implementations"),
                         // t2b: where the budget went — cluster load+resolve vs the finder passes.
-                        timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
+                        timing = new
+                        {
+                            deadlineMs,
+                            elapsedMs,
+                            documentationIdResolutionMs,
+                            clusterLoadMs = result.ClusterLoadMs,
+                            queryMs = result.QueryMs,
+                        },
                         truncated,
                         hint = concreteCount == 1 && !partial
                         ? "One concrete implementation — likely the runtime target. Ranked concrete-first; isAbstract/rank mark non-instantiable scaffolding."
                         : null,
                         meta = meta0,
                     });
+                string response = BuildImplementations(likelyImplementation,
+                    likelyOmitted: false);
+                if (Json.Utf8Bytes(response) > Json.HardBudgetBytes &&
+                    likelyImplementation is not null)
+                {
+                    response = BuildImplementations(null, likelyOmitted: true);
+                }
+                return Json.WithCompleteSemanticIdentity(response);
+            }
+            if (requestedDocumentationCommentId is not null)
+            {
+                if (result is not null)
+                {
+                    bool partial = result.DeadlineExhausted ||
+                                   result.Coverage.SkippedProjects.Count > 0 ||
+                                   result.Coverage.FailedProjects.Count > 0 ||
+                                   result.Coverage.LoadedProjects <
+                                   result.Coverage.RequestedProjects ||
+                                   result.SkippedCandidateProjects.Count > 0 ||
+                                   result.ProjectModelUnproven;
+                    string? partialReason = SemanticCoverageReasons.Primary(
+                        result.Coverage,
+                        result.DeadlineExhausted,
+                        result.SkippedCandidateProjects.Count > 0,
+                        projectModelUnproven: result.ProjectModelUnproven);
+                    return Json.WithCompleteSemanticIdentity(Json.Serialize(new
+                    {
+                        symbol = SemanticSymbolJson(result.Symbol),
+                        documentationCommentId = requestedDocumentationCommentId,
+                        documentationIdCoverage = documentationIdCoverage is null
+                            ? null
+                            : DocumentationIdCoverageJson(documentationIdCoverage),
+                        implementations = Array.Empty<object>(),
+                        concreteCount = 0,
+                        coverage = CoverageJson(result.Coverage),
+                        partial = partial ? true : (bool?)null,
+                        partialReason,
+                        retryRecommended = SemanticRetryRecommended(partialReason)
+                            ? true
+                            : (bool?)null,
+                        retryHint = SemanticRetryHint(partialReason, "implementations"),
+                        timing = new
+                        {
+                            deadlineMs,
+                            elapsedMs = swSem.ElapsedMilliseconds,
+                            documentationIdResolutionMs,
+                            clusterLoadMs = result.ClusterLoadMs,
+                            queryMs = result.QueryMs,
+                        },
+                        meta = Meta.From(_manager.Health(), partial ? "indexed" : "exact",
+                            "semantic"),
+                    }));
+                }
+                failReason = ExpandReason(reason);
+                object Error(string boundedId, bool truncated) => new
+                {
+                    error = "semantic_unavailable",
+                    operation = "implementations",
+                    documentationCommentId = boundedId,
+                    documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                    documentationCommentIdBytes = truncated
+                        ? Json.Utf8Bytes(documentationCommentId!)
+                        : (int?)null,
+                    partialReason = failReason,
+                    retryRecommended = SemanticRetryRecommended(failReason)
+                        ? true
+                        : (bool?)null,
+                    retryHint = SemanticRetryHint(failReason, "implementations"),
+                    retry = new
+                    {
+                        tool = "search_symbol",
+                        arguments = new { query = name, match = "exact", lang = "csharp" },
+                    },
+                    documentationIdCoverage = documentationIdCoverage is null
+                        ? null
+                        : DocumentationIdCoverageJson(documentationIdCoverage),
+                    timing = new
+                    {
+                        deadlineMs,
+                        elapsedMs = swSem.ElapsedMilliseconds,
+                        documentationIdResolutionMs,
+                    },
+                    meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                };
+                return DocumentationIdError(documentationCommentId!, Error);
             }
             // Semantic RESOLVED the symbol but found no implementers, OR it could not resolve. Be
             // honest about which: bounded coverage (raising maxProjects may help) vs genuinely none.
@@ -1852,6 +2348,36 @@ public sealed partial class NavigationTools
                     candidateProjectsSkipped: result.SkippedCandidateProjects.Count > 0,
                     projectModelUnproven: result.ProjectModelUnproven)
                   ?? "no_semantic_implementers";
+        }
+
+        if (requestedDocumentationCommentId is not null)
+        {
+            return DocumentationIdError(documentationCommentId!, (boundedId, truncated) => new
+            {
+                error = "semantic_unavailable",
+                operation = "implementations",
+                documentationCommentId = boundedId,
+                documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                documentationCommentIdBytes = truncated
+                    ? Json.Utf8Bytes(documentationCommentId!)
+                    : (int?)null,
+                partialReason = "target_not_resolved",
+                retry = new
+                {
+                    tool = "search_symbol",
+                    arguments = new { query = name, match = "exact", lang = "csharp" },
+                },
+                documentationIdCoverage = documentationIdCoverage is null
+                    ? null
+                    : DocumentationIdCoverageJson(documentationIdCoverage),
+                timing = new
+                {
+                    deadlineMs,
+                    elapsedMs = swSem.ElapsedMilliseconds,
+                    documentationIdResolutionMs,
+                },
+                meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+            });
         }
 
         // Heuristic fallback: types with a normalized direct base-head edge for the name — a
@@ -1882,7 +2408,7 @@ public sealed partial class NavigationTools
                 error = "symbol_not_resolved",
                 partialReason = failReason,
                 retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-                retryHint = SemanticRetryHint(failReason),
+                retryHint = SemanticRetryHint(failReason, "implementations"),
                 meta = Meta.From(_manager.Health(), "heuristic", "syntax"),
             });
         }
@@ -1933,7 +2459,7 @@ public sealed partial class NavigationTools
                     partialReason = "member_scoped_syntactic",
                     semanticReason = failReason,
                     retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-                    retryHint = SemanticRetryHint(failReason),
+                    retryHint = SemanticRetryHint(failReason, "implementations"),
                     note = $"Same-named members of the syntactic implementers of {targetSym!.Container} (confidence heuristic — compiler-exact override resolution found none, likely a type-twin identity mismatch)."
                         + (omitted > 0 ? $" {omitted} of {implementerCount} implementer(s) declare no such member and were omitted." : "")
                         + " Verify with source_context.",
@@ -1952,7 +2478,7 @@ public sealed partial class NavigationTools
                 partialReason = "member_fallback_type_scoped",
                 semanticReason = failReason, // why the exact path returned nothing (context, not actionable)
                 retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-                retryHint = SemanticRetryHint(failReason),
+                retryHint = SemanticRetryHint(failReason, "implementations"),
                 note = "No compiler-exact member implementations in the loaded cluster (possibly a type-twin identity mismatch), and no same-named member found in the declaring type's implementers. Run implementations on the declaring interface/type, then read this member in each implementer.",
                 meta,
             });
@@ -1974,7 +2500,7 @@ public sealed partial class NavigationTools
             implementations = items.Select(SymbolJson),
             partialReason = failReason ?? "semantic_unavailable",
             retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-            retryHint = SemanticRetryHint(failReason),
+            retryHint = SemanticRetryHint(failReason, "implementations"),
             note = items.Count > 0 && failReason is "no_semantic_implementers" or "candidate_cluster_bounded"
                 // Field (lhg): the old "declared in more than one assembly / generated twin" wording
                 // went stale once compiled-awareness + assembly-ref edges landed — say what we now
@@ -1987,7 +2513,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "references")]
-    [Description("Where a symbol is used across the workspace, grouped by project with counts and sample lines. mode='auto' tries compiler-exact references (target by position path+line, or by name) scoped to candidate projects, falling back to index candidates. Exact references are usage-kind classified (kinds breakdown: call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/implicitConversion/explicitConversion/checkedConversion/other) — filter with usageKinds (e.g. 'call' to skip doc mentions) or publicConsumersOnly for external callers. Pass pathGlob/excludePath to scope candidates (e.g. excludePath='3rdparty/**'); a path filter runs the indexed candidate path so counts reflect the filter. Call before changing behavior.")]
+    [Description("Where a symbol is used across the workspace, grouped by project with counts and sample lines. mode='auto' tries compiler-exact references (target by stable C# documentationCommentId, position path+line, symbolId, or name) scoped to candidate projects. A documentationCommentId is semantic-only and never falls back to indexed name candidates; other selectors may. Exact references are usage-kind classified (kinds breakdown: call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/implicitConversion/explicitConversion/checkedConversion/other) — filter with usageKinds (e.g. 'call' to skip doc mentions) or publicConsumersOnly for external callers. Pass pathGlob/excludePath to scope candidates (e.g. excludePath='3rdparty/**'); a path filter runs the indexed candidate path so counts reflect the filter. Call before changing behavior.")]
     public string References(
         [Description("Symbol name (whole-identifier). Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of a usage or declaration (position mode — most precise).")] string? path = null,
@@ -1996,18 +2522,82 @@ public sealed partial class NavigationTools
         [Description("'auto' (semantic first), 'semantic', or 'indexed' (fast candidates).")] string mode = "auto",
         [Description("Include usages in test projects (default true).")] bool includeTests = true,
         [Description("Include usages in generated files (default false).")] bool includeGenerated = false,
-        [Description("Comma-separated usage-kind filter — SEMANTIC (exact) path only: call, construction, typeMention, attribute, nameof, xmldoc, usingDirective, baseList, typeof, implicitConversion, explicitConversion, checkedConversion, other. Counts and groups honor it (e.g. 'call,construction' = real executions only).")] string? usageKinds = null,
+        [Description("Comma-separated usage-kind filter or JSON-array encoded string — SEMANTIC (exact) path only: call, construction, typeMention, attribute, nameof, xmldoc, usingDirective, baseList, typeof, implicitConversion, explicitConversion, checkedConversion, other. Null or an empty string = all; whitespace-only values, empty CSV items, and empty JSON arrays are bad_request. Counts and groups honor it (e.g. 'call,construction' = real executions only).")] string? usageKinds = null,
         [Description("Only usages OUTSIDE the symbol's own declaring PROJECT (project-scoped, NOT accessibility-scoped — the name is about API blast radius, not access modifiers). The external-consumer view; semantic path only.")] bool publicConsumersOnly = false,
         [Description("Restrict candidate paths to this glob (supplying a path filter runs indexed candidates).")] string? pathGlob = null,
         [Description("Exclude candidate paths matching this glob, e.g. '3rdparty/**' (supplying a path filter runs indexed candidates).")] string? excludePath = null,
         [Description("Max candidate files scanned in indexed mode (default 500).")] int maxFiles = 500,
         [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
         [Description("Sample lines per project group (default 3).")] int samplesPerGroup = 3,
-        [Description("Semantic deadline in ms (default 15000).")] int timeoutMs = 15000,
-        [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex; a documentationCommentId is not yet accepted here.")] string? symbolId = null)
+        [Description("Semantic deadline in ms (default 15000, max 120000).")] int timeoutMs = 15000,
+        [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex.")] string? symbolId = null,
+        [Description("Stable C# Roslyn declaration id (T:/M:/P:/F:/E:). Empty means omitted; whitespace-only is bad_request. Mutually exclusive with symbolId, name, and path+line. A successful response echoes the compiler-canonical id, which is safe to reuse directly; failures echo a bounded form of the caller input.")] string? documentationCommentId = null)
     {
         if (NotReady() is { } notReady) return notReady;
+        if (NormalizeDocumentationCommentId(ref documentationCommentId) is { } idError)
+            return idError;
+        mode = string.IsNullOrWhiteSpace(mode) ? "auto" : mode.Trim().ToLowerInvariant();
+        if (mode is not ("auto" or "semantic" or "indexed"))
+        {
+            return Json.Serialize(new
+            {
+                error = "bad_request",
+                field = "mode",
+                validValues = new[] { "auto", "semantic", "indexed" },
+                detail = "mode must be 'auto', 'semantic', or 'indexed'.",
+                meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+            });
+        }
+        int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
+        var swSem = System.Diagnostics.Stopwatch.StartNew();
+        using var semanticDeadline = new CancellationTokenSource(deadlineMs);
+        string? requestedDocumentationCommentId = null;
+        DocumentationIdResolutionCoverage? documentationIdCoverage = null;
+        IndexSnapshotIdentity? documentationIdSnapshotIdentity = null;
+        long? documentationIdResolutionMs = null;
         string? semanticDeclarationKey = null;
+        if (!string.IsNullOrEmpty(documentationCommentId))
+        {
+            if (symbolId is { Length: > 0 } || name is { Length: > 0 } ||
+                path is { Length: > 0 } || line > 0 || column > 0)
+            {
+                return Json.Serialize(new
+                {
+                    error = "bad_request",
+                    field = "documentationCommentId",
+                    detail = "documentationCommentId is mutually exclusive with symbolId, name, path, line, and column.",
+                });
+            }
+            if (mode == "indexed" || pathGlob is { Length: > 0 } || excludePath is { Length: > 0 })
+            {
+                return DocumentationIdError(documentationCommentId,
+                    (boundedId, truncated) => new
+                {
+                    error = "semantic_required",
+                    operation = "references",
+                    documentationCommentId = boundedId,
+                    documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                    documentationCommentIdBytes = truncated
+                        ? Json.Utf8Bytes(documentationCommentId)
+                        : (int?)null,
+                    detail = "documentationCommentId is compiler identity and cannot be combined with indexed mode or path filters.",
+                    meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                });
+            }
+            var (documentedTarget, documentedError) = ResolveDocumentationTarget(
+                documentationCommentId, "references", deadlineMs, implementationsOnly: false,
+                SemanticNavigationDeadlineMaxMs, semanticDeadline.Token, swSem);
+            if (documentedError is not null) return documentedError;
+            requestedDocumentationCommentId = documentedTarget!.CanonicalDocumentationCommentId;
+            documentationIdCoverage = documentedTarget.Coverage;
+            documentationIdSnapshotIdentity = documentedTarget.SnapshotIdentity;
+            documentationIdResolutionMs = documentedTarget.ResolutionElapsedMs;
+            name = documentedTarget!.Name;
+            path = documentedTarget.Path;
+            line = documentedTarget.Line;
+            column = documentedTarget.Column;
+            semanticDeclarationKey = null;
+        }
         SymbolHit? resolvedHandleHit = null;
         if (symbolId is { Length: > 0 })
         {
@@ -2036,7 +2626,10 @@ public sealed partial class NavigationTools
         }
         string? failReason = hasPathFilter && mode != "indexed" ? "path_filter_ran_indexed_candidates" : null;
         // Usage-kind buckets + external-consumers view are syntax/compiler facts — semantic path only.
-        var kindSet = SplitCsv(usageKinds) is { Count: > 0 } uk
+        if (!TryParseStringList(usageKinds, "usageKinds",
+                out List<string>? parsedUsageKinds, out string? usageKindsDetail))
+            return StringListBadRequest("usageKinds", usageKindsDetail);
+        var kindSet = parsedUsageKinds is { Count: > 0 } uk
             ? new HashSet<string>(uk, StringComparer.OrdinalIgnoreCase)
             : null;
         if (kindSet is not null)
@@ -2058,8 +2651,6 @@ public sealed partial class NavigationTools
         {
             // Deadline visibility (24n): every semantic response reports the effective deadline and
             // how much of it was spent — "why is this partial / slow?" needs numbers, not guesses.
-            int deadlineMs = Math.Clamp(timeoutMs, 500, 120000);
-            var swSem = System.Diagnostics.Stopwatch.StartNew();
             var (target, hint) = ResolveSemanticTarget(name, null, null, path, line, column);
             if (TestOnlySemanticFailureReason is { } forcedFailure)
             {
@@ -2069,12 +2660,27 @@ public sealed partial class NavigationTools
             {
                 var (result, reason) = _semantic
                     .ReferencesAsync(t.Path, t.Line, t.Column, hint, maxProjects,
-                        Math.Clamp(samplesPerGroup, 0, 10), timeoutMs, includeGenerated,
+                        Math.Clamp(samplesPerGroup, 0, 10),
+                        RemainingDeadlineMilliseconds(deadlineMs, swSem), includeGenerated,
                         kindSet, publicConsumersOnly, includeTests,
-                        semanticDeclarationKey)
+                        semanticDeclarationKey, semanticDeadline.Token,
+                        documentationIdSnapshotIdentity)
                     .GetAwaiter().GetResult();
                 if (result is not null)
                 {
+                    if (requestedDocumentationCommentId is not null &&
+                        !string.Equals(result.Symbol.DocumentationCommentId,
+                            requestedDocumentationCommentId, StringComparison.Ordinal))
+                    {
+                        return DocumentationIdIdentityMismatch(documentationCommentId!,
+                            requestedDocumentationCommentId,
+                            result.Symbol.DocumentationCommentId,
+                            "references",
+                            documentationIdCoverage,
+                            deadlineMs,
+                            swSem,
+                            documentationIdResolutionMs);
+                    }
                     // includeTests is filtered INSIDE the semantic scan, before counting (wu1) —
                     // so TotalLocations, KindCounts, Groups, and this summary all describe one set.
                     var groups0 = result.Groups;
@@ -2222,6 +2828,10 @@ public sealed partial class NavigationTools
                             return new
                             {
                                 symbol = SemanticSymbolJson(result.Symbol),
+                                documentationCommentId = requestedDocumentationCommentId,
+                                documentationIdCoverage = documentationIdCoverage is null
+                                    ? null
+                                    : DocumentationIdCoverageJson(documentationIdCoverage),
                                 summary,
                                 totalReferences = result.TotalLocations,
                                 totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
@@ -2249,6 +2859,10 @@ public sealed partial class NavigationTools
                                 coverage = CoverageJson(result.Coverage),
                                 partial,
                                 partialReason,
+                                retryRecommended = SemanticRetryRecommended(partialReason)
+                                    ? true
+                                    : (bool?)null,
+                                retryHint = SemanticRetryHint(partialReason, "references"),
                                 skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
                                 skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
                             ? result.SkippedCandidateProjects.Count
@@ -2277,7 +2891,14 @@ public sealed partial class NavigationTools
                                 note = referenceNote,
                                 noteId = referenceNoteId, // a0b: stable, machine-matchable cause
                                                           // t2b: where the budget went — cluster load+resolve vs find+count.
-                                timing = new { deadlineMs, elapsedMs, clusterLoadMs = result.ClusterLoadMs, queryMs = result.QueryMs },
+                                timing = new
+                                {
+                                    deadlineMs,
+                                    elapsedMs,
+                                    documentationIdResolutionMs,
+                                    clusterLoadMs = result.ClusterLoadMs,
+                                    queryMs = result.QueryMs,
+                                },
                                 truncated,
                                 meta = meta0,
                             };
@@ -2289,16 +2910,43 @@ public sealed partial class NavigationTools
             {
                 failReason = "target_not_found_in_index";
             }
-            if (mode == "semantic")
+            if (mode == "semantic" || requestedDocumentationCommentId is not null)
             {
-                return Json.Serialize(new
+                object Error(string boundedId, bool truncated) => new
                 {
                     error = "semantic_unavailable",
+                    operation = "references",
+                    documentationCommentId = requestedDocumentationCommentId is null
+                        ? null
+                        : boundedId,
+                    documentationCommentIdTruncated = requestedDocumentationCommentId is not null &&
+                                                      truncated
+                        ? true
+                        : (bool?)null,
                     partialReason = failReason,
-                    hint = "Retry with mode='indexed' for fast text candidates.",
-                    timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds }, // 24n: was the deadline the cause?
+                    retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+                    retryHint = SemanticRetryHint(failReason, "references"),
+                    retry = requestedDocumentationCommentId is null
+                        ? null
+                        : new
+                        {
+                            tool = "search_symbol",
+                            arguments = new { query = name, match = "exact", lang = "csharp" },
+                        },
+                    documentationIdCoverage = documentationIdCoverage is null
+                        ? null
+                        : DocumentationIdCoverageJson(documentationIdCoverage),
+                    timing = new
+                    {
+                        deadlineMs,
+                        elapsedMs = swSem.ElapsedMilliseconds,
+                        documentationIdResolutionMs,
+                    },
                     meta = Meta.From(_manager.Health(), "indexed", "semantic"),
-                });
+                };
+                return requestedDocumentationCommentId is null
+                    ? Json.Serialize(Error("", false))
+                    : DocumentationIdError(documentationCommentId!, Error);
             }
         }
 
@@ -2314,7 +2962,13 @@ public sealed partial class NavigationTools
         }
         if (string.IsNullOrEmpty(name))
         {
-            return Json.Serialize(new { error = "symbol_not_resolved", partialReason = failReason });
+            return Json.Serialize(new
+            {
+                error = "symbol_not_resolved",
+                partialReason = failReason,
+                retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+                retryHint = SemanticRetryHint(failReason, "references"),
+            });
         }
         var excludes = excludePath is { Length: > 0 } ex ? new[] { ex } : null;
         // includeTests is filtered INSIDE the candidate scan, before counting (wu1) — so `total`
@@ -2349,6 +3003,8 @@ public sealed partial class NavigationTools
             name,
             partial = candidateFilesCapHit ? true : (bool?)null,
             partialReason = indexedPartialReason,
+            retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
+            retryHint = SemanticRetryHint(failReason, "references"),
             summary = candidateFilesCapHit
                 ? $"At least {total} candidate reference lines across {groups.Count} returned project groups ({mix}); the indexed scan covered {candidates.CandidateFilesScanned} of at least {candidates.CandidateFilesAtLeast} matching files."
                 : $"{total} candidate reference lines across {groups.Count} projects ({mix}).",
@@ -2391,21 +3047,39 @@ public sealed partial class NavigationTools
     [McpServerTool(Name = "project_graph")]
     [Description("Project dependency edges around a project (upstream = dependents, downstream = dependencies). Use to understand ownership and blast radius before changes.")]
     public string ProjectGraph(
-        [Description("Project name (e.g. 'Acme.Billing.Invoicing.Application').")] string project,
+        [Description("Project name, AssemblyName metadata, or exact workspace-relative .csproj/.fsproj path.")] string project,
         [Description("Traversal depth (default 2, max 5).")] int depth = 2,
-        [Description("'upstream', 'downstream', or 'both' (default).")] string direction = "both")
+        [Description("'upstream'/'dependents', 'downstream'/'dependencies', or 'both' (default). Responses echo the canonical value.")] string direction = "both")
     {
         if (NotReady() is { } notReady) return notReady;
+        string normalizedDirection = string.IsNullOrWhiteSpace(direction)
+            ? "both"
+            : direction.Trim().ToLowerInvariant();
+        direction = normalizedDirection switch
+        {
+            "dependencies" => "downstream",
+            "dependents" => "upstream",
+            "upstream" or "downstream" or "both" => normalizedDirection,
+            _ => "invalid",
+        };
+        if (direction == "invalid")
+        {
+            return Json.Serialize(new
+            {
+                error = "bad_request",
+                field = "direction",
+                validValues = new[] { "upstream", "downstream", "both", "dependencies", "dependents" },
+                detail = "direction must name a canonical direction or its agent-facing alias.",
+                meta = Meta.From(_manager.Health(), "indexed", "text"),
+            });
+        }
         depth = Math.Clamp(depth, 1, 5);
         using var q = _manager.OpenQueries();
-        List<ProjectRow> rootRows = q.ProjectsByName(project);
-        ProjectRow? root = rootRows.FirstOrDefault(row => row.Language == "cs") ??
-                           rootRows.FirstOrDefault();
-        if (root is null)
-        {
-            return Json.Serialize(new { error = "project_not_found", project, meta = Meta.From(_manager.Health(), "indexed", "text") });
-        }
-        var edges = q.ProjectGraph(root.Name, depth, direction);
+        (ResolvedProjectSelector? projectSelection, string? selectorError) =
+            ResolveProjectSelector(q, project, "project", "project_graph");
+        if (selectorError is not null) return selectorError;
+        ProjectRow root = projectSelection!.Project;
+        var edges = q.ProjectGraph(root!.Name, depth, direction);
         var nodes = edges.SelectMany(e => new[] { e.FromProject, e.ToProject })
             .Append(root.Name)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -2416,27 +3090,38 @@ public sealed partial class NavigationTools
             : "unknown";
 
         var meta = Meta.From(_manager.Health(), "indexed", "text");
-        return Json.WithListBudget(edges, (items, truncated) => new
-        {
-            root = new { root.Name, root.Path, root.Style, language = LanguageOf(root.Name), root.Tfms, root.IsTest },
-            direction,
-            depth,
-            nodeCount = nodes.Count,
-            // Edge provenance (bxw, schema v10): 'projectReference' = a real <ProjectReference>;
-            // 'hintPathReference' = recovered from <Reference>+HintPath / bare Include (the
-            // multi-staged build). kind was previously HARDCODED 'projectReference' for every
-            // edge — presenting binary couplings as source-graph ones.
-            edges = items.Select(e => new
-            {
-                from = e.FromProject,
-                fromLanguage = LanguageOf(e.FromProject),
-                to = e.ToProject,
-                toLanguage = LanguageOf(e.ToProject),
-                kind = EdgeKind(e.Kind),
-            }),
-            truncated,
-            meta,
-        });
+        return Json.WithStringBudget(project, Json.HardBudgetBytes,
+            (boundedSelector, selectorTruncated) =>
+                System.Text.Json.Nodes.JsonNode.Parse(Json.WithDiagnosticListBudget(
+                    edges, projectSelection.ShadowedMatches,
+                    (items, truncated, shadowedMatches, shadowedMatchesTruncated) => new
+                    {
+                        root = new { root.Name, root.Path, root.Style, language = LanguageOf(root.Name), root.Tfms, root.IsTest },
+                        projectSelector = boundedSelector,
+                        projectSelectorTruncated = selectorTruncated ? true : (bool?)null,
+                        projectSelectorBytes = selectorTruncated ? Json.Utf8Bytes(project) : (int?)null,
+                        projectSelectorResolution = ProjectSelectorResolutionJson(
+                            projectSelection.ShadowedMatches.Count, shadowedMatches,
+                            shadowedMatchesTruncated),
+                        direction,
+                        depth,
+                        nodeCount = nodes.Count,
+                        // Edge provenance (bxw, schema v10): 'projectReference' = a real <ProjectReference>;
+                        // 'hintPathReference' = recovered from <Reference>+HintPath / bare Include (the
+                        // multi-staged build). kind was previously HARDCODED 'projectReference' for every
+                        // edge — presenting binary couplings as source-graph ones.
+                        edges = items.Select(e => new
+                        {
+                            from = e.FromProject,
+                            fromLanguage = LanguageOf(e.FromProject),
+                            to = e.ToProject,
+                            toLanguage = LanguageOf(e.ToProject),
+                            kind = EdgeKind(e.Kind),
+                        }),
+                        truncated,
+                        meta,
+                    }, TestOnlyProjectSelectorResponseMaxBytes))!,
+            TestOnlyProjectSelectorResponseMaxBytes);
     }
 
     [McpServerTool(Name = "projects_containing")]
@@ -2537,7 +3222,8 @@ public sealed partial class NavigationTools
     /// semantic layer, using the index to locate the best declaration for name targets.
     /// </summary>
     private ((string Path, int Line, int? Column)? Target, string? NameHint) ResolveSemanticTarget(
-        string? name, string? container, string? kinds, string? path, int line, int column,
+        string? name, string? container, IReadOnlyList<string>? kinds, string? path, int line,
+        int column,
         int? arity = null)
     {
         if (path is not null && line > 0)
@@ -2553,7 +3239,7 @@ public sealed partial class NavigationTools
         // production case. The ORDER BY still ranks non-generated first, so picks only change when
         // the non-generated candidates are dead.
         var hits = q.SearchSymbols(
-            name, "exact", SplitCsv(kinds), 20, includeGenerated: true, arity: arity,
+            name, "exact", kinds, 20, includeGenerated: true, arity: arity,
             language: "cs");
         if (container is { } c)
         {
@@ -2768,22 +3454,62 @@ public sealed partial class NavigationTools
             : null;
     }
 
-    /// <summary>Combines an explicit excludePath glob with firstPartyOnly's whole-segment vendor
-    /// globs into one exclude list (null when empty, so callers pass null for "no filter").
-    /// firstPartyOnly uses <see cref="IndexQueries.VendorExcludeGlobs"/> — a complete, scan-free
-    /// exclusion that matches exactly what the per-hit noise flag reports.</summary>
-    private static IReadOnlyList<string>? BuildExcludes(string? excludePath, bool firstPartyOnly)
+    /// <summary>Combines an explicit excludePath glob with the first-party query scope's
+    /// whole-segment vendor globs into one exclude list (null when empty, so callers pass null for
+    /// "no filter"). The scope uses <see cref="IndexQueries.VendorExcludeGlobs"/> — a complete,
+    /// scan-free exclusion that matches exactly what the per-hit noise flag reports.</summary>
+    private static IReadOnlyList<string>? BuildExcludes(string? excludePath, bool firstPartyScope)
     {
         var list = new List<string>();
         if (excludePath is { Length: > 0 } ex) list.Add(ex);
-        if (firstPartyOnly) list.AddRange(IndexQueries.VendorExcludeGlobs());
+        if (firstPartyScope) list.AddRange(IndexQueries.VendorExcludeGlobs());
         return list.Count > 0 ? list.Distinct(StringComparer.OrdinalIgnoreCase).ToList() : null;
+    }
+
+    private sealed record QueryScopeSelection(
+        string ConfiguredDefault,
+        string Applied,
+        bool DefaultApplied);
+
+    internal static string NormalizeDefaultQueryScope(string? configured) =>
+        configured?.Trim().ToLowerInvariant() switch
+        {
+            "first_party" => "first_party",
+            _ => "all",
+        };
+
+    private (QueryScopeSelection? Selection, string? Error) ResolveQueryScope(string? requested)
+    {
+        string value = requested is null || requested.Length == 0
+            ? "default"
+            : requested.Trim().ToLowerInvariant();
+        if (value is not ("default" or "all" or "first_party"))
+        {
+            return (null, Json.Serialize(new
+            {
+                error = "bad_request",
+                field = "queryScope",
+                value = requested,
+                validValues = new[] { "default", "all", "first_party" },
+                detail = "queryScope must be 'default', 'all', or 'first_party'.",
+                meta = Meta.From(_manager.Health(), "indexed", "text"),
+            }));
+        }
+        bool defaultApplied = value == "default";
+        string applied = value switch
+        {
+            "all" => "all",
+            "first_party" => "first_party",
+            _ => _defaultQueryScope,
+        };
+        return (new QueryScopeSelection(
+            _defaultQueryScope, applied, defaultApplied), null);
     }
 
     /// <summary>Resolves a symbolId handle to its indexed declaration row. Accepts the idx:NNN
     /// handle (from any search_symbol / symbol_at / definition result) — index-local, so it changes
-    /// on reindex. A documentationCommentId is not yet accepted as an input handle. Returns the hit
-    /// on success, or an error-JSON string to hand straight back to the caller.</summary>
+    /// on reindex. Compiler-stable ids use the separate documentationCommentId argument. Returns the
+    /// hit on success, or an error-JSON string to hand straight back to the caller.</summary>
     private (SymbolHit? Hit, string? Error) ResolveSymbolIdHandle(string symbolId)
     {
         // Handle shape: idx:<rowid>[~<fingerprint>]. The fingerprint is optional so a hand-typed
@@ -2797,7 +3523,7 @@ public sealed partial class NavigationTools
             return (null, Json.Serialize(new
             {
                 error = "bad_request",
-                detail = "symbolId must be an 'idx:NNN' handle (from a prior search_symbol / symbol_at / definition result). A documentationCommentId (e.g. 'T:Ns.Type') is not yet accepted as input — use name, or path+line.",
+                detail = "symbolId must be an 'idx:NNN' handle (from a prior search_symbol / symbol_at / definition result). Pass a Roslyn id such as 'T:Ns.Type' through documentationCommentId instead.",
             }));
         }
         using var q = _manager.OpenQueries();
@@ -2856,14 +3582,17 @@ public sealed partial class NavigationTools
     internal static bool SemanticRetryRecommended(string? reason) =>
         reason is not null &&
         (reason.StartsWith("cluster_cold_load", StringComparison.Ordinal) ||
-         reason.StartsWith("semantic_timeout", StringComparison.Ordinal));
+         reason.StartsWith("semantic_timeout", StringComparison.Ordinal) ||
+         reason.StartsWith("index_snapshot_changed", StringComparison.Ordinal));
 
-    internal static string? SemanticRetryHint(string? reason)
+    internal static string? SemanticRetryHint(string? reason, string operation)
     {
         if (!SemanticRetryRecommended(reason)) return null;
-        return reason!.StartsWith("cluster_cold_load", StringComparison.Ordinal)
-            ? "Retry implementations once with the same arguments; the semantic cluster may now be warm and return exact results."
-            : "Retry implementations once with the same arguments; if it remains partial, narrow the target or explicitly choose a larger timeoutMs.";
+        if (reason!.StartsWith("index_snapshot_changed", StringComparison.Ordinal))
+            return $"Retry {operation} once with the same arguments; an index refresh landed during the request.";
+        return reason.StartsWith("cluster_cold_load", StringComparison.Ordinal)
+            ? $"Retry {operation} once with the same arguments; the semantic cluster may now be warm and return exact results."
+            : $"Retry {operation} once with the same arguments; if it remains partial, narrow the target or explicitly choose a larger timeoutMs.";
     }
 
     /// <summary>Wire vocabulary for edge provenance (bxw): the stored kind ('project'/'assembly')
@@ -2940,7 +3669,7 @@ public sealed partial class NavigationTools
         isPartial = s.IsPartial ? true : (bool?)null,
         isGenerated = s.FileIsGenerated ? true : (bool?)null,
         // Best-effort "this hit lives under a vendored/generated dir" signal (only present when
-        // true). Lets a caller spot third-party noise without firstPartyOnly, or excludePath it.
+        // true). Lets a caller spot third-party noise without first-party scope, or excludePath it.
         noise = IndexQueries.IsVendorPath(s.FilePath) ? true : (bool?)null,
         // "No project compiles this file" (only present when true) — the compile-graph signal grep
         // lacks. 3tz: Include globs expanded, Remove honored; residual gaps are shared .projitems,
@@ -3031,10 +3760,767 @@ public sealed partial class NavigationTools
         return (limit, offset, mode);
     }
 
-    private static List<string>? SplitCsv(string? csv) =>
-        string.IsNullOrWhiteSpace(csv)
-            ? null
-            : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+    internal static bool TryParseStringList(
+        string? value,
+        string field,
+        out List<string>? items,
+        out string? detail)
+    {
+        items = null;
+        detail = null;
+        if (value is null || value.Length == 0) return true;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            detail = $"{field} must not be whitespace-only.";
+            return false;
+        }
+        string trimmed = value.Trim();
+        if (trimmed[0] == '[')
+        {
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(trimmed);
+                if (document.RootElement.ValueKind != JsonValueKind.Array)
+                {
+                    detail = $"{field} must be comma-separated text or a JSON array of strings.";
+                    return false;
+                }
+                items = new List<string>();
+                foreach (JsonElement item in document.RootElement.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.String ||
+                        string.IsNullOrWhiteSpace(item.GetString()))
+                    {
+                        detail = $"Every JSON-array {field} item must be a non-empty string.";
+                        return false;
+                    }
+                    items.Add(item.GetString()!.Trim());
+                }
+                if (items.Count == 0)
+                {
+                    detail = $"The JSON-array {field} value must contain at least one item.";
+                    return false;
+                }
+                return true;
+            }
+            catch (JsonException)
+            {
+                detail = $"{field} starts like a JSON array but is not a valid JSON array of strings.";
+                return false;
+            }
+        }
+        if (trimmed[0] is '"' or '{')
+        {
+            detail = $"{field} must be comma-separated text or a JSON array of strings.";
+            return false;
+        }
+        string[] csvItems = value.Split(',', StringSplitOptions.TrimEntries);
+        if (csvItems.Length == 0 || csvItems.Any(string.IsNullOrWhiteSpace))
+        {
+            detail = $"Every comma-separated {field} item must be non-empty.";
+            return false;
+        }
+        items = csvItems.ToList();
+        return true;
+    }
+
+    private string StringListBadRequest(string field, string? detail) => Json.Serialize(new
+    {
+        error = "bad_request",
+        field,
+        detail,
+        meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+    });
+
+    private string? NormalizeDocumentationCommentId(ref string? documentationCommentId)
+    {
+        if (documentationCommentId is null or "") return null;
+        if (string.IsNullOrWhiteSpace(documentationCommentId))
+        {
+            return Json.Serialize(new
+            {
+                error = "bad_request",
+                field = "documentationCommentId",
+                detail = "documentationCommentId must not be whitespace-only. Use an empty string to omit it.",
+                meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+            });
+        }
+        documentationCommentId = documentationCommentId.Trim();
+        return null;
+    }
+
+    private sealed record DocumentationTarget(
+        string Name,
+        string Path,
+        int Line,
+        int Column,
+        string CanonicalDocumentationCommentId,
+        DocumentationIdResolutionCoverage Coverage,
+        IndexSnapshotIdentity SnapshotIdentity,
+        long ResolutionElapsedMs);
+
+    private (DocumentationTarget? Target, string? Error) ResolveDocumentationTarget(
+        string documentationCommentId,
+        string operation,
+        int deadlineMs,
+        bool implementationsOnly,
+        int maxDeadlineMs,
+        CancellationToken cancellationToken,
+        System.Diagnostics.Stopwatch deadlineStopwatch)
+    {
+        string id = documentationCommentId.Trim();
+        if (id.Length < 3 || id[1] != ':' || id[2..].Length == 0 ||
+            id.Any(char.IsWhiteSpace) || id.Any(char.IsControl))
+        {
+            return (null, DocumentationIdError(documentationCommentId, (boundedId, truncated) => new
+            {
+                error = "bad_request",
+                field = "documentationCommentId",
+                documentationCommentId = boundedId,
+                documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                documentationCommentIdBytes = truncated
+                    ? Json.Utf8Bytes(documentationCommentId)
+                    : (int?)null,
+                detail = "Expected a Roslyn declaration id such as T:Ns.Type or M:Ns.Type.Method(System.String).",
+                supportedPrefixes = new[] { "T:", "M:", "P:", "F:", "E:" },
+                meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+            }));
+        }
+        char prefix = id[0];
+        if (prefix is not ('T' or 'M' or 'P' or 'F' or 'E'))
+        {
+            return (null, DocumentationIdError(id, (boundedId, truncated) => new
+            {
+                error = "unsupported_documentation_id_kind",
+                operation,
+                documentationCommentId = boundedId,
+                documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                documentationCommentIdBytes = truncated ? Json.Utf8Bytes(id) : (int?)null,
+                prefix = id[..2],
+                supportedPrefixes = new[] { "T:", "M:", "P:", "F:", "E:" },
+                detail = "Only declaration ids are supported; namespace and error ids are not retargeted.",
+                meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+            }));
+        }
+        string signature = id[2..];
+        int parameterStart = signature.IndexOf('(');
+        if (parameterStart >= 0) signature = signature[..parameterStart];
+        bool unsupportedImplementationKind = prefix == 'F' ||
+            prefix == 'M' &&
+            (signature.EndsWith(".#ctor", StringComparison.Ordinal) ||
+             signature.EndsWith(".#cctor", StringComparison.Ordinal) ||
+             signature.Split('.').Last().StartsWith("op_", StringComparison.Ordinal));
+        if (implementationsOnly && unsupportedImplementationKind)
+        {
+            return (null, DocumentationIdError(id, (boundedId, truncated) => new
+            {
+                error = "unsupported_symbol_kind",
+                operation,
+                documentationCommentId = boundedId,
+                documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                documentationCommentIdBytes = truncated ? Json.Utf8Bytes(id) : (int?)null,
+                kind = prefix == 'F' ? "field" : "method",
+                detail = "Implementations does not model fields, constructors, or operators. The documentation id was not retargeted to its containing type.",
+                meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+            }));
+        }
+
+        string declaring = prefix == 'T'
+            ? signature
+            : signature.Contains('.')
+                ? signature[..signature.LastIndexOf('.')]
+                : "";
+        string[] declaringSegments = declaring.Split('.', StringSplitOptions.RemoveEmptyEntries)
+            .Select(segment =>
+            {
+                int generic = segment.IndexOfAny(['`', '{']);
+                return generic >= 0 ? segment[..generic] : segment;
+            })
+            .Where(segment => segment.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (declaringSegments.Length == 0)
+        {
+            return (null, DocumentationIdError(id, (boundedId, truncated) => new
+            {
+                error = "bad_request",
+                field = "documentationCommentId",
+                documentationCommentId = boundedId,
+                documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                documentationCommentIdBytes = truncated ? Json.Utf8Bytes(id) : (int?)null,
+                detail = "The declaration id does not contain a declaring type.",
+                meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+            }));
+        }
+
+        string candidateName = declaringSegments[^1];
+        DocumentationIdResolutionResult resolution = _semantic
+            .ResolveDocumentationCommentIdAsync(
+                candidateName, id, deadlineMs, cancellationToken,
+                forceSeedTimeoutForTest: TestOnlyDocumentationIdSeedTimeout)
+            .GetAwaiter().GetResult();
+        if (TestOnlyDocumentationIdResolutionTransform is not null)
+            resolution = TestOnlyDocumentationIdResolutionTransform(resolution);
+        if (resolution.FailReason == "documentation_id_seed_timeout")
+        {
+            return (null, Json.WithStringBudget(candidateName, Json.HardBudgetBytes,
+                (boundedCandidateName, candidateNameTruncated) =>
+                    System.Text.Json.Nodes.JsonNode.Parse(DocumentationIdError(id,
+                        (boundedId, truncated) => new
+                        {
+                            error = "semantic_unavailable",
+                            operation,
+                            documentationCommentId = boundedId,
+                            documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                            documentationCommentIdBytes = truncated ? Json.Utf8Bytes(id) : (int?)null,
+                            partialReason = "documentation_id_seed_timeout",
+                            retryRecommended = true,
+                            retryHint = deadlineMs < maxDeadlineMs
+                                ? $"Retry the same semantic request once; if pre-compiler documentation-id discovery (seed, owner, and dependency closure) times out again, choose a timeoutMs up to {maxDeadlineMs}."
+                                : "Retry the same semantic request once; if pre-compiler documentation-id discovery (seed, owner, and dependency closure) times out again at the maximum deadline, inspect index health after the exact declaration probe instead of increasing timeoutMs.",
+                            retry = candidateNameTruncated
+                                ? null
+                                : new
+                                {
+                                    tool = "search_symbol",
+                                    arguments = new
+                                    {
+                                        query = boundedCandidateName,
+                                        match = "exact",
+                                        lang = "csharp",
+                                    },
+                                },
+                            timing = new
+                            {
+                                deadlineMs,
+                                effectiveDeadlineMs = deadlineMs,
+                                maxDeadlineMs,
+                                elapsedMs = deadlineStopwatch.ElapsedMilliseconds,
+                                documentationIdResolutionMs = deadlineStopwatch.ElapsedMilliseconds,
+                            },
+                            meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                        }))!));
+        }
+        if (resolution.Matches is null)
+        {
+            return (null, DocumentationIdErrorWithCoverage(id, resolution.Coverage,
+                (boundedId, truncated, skippedProjects, skippedProjectsTruncated) => new
+            {
+                error = "semantic_unavailable",
+                operation,
+                documentationCommentId = boundedId,
+                documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                documentationCommentIdBytes = truncated ? Json.Utf8Bytes(id) : (int?)null,
+                partialReason = ExpandReason(resolution.FailReason),
+                retryRecommended = SemanticRetryRecommended(resolution.FailReason)
+                    ? true
+                    : (bool?)null,
+                retryHint = SemanticRetryHint(resolution.FailReason, operation),
+                retry = truncated
+                    ? null
+                    : new
+                    {
+                        tool = "search_symbol",
+                        arguments = new
+                        {
+                            query = candidateName,
+                            match = "exact",
+                            lang = "csharp",
+                        },
+                    },
+                documentationIdCoverage = DocumentationIdCoverageJson(resolution.Coverage,
+                    skippedProjects, skippedProjectsTruncated),
+                timing = new
+                {
+                    deadlineMs,
+                    effectiveDeadlineMs = deadlineMs,
+                    maxDeadlineMs,
+                    elapsedMs = deadlineStopwatch.ElapsedMilliseconds,
+                    documentationIdResolutionMs = deadlineStopwatch.ElapsedMilliseconds,
+                },
+                meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+            }));
+        }
+        List<DocumentationIdResolution> matches = resolution.Matches;
+        if (matches.Count == 0)
+            return (null, DocumentationIdNotFound(id, operation, candidateName,
+                resolution.MissReason ?? "documentation_id_not_found", resolution.Coverage));
+        if (matches.Count > 1)
+            return (null, DocumentationIdCandidateEvidence(id, operation, matches,
+                resolution.Coverage,
+                coverageIncomplete: !resolution.Coverage.CompilerScanned));
+        if (!resolution.Coverage.CompilerScanned)
+            return (null, DocumentationIdCandidateEvidence(id, operation, matches,
+                resolution.Coverage, coverageIncomplete: true));
+        DocumentationIdResolution resolved = matches[0];
+        if (resolution.SnapshotIdentity is null)
+        {
+            return (null, DocumentationIdErrorWithCoverage(id, resolution.Coverage,
+                (boundedId, truncated, skippedProjects, skippedProjectsTruncated) => new
+                {
+                    error = "semantic_unavailable",
+                    operation,
+                    documentationCommentId = boundedId,
+                    documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                    documentationCommentIdBytes = truncated ? Json.Utf8Bytes(id) : (int?)null,
+                    partialReason = "index_snapshot_unavailable",
+                    retryRecommended = true,
+                    retryHint = $"Retry {operation} once with the same arguments.",
+                    documentationIdCoverage = DocumentationIdCoverageJson(resolution.Coverage,
+                        skippedProjects, skippedProjectsTruncated),
+                    meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                }));
+        }
+        return (new DocumentationTarget(
+            resolved.Name,
+            resolved.NavigationPath,
+            resolved.NavigationLine,
+            resolved.NavigationColumn,
+            resolved.CanonicalDocumentationCommentId,
+            resolution.Coverage,
+            resolution.SnapshotIdentity,
+            deadlineStopwatch.ElapsedMilliseconds), null);
+    }
+
+    private string DocumentationIdCandidateEvidence(
+        string id,
+        string operation,
+        List<DocumentationIdResolution> matches,
+        DocumentationIdResolutionCoverage coverage,
+        bool coverageIncomplete)
+    {
+        HashSet<(string Path, int Line, int Column)> sharedPositions = matches
+            .GroupBy(match => (match.NavigationPath, match.NavigationLine,
+                match.NavigationColumn))
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToHashSet();
+        bool sharedPosition = sharedPositions.Count > 0;
+
+        object BuildResponse(
+            string boundedId,
+            bool idTruncated,
+            List<DocumentationIdResolution> items,
+            bool truncated,
+            List<string> skippedProjects,
+            bool skippedProjectsTruncated)
+        {
+            bool ambiguous = matches.Count > 1;
+            return new
+            {
+                error = ambiguous
+                    ? "symbol_ambiguous"
+                    : "documentation_id_coverage_incomplete",
+                operation,
+                documentationCommentId = boundedId,
+                documentationCommentIdTruncated = idTruncated ? true : (bool?)null,
+                documentationCommentIdBytes = idTruncated ? Json.Utf8Bytes(id) : (int?)null,
+                reason = coverageIncomplete
+                    ? "documentation_id_coverage_incomplete"
+                    : null,
+                detail = ambiguous
+                    ? coverageIncomplete
+                        ? "At least two compiler identities match this documentation id, and the compiler sweep was incomplete, so more candidates may exist. Inspect project/assembly evidence and use a candidate's position recovery when it is available."
+                        : "The declaration id exists in multiple workspace assemblies. Inspect project/assembly evidence and use a candidate's position recovery; Phoenix never chooses the first assembly."
+                    : "Compiler coverage was incomplete, so this matching declaration is evidence only and Phoenix will not claim it is unique. Use its position recovery after inspecting skipped projects.",
+                candidateCount = matches.Count,
+                candidateCountIsLowerBound = coverageIncomplete ? true : (bool?)null,
+                candidatesReturned = items.Count,
+                candidates = items.Select(match =>
+                {
+                    var position = (match.NavigationPath, match.NavigationLine,
+                        match.NavigationColumn);
+                    return new
+                    {
+                        confidence = "exact",
+                        project = match.ProjectName,
+                        assembly = match.Declaration.Assembly,
+                        position = new
+                        {
+                            path = match.NavigationPath,
+                            line = match.NavigationLine,
+                            column = match.NavigationColumn,
+                        },
+                        recovery = sharedPositions.Contains(position)
+                            ? null
+                            : new
+                            {
+                                tool = operation,
+                                replayOriginalRequest = true,
+                                remove = DocumentationIdSelectorArguments(operation),
+                                arguments = DocumentationIdPositionArguments(operation, match),
+                            },
+                    };
+                }),
+                selectionRequired = true,
+                truncated = truncated ? true : (bool?)null,
+                partial = coverageIncomplete ? true : (bool?)null,
+                partialReason = coverageIncomplete
+                    ? "documentation_id_coverage_incomplete"
+                    : null,
+                noteId = sharedPosition ? NoteIds.DocumentationIdPositionShared : null,
+                note = sharedPosition
+                    ? "Some compiler identities share one source position across projects. Recovery is omitted only for those candidates because this tool has no project/assembly selector; inspect their project and assembly evidence explicitly."
+                    : null,
+                documentationIdCoverage = DocumentationIdCoverageJson(coverage,
+                    skippedProjects, skippedProjectsTruncated),
+                meta = Meta.From(_manager.Health(),
+                    coverageIncomplete ? "indexed" : "exact", "semantic"),
+            };
+        }
+
+        string BuildBudgeted(string boundedId, bool idTruncated) =>
+            Json.WithDiagnosticListBudget(matches,
+                coverage.SkippedProjects.ToList(),
+                (budgetedItems, truncated, skippedProjects, skippedProjectsTruncated) =>
+                {
+                    bool candidateFloorApplied = budgetedItems.Count == 0 && matches.Count > 0;
+                    List<DocumentationIdResolution> items = candidateFloorApplied
+                        ? matches.Take(1).ToList()
+                        : budgetedItems;
+                    return BuildResponse(boundedId, idTruncated, items,
+                        truncated || candidateFloorApplied, skippedProjects,
+                        skippedProjectsTruncated);
+                });
+
+        try
+        {
+            return Json.WithStringBudget(id, Json.HardBudgetBytes,
+                (boundedId, idTruncated) =>
+                    System.Text.Json.Nodes.JsonNode.Parse(
+                        BuildBudgeted(boundedId, idTruncated))!);
+        }
+        catch (InvalidOperationException)
+        {
+            // The reflected caller id is optional recovery context; preserve one complete exact
+            // candidate instead. If that indivisible position/assembly identity alone exceeds the
+            // ordinary target, use the same measured exception as other compiler identities.
+            string floor = Json.Serialize(BuildResponse("", id.Length > 0,
+                matches.Take(1).ToList(), truncated: true, [],
+                skippedProjectsTruncated: coverage.SkippedProjects.Count > 0));
+            return Json.WithCompleteSemanticIdentity(floor);
+        }
+    }
+
+    private static object DocumentationIdPositionArguments(
+        string operation,
+        DocumentationIdResolution match) => operation == "implementations"
+        ? new
+        {
+            path = match.NavigationPath,
+            line = match.NavigationLine,
+            column = match.NavigationColumn,
+        }
+        : new
+        {
+            path = match.NavigationPath,
+            line = match.NavigationLine,
+            column = match.NavigationColumn,
+            mode = "semantic",
+        };
+
+    private static string[] DocumentationIdSelectorArguments(string operation) =>
+        operation switch
+        {
+            "definition" =>
+            [
+                "name", "container", "kinds", "path", "line", "column", "symbolId",
+                "documentationCommentId", "projectPath", "targetFramework",
+            ],
+            "implementations" =>
+            [
+                "name", "path", "line", "column", "arity", "symbolId",
+                "documentationCommentId",
+            ],
+            _ =>
+            [
+                "name", "path", "line", "column", "symbolId",
+                "documentationCommentId",
+            ],
+        };
+
+    private string DocumentationIdNotFound(
+        string id,
+        string operation,
+        string candidateName,
+        string reason,
+        DocumentationIdResolutionCoverage coverage) =>
+        DocumentationIdErrorWithCoverage(id, coverage,
+            (boundedId, truncated, skippedProjects, skippedProjectsTruncated) => new
+        {
+            error = "symbol_not_found",
+            operation,
+            documentationCommentId = boundedId,
+            documentationCommentIdTruncated = truncated ? true : (bool?)null,
+            documentationCommentIdBytes = truncated ? Json.Utf8Bytes(id) : (int?)null,
+            reason,
+            detail = coverage.CompilerScanned
+                ? "The compiler completed the requested project sweep and found no source declaration with this documentation id."
+                : "The index could not identify a C# compile owner for this documentation id, so absence is not compiler-proven.",
+            retry = truncated
+                ? null
+                : new
+                {
+                    tool = "search_symbol",
+                    arguments = new
+                    {
+                        query = candidateName,
+                        match = "exact",
+                        lang = "csharp",
+                    },
+                },
+            partial = coverage.CompilerScanned ? (bool?)null : true,
+            partialReason = coverage.CompilerScanned ? null : reason,
+            documentationIdCoverage = DocumentationIdCoverageJson(coverage,
+                skippedProjects, skippedProjectsTruncated),
+            meta = Meta.From(_manager.Health(),
+                coverage.CompilerScanned ? "exact" : "indexed",
+                coverage.CompilerScanned ? "semantic" : "syntax"),
+        });
+
+    private static object DocumentationIdCoverageJson(
+        DocumentationIdResolutionCoverage coverage,
+        IReadOnlyCollection<string>? skippedProjects = null,
+        bool skippedProjectsTruncated = false)
+    {
+        int skippedTotal = coverage.SkippedProjects.Count;
+        int skippedReturned = skippedProjects?.Count ?? 0;
+        return new
+        {
+            coverage.SeedFiles,
+            coverage.SeedProjects,
+            coverage.RequestedProjects,
+            coverage.LoadedProjects,
+            coverage.ScannedProjects,
+            skippedProjectCount = skippedTotal > 0 ? skippedTotal : (int?)null,
+            skippedProjects = skippedReturned > 0
+                ? skippedProjects
+                : null,
+            skippedProjectsReturned = skippedTotal > 0 ? skippedReturned : (int?)null,
+            skippedProjectsTruncated = skippedTotal > skippedReturned || skippedProjectsTruncated
+                ? true
+                : (bool?)null,
+            compilerScanned = coverage.CompilerScanned,
+            nameKeyedOwnerCollisionGroups = coverage.NameKeyedOwnerCollisionGroups > 0
+                ? coverage.NameKeyedOwnerCollisionGroups
+                : (int?)null,
+            noteId = coverage.NameKeyedOwnerCollisionGroups > 0
+                ? NoteIds.DocumentationIdNameKeyedOwnerCollision
+                : null,
+            note = coverage.NameKeyedOwnerCollisionGroups > 0
+                ? "The semantic compiler model is name-keyed and this request's owner set includes same-name C# physical projects beyond the recognized base/.Net pair. Results preserve the current compiler model; project selectors continue to expose the physical rows separately."
+                : null,
+        };
+    }
+
+    private static string DocumentationIdErrorWithCoverage(
+        string documentationCommentId,
+        DocumentationIdResolutionCoverage coverage,
+        Func<string, bool, List<string>, bool, object> build) =>
+        Json.WithStringBudget(documentationCommentId, Json.HardBudgetBytes,
+            (boundedId, idTruncated) =>
+            {
+                string json = Json.WithListBudget(coverage.SkippedProjects.ToList(),
+                    (skippedProjects, skippedProjectsTruncated) => build(
+                        boundedId, idTruncated, skippedProjects,
+                        skippedProjectsTruncated));
+                return System.Text.Json.Nodes.JsonNode.Parse(json)!;
+            });
+
+    private static string DocumentationIdError(
+        string documentationCommentId,
+        Func<string, bool, object> build) => Json.WithStringBudget(
+            documentationCommentId,
+            Json.HardBudgetBytes,
+            build);
+
+    private static int RemainingDeadlineMilliseconds(
+        int deadlineMs,
+        System.Diagnostics.Stopwatch stopwatch) =>
+        Math.Max(1, deadlineMs - (int)Math.Min(int.MaxValue, stopwatch.ElapsedMilliseconds));
+
+    private string DocumentationIdIdentityMismatch(
+        string callerDocumentationCommentId,
+        string expectedCanonicalId,
+        string? observedCanonicalId,
+        string operation,
+        DocumentationIdResolutionCoverage? coverage,
+        int deadlineMs,
+        System.Diagnostics.Stopwatch stopwatch,
+        long? documentationIdResolutionMs) =>
+        DocumentationIdError(callerDocumentationCommentId, (boundedId, truncated) => new
+        {
+            error = "semantic_identity_mismatch",
+            operation,
+            documentationCommentId = boundedId,
+            documentationCommentIdTruncated = truncated ? true : (bool?)null,
+            documentationCommentIdBytes = truncated
+                ? Json.Utf8Bytes(callerDocumentationCommentId)
+                : (int?)null,
+            expectedCanonicalIdentityPresent = expectedCanonicalId.Length > 0,
+            observedCanonicalIdentityPresent = observedCanonicalId is { Length: > 0 },
+            detail = "The downstream compiler operation resolved a different symbol than documentationCommentId resolution. No indexed or name-based fallback was returned.",
+            documentationIdCoverage = coverage is null
+                ? null
+                : DocumentationIdCoverageJson(coverage),
+            timing = new
+            {
+                deadlineMs,
+                elapsedMs = stopwatch.ElapsedMilliseconds,
+                documentationIdResolutionMs,
+            },
+            meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+        });
+
+    private sealed record ResolvedProjectSelector(
+        ProjectRow Project,
+        List<ProjectSelectorMatch> ShadowedMatches);
+
+    private sealed record ProjectSelectorShadow(
+        string Field,
+        ProjectSelectorMatch Match);
+
+    private (ResolvedProjectSelector? Project, string? Error) ResolveProjectSelector(
+        IndexQueries queries,
+        string selector,
+        string field,
+        string operation)
+    {
+        if (string.IsNullOrWhiteSpace(selector))
+            return (null, Json.Serialize(new
+            {
+                error = "bad_request",
+                field,
+                detail = $"Provide '{field}'.",
+            }));
+        ProjectSelectorResolution resolution = queries.ProjectsBySelector(selector);
+        if (TestOnlyProjectSelectorResolutionTransform is not null)
+            resolution = TestOnlyProjectSelectorResolutionTransform(resolution);
+        List<ProjectSelectorMatch> matches = resolution.Matches;
+        if (matches.Count == 1)
+            return (new ResolvedProjectSelector(matches[0].Project,
+                resolution.ShadowedMatches), null);
+        if (matches.Count > 1)
+        {
+            bool sameLogicalName = matches.Select(match => match.Project.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1;
+            return (null, ProjectSelectorResponse(selector, matches,
+                resolution.ShadowedMatches,
+                (boundedSelector, selectorTruncated, items, truncated,
+                    shadowedMatches, shadowedMatchesTruncated) => new
+                {
+                    error = "project_ambiguous",
+                    field,
+                    selector = boundedSelector,
+                    selectorTruncated = selectorTruncated ? true : (bool?)null,
+                    selectorBytes = selectorTruncated ? Json.Utf8Bytes(selector) : (int?)null,
+                    detail = sameLogicalName
+                        ? "The selector matches multiple physical projects with one logical name. Use an exact project-file path; graph and dependency answers are name-keyed and therefore identical for the listed paths."
+                        : "The selector matches multiple physical projects. Use an exact project-file path; Phoenix never picks the first match.",
+                    sameLogicalName = sameLogicalName ? true : (bool?)null,
+                    totalMatches = matches.Count,
+                    matches = items.Select(match => new
+                    {
+                        match.Project.Name,
+                        match.Project.Path,
+                        language = match.Project.Language,
+                        matchedBy = match.MatchedBy,
+                    }),
+                    matchesReturned = items.Count,
+                    truncated,
+                    projectSelectorResolution = ProjectSelectorResolutionJson(
+                        resolution.ShadowedMatches.Count, shadowedMatches,
+                        shadowedMatchesTruncated),
+                    meta = Meta.From(_manager.Health(), "indexed", "text"),
+                }));
+        }
+        ProjectSuggestionResult suggestions = queries.SuggestProjects(
+            selector, DefaultResultLimit);
+        return (null, ProjectSelectorResponse(selector, suggestions.Matches.ToList(),
+            resolution.ShadowedMatches,
+            (boundedSelector, selectorTruncated, items, truncated,
+                shadowedMatches, shadowedMatchesTruncated) => new
+            {
+                error = "project_not_found",
+                field,
+                selector = boundedSelector,
+                selectorTruncated = selectorTruncated ? true : (bool?)null,
+                selectorBytes = selectorTruncated ? Json.Utf8Bytes(selector) : (int?)null,
+                reason = "project_not_found",
+                suggestions = items.Select(match => new
+                {
+                    match.Project.Name,
+                    match.Project.Path,
+                    language = match.Project.Language,
+                    rationale = match.MatchedBy,
+                    recovery = new
+                    {
+                        tool = operation,
+                        replayOriginalRequest = true,
+                        remove = new[] { field },
+                        arguments = new Dictionary<string, object?>
+                        {
+                            [field] = match.Project.Path,
+                        },
+                    },
+                }),
+                suggestionCoverage = new
+                {
+                    suggestions.Probed,
+                    suggestions.ProbeLimit,
+                    suggestions.ProbeTruncated,
+                    returned = items.Count,
+                    truncated = truncated || suggestions.Matches.Count > items.Count
+                        ? true
+                        : (bool?)null,
+                },
+                projectSelectorResolution = ProjectSelectorResolutionJson(
+                    resolution.ShadowedMatches.Count, shadowedMatches,
+                    shadowedMatchesTruncated),
+                meta = Meta.From(_manager.Health(), "indexed", "text"),
+            }));
+    }
+
+    private string ProjectSelectorResponse<T>(
+        string selector,
+        List<T> items,
+        List<ProjectSelectorMatch> shadowedMatches,
+        Func<string, bool, List<T>, bool, List<ProjectSelectorMatch>, bool, object> build) =>
+        Json.WithStringBudget(selector, Json.HardBudgetBytes,
+            (boundedSelector, selectorTruncated) =>
+                System.Text.Json.Nodes.JsonNode.Parse(Json.WithDiagnosticListBudget(
+                    items, shadowedMatches,
+                    (boundedItems, itemsTruncated, boundedShadowedMatches,
+                        shadowedMatchesTruncated) => build(
+                        boundedSelector, selectorTruncated,
+                        boundedItems, itemsTruncated,
+                        boundedShadowedMatches, shadowedMatchesTruncated),
+                    TestOnlyProjectSelectorResponseMaxBytes))!,
+            TestOnlyProjectSelectorResponseMaxBytes);
+
+    private static object? ProjectSelectorResolutionJson(
+        int shadowedMatchCount,
+        IReadOnlyCollection<ProjectSelectorMatch> shadowedMatches,
+        bool shadowedMatchesTruncated) => shadowedMatchCount == 0
+        ? null
+        : new
+        {
+            selectedByPrecedence = true,
+            shadowedMatchCount,
+            shadowedMatches = shadowedMatches.Select(match => new
+            {
+                match.Project.Name,
+                match.Project.Path,
+                language = match.Project.Language,
+                matchedBy = match.MatchedBy,
+            }),
+            shadowedMatchesReturned = shadowedMatches.Count,
+            shadowedMatchesTruncated = shadowedMatchCount > shadowedMatches.Count ||
+                                       shadowedMatchesTruncated
+                ? true
+                : (bool?)null,
+            detail = "Lower-precedence selector classes also matched; the selected exact path or filename remains authoritative.",
+        };
 
     internal static bool TryParsePathList(
         string? value,

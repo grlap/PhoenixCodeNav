@@ -15,8 +15,10 @@ of truncating or rejecting it, with exact byte metadata on that response.
 **Docs:** [`docs/intro.md`](docs/intro.md) — why it exists, and how it compares to grep,
 Cursor, and other tools · [`docs/design.md`](docs/design.md) — architecture, projects, and
 how freshness (incl. git branch switch / pull) is handled ·
-[`docs/agent-instructions.md`](docs/agent-instructions.md) — the snippet for your repo's
-`CLAUDE.md` / `AGENTS.md`.
+[`docs/agent-instructions.md`](docs/agent-instructions.md) — the concise snippet for your
+repo's `CLAUDE.md` / `AGENTS.md` ·
+[`docs/agent-experience-roadmap.md`](docs/agent-experience-roadmap.md) — the prioritized product
+contract for the MCP's agent experience.
 
 ## Why not just grep?
 
@@ -80,10 +82,41 @@ authority and a host-selected `FSharp.Core`. See [`docs/design.md`](docs/design.
 evaluation boundaries and how ambiguous project/TFM ownership is disclosed.
 
 **A miss is recoverable, and never disguised.** A first-page empty `search_symbol` response stays a
-clean result but reports `existsUnfiltered` and `appliedFilters`, so a declaration hidden by your
-own narrowing never looks like one that does not exist. Exact-path misses in `outline`,
+clean result but reports `existsUnfiltered`, `appliedFilters`, `zeroResult.reason`, effective scope,
+bounded suggestions, coverage, and concrete retry arguments. Project selectors use strict
+precedence—exact project path, exact suffixed project filename, extensionless filename stem, then
+`AssemblyName`. A `.csproj` selector never cross-matches `.fsproj`; lower-precedence matches are
+disclosed, and multiple physical matches return `project_ambiguous` rather than choosing the first.
+Selector echoes and lower-precedence evidence share the response byte budget; true totals,
+returned counts, and truncation remain explicit when diagnostic matches are reduced.
+Exact-path misses in `outline`,
 `source_context`, and `find_file` may offer up to three indexed `pathSuggestions.paths` — Phoenix
 never silently substitutes a suggestion, and never consults Git history for deleted files.
+
+**Agent-compatible inputs stay forgiving.** List-like string arguments such as symbol kinds,
+reference usage kinds, and source spans accept either CSV or a JSON-array encoded string while
+retaining their MCP string schemas. C# `definition`, `references`, and `implementations` accept
+Roslyn `documentationCommentId` selectors (`T:`, `M:`, `P:`, `F:`, and `E:`); assembly ambiguity is
+returned as evidence, and operations reject unsupported constructors, fields, or operators instead
+of retargeting their containing type. Documentation IDs always use compiler semantics: `auto`
+means semantic, `indexed` is rejected, the full operation shares one deadline, and semantic failure
+never degrades to a name scan. Seed discovery reports distinct indexed seed files for only the
+innermost declaring type, and incomplete
+compiler coverage returns byte-bounded exact candidates as evidence without selecting one as
+unique. Candidate recovery carries project, assembly, path, line, and column; when multiple
+assemblies share one linked source position, Phoenix says that its current position selector cannot
+disambiguate them. Semantic deadline responses expose both the effective and maximum deadline.
+`project_graph` also accepts `dependencies` for canonical
+`downstream` and `dependents` for canonical `upstream`, echoing the canonical value.
+
+Broad indexed lookups default to all indexed content. A host may set
+`CODENAV_DEFAULT_QUERY_SCOPE=first_party` to make `find_file`, `search_text`, and `search_symbol`
+exclude known vendor/generated directory segments by default; every affected response echoes the
+configured and applied scope, and `queryScope: "all"` restores complete indexed coverage. This is
+query-time policy only—Phoenix still indexes the workspace—and exact semantic navigation is never
+silently narrowed by it. `queryScope` is the only scope control and accepts `default`, `all`, or
+`first_party`; an empty optional value means `default`, while whitespace-only input is invalid.
+Zero-hit retry templates preserve the complete effective search scope.
 
 The dependency graph also sees what MSBuild's project view hides in large legacy codebases:
 binary `<Reference Include>` + HintPath couplings from **multi-staged builds** (phase one
@@ -125,6 +158,9 @@ untracked move-candidate bytes it actually hashed. A mid-call mismatch fails wit
 `git_worktree_changed` and no partial digest. Unreadable, non-regular, oversized, or cap-excluded
 untracked candidates remain conservatively uncorrelated instead of failing an otherwise stable
 review.
+When any review section is clipped, `affectedPaths` reports the total changed-path set, the
+established eight-path/512-byte metadata sample, truncation, stable reason ids, and the explicit
+split-by-path recovery action.
 
 Every registered MCP tool retains its required JSON schema and validates arguments before SDK
 binding. A missing or mistyped field returns an error result with `error:"bad_request"`, plus the
@@ -207,11 +243,16 @@ Project-scoped `.mcp.json` at the repo root (recommended — checked in for the 
   "mcpServers": {
     "phoenix": {
       "command": "C:\\tools\\phoenix\\PhoenixCodeNav.Mcp.exe",
-      "args": ["--workspace-root", "."]
+      "args": ["--workspace-root", "."],
+      "env": { "CODENAV_DEFAULT_QUERY_SCOPE": "first_party" }
     }
   }
 }
 ```
+
+This example intentionally chooses a first-party default for lower-noise agent orientation.
+Remove the `env` entry when complete all-content indexed search should be the default; an agent can
+always override a configured default per call with `queryScope: "all"`.
 
 or per-user: `claude mcp add phoenix -- C:\tools\phoenix\PhoenixCodeNav.Mcp.exe --workspace-root C:\path\to\repo`
 
@@ -223,6 +264,7 @@ or per-user: `claude mcp add phoenix -- C:\tools\phoenix\PhoenixCodeNav.Mcp.exe 
 [mcp_servers.phoenix]
 command = "C:\\tools\\phoenix\\PhoenixCodeNav.Mcp.exe"
 args = ["--workspace-root", "C:\\path\\to\\repo"]
+env = { CODENAV_DEFAULT_QUERY_SCOPE = "first_party" }
 ```
 
 Then add the agent instructions from `docs/agent-instructions.md` to your repo's

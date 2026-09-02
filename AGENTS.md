@@ -101,9 +101,9 @@ documentation-only, test-only, and apparently trivial changes still follow the f
    F# indexes through normal MCP startup and runs every assertion against those fresh indexes. It
    never updates a submodule, repairs an old index, or learns a new baseline automatically. A
    mismatched checkout, pre-existing explicit index path, baseline mismatch, missing prerequisite,
-   or any harness failure blocks check-in. The documented
-   `WatcherTests.ExtensionlessFileDeleteDoesNotTriggerSweep` timing flake may be noted only
-   when it is the sole solution-test failure and passes in isolation.
+   harness failure, or solution-test failure blocks check-in. An isolated pass is diagnostic
+   evidence only; it never converts a failed full suite into a green gate. Fix nondeterministic
+   tests or product races.
    The complete suite requires directory-link support: NTFS junction creation on Windows
    (ordinary non-elevated NTFS is sufficient; Developer Mode is not required) and directory
    symbolic links on Unix. Failure of either prerequisite is infrastructure failure, never a

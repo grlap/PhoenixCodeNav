@@ -47,6 +47,10 @@ public sealed partial class NavigationTools
     private const int ReviewMaxProjectShapeMilliseconds = 2_000;
     private const int ReviewMaxProjectGlobSegments = 256;
     private const long ReviewMaxProjectGlobOperations = 1_000_000;
+    // Existing fixed metadata sample used by every review path disclosure. Keep the response's
+    // advertised bound identical to the sampler's actual bound.
+    internal const int ReviewPathSampleLimit = 8;
+    internal const int ReviewPathSampleBytes = 512;
 
     internal static bool BaseBlobTimeBudgetHitAfterAttempt(string? content,
         long elapsedMilliseconds) => content is null &&
@@ -383,7 +387,10 @@ public sealed partial class NavigationTools
                     content = GitInfo.ShowFile(root, resolvedBase, path,
                         ReviewMaxBaseBlobBytes, remainingTimeMs);
                     attemptTimer.Stop();
-                    baseBlobElapsedMilliseconds += attemptTimer.ElapsedMilliseconds;
+                    baseBlobElapsedMilliseconds +=
+                        TestOnlyReviewBaseBlobElapsedMilliseconds?.Invoke(
+                            attemptTimer.ElapsedMilliseconds) ??
+                        attemptTimer.ElapsedMilliseconds;
                     if (BaseBlobTimeBudgetHitAfterAttempt(content,
                             baseBlobElapsedMilliseconds))
                     {
@@ -1316,11 +1323,33 @@ public sealed partial class NavigationTools
         var formerItems = new List<ReviewFormerFile>(formerFiles);
         var movedItems = new List<ReviewMovedFile>(movedFiles);
         var responseNotes = new List<ReviewNote>(notes);
+        List<string> allAffectedPaths = changed.Keys
+            .Concat(deleted)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        var affectedPathItems = BoundedReviewPathSample(allAffectedPaths);
         bool byteBudgetTrimmed = false;
         bool compactNoteText = false;
 
         string BuildResponse()
         {
+            var budgetGapReasonIds = new List<string>();
+            if (changedFileCapHit) budgetGapReasonIds.Add(NoteIds.ReviewChangedFilesCap);
+            if (touchedSymbolsTotal > maxSymbols)
+                budgetGapReasonIds.Add(NoteIds.ReviewSymbolCountCap);
+            if (symbolItems.Count < Math.Min(touchedSymbolsTotal, maxSymbols))
+                budgetGapReasonIds.Add(NoteIds.ReviewByteBudget);
+            if (unsupportedLanguageItems.Count < unsupportedLanguageFilesTotal)
+                budgetGapReasonIds.Add(NoteIds.ReviewUnsupportedLanguageFiles);
+            if (deletedItems.Count < orderedDeleted.Count)
+                budgetGapReasonIds.Add(NoteIds.ReviewDeletedFilesCap);
+            if (formerItems.Sum(file => file.FormerSymbols.Count) < formerSymbolsTotal)
+                budgetGapReasonIds.Add(NoteIds.ReviewFormerSymbolsCap);
+            if (projectItems.Count < projectFiles.Count || movedItems.Count < movedFiles.Count ||
+                unmappedItems.Count < unmappedHunks.Count || byteBudgetTrimmed)
+                budgetGapReasonIds.Add(NoteIds.ReviewByteBudget);
+            budgetGapReasonIds = budgetGapReasonIds.Distinct(StringComparer.Ordinal).ToList();
             List<ReviewNote> emittedNotes = compactNoteText
                 ? responseNotes.Select(note => note with
                 {
@@ -1346,6 +1375,23 @@ public sealed partial class NavigationTools
                     submoduleLinks = changedSubmoduleLinks.Count > 0
                         ? changedSubmoduleLinks.Count
                         : (int?)null,
+                },
+                affectedPaths = budgetGapReasonIds.Count == 0 ? null : new
+                {
+                    total = allAffectedPaths.Count,
+                    returned = affectedPathItems.Count,
+                    truncated = affectedPathItems.Count < allAffectedPaths.Count
+                        ? true
+                        : (bool?)null,
+                    disclosureLimit = ReviewPathSampleLimit,
+                    disclosureBytes = ReviewPathSampleBytes,
+                    reasonIds = budgetGapReasonIds,
+                    items = affectedPathItems,
+                    recovery = new
+                    {
+                        action = "split_review_by_explicit_paths",
+                        detail = "Call review_pack again with explicit paths from the changed-file manifest in smaller batches; do not treat this response as full coverage.",
+                    },
                 },
                 changedCsFilesCoverage = new
                 {
@@ -1549,7 +1595,8 @@ public sealed partial class NavigationTools
                            TrimReviewList(deletedItems) ||
                            TrimReviewList(movedItems) ||
                            TrimReviewList(formerItems) ||
-                           TrimReviewList(unmappedItems);
+                           TrimReviewList(unmappedItems) ||
+                           TrimReviewList(affectedPathItems);
             if (!trimmed && !compactNoteText)
             {
                 compactNoteText = true;
@@ -2150,15 +2197,15 @@ public sealed partial class NavigationTools
     }
 
     internal static List<string> BoundedReviewPathSample(IEnumerable<string> paths,
-        int maxJsonBytes = 512)
+        int maxJsonBytes = ReviewPathSampleBytes)
     {
-        const int maxPaths = 8;
         var sample = new List<string>();
-        int bytes = 0;
+        int bytes = 2; // JSON array brackets: []
         foreach (string path in paths.OrderBy(x => x, StringComparer.Ordinal))
         {
-            if (sample.Count >= maxPaths) break;
-            int pathBytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(path).Length + 1;
+            if (sample.Count >= ReviewPathSampleLimit) break;
+            int pathBytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(path).Length +
+                            (sample.Count > 0 ? 1 : 0); // comma between array entries
             if (pathBytes > Math.Max(0, maxJsonBytes) - bytes) continue;
             sample.Add(path);
             bytes += pathBytes;

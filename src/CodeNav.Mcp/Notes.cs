@@ -59,6 +59,10 @@ internal static class NoteIds
         "references.samples_byte_budget"; // bounded sample evidence was omitted by the final response byte budget
     public const string SemanticDeclarationSitesBudget =
         "semantic.declaration_sites_budget"; // optional declaration sites omitted by count/byte budget
+    public const string DocumentationIdPositionShared =
+        "documentation_id_position_shared"; // compiler identities share one source position across projects
+    public const string DocumentationIdNameKeyedOwnerCollision =
+        "documentation_id_name_keyed_owner_collision"; // semantic name-keying spans physical rows beyond the recognized base/.Net pair
     public const string ImpactTransitiveSingleCount = "impact.transitive_single_count"; // by-design single transitive number
     public const string HierarchyHeuristicFallback = "type_hierarchy.heuristic_fallback"; // derived list degraded to base-list
     public const string SearchDidYouMean = "search_text.did_you_mean";           // a probed variant/spelling suggestion exists

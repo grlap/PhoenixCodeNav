@@ -1538,7 +1538,13 @@ public class Batch42Tests
             Git(root, "commit -q -m base-recovery-budget-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m))
+            {
+                // This case proves the cumulative character bound. Parallel solution runs can
+                // legitimately make the independent wall-clock bound win first, so remove only
+                // elapsed accounting while retaining real bounded Git reads and response shaping.
+                TestOnlyReviewBaseBlobElapsedMilliseconds = _ => 0,
+            };
 
             foreach (string path in deletedPaths) File.Delete(Path.Combine(root, path));
             m.RequestRefresh(deletedPaths);

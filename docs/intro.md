@@ -65,6 +65,23 @@ partial.
 The design rule is: **return the smallest precise context that lets the agent take the
 next step** — and never present a guess as a fact.
 
+## Agent-first navigation contract
+
+Phoenix serves a concise route in the MCP handshake, keeps capability discovery compact by default,
+and exposes stable feature ids through `server_capabilities`. Broad find/search calls can use the
+host-configured `CODENAV_DEFAULT_QUERY_SCOPE` (`all` or `first_party`) and always echo what was
+applied; `queryScope: "all"` restores all indexed content without changing index-time inclusion.
+
+Symbol and project dead ends include bounded recovery evidence rather than silent substitution.
+Project selectors use exact path, exact suffixed filename, extensionless stem, then assembly
+metadata; lower-precedence matches are byte-budgeted with true total, returned, and truncation
+counts. `documentationCommentId` carries compiler-stable
+C# identity through definition, references, and implementations on one semantic deadline, with no
+indexed name fallback. CSV and JSON-array encoded strings are equivalent for list-like string fields.
+Transient semantic cold-load/timeout responses across the navigation family share one bounded
+`retryRecommended` / `retryHint` contract. When `review_pack` clips evidence, its separately bounded
+`affectedPaths` block names stable causes and the path-splitting recovery action.
+
 ## How it compares
 
 ### vs. `grep` / `ripgrep`
@@ -133,5 +150,8 @@ navigation layer a large C# repo needs: ranked search, outlines, project ownersh
 **compiler-exact** symbol facts — labeled with how much to trust each one — so the agent
 spends its context editing, not hunting.
 
-See [`design.md`](./design.md) for the architecture and [`agent-instructions.md`](./agent-instructions.md)
-for the snippet to drop into your repo's `CLAUDE.md` / `AGENTS.md`.
+See [`design.md`](./design.md) for the architecture,
+[`agent-instructions.md`](./agent-instructions.md) for the concise snippet to drop into your
+repo's `CLAUDE.md` / `AGENTS.md`, and
+[`agent-experience-roadmap.md`](./agent-experience-roadmap.md) for the prioritized MCP
+improvements aimed at coding agents.

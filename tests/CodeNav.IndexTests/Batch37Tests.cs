@@ -132,7 +132,7 @@ public class Batch37Tests
         string reason)
     {
         Assert.True(NavigationTools.SemanticRetryRecommended(reason));
-        string hint = Assert.IsType<string>(NavigationTools.SemanticRetryHint(reason));
+        string hint = Assert.IsType<string>(NavigationTools.SemanticRetryHint(reason, "implementations"));
         Assert.Contains("Retry implementations once", hint, StringComparison.Ordinal);
         Assert.DoesNotContain("automatically", hint, StringComparison.OrdinalIgnoreCase);
     }
@@ -145,7 +145,7 @@ public class Batch37Tests
     public void ImplementationsDeterministicFallbacksDoNotRecommendRetry(string? reason)
     {
         Assert.False(NavigationTools.SemanticRetryRecommended(reason));
-        Assert.Null(NavigationTools.SemanticRetryHint(reason));
+        Assert.Null(NavigationTools.SemanticRetryHint(reason, "implementations"));
     }
 
     [Fact]

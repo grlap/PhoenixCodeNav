@@ -103,7 +103,6 @@ Do not flag these by themselves:
 - `idx:` symbol handles being index-local when stale-handle detection remains intact.
 - Roslyn `AdhocWorkspace` and direct project parsing instead of MSBuild; this is a core design constraint.
 - Read-only Git CLI use when arguments, helpers, time, output, path roots, and wrapper transport are bounded safely.
-- The documented isolated watcher timing flake, but only when the parent validation proved the isolated rerun passes.
 
 ## Phase 4: Contract-specific checks
 

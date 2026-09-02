@@ -50,7 +50,7 @@ Focus: Contract-level regression coverage, deterministic reproductions, decisive
 11. **Cleanup and flake resistance**
     - Dispose managers/services/watchers, clear SQLite pools safely, and clean temporary repositories best-effort.
     - Avoid shared static test seams and order-dependent state.
-    - The known watcher timing flake may be reported and verified in isolation; do not normalize new flakes.
+    - Every full-suite failure blocks the gate. An isolated pass is diagnostic evidence only; it never waives the failed full-suite run.
 
 12. **Quality gates**
     - `dotnet build` finishes with zero warnings.
@@ -63,4 +63,3 @@ Focus: Contract-level regression coverage, deterministic reproductions, decisive
 - Temporary-repository integration tests.
 - A Git/platform guard when equivalent core logic has portable coverage.
 - Bounded polling for genuine filesystem/process events.
-- The documented watcher flake if it passes in isolation and is explicitly reported.

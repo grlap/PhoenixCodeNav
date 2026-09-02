@@ -733,7 +733,13 @@ public class FSharpTierATests
                 "mixed-language collision index did not become fresh");
             using var semantic = new SemanticService(manager);
             var tools = new NavigationTools(manager, semantic);
-            JsonElement graph = Parse(tools.ProjectGraph("Shared.Logical", 1, "both"));
+            JsonElement ambiguous = Parse(tools.ProjectGraph("Shared.Logical", 1, "both"));
+            Assert.Equal("project_ambiguous", ambiguous.GetProperty("error").GetString());
+            Assert.Equal(2, ambiguous.GetProperty("totalMatches").GetInt32());
+            Assert.Equal(2, ambiguous.GetProperty("matches").GetArrayLength());
+
+            JsonElement graph = Parse(tools.ProjectGraph(
+                $"{csharpDirectory}/Shared.csproj", 1, "both"));
             Assert.Equal("mixed", graph.GetProperty("root").GetProperty("language").GetString());
             Assert.Equal($"{csharpDirectory}/Shared.csproj",
                 graph.GetProperty("root").GetProperty("path").GetString());
@@ -1696,6 +1702,26 @@ public class FSharpTierATests
                 ["fsharp_parse_failed", "unsupported_language_files_skipped"],
                 combined.GetProperty("partialReasons").EnumerateArray()
                     .Select(reason => reason.GetString()!).ToArray());
+
+            JsonElement csharpOnly = Parse(tools.SearchSymbol("missingMarker",
+                match: "exact", lang: "csharp"));
+            Assert.Equal("csharp", csharpOnly.GetProperty("languageScope").GetString());
+            Assert.False(csharpOnly.TryGetProperty("partial", out _));
+            Assert.False(csharpOnly.TryGetProperty("fsharpParseCoverage", out _));
+
+            JsonElement fsharpOnly = Parse(tools.SearchSymbol("missingMarker",
+                match: "exact", lang: "fsharp"));
+            Assert.Equal("fsharp", fsharpOnly.GetProperty("languageScope").GetString());
+            Assert.True(fsharpOnly.GetProperty("partial").GetBoolean());
+            Assert.Equal("fsharp_parse_failed",
+                fsharpOnly.GetProperty("partialReason").GetString());
+
+            JsonElement invalidLanguage = Parse(tools.SearchSymbol("missingMarker",
+                match: "exact", lang: "vb"));
+            Assert.Equal("bad_request", invalidLanguage.GetProperty("error").GetString());
+            Assert.Equal("lang", invalidLanguage.GetProperty("field").GetString());
+            Assert.Equal(["csharp", "fsharp"], invalidLanguage.GetProperty("validValues")
+                .EnumerateArray().Select(value => value.GetString()!).ToArray());
         }
     }
 

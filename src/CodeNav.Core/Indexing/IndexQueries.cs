@@ -54,6 +54,20 @@ public sealed record FSharpParseCoverage(
 
 public sealed record PathSuggestionResult(IReadOnlyList<string> Paths, int Total);
 
+public sealed record ProjectSelectorMatch(ProjectRow Project, string MatchedBy);
+public sealed record ProjectSelectorResolution(
+    List<ProjectSelectorMatch> Matches,
+    List<ProjectSelectorMatch> ShadowedMatches);
+public sealed record DocumentationIdSeedResult(
+    List<string> Paths,
+    int SeedFiles);
+
+public sealed record ProjectSuggestionResult(
+    IReadOnlyList<ProjectSelectorMatch> Matches,
+    int Probed,
+    int ProbeLimit,
+    bool ProbeTruncated);
+
 public sealed record DirectoryBuildAuthorityPaths(
     string? PropsPath,
     string? TargetsPath,
@@ -875,11 +889,41 @@ public sealed partial class IndexQueries : IDisposable
             args.ToArray());
     }
 
+    /// <summary>Every indexed C# declaration for one exact documentation-id declaring-type name.
+    /// The caller supplies only the last declaring segment, avoiding namespace-segment noise
+    /// without imposing a result cap; the semantic deadline cancels SQLite and materialization.</summary>
+    internal static readonly string DocumentationIdSeedPathsSql =
+        $"""
+        SELECT DISTINCT f.path
+        FROM symbols s INDEXED BY idx_symbols_name JOIN files f ON f.id = s.file_id
+        WHERE f.lang = 'cs'
+          AND s.kind IN ({IndexedSymbolKinds.TypeDeclarationsSql})
+          AND s.name = $name COLLATE NOCASE
+          AND s.name = $name COLLATE BINARY
+        ORDER BY f.path
+        """;
+
+    public DocumentationIdSeedResult DocumentationIdSeedPaths(
+        string typeName,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(typeName)) return new([], 0);
+        List<string> seedFiles = QueryCancellable(
+            DocumentationIdSeedPathsSql,
+            reader => reader.GetString(0),
+            cancellationToken,
+            ("$name", typeName));
+        return new(seedFiles, seedFiles.Count);
+    }
+
     /// <summary>Distinct declaration kinds matching only the requested name semantics. This is
     /// deliberately unfiltered by generated/path/namespace/kind policy: <c>search_symbol</c>
     /// uses it after a first-page miss to distinguish genuine absence from a declaration hidden
     /// by the active filters. The result has at most one row per indexed kind.</summary>
-    public List<string> UnfilteredSymbolKinds(string query, string mode)
+    public List<string> UnfilteredSymbolKinds(
+        string query,
+        string mode,
+        string? language = null)
     {
         string esc = EscapeLike(query);
         string pattern = mode switch
@@ -888,18 +932,25 @@ public sealed partial class IndexQueries : IDisposable
             "prefix" => esc + "%",
             _ => "%" + esc + "%",
         };
+        var args = new List<(string, object)> { ("$pat", pattern) };
+        string languageFilter = "";
+        if (!string.IsNullOrEmpty(language))
+        {
+            languageFilter = " AND f.lang = $language";
+            args.Add(("$language", language));
+        }
         return Query(
             $"""
             SELECT DISTINCT s.kind
             FROM symbols s JOIN files f ON f.id = s.file_id
-            WHERE s.name LIKE $pat ESCAPE '\'
+            WHERE s.name LIKE $pat ESCAPE '\' {languageFilter}
             ORDER BY
               CASE WHEN s.kind IN ({IndexedSymbolKinds.TypeDeclarationsSql})
                    THEN 0 ELSE 1 END,
               s.kind
             """,
             r => r.GetString(0),
-            ("$pat", pattern));
+            args.ToArray());
     }
 
     /// <summary>Distinct generic arities for exact-name declarations. This is syntax-index
@@ -1365,6 +1416,167 @@ public sealed partial class IndexQueries : IDisposable
         "WHERE name = $n COLLATE NOCASE ORDER BY path",
         ReadProject, ("$n", name));
 
+    /// <summary>Resolve the three project selector forms exposed by the MCP surface without
+    /// collapsing multiple physical projects that share AssemblyName metadata. Forms have
+    /// deterministic precedence: exact relative path, project-file stem, then AssemblyName.</summary>
+    public ProjectSelectorResolution ProjectsBySelector(string selector)
+        => ProjectsBySelectorForHost(selector, OperatingSystem.IsWindows());
+
+    internal ProjectSelectorResolution ProjectsBySelectorForHost(string selector,
+        bool caseInsensitivePaths)
+    {
+        if (string.IsNullOrWhiteSpace(selector)) return new([], []);
+        string normalized = WorkspacePaths.Normalize(selector.Trim());
+        string fileName = Path.GetFileName(normalized);
+        bool explicitProjectFile = fileName.EndsWith(".csproj",
+                                       StringComparison.OrdinalIgnoreCase) ||
+                                   fileName.EndsWith(".fsproj",
+                                       StringComparison.OrdinalIgnoreCase);
+        bool bare = !normalized.Contains('/');
+        List<ProjectRow> assemblyNames = bare
+            ? Query(
+                "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects " +
+                "WHERE name = $selector COLLATE NOCASE ORDER BY path",
+                ReadProject,
+                ("$selector", selector.Trim()))
+            : [];
+        List<ProjectRow> exactPath = Query(
+            "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects " +
+            $"WHERE path = $path COLLATE {(caseInsensitivePaths ? "NOCASE" : "BINARY")} ORDER BY path",
+            ReadProject, ("$path", normalized));
+        if (exactPath.Count > 0)
+        {
+            IEnumerable<ProjectSelectorMatch> lower = bare
+                ? ProjectFilesBySelector(fileName, explicitProjectFile,
+                    caseInsensitivePaths)
+                    .Select(row => new ProjectSelectorMatch(row,
+                        explicitProjectFile ? "projectFileName" : "projectStem"))
+                    .Concat(assemblyNames.Select(row =>
+                        new ProjectSelectorMatch(row, "assemblyName")))
+                : assemblyNames.Select(row =>
+                    new ProjectSelectorMatch(row, "assemblyName"));
+            return SelectorResolution(exactPath, "projectPath", lower,
+                caseInsensitivePaths);
+        }
+        if (bare)
+        {
+            List<ProjectRow> projectNames = ProjectFilesBySelector(fileName,
+                explicitProjectFile, caseInsensitivePaths);
+            if (projectNames.Count > 0)
+            {
+                return SelectorResolution(projectNames,
+                    explicitProjectFile ? "projectFileName" : "projectStem",
+                    assemblyNames.Select(row =>
+                        new ProjectSelectorMatch(row, "assemblyName")),
+                    caseInsensitivePaths);
+            }
+        }
+        return new(assemblyNames
+            .Select(row => new ProjectSelectorMatch(row, "assemblyName"))
+            .ToList(), []);
+    }
+
+    private List<ProjectRow> ProjectFilesBySelector(string fileName,
+        bool explicitProjectFile, bool caseInsensitivePaths)
+    {
+        string collation = caseInsensitivePaths ? "NOCASE" : "BINARY";
+        if (explicitProjectFile)
+        {
+            string suffixPredicate = caseInsensitivePaths
+                ? "path LIKE $suffix ESCAPE '\\' COLLATE NOCASE"
+                : "substr(path, -length($suffix)) = $suffix COLLATE BINARY";
+            return Query(
+                "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects " +
+                $"WHERE path = $root COLLATE {collation} OR {suffixPredicate} ORDER BY path",
+                ReadProject,
+                ("$root", fileName),
+                ("$suffix", caseInsensitivePaths
+                    ? "%/" + EscapeLike(fileName)
+                    : "/" + fileName));
+        }
+        string csSuffixPredicate = caseInsensitivePaths
+            ? "path LIKE $csSuffix ESCAPE '\\' COLLATE NOCASE"
+            : "substr(path, -length($csSuffix)) = $csSuffix COLLATE BINARY";
+        string fsSuffixPredicate = caseInsensitivePaths
+            ? "path LIKE $fsSuffix ESCAPE '\\' COLLATE NOCASE"
+            : "substr(path, -length($fsSuffix)) = $fsSuffix COLLATE BINARY";
+        return Query(
+            "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects " +
+            $"WHERE path = $rootCs COLLATE {collation} OR path = $rootFs COLLATE {collation} " +
+            $"OR {csSuffixPredicate} OR {fsSuffixPredicate} ORDER BY path",
+            ReadProject,
+            ("$rootCs", fileName + ".csproj"),
+            ("$rootFs", fileName + ".fsproj"),
+            ("$csSuffix", caseInsensitivePaths
+                ? "%/" + EscapeLike(fileName) + ".csproj"
+                : "/" + fileName + ".csproj"),
+            ("$fsSuffix", caseInsensitivePaths
+                ? "%/" + EscapeLike(fileName) + ".fsproj"
+                : "/" + fileName + ".fsproj"));
+    }
+
+    private static ProjectSelectorResolution SelectorResolution(
+        List<ProjectRow> matches,
+        string matchedBy,
+        IEnumerable<ProjectSelectorMatch> lowerPrecedence,
+        bool caseInsensitivePaths)
+    {
+        StringComparer pathComparer = caseInsensitivePaths
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        var selectedPaths = matches.Select(row => row.Path)
+            .ToHashSet(pathComparer);
+        return new(
+            matches.Select(row => new ProjectSelectorMatch(row, matchedBy)).ToList(),
+            lowerPrecedence
+                .Where(match => !selectedPaths.Contains(match.Project.Path))
+                .GroupBy(match => match.MatchedBy, StringComparer.Ordinal)
+                .SelectMany(group => group
+                    .GroupBy(match => match.Project.Path, pathComparer)
+                    .Select(paths => paths.First()))
+                .OrderBy(match => match.Project.Path, StringComparer.Ordinal)
+                .ToList());
+    }
+
+    /// <summary>Ranked recovery candidates for a failed project selector. The caller supplies its
+    /// already-advertised result limit; one extra row detects truncation without another cap.</summary>
+    public ProjectSuggestionResult SuggestProjects(
+        string selector,
+        int resultLimit)
+    {
+        resultLimit = Math.Max(1, resultLimit);
+        string normalized = WorkspacePaths.Normalize(selector.Trim());
+        string fileName = Path.GetFileName(normalized);
+        string token = fileName.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) ||
+                       fileName.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase)
+            ? Path.GetFileNameWithoutExtension(fileName)
+            : fileName;
+        string contains = "%" + EscapeLike(token) + "%";
+        List<ProjectRow> probed = Query(
+            "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects " +
+            "WHERE name LIKE $contains ESCAPE '\\' COLLATE NOCASE " +
+            "OR path LIKE $contains ESCAPE '\\' COLLATE NOCASE " +
+            "ORDER BY CASE WHEN name = $token COLLATE NOCASE THEN 0 " +
+            "WHEN path LIKE $suffix ESCAPE '\\' COLLATE NOCASE THEN 1 ELSE 2 END, " +
+            "length(path), path LIMIT $limit",
+            ReadProject,
+            ("$contains", contains),
+            ("$token", token),
+            ("$suffix", "%/" + EscapeLike(token) + ".%proj"),
+            ("$limit", resultLimit + 1));
+        bool probeTruncated = probed.Count > resultLimit;
+        if (probeTruncated) probed.RemoveAt(probed.Count - 1);
+        List<ProjectSelectorMatch> returned = probed
+            .Select(row => new ProjectSelectorMatch(
+                row,
+                row.Name.Contains(token, StringComparison.OrdinalIgnoreCase)
+                    ? "similarAssemblyName"
+                    : "similarProjectPath"))
+            .ToList();
+        return new ProjectSuggestionResult(
+            returned, probed.Count, resultLimit, probeTruncated);
+    }
+
     /// <summary>All physical rows for many logical project names in bounded grouped queries.</summary>
     public Dictionary<string, List<ProjectRow>> ProjectsByNames(
         IReadOnlyCollection<string> projectNames,
@@ -1478,6 +1690,43 @@ public sealed partial class IndexQueries : IDisposable
             ORDER BY p.name
             """,
             ReadProject, ("$p", filePath));
+    }
+
+    /// <summary>All physical C# project owners for an unbounded set of workspace-relative files.
+    /// The caller's deadline remains authoritative across both SQLite execution and row
+    /// materialization; chunking avoids one command per seed without imposing a result cap.</summary>
+    public List<ProjectRow> ProjectsContaining(
+        IReadOnlyCollection<string> filePaths,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<ProjectRow>();
+        var seen = new HashSet<long>();
+        foreach (string[] chunk in filePaths.Distinct(StringComparer.Ordinal).Chunk(200))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var args = new List<(string, object)>();
+            var parameters = new List<string>();
+            for (int i = 0; i < chunk.Length; i++)
+            {
+                string parameter = $"$p{i}";
+                parameters.Add(parameter);
+                args.Add((parameter, chunk[i]));
+            }
+
+            foreach (ProjectRow row in QueryCancellable(
+                         "SELECT DISTINCT p.id, p.path, p.name, p.style, p.tfms, p.is_test, " +
+                         "p.load_status, p.lang FROM compile_items ci " +
+                         "JOIN files f ON f.id = ci.file_id " +
+                         "JOIN projects p ON p.id = ci.project_id " +
+                         $"WHERE f.path IN ({string.Join(",", parameters)}) " +
+                         "AND p.lang = 'cs' COLLATE NOCASE " +
+                         "ORDER BY p.name, p.path",
+                         ReadProject, cancellationToken, args.ToArray()))
+            {
+                if (seen.Add(row.Id)) result.Add(row);
+            }
+        }
+        return result;
     }
 
     public List<GraphEdge> ProjectGraph(string projectName, int depth, string direction)
@@ -2733,18 +2982,25 @@ public sealed partial class IndexQueries : IDisposable
     }
 
     /// <summary>All transitive dependency project names (downstream closure), targets included.</summary>
-    public HashSet<string> DependencyClosure(IEnumerable<string> projectNames)
+    public HashSet<string> DependencyClosure(
+        IEnumerable<string> projectNames,
+        CancellationToken cancellationToken = default)
     {
-        var edges = ProjectGraphEdges();
+        var edges = ProjectGraphEdges(cancellationToken);
         var closure = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var stack = new Stack<string>(projectNames);
         while (stack.Count > 0)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var node = stack.Pop();
             if (!closure.Add(node)) continue;
             if (edges.Downstream.TryGetValue(node, out var deps))
             {
-                foreach (var d in deps) stack.Push(d);
+                foreach (var d in deps)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    stack.Push(d);
+                }
             }
         }
         return closure;
@@ -2962,19 +3218,21 @@ public sealed partial class IndexQueries : IDisposable
             .ToList();
     }
 
-    private (Dictionary<string, List<string>> Downstream, Dictionary<string, List<string>> Upstream) ProjectGraphEdges()
+    private (Dictionary<string, List<string>> Downstream, Dictionary<string, List<string>> Upstream)
+        ProjectGraphEdges(CancellationToken cancellationToken = default)
     {
-        var edges = Query(
+        var edges = QueryCancellable(
             """
             SELECT pf.name, pt.name FROM project_refs r
             JOIN projects pf ON pf.id = r.from_id
             JOIN projects pt ON pt.id = r.to_id
             """,
-            r => (From: r.GetString(0), To: r.GetString(1)));
+            r => (From: r.GetString(0), To: r.GetString(1)), cancellationToken);
         var down = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         var up = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         foreach (var e in edges)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             (down.TryGetValue(e.From, out var d) ? d : down[e.From] = new()).Add(e.To);
             (up.TryGetValue(e.To, out var u) ? u : up[e.To] = new()).Add(e.From);
         }
@@ -3391,8 +3649,9 @@ public sealed partial class IndexQueries : IDisposable
     /// the index (e.g. "3rdparty/**", "src/vendor/**") — the repo_overview discovery hint. The
     /// vendor-segment test is pushed into SQL so ALL paths are considered (not a sampled window),
     /// yet only vendor paths come back to walk. Ordinal-sorted; the 50-cap bounds only pathological
-    /// output. Empty when none are present. (firstPartyOnly does NOT use this — it excludes vendor
-    /// segments directly via <see cref="VendorExcludeGlobs"/>, so it never depends on this scan.)</summary>
+    /// output. Empty when none are present. (The first-party query scope does NOT use this — it
+    /// excludes vendor segments directly via <see cref="VendorExcludeGlobs"/>, so it never depends
+    /// on this scan.)</summary>
     public List<string> SuggestedExcludes()
     {
         // Whole-segment match per marker: at the path start ("marker/…") or after a slash
@@ -3430,7 +3689,7 @@ public sealed partial class IndexQueries : IDisposable
 
     /// <summary>Whole-segment exclude globs for the known vendor/generated directory names, at any
     /// depth — two per marker: "<c>name/**</c>" (workspace root) and "<c>**/name/**</c>" (nested).
-    /// Powers firstPartyOnly: a complete, scan-free exclusion that matches exactly the paths
+    /// Powers queryScope="first_party": a complete, scan-free exclusion that matches the paths
     /// <see cref="IsVendorPath"/> flags as noise, so the two signals never diverge.</summary>
     public static IReadOnlyList<string> VendorExcludeGlobs()
     {

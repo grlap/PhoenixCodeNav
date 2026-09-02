@@ -1580,7 +1580,9 @@ public sealed class UnavailableSourceRefreshTests
             Assert.True(manager.RequestRefreshForTest(Array.Empty<string>(),
                 out Task sweepAndBarrierDrained));
             await sweepAndBarrierDrained.WaitAsync(TimeSpan.FromSeconds(20));
-            Assert.Equal("ready", manager.State);
+            IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(20),
+                "cold-start post-build sweep did not converge after the watcher refresh");
+            Assert.Null(manager.Health().RefreshIncompleteReason);
             using var queries = manager.OpenQueries();
             Assert.Single(queries.SearchSymbols("AfterSweep", "exact", null, 2));
             Assert.Empty(queries.SearchSymbols("BeforeSweep", "exact", null, 2));
@@ -1633,7 +1635,9 @@ public sealed class UnavailableSourceRefreshTests
             Assert.True(manager.RequestRefreshForTest(Array.Empty<string>(),
                 out Task sweepAndBarrierDrained));
             await sweepAndBarrierDrained.WaitAsync(TimeSpan.FromSeconds(20));
-            Assert.Equal("ready", manager.State);
+            IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(20),
+                "full-rebuild post-build sweep did not converge after the watcher refresh");
+            Assert.Null(manager.Health().RefreshIncompleteReason);
             using var queries = manager.OpenQueries();
             Assert.Single(queries.SearchSymbols("AfterSweep", "exact", null, 2));
             Assert.Empty(queries.SearchSymbols("BeforeSweep", "exact", null, 2));

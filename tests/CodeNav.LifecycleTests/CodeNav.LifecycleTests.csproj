@@ -26,6 +26,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\TestSupport\IndexManagerTestSupport.cs" Link="TestSupport\IndexManagerTestSupport.cs" />
     <Compile Include="..\TestSupport\TestWorkspaceCleanup.cs" Link="TestSupport\TestWorkspaceCleanup.cs" />
   </ItemGroup>
 

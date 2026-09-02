@@ -8,7 +8,13 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace CodeNav.Core.Semantic;
 
-public sealed record DeclarationSpan(string Path, int StartLine, int EndLine, string Project);
+public sealed record DeclarationSpan(
+    string Path,
+    int StartLine,
+    int EndLine,
+    string Project,
+    int StartColumn = 0,
+    int EndColumn = 0);
 
 public sealed record SemanticDeclaration(
     string SymbolDisplay,
@@ -19,6 +25,32 @@ public sealed record SemanticDeclaration(
     string? Assembly,
     List<DeclarationSpan> Declarations,
     bool IsAbstract = false);
+
+public sealed record DocumentationIdResolution(
+    string Name,
+    string CanonicalDocumentationCommentId,
+    string ProjectName,
+    string NavigationPath,
+    int NavigationLine,
+    int NavigationColumn,
+    SemanticDeclaration Declaration);
+
+public sealed record DocumentationIdResolutionCoverage(
+    int SeedFiles,
+    int SeedProjects,
+    int RequestedProjects,
+    int LoadedProjects,
+    int ScannedProjects,
+    IReadOnlyList<string> SkippedProjects,
+    bool CompilerScanned,
+    int NameKeyedOwnerCollisionGroups = 0);
+
+public sealed record DocumentationIdResolutionResult(
+    List<DocumentationIdResolution>? Matches,
+    string? FailReason,
+    string? MissReason,
+    DocumentationIdResolutionCoverage Coverage,
+    IndexSnapshotIdentity? SnapshotIdentity = null);
 
 public sealed record SemanticLocation(string Path, int Line, string LineText, string Project, bool IsTestProject,
     string? Kind = null);
@@ -485,12 +517,214 @@ public sealed partial class SemanticService : IDisposable
 
     // ---------------------------------------------------------------- definition
 
+    /// <summary>Resolves a stable Roslyn documentation-comment id inside the semantic
+    /// solution containing the indexed seed declarations. Seed discovery, owner lookup, and
+    /// closure derivation all use one pinned index snapshot so a refresh cannot make a stale
+    /// seed subset look complete on a newer generation. The method preserves assembly-level
+    /// ambiguity instead of selecting whichever compilation happens to load first.</summary>
+    public async Task<DocumentationIdResolutionResult> ResolveDocumentationCommentIdAsync(
+        string candidateName,
+        string documentationCommentId,
+        int timeoutMs,
+        CancellationToken cancellationToken = default,
+        bool forceSeedTimeoutForTest = false)
+    {
+        using CancellationTokenSource? ownedDeadline = cancellationToken.CanBeCanceled
+            ? null
+            : new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 60000));
+        CancellationToken token = cancellationToken.CanBeCanceled
+            ? cancellationToken
+            : ownedDeadline!.Token;
+        bool loadCompleted = false;
+        bool semanticLoadStarted = false;
+        IndexSnapshotIdentity? snapshotIdentity = null;
+        int seedFiles = 0;
+        int seedProjects = 0;
+        int requestedProjects = 0;
+        int loadedProjects = 0;
+        int scannedProjects = 0;
+        int nameKeyedOwnerCollisionGroups = 0;
+        var skippedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        DocumentationIdResolutionCoverage Coverage(bool compilerScanned) => new(
+            seedFiles,
+            seedProjects,
+            requestedProjects,
+            loadedProjects,
+            scannedProjects,
+            skippedProjects.OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList(),
+            compilerScanned,
+            nameKeyedOwnerCollisionGroups);
+
+        try
+        {
+            using var indexSnapshot = _manager.TryOpenReviewSnapshot(token);
+            if (indexSnapshot is null)
+                return new(null, "index_snapshot_unavailable", null, Coverage(false));
+            snapshotIdentity = indexSnapshot.Identity;
+
+            DocumentationIdSeedResult seeds;
+            try
+            {
+                if (forceSeedTimeoutForTest)
+                    throw new OperationCanceledException(
+                        "test-only documentation id seed timeout");
+                token.ThrowIfCancellationRequested();
+                seeds = indexSnapshot.Queries.DocumentationIdSeedPaths(candidateName, token);
+                seedFiles = seeds.SeedFiles;
+            }
+            catch (OperationCanceledException)
+            {
+                return new(null, "documentation_id_seed_timeout", null,
+                    Coverage(false), indexSnapshot.Identity);
+            }
+
+            if (seeds.Paths.Count == 0)
+            {
+                return new([], null, "no_indexed_seed_declaration", Coverage(false),
+                    indexSnapshot.Identity);
+            }
+
+            List<ProjectRow> seedOwnerRows = indexSnapshot.Queries
+                .ProjectsContaining(seeds.Paths, token)
+                .Where(project => project.Language.Equals("cs", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            string[] owners = seedOwnerRows
+                .Select(project => project.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            seedProjects = owners.Length;
+            if (owners.Length == 0)
+                return new([], null, "no_csharp_compile_owner", Coverage(false));
+
+            Dictionary<string, List<ProjectRow>> physicalRows = indexSnapshot.Queries
+                .ProjectsByNames(owners, token);
+            nameKeyedOwnerCollisionGroups = physicalRows.Values.Count(rows =>
+            {
+                List<ProjectRow> csharpRows = rows
+                    .Where(row => row.Language.Equals("cs", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (csharpRows.Count <= 1) return false;
+                if (csharpRows.Count != 2) return true;
+                ProjectRow? legacy = csharpRows.FirstOrDefault(row =>
+                    row.Style.Equals("legacy", StringComparison.OrdinalIgnoreCase));
+                ProjectRow? sdk = csharpRows.FirstOrDefault(row =>
+                    row.Style.Equals("sdk", StringComparison.OrdinalIgnoreCase));
+                return legacy is null || sdk is null ||
+                       !IsExactNetCompanion(legacy.Path, sdk.Path);
+            });
+
+            IReadOnlyCollection<string> closure = indexSnapshot.Queries.DependencyClosure(owners, token);
+            semanticLoadStarted = true;
+            using SemanticSolutionLease lease = await Workspace
+                .EnsureLoadedAsync(closure, token)
+                .ConfigureAwait(false);
+            loadCompleted = true;
+            requestedProjects = lease.RequestedProjectIds.Length;
+            loadedProjects = lease.Coverage.LoadedProjects;
+            foreach (string skipped in lease.Coverage.SkippedProjects
+                         .Concat(lease.Coverage.FailedProjects))
+            {
+                skippedProjects.Add(skipped);
+            }
+
+            var resolutions = new List<DocumentationIdResolution>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (ProjectId projectId in lease.RequestedProjectIds)
+            {
+                token.ThrowIfCancellationRequested();
+                Project? project = lease.Solution.GetProject(projectId);
+                if (project is null)
+                {
+                    skippedProjects.Add(projectId.Id.ToString());
+                    continue;
+                }
+                scannedProjects++;
+                Compilation? compilation = await project.GetCompilationAsync(token)
+                    .ConfigureAwait(false);
+                if (compilation is null)
+                {
+                    skippedProjects.Add(project.Name);
+                    continue;
+                }
+                foreach (ISymbol symbol in Microsoft.CodeAnalysis.DocumentationCommentId
+                             .GetSymbolsForDeclarationId(documentationCommentId, compilation))
+                {
+                    string? canonicalId = symbol.GetDocumentationCommentId();
+                    if (canonicalId is null) continue;
+                    SemanticDeclaration declaration = Describe(symbol);
+                    if (declaration.Declarations.Count == 0) continue;
+                    Location? navigationLocation = symbol.Locations
+                        .Where(location => location.IsInSource && location.SourceTree is not null)
+                        .OrderBy(location => location.SourceTree!.FilePath,
+                            StringComparer.Ordinal)
+                        .ThenBy(location => location.SourceSpan.Start)
+                        .FirstOrDefault();
+                    if (navigationLocation?.SourceTree is null) continue;
+                    FileLinePositionSpan navigationSpan = navigationLocation.GetLineSpan();
+                    string navigationPath = ToRelPath(navigationLocation.SourceTree.FilePath);
+                    int navigationLine = navigationSpan.StartLinePosition.Line + 1;
+                    int navigationColumn = navigationSpan.StartLinePosition.Character + 1;
+                    string identity = string.Join('\u001e',
+                        declaration.Assembly ?? "",
+                        canonicalId,
+                        navigationPath,
+                        navigationLine,
+                        navigationColumn);
+                    if (seen.Add(identity))
+                    {
+                        string navigationName = symbol is IMethodSymbol
+                            {
+                                MethodKind: MethodKind.Constructor or MethodKind.StaticConstructor,
+                            }
+                            ? symbol.ContainingType.Name
+                            : symbol.Name;
+                        resolutions.Add(new DocumentationIdResolution(
+                            navigationName,
+                            canonicalId,
+                            project.Name,
+                            navigationPath,
+                            navigationLine,
+                            navigationColumn,
+                            declaration));
+                    }
+                }
+            }
+            bool completeCompilerSweep = requestedProjects > 0 &&
+                                         scannedProjects == requestedProjects &&
+                                         loadedProjects >= requestedProjects &&
+                                         skippedProjects.Count == 0;
+            return new(resolutions, null,
+                resolutions.Count == 0 ? "documentation_id_not_found" : null,
+                Coverage(completeCompilerSweep), indexSnapshot.Identity);
+        }
+        catch (OperationCanceledException)
+        {
+            string reason = !semanticLoadStarted
+                ? "documentation_id_seed_timeout"
+                : loadCompleted
+                    ? "semantic_timeout"
+                    : "cluster_cold_load";
+            return new(null, reason, null, Coverage(false), snapshotIdentity);
+        }
+        catch (Exception ex)
+        {
+            _log($"Documentation-comment id resolution failed: {ex.Message}");
+            return new(null, $"semantic_error:{ex.GetType().Name}", null,
+                Coverage(false));
+        }
+    }
+
     public async Task<(SemanticDeclaration? Result, string? FailReason,
         bool ProjectModelUnproven, string? PartialReason)> DefinitionAsync(
         string path, int line, int? column, string? nameHint, int timeoutMs,
-        string? declarationKeyHint = null)
+        string? declarationKeyHint = null,
+        CancellationToken cancellationToken = default,
+        IndexSnapshotIdentity? expectedIndexSnapshot = null)
     {
-        using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 60000));
+        using CancellationTokenSource cts = cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 60000));
         bool loadCompleted = false;
         var swOp = System.Diagnostics.Stopwatch.StartNew(); // field 48s gap: op wall split
         long loadMs = 0;
@@ -502,6 +736,12 @@ public sealed partial class SemanticService : IDisposable
             {
                 EmitOpTelemetry("definition", "unresolved", "index_snapshot_unavailable"); // epuc.1
                 return (null, "index_snapshot_unavailable", false, null);
+            }
+            if (expectedIndexSnapshot is not null &&
+                indexSnapshot.Identity != expectedIndexSnapshot)
+            {
+                EmitOpTelemetry("definition", "unresolved", "index_snapshot_changed");
+                return (null, "index_snapshot_changed", false, null);
             }
             var (ownerLease, symbol, owningProject, coverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
@@ -558,9 +798,13 @@ public sealed partial class SemanticService : IDisposable
     public async Task<(SemanticReferences? Result, string? FailReason)> ReferencesAsync(
         string path, int line, int? column, string? nameHint, int maxProjects, int samplesPerGroup, int timeoutMs,
         bool includeGenerated = true, IReadOnlySet<string>? usageKinds = null, bool publicConsumersOnly = false,
-        bool includeTests = true, string? declarationKeyHint = null)
+        bool includeTests = true, string? declarationKeyHint = null,
+        CancellationToken cancellationToken = default,
+        IndexSnapshotIdentity? expectedIndexSnapshot = null)
     {
-        using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
+        using CancellationTokenSource cts = cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         string operationId = Guid.NewGuid().ToString("N")[..8];
         TimeSpan? clusterLoadCpuStarted = SemanticProcessCpu.Snapshot();
         double? clusterLoadProcessWideCpuMs = null;
@@ -584,6 +828,15 @@ public sealed partial class SemanticService : IDisposable
                     clusterLoadMs: swPhase.ElapsedMilliseconds,
                     clusterLoadProcessWideCpuMs: clusterLoadProcessWideCpuMs); // epuc.1
                 return (null, "index_snapshot_unavailable");
+            }
+            if (expectedIndexSnapshot is not null &&
+                indexSnapshot.Identity != expectedIndexSnapshot)
+            {
+                EmitReferencesTelemetry(operationId, "unresolved", "index_snapshot_changed",
+                    clusterLoadMs: swPhase.ElapsedMilliseconds,
+                    clusterLoadProcessWideCpuMs: SemanticProcessCpu.ElapsedMilliseconds(
+                        clusterLoadCpuStarted));
+                return (null, "index_snapshot_changed");
             }
 
             // Phase 1: load the owner closure and resolve, to learn the symbol name.
@@ -1067,9 +1320,13 @@ public sealed partial class SemanticService : IDisposable
 
     public async Task<(SemanticImplementations? Result, string? FailReason)> ImplementationsAsync(
         string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs,
-        int? arityHint = null)
+        int? arityHint = null,
+        CancellationToken cancellationToken = default,
+        IndexSnapshotIdentity? expectedIndexSnapshot = null)
     {
-        using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
+        using CancellationTokenSource cts = cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         bool clusterLoadInProgress = true;
         var swPhase = System.Diagnostics.Stopwatch.StartNew();
         long clusterLoadMs = 0;
@@ -1084,6 +1341,12 @@ public sealed partial class SemanticService : IDisposable
             {
                 EmitOpTelemetry("implementations", "unresolved", "index_snapshot_unavailable"); // epuc.1
                 return (null, "index_snapshot_unavailable");
+            }
+            if (expectedIndexSnapshot is not null &&
+                indexSnapshot.Identity != expectedIndexSnapshot)
+            {
+                EmitOpTelemetry("implementations", "unresolved", "index_snapshot_changed");
+                return (null, "index_snapshot_changed");
             }
 
             deferredRetentionPending = true;
@@ -1484,6 +1747,13 @@ public sealed partial class SemanticService : IDisposable
                    (declarationKeyHint is null ||
                     SyntaxIndexer.OperatorDeclarationKey(operatorDeclaration)
                         .Equals(declarationKeyHint, StringComparison.Ordinal));
+        }
+
+        if (node is ConstructorDeclarationSyntax constructor)
+        {
+            return declarationKeyHint is null &&
+                   constructor.Identifier.ValueText.Equals(nameHint,
+                       StringComparison.Ordinal);
         }
 
         return declarationKeyHint is null &&
@@ -2367,17 +2637,20 @@ public sealed partial class SemanticService : IDisposable
     private SemanticDeclaration Describe(ISymbol symbol)
     {
         var spans = new List<DeclarationSpan>();
-        var seenSpans = new HashSet<(string, int, int)>();
+        var seenSpans = new HashSet<(string, int, int, int, int)>();
         foreach (var syntaxRef in symbol.DeclaringSyntaxReferences)
         {
             var lineSpan = syntaxRef.SyntaxTree.GetLineSpan(syntaxRef.Span);
             string rel = ToRelPath(syntaxRef.SyntaxTree.FilePath);
             int start = lineSpan.StartLinePosition.Line + 1;
             int end = lineSpan.EndLinePosition.Line + 1;
+            int startColumn = lineSpan.StartLinePosition.Character + 1;
+            int endColumn = lineSpan.EndLinePosition.Character + 1;
             // A file linked into more than one project can surface the SAME declaration span through
             // different project graphs; dedupe so declarations[] has no duplicate path+span entry.
-            if (seenSpans.Add((rel, start, end)))
-                spans.Add(new DeclarationSpan(rel, start, end, symbol.ContainingAssembly?.Name ?? ""));
+            if (seenSpans.Add((rel, start, end, startColumn, endColumn)))
+                spans.Add(new DeclarationSpan(rel, start, end,
+                    symbol.ContainingAssembly?.Name ?? "", startColumn, endColumn));
         }
         return new SemanticDeclaration(
             symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),

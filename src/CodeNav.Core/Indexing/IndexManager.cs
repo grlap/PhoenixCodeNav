@@ -41,19 +41,26 @@ public sealed record IndexHealth(
     string? StartupBuildReason = null,
     string? StartupPriorSchema = null);
 
+/// <summary>Process-local identity for one pinned index generation. The refresh epoch detects
+/// committed WAL mutations while the database identity detects a replaced database file.</summary>
+public sealed record IndexSnapshotIdentity(long RefreshEpoch, string DatabaseIdentity);
+
 public sealed class IndexReadSnapshot : IDisposable
 {
     private Action? _release;
 
-    internal IndexReadSnapshot(IndexQueries queries, IndexHealth health, Action release)
+    internal IndexReadSnapshot(IndexQueries queries, IndexHealth health,
+        IndexSnapshotIdentity identity, Action release)
     {
         Queries = queries;
         Health = health;
+        Identity = identity;
         _release = release;
     }
 
     public IndexQueries Queries { get; }
     public IndexHealth Health { get; }
+    public IndexSnapshotIdentity Identity { get; }
 
     public void Dispose()
     {
@@ -2770,6 +2777,7 @@ public sealed class IndexManager : IDisposable
                  (!IsFollower && health.State == "building" && _store is not null)))
             {
                 var snapshot = new IndexReadSnapshot(queries, health,
+                    new IndexSnapshotIdentity(before, databaseBefore.DatabaseIdentity),
                     ReleaseReviewSnapshot);
                 transferred = true;
                 return snapshot;

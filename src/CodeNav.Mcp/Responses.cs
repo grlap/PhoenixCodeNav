@@ -134,15 +134,29 @@ internal static class Json
     /// non-review summaries are removed first, deterministically; review summaries are retained
     /// preferentially because they are the deploy-verification surface for the safety contract.
     /// The root-level coverage fields make any compaction explicit.</summary>
-    public static string WithCapabilitiesBudget(object envelope)
+    public static string WithCapabilitiesBudget(
+        object envelope,
+        bool includeFeatureSummaries = true)
     {
         string json = Serialize(envelope);
-        if (Utf8Bytes(json) <= HardBudgetBytes) return json;
-
         JsonObject root = JsonNode.Parse(json)?.AsObject()
             ?? throw new InvalidOperationException("Capability envelope did not serialize as an object.");
         JsonArray features = root["features"]?.AsArray()
             ?? throw new InvalidOperationException("Capability envelope has no feature manifest.");
+        if (!includeFeatureSummaries)
+        {
+            foreach (JsonNode? node in features)
+                node?.AsObject().Remove("summary");
+            root["featureSummaryMode"] = "ids";
+            json = root.ToJsonString(Options);
+        }
+        else
+        {
+            root["featureSummaryMode"] = "detail";
+            json = root.ToJsonString(Options);
+        }
+        if (Utf8Bytes(json) <= HardBudgetBytes) return json;
+
         var summaries = features
             .Select(node => node?.AsObject())
             .Where(feature => feature is not null && feature["summary"] is not null)
@@ -213,6 +227,38 @@ internal static class Json
             work.RemoveRange(keep, work.Count - keep);
             truncated = true;
             json = Serialize(build(work, truncated));
+        }
+        return json;
+    }
+
+    /// <summary>Budgets an actionable primary list plus an uncounted diagnostic list. Diagnostic
+    /// evidence is reduced first so primary recovery candidates survive; both lists report their
+    /// independent byte-driven truncation. No count sample is imposed.</summary>
+    public static string WithDiagnosticListBudget<T, TDiagnostic>(
+        List<T> items,
+        List<TDiagnostic> diagnostics,
+        Func<List<T>, bool, List<TDiagnostic>, bool, object> build,
+        int? maxBytes = null)
+    {
+        int cap = Math.Min(maxBytes ?? HardBudgetBytes, HardBudgetBytes);
+        var work = new List<T>(items);
+        var diagnosticWork = new List<TDiagnostic>(diagnostics);
+        bool truncated = false;
+        bool diagnosticsTruncated = false;
+        string json = Serialize(build(work, truncated, diagnosticWork, diagnosticsTruncated));
+        while (Utf8Bytes(json) > cap && diagnosticWork.Count > 0)
+        {
+            int keep = diagnosticWork.Count / 2;
+            diagnosticWork.RemoveRange(keep, diagnosticWork.Count - keep);
+            diagnosticsTruncated = true;
+            json = Serialize(build(work, truncated, diagnosticWork, diagnosticsTruncated));
+        }
+        while (Utf8Bytes(json) > cap && work.Count > 0)
+        {
+            int keep = work.Count / 2;
+            work.RemoveRange(keep, work.Count - keep);
+            truncated = true;
+            json = Serialize(build(work, truncated, diagnosticWork, diagnosticsTruncated));
         }
         return json;
     }

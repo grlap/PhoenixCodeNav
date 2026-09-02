@@ -1,79 +1,91 @@
 # PhoenixCodeNav — agent instructions
 
-Paste this section into the target repository's `CLAUDE.md` / `AGENTS.md`.
+Paste the section below into the target repository's `CLAUDE.md` or `AGENTS.md`.
+It is intentionally short: the MCP response metadata is the authority for exceptional
+cases, budgets, and recovery.
 
 ---
 
-## Code Navigation (phoenix MCP)
+## Code Navigation (Phoenix MCP)
 
-This repository is too large for broad grep-based C# navigation. A `phoenix` MCP server
-(PhoenixCodeNav) is attached with a persisted index of every project, file, and symbol.
-Prefer its tools over shell `rg`/`grep`/`find` for source navigation.
+Phoenix is the primary source-navigation tool for this repository. Prefer it to broad
+`rg`/`grep` and whole-file reads when answering questions about source symbols, callers,
+ownership, dependencies, or likely tests.
 
-Default flow:
+### Default route
 
-1. Call `repo_overview` once before code work and check `meta.indexStatus` and
-   `meta.indexMode`. `daemon` means this agent is an independent MCP client of the shared
-   same-worktree Phoenix process and may request refreshes normally. Ordinary launches always use
-   this topology; no daemon flag or environment opt-in is required. `unavailable` means daemon
-   negotiation failed, and the response includes a stable cause plus recovery guidance.
-   `standalone` appears only when Phoenix was explicitly launched with the diagnostics-only
-   `--standalone` switch.
-2. For anything that is a **code identifier** (type, method, property), use the symbol tools:
-   `search_symbol`, `definition`, `references`, `implementations` — not text search. Indexed
-   `search_symbol` supports F# `.fs/.fsi` declarations too; `.fsx` remains text-only. Treat
-   `fsharp_parse_failed`, `fsharp_parse_contexts_truncated`, and any project-option cause in `partialReasons` as incomplete indexed F#
-   declaration evidence rather than authoritative absence; inspect the parse/project-option
-   coverage objects too. Stored indexing reserves one context per valid compile owner while the
-   64-context budget has capacity; `truncatedOwnerProjects` counts owners whose distinct contexts
-   were still omitted. `fsharp_project_options_imported` alone is advisory structured coverage,
-   not a blanket partial result.
-   F# semantic resolution is narrower: use
-   position-based `symbol_at` / `definition`; references, implementations, callers/callees, and
-   hierarchy are not available yet. The bounded evaluator processes a
-   bounded subset of simple project properties/conditions/`Choose` and local `.props`; an explicit
-   `fsharp_semantic_*_unsupported` cause means the project crossed that boundary, not that the symbol
-   is absent. An unresolved condition-property cause means the result depends on an ambient/global
-   build input that the selected project/TFM context does not claim to know. Standard SDK/toolchain
-   implicit authority is disclosed as partial. The nearest indexed ancestor `Directory.Build.props`
-   and `.targets` are evaluated only for bounded properties, conditions, and metadata-free Reference
-   Include/Remove lists. For C# semantic navigation, an unconditional simple `PackageVersion` in the
-   nearest indexed `Directory.Packages.props` supplies a versionless direct `PackageReference`; its
-   version may use bounded simple `$(Name)` expansion from local unconditional properties, and the
-   exact package version must already be installed. Project overrides, explicit project imports,
-   applicable `Directory.Build.targets`, conditions, property functions, unresolved properties,
-   exceeded limits, and other unsupported evaluation shapes retain
-   established unresolved-reference behavior rather than guessing. For F#, the nearest indexed `Directory.Packages.props` contributes bounded,
-   conditional `PackageVersion` authority for active versionless `PackageReference` items. Those
-   identities use the selected target from an already-restored `project.assets.json`; transitive
-   compile assets are copied into immutable request-private snapshots, while missing/stale or
-   ambiguous assets and all project-reference closure fail closed. Custom SDKs and
-   target/task-driven semantic mutations fail closed.
-   If `implementations` returns `retryRecommended:true` with a cold-load or semantic-timeout
-   reason, retry it once with the same arguments; non-partial exact responses omit that signal.
-3. Use `search_text` only for literals: config keys, route strings, error messages, log
-   fragments, comments. Use `config_lookup` for configuration keys specifically.
-4. Starting from a **stack trace, build error, or diff hunk**: call
-   `symbol_at(path, line)` to get the owning symbol and projects, then continue from it.
-5. **Never read a large file blind.** Call `outline(path)` first (or `batch_outline` for
-   several), then fetch only the needed spans with `source_context(path, "start-end")`.
-6. Before **changing behavior**: `references(name or path+line)` grouped by project, plus
-   `related_tests(name)`; for risky/public symbols run `impact(name)` first.
-7. To orient on an unfamiliar symbol quickly, `context_pack(name)` returns definition,
-   source, reference summary, tests, and project edges in one call.
-8. For ownership and dependency direction use `project_graph`, `projects_containing`,
-   and `dependency_path` — never guess from folder names.
-9. Trust `meta.confidence`:
-   - `exact` — compiler-verified by a closed Roslyn project model; safe to act on.
-   - `indexed` — index/syntax-backed leads, including bounded FCS results whose
-     `partialReason` names unevaluated project inputs; verify with `source_context` before
-     large edits. `partial: true` or a `partialReason` means coverage was bounded —
-      use `maxProjects: 0` after an explicitly bounded call, raise `timeoutMs`, or narrow the
-      target if completeness matters; Phoenix does not impose a fixed project ceiling.
-10. Keep limits small and tighten filters before paging. Fall back to shell `rg` only when
-    the server reports `index_building`/`index_unavailable`, the path is outside the
-    workspace, or you need true regex matching.
-11. Call `open_operations_portal` only when the user explicitly asks to open or show the Phoenix
-    Operations Portal. On success, show its returned `url` field verbatim as a clickable link.
-    The tool starts or reuses the read-only loopback portal; it intentionally does not open a
-    browser itself.
+1. Call `repo_overview` once before code work. Check index status, mode, language coverage,
+   and partial reasons. Ordinary launches use the shared same-worktree daemon automatically;
+   `meta.indexMode` is the authority, and agents do not configure a daemon fallback.
+2. For an identifier, call `search_symbol`, then `context_pack` for the best candidate.
+   Use `definition`, `references`, `implementations`, `callers`, `callees`, and `type_hierarchy`
+   when the question needs compiler-resolved facts rather than an orientation bundle.
+   Carry a returned C# `documentationCommentId` into `definition`, `references`, or
+   `implementations` when identity must survive reindexing; keep `symbolId` for cheap same-index
+   follow-ups. A documentation ID is semantic-only: never request indexed mode and never replace a
+   semantic failure with a same-name result. When documentation-ID coverage is incomplete, treat
+   returned candidates as evidence and follow their explicit position recovery. If
+   `documentation_id_position_shared` is present, the current tool cannot distinguish the linked
+   assemblies by position; inspect the reported project and assembly evidence instead.
+3. From a stack trace, build error, or diff hunk, call `symbol_at(path, line)` and continue
+   with the owning symbol and project.
+4. Use `search_text` for literals, messages, comments, and non-symbol text. Use
+   `config_lookup` for configuration keys.
+5. Before reading a large file, call `outline` or `batch_outline`; fetch only the required
+   ranges with `source_context`.
+6. Before changing behavior, inspect `references` and `related_tests`; add `impact` for a
+   public or risky symbol. For a whole change set, use `review_pack` to collect the bounded
+   review surface.
+7. Use `projects_containing`, `project_graph`, and `dependency_path` for ownership and
+   dependency direction. `dependencies` means canonical `downstream`; `dependents` means canonical
+   `upstream`. Project selectors prefer exact path, exact suffixed filename, extensionless stem,
+   then `AssemblyName`; an ambiguous result must be resolved with an exact path. Do not infer
+   ownership from folders. When shadow evidence is truncated, use `shadowedMatchCount` and
+   `shadowedMatchesReturned` to distinguish the complete precedence decision from its diagnostic
+   sample; the selected exact path or filename remains authoritative.
+
+### Act on the response contract
+
+- Phoenix reports domain failures as structured tool content with stable error and reason
+  identifiers. A transport-successful MCP call can therefore still be a domain failure.
+  Inspect the response before treating an empty result as authoritative.
+- Reuse a returned `symbolId` for follow-up calls instead of resolving the same name again.
+  Symbol handles fail closed after a reindex rather than silently retargeting.
+- If a response sets `retryRecommended: true`, follow `retryHint`. Retry the same request
+  when instructed; otherwise narrow scope, raise the disclosed budget, or take the named
+  recovery action. Do not invent an unbounded retry loop.
+- Treat `meta.confidence: exact` as compiler-verified within the stated coverage.
+  `indexed` is a strong syntax/index lead that may need source verification. Never hide
+  `partial`, `partialReason`, stale status, omitted counts, or truncation from your conclusion.
+- A zero-hit retry template preserves the effective filters and `queryScope`; replay it as emitted
+  so the suggested symbol remains visible under the same evidence scope.
+- Recovery has two executable shapes. When `arguments` stands alone, call the named tool with
+  those arguments. When `replayOriginalRequest: true` is present, replay your original call,
+  remove every argument named by `remove`, then merge the supplied `arguments` patch; this keeps
+  all non-selector filters and budgets unchanged while replacing only the failed selector.
+- Keep result limits small and tighten filters before paging. When completeness matters,
+  use the response's coverage fields and recovery guidance rather than assuming that no hit
+  means no symbol.
+- List-like string fields accept CSV or a JSON-array encoded string. Use the JSON form when an item
+  contains a comma. If a configured default query scope is active, pass `queryScope: "all"` when
+  complete generated/vendor/external indexed evidence is required. Exact semantic operations are
+  not narrowed by this default. `queryScope` accepts `default`, `all`, or `first_party`; empty means
+  `default`, while whitespace-only input is invalid.
+- If `review_pack.affectedPaths` is present, the review is incomplete. Follow its stable reason ids
+  and split the changed manifest into smaller explicit-path calls as instructed.
+
+### Language boundary
+
+- C# supports compiler-exact semantic navigation when its project model closes.
+- F# `.fs` and `.fsi` files support indexed declarations, outlines, position-based
+  `symbol_at`, and same-project definitions in a selected compiler context. Broader F#
+  semantic operations may return explicit unsupported or partial reasons. `.fsx` remains
+  text-only.
+- Mixed-language results are only as complete as the reported per-language coverage. Treat
+  an F# parse or project-option failure as missing F# evidence, not proof that the requested
+  C# symbol is absent.
+
+Fall back to shell search only for true regex work, files outside the indexed workspace,
+transient build output, or when Phoenix explicitly reports that the required layer is
+unavailable. When the user asks to open the Phoenix Operations Portal, call
+`open_operations_portal` and return its URL verbatim; do not open a browser yourself.
