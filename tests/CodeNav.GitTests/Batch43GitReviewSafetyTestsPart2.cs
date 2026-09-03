@@ -424,7 +424,8 @@ public class Batch43GitReviewSafetyTestsPart2
         {
             var initialized = GitInfo.RunProcessEx(gitExe, root,
                 "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " +
-                "init -q -b main --ref-format=reftable", waitMs: 20_000);
+                "init -q -b main --ref-format=reftable",
+                waitMs: TestGit.ProcessExitTimeoutMilliseconds);
             if (initialized.Status != "ok") return; // Older Git builds do not expose reftable.
             Git(root, gitExe, "config user.email test@example.com");
             Git(root, gitExe, "config user.name CodeNavTest");
@@ -457,7 +458,8 @@ public class Batch43GitReviewSafetyTestsPart2
         {
             var initialized = GitInfo.RunProcessEx(gitExe, root,
                 "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " +
-                "init -q -b main --object-format=sha256", waitMs: 20_000);
+                "init -q -b main --object-format=sha256",
+                waitMs: TestGit.ProcessExitTimeoutMilliseconds);
             if (initialized.Status != "ok") return; // Older Git builds may omit SHA-256 repos.
             Git(root, gitExe, "config user.email test@example.com");
             Git(root, gitExe, "config user.name CodeNavTest");

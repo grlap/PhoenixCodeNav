@@ -2127,8 +2127,8 @@ public sealed partial class NavigationTools
         int cap = Math.Clamp(maxBytes, 2048, Json.HardBudgetBytes);
         string error = health.State == "building" ? "index_building" : "index_unavailable";
         string hint = health.State == "building"
-            ? "The workspace index is still building (first run). Retry shortly; use shell tools meanwhile."
-            : "Index unavailable. Falling back to shell search is appropriate.";
+            ? "The workspace index is still building (first run). Inspect server_capabilities index.progress, wait while it advances, and retry after index.state is ready."
+            : "The workspace index is unavailable. Inspect server_capabilities for the cause and recovery before retrying.";
         string json = Json.Serialize(new
         {
             error,

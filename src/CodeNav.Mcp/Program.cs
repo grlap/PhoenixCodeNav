@@ -3,13 +3,18 @@ using System.Runtime.InteropServices;
 using CodeNav.Mcp;
 using CodeNav.Mcp.Daemon;
 
-// x5ls.1: the telemetry producer's hello.mcpVersion — Core cannot reference Mcp's BuildInfo.
+// The telemetry producer's hello.mcpVersion lives in Core, which cannot reference Mcp's BuildInfo.
 CodeNav.Core.Telemetry.TelemetryProducer.ProductVersion = BuildInfo.Version;
 
 McpCommandLine command;
 try
 {
     command = McpCommandLine.Parse(args);
+}
+catch (PhoenixCliUsageException ex)
+{
+    bool pretty = args.Contains("--pretty", StringComparer.Ordinal);
+    return await PhoenixCli.WriteBadRequestAsync(ex.ToolName, ex.Issue, pretty);
 }
 catch (ArgumentException ex)
 {
@@ -24,11 +29,40 @@ if (command.Help)
     return 0;
 }
 
+if (command.Mode == McpLaunchMode.Cli &&
+    command.Cli!.Action is not PhoenixCliAction.Invoke)
+{
+    return await PhoenixCli.RunAsync(
+        command.Cli,
+        proxy: null,
+        cancellationToken: CancellationToken.None);
+}
+
+if (command.Mode == McpLaunchMode.Cli &&
+    !PhoenixCli.IsKnownTool(command.Cli!.ToolName))
+{
+    return await PhoenixCli.WriteBadRequestAsync(
+        command.Cli.ToolName ?? "phoenix",
+        PhoenixCli.UnknownTool(command.Cli.ToolName ?? "phoenix"),
+        command.Cli.Pretty);
+}
+
 string workspaceRoot = command.WorkspaceRoot ??
     Environment.GetEnvironmentVariable("CODENAV_WORKSPACE_ROOT") ??
     Directory.GetCurrentDirectory();
 if (!Directory.Exists(workspaceRoot))
 {
+    if (command.Mode == McpLaunchMode.Cli)
+    {
+        return await PhoenixCli.WriteBadRequestAsync(
+            command.Cli!.ToolName ?? "phoenix",
+            new ArgumentValidationIssue(
+                "workspaceRoot",
+                "path_not_found",
+                "existing workspace directory",
+                "Phoenix workspace root does not exist or is not a directory."),
+            command.Cli.Pretty);
+    }
     if (command.Mode == McpLaunchMode.SharedProxy)
     {
         return await UnavailableMcpShim.RunAsync(new DaemonUnavailableFailure(
@@ -52,6 +86,17 @@ try
 catch (Exception ex) when (ex is ArgumentException or IOException or
                            NotSupportedException or UnauthorizedAccessException)
 {
+    if (command.Mode == McpLaunchMode.Cli)
+    {
+        return await PhoenixCli.WriteBadRequestAsync(
+            command.Cli!.ToolName ?? "phoenix",
+            new ArgumentValidationIssue(
+                "indexDb",
+                "invalid_path",
+                "normalizable index database path",
+                "Phoenix index destination could not be normalized."),
+            command.Cli.Pretty);
+    }
     if (command.Mode == McpLaunchMode.SharedProxy)
     {
         return await UnavailableMcpShim.RunAsync(new DaemonUnavailableFailure(
@@ -84,6 +129,57 @@ if (!OperatingSystem.IsWindows())
 
 try
 {
+    if (command.Mode == McpLaunchMode.Cli)
+    {
+        DaemonEndpoint endpoint;
+        try
+        {
+            endpoint = DaemonEndpoint.Create(workspaceRoot, indexDb);
+        }
+        catch (Exception ex) when (ex is ArgumentException or DirectoryNotFoundException or
+                                   PathTooLongException or NotSupportedException)
+        {
+            return await PhoenixCli.WriteBadRequestAsync(
+                command.Cli!.ToolName ?? "phoenix",
+                new ArgumentValidationIssue(
+                    "workspaceRoot",
+                    "invalid_path",
+                    "usable physical workspace path",
+                    "Phoenix could not resolve the requested workspace path."),
+                command.Cli.Pretty);
+        }
+        catch (DaemonRuntimeDirectoryUnavailableException ex)
+        {
+            return await PhoenixCli.WriteUnavailableAsync(
+                command.Cli!,
+                new DaemonUnavailableFailure(
+                    "daemon_runtime_directory_unavailable",
+                    $"Phoenix could not select a runtime directory for its local transport ({ex.GetType().Name}).",
+                    "Verify the owner-only runtime authority or shorten the configured runtime paths, then retry.",
+                    Retryable: false));
+        }
+        catch (Exception ex)
+        {
+            return await PhoenixCli.WriteUnavailableAsync(
+                command.Cli!,
+                new DaemonUnavailableFailure(
+                    "daemon_workspace_identity_unavailable",
+                    $"Phoenix could not prove the physical workspace identity ({ex.GetType().Name}).",
+                    "Verify workspace ownership and path safety, then retry.",
+                    Retryable: false));
+        }
+
+        DaemonRuntimeDiagnostics.WriteDiscoveryWarning(endpoint, Console.Error);
+        var proxy = new DaemonProxy(
+            endpoint,
+            indexDb,
+            command.Rebuild,
+            command.KeepAlive,
+            "cli",
+            command.DaemonIdle);
+        return await PhoenixCli.RunAsync(command.Cli!, proxy, shutdown.Token);
+    }
+
     if (command.Mode == McpLaunchMode.DaemonRetireAuthorized)
     {
         try
@@ -111,6 +207,8 @@ try
 
     if (command.Mode == McpLaunchMode.Daemon)
     {
+        // Keep this first: detach the dedicated startup diagnostics stream immediately; only
+        // stdout survives long enough to carry the single startup frame.
         DaemonProcessIsolation.DetachStandardStreams(preserveStandardOutput: true);
         var reporter = new DaemonStartupReporter(Console.OpenStandardOutput());
         try
@@ -217,6 +315,7 @@ internal static class DaemonRuntimeDiagnostics
 
 internal enum McpLaunchMode
 {
+    Cli,
     Standalone,
     SharedProxy,
     DaemonBootstrap,
@@ -231,10 +330,14 @@ internal sealed record McpCommandLine(
     bool Rebuild,
     bool KeepAlive,
     TimeSpan? DaemonIdle,
-    bool Help)
+    bool Help,
+    PhoenixCliCommand? Cli = null)
 {
     internal static McpCommandLine Parse(string[] arguments)
     {
+        if (arguments.Length > 0 && !arguments[0].StartsWith("-", StringComparison.Ordinal))
+            return PhoenixCliCommand.Parse(arguments);
+
         bool shared = false;
         bool daemonBootstrap = false;
         bool daemon = false;
@@ -300,8 +403,9 @@ internal sealed record McpCommandLine(
     }
 
     internal static void WriteUsage() => Console.Error.WriteLine(
-        "Usage: PhoenixCodeNav.Mcp --workspace-root <dir> [--index-db <path>] [--rebuild] " +
-        "[--standalone] [--keepalive]");
+        "Usage: PhoenixCodeNav.Mcp [--workspace-root <dir>] [--index-db <path>] [--rebuild] " +
+        "[--standalone] [--keepalive]\n" +
+        "       PhoenixCodeNav.Mcp tools|help <tool>|schema <tool>|<tool> [CLI options] [--<parameter> <value> ...]");
 
     private static string RequiredValue(string[] arguments, ref int index)
     {

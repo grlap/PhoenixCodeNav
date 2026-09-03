@@ -339,7 +339,7 @@ public class Batch43GitReviewSafetyTests
             string head = GitOutput(root, gitExe, "rev-parse HEAD").Trim();
             var merge = GitInfo.RunProcessEx(gitExe, root,
                 "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " +
-                "merge --no-edit other", waitMs: 20_000);
+                "merge --no-edit other", waitMs: TestGit.ProcessExitTimeoutMilliseconds);
             Assert.Equal("exit_nonzero", merge.Status);
 
             var indexingDirty = GitInfo.DirtyFiles(root, gitExe);

@@ -254,7 +254,8 @@ public class Batch41Tests
             var merge = GitInfo.RunProcessEx(
                 GitInfo.ResolveGitExeFrom(null, Environment.GetEnvironmentVariable("PATH"))!,
                 wt, "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " +
-                    "merge --no-edit conflict-side", waitMs: 20_000);
+                    "merge --no-edit conflict-side",
+                waitMs: TestGit.ProcessExitTimeoutMilliseconds);
             Assert.Equal("exit_nonzero", merge.Status);
 
             var conflictRefresh = Parse(tools.IndexWorktree(wt, "refresh"));
@@ -1844,7 +1845,7 @@ public class Batch41Tests
         Git(root, "commit -q -m init");
     }
 
-    private static void Git(string dir, string args) => TestGit.Run(dir, args); // n7ly: loud + retried
+    private static void Git(string dir, string args) => TestGit.Run(dir, args);
 
     /// <summary>BeforeAnchoredInstallForTest is process-global and test classes run in
     /// parallel — a closure must act only on ITS OWN worktree's install, or a foreign Ensure

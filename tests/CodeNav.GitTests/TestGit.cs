@@ -3,31 +3,27 @@ using CodeNav.Core.Indexing;
 namespace CodeNav.Tests;
 
 /// <summary>
-/// Owns: the shared, LOUD test-side git runner (n7ly). The suite's per-class `void Git(...)`
+/// Owns: the shared, loud test-side Git runner. The suite's per-class `void Git(...)`
 /// helpers discarded GitInfo.RunProcess's result, so a git spawn starved by full-suite load
 /// (or killed by the wait timeout) became a SILENT no-op — the test's own setup broke and the
-/// failure surfaced minutes later as an unrelated-looking red (Batch25's first-commit test
-/// waited 60s for a commit that never existed). Spawn failures are transient under load, so:
-/// bounded retry, then FAIL LOUDLY with the exact command — a named setup failure beats a
-/// mystery downstream one. Git setup commands used by tests (init/config/add/commit -q) are
-/// retry-safe in the common cases; residues a retry cannot heal (a killed run's stale
-/// config.lock/index.lock, or a timed-out-but-completed commit whose retry says "nothing to
-/// commit") still end in the LOUD red below — never a false green.
+/// failure surfaced minutes later as an unrelated-looking red. Test-side repository setup uses
+/// the repository's established process-exit ceiling and fails loudly with the exact command.
+/// It is deliberately not retried: killing Git can leave config.lock/index.lock behind, so a
+/// retry cannot prove that the setup command completed correctly.
 /// Deliberately does not own: wrappers that pass a custom gitExe (Batch43/44 assert their own
 /// results and often count invocations, where a retry would break the count).
 /// </summary>
 internal static class TestGit
 {
-    internal static void Run(string dir, string args, int attempts = 3)
+    // Shared with ProcessHeavyTestIsolation: this is the approved outer process-exit ceiling,
+    // not a product Git timeout and not a second test-specific wall-clock guess.
+    internal const int ProcessExitTimeoutMilliseconds = 130_000;
+
+    internal static void Run(string dir, string args)
     {
-        string? output = null;
-        for (int i = 0; i < attempts; i++)
-        {
-            if (i > 0) Thread.Sleep(500);
-            output = GitInfo.RunProcess("git", dir,
-                "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args, waitMs: 20000);
-            if (output is not null) return;
-        }
-        Assert.Fail($"test-side git failed after {attempts} attempts: git {args} (in {dir})");
+        string? output = GitInfo.RunProcess("git", dir,
+            "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args,
+            waitMs: ProcessExitTimeoutMilliseconds);
+        Assert.NotNull(output);
     }
 }

@@ -46,7 +46,7 @@ Before a public deployment:
 
 1. Choose the hosting URL, update canonical/social metadata, and change the robots directive to `index,follow` at launch.
 2. Reconfirm product claims against the intended public commit.
-3. Publish a license or explicit use terms before making the website public; repository visibility alone does not grant reuse rights.
+3. Keep the repository's Apache-2.0 `LICENSE`, `NOTICE`, and third-party notices published with every PhoenixCodeNav source or binary distribution.
 4. Confirm the host serves CSS, JavaScript, and SVG with their correct MIME types. This repository deploys through GitHub Pages. GitHub Pages caches each stable URL independently, so warm clients can briefly mix HTML and asset generations until those entries revalidate or expire; this workflow does not configure custom per-asset cache headers. Before upload, the deployment workflow runs `node ./website/verify.mjs --auto`, selecting prelaunch or launch checks from the committed robots directive while verifying source and asset-reference integrity. That gate proves repository coherence, not cross-resource cache atomicity. After deployment, verify the current HTML and both assets with cold requests.
 
 ## Accessibility and motion

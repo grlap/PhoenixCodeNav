@@ -1420,7 +1420,8 @@ public sealed class Batch44GitSubtreeTests
     {
         var (exe, wrapped) = GitInfo.Invocation(gitExe,
             "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args);
-        GitInfo.ProcessResult result = GitInfo.RunProcessEx(exe, root, wrapped, waitMs: 20_000);
+        GitInfo.ProcessResult result = GitInfo.RunProcessEx(
+            exe, root, wrapped, waitMs: TestGit.ProcessExitTimeoutMilliseconds);
         Assert.Equal("ok", result.Status);
     }
 
@@ -1428,7 +1429,8 @@ public sealed class Batch44GitSubtreeTests
     {
         var (exe, wrapped) = GitInfo.Invocation(gitExe,
             "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args);
-        GitInfo.ProcessResult result = GitInfo.RunProcessEx(exe, root, wrapped, waitMs: 20_000);
+        GitInfo.ProcessResult result = GitInfo.RunProcessEx(
+            exe, root, wrapped, waitMs: TestGit.ProcessExitTimeoutMilliseconds);
         Assert.Equal("ok", result.Status);
         return Assert.IsType<string>(result.Output);
     }

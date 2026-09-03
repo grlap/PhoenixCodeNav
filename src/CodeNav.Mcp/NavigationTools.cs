@@ -177,6 +177,7 @@ public sealed partial class NavigationTools
             // trigger its (often silent-when-clean) response fields — grep an id to verify a deploy.
             features = new object[]
             {
+                new { id = "agent-cli-tool-surface", summary = "PhoenixCodeNav.Mcp exposes registration-backed offline tools/help/schema discovery and exact MCP tool invocation as a one-JSON-document CLI over the same shared workspace daemon, with schema-derived flags or complete JSON arguments and deterministic exit codes" },
                 new { id = "agent-first-server-instructions", summary = "MCP initialize instructions route agents through repo_overview, context_pack, exact semantic tools, impact/related_tests, and review_pack while naming structured domain errors and bounded retry guidance" },
                 new { id = "compact-capability-discovery", summary = "server_capabilities returns every stable feature id plus status, language, budget, and confidence contracts by default; detail=true adds bounded feature summaries" },
                 new { id = "language-scoped-symbol-search", summary = "search_symbol lang=csharp|fsharp limits declarations and computes partiality from the effective language and path scope, so unrelated language failures do not poison authoritative scoped misses" },
@@ -3706,8 +3707,8 @@ public sealed partial class NavigationTools
             // filesTotal omitted until the scan knows it, no fabricated ETA/percent (bead two).
             progress = ProgressJson(h),
             hint = h.State == "building"
-                ? "The workspace index is still building (first run). Retry shortly; use shell tools meanwhile."
-                : "Index unavailable. Falling back to shell search is appropriate.",
+                ? "The workspace index is still building (first run). Inspect server_capabilities index.progress, wait while it advances, and retry after index.state is ready."
+                : "The workspace index is unavailable. Inspect server_capabilities for the cause and recovery before retrying.",
         });
     }
 

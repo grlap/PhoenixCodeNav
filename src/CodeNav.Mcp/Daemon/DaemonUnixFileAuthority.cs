@@ -5,6 +5,7 @@ namespace CodeNav.Mcp.Daemon;
 internal readonly record struct DaemonUnixFileInfo(uint UserId, ushort Mode)
 {
     internal bool IsDirectory => (Mode & 0xF000) == 0x4000;
+    internal bool IsRegular => (Mode & 0xF000) == 0x8000;
     internal bool IsSocket => (Mode & 0xF000) == 0xC000;
 }
 

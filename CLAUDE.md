@@ -40,6 +40,8 @@ marked as facts.
 
 - For design/API decisions and meaningful implementation choices,
   proactively consult an independent opinion before implementing.
+- No tests of infrastructure, build targets, scripts, or repository policy
+  files — reaffirmed 2026-09-03 ("again").
 - Never create feature, fix, review, or temporary Git branches for this
   repository; work on the default branch.
 - Do not introduce or lower any MCP or internal count, byte, transfer,

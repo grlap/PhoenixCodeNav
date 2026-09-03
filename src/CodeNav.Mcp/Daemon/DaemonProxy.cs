@@ -77,7 +77,7 @@ internal sealed class DaemonProxy
         }
     }
 
-    private async Task<Stream> ConnectOrStartAsync(CancellationToken cancellationToken)
+    internal async Task<Stream> ConnectOrStartAsync(CancellationToken cancellationToken)
     {
         try
         {

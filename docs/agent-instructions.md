@@ -89,3 +89,35 @@ Fall back to shell search only for true regex work, files outside the indexed wo
 transient build output, or when Phoenix explicitly reports that the required layer is
 unavailable. When the user asks to open the Phoenix Operations Portal, call
 `open_operations_portal` and return its URL verbatim; do not open a browser yourself.
+
+### Shell-only agents
+
+When MCP transport is unavailable but the Phoenix executable is installed, use its direct CLI
+instead of replacing structured navigation with broad shell search. Start with
+`PhoenixCodeNav.Mcp tools` and inspect a tool through `help <tool>` or `schema <tool>`. Discovery is
+local to the executable, accepts but ignores global workspace/index flags, does not start a daemon, and carries
+`meta.build` plus `meta.indexSchema` on `tools` and `help`; `schema` is intentionally the bare JSON
+Schema, so cache it with the stamped help response when build identity matters. Invoke the exact
+MCP name directly, for example
+`PhoenixCodeNav.Mcp search_symbol --workspace-root <repo> --query IndexManager --lang csharp`.
+Invocation workspace precedence is `--workspace-root`, then `CODENAV_WORKSPACE_ROOT`, then the
+current working directory, so `cd <repo>` is the shortest reliable setup.
+Direct flags use exact case-sensitive MCP wire names and accept `--name value` or `--name=value`.
+Use `--json`, a regular non-symlink `--args-file <path>`, or `--args-file -` for complete JSON
+arguments; stdin is one complete UTF-8 object terminated by EOF. Parse the single JSON document on stdout and keep stderr
+separate. Exit codes are `0` success/partial, `1` domain/request-rejected/invalid-tool-result error, `2` bad input,
+`3` daemon unavailable only, and `130` interrupted. A validated tool call joins the same shared
+daemon and preserves the same response contract. CLI-generated and daemon-unavailable envelopes use
+`retryable`; relayed tool-domain results keep their MCP `retryRecommended` / `retryHint` fields. Act
+on the stated recovery before retrying at most once. Treat `index_building` separately: inspect
+`server_capabilities.index.progress`, wait while its counters advance, and retry the original tool
+after `index.state` becomes `ready`; do not replace structured navigation with broad shell search.
+The CLI is not permission to invent automatic retries or name-based fallbacks;
+`phoenix_tool_result_invalid` is non-retryable. The CLI adds no
+second wall-clock timeout: tool work keeps each tool's own deadline, Ctrl-C/SIGTERM returns `130`,
+and a host that needs a whole-process deadline should enforce it around the CLI process. `--pretty`
+changes indentation only; response budgets apply to the compact JSON representation.
+The CLI-only names `--workspace-root`, `--index-db`, `--json`, `--args-file`, and `--pretty` are
+reserved. It rejects host lifecycle flags: request a rebuild through the `refresh_index` tool and
+configure daemon keepalive/idle lifetime on the MCP host, never as a side effect of a navigation
+command.

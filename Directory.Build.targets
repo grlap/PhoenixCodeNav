@@ -1,0 +1,70 @@
+<Project>
+  <PropertyGroup>
+    <_PhoenixDistributionProject Condition="'$(MSBuildProjectName)' == 'CodeNav.Mcp' or '$(MSBuildProjectName)' == 'CodeNav.Portal'">true</_PhoenixDistributionProject>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(_PhoenixDistributionProject)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)LICENSE"
+          Link="LICENSE"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)NOTICE"
+          Link="NOTICE"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)THIRD-PARTY-NOTICES.txt"
+          Link="THIRD-PARTY-NOTICES.txt"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)legal/ModelContextProtocol-1.4.0-LICENSE.txt"
+          Link="legal/ModelContextProtocol-1.4.0-LICENSE.txt"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)legal/ModelContextProtocol-1.4.0-THIRD-PARTY-NOTICES.txt"
+          Link="legal/ModelContextProtocol-1.4.0-THIRD-PARTY-NOTICES.txt"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)legal/SQLitePCLRaw-2.1.12-NOTICE.txt"
+          Link="legal/SQLitePCLRaw-2.1.12-NOTICE.txt"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- A self-contained application redistributes the runtime. Source the matching legal files
+       from the exact runtime packs selected by this SDK, so a servicing update cannot leave a
+       stale checked-in notice. Windows coreclr is additionally governed by the .NET Library
+       License; keep those terms distinct from PhoenixCodeNav's Apache-2.0 license. -->
+  <Target Name="IncludeResolvedRuntimePackLegalFiles"
+          AfterTargets="ComputeFilesToPublish"
+          Condition="'$(_PhoenixDistributionProject)' == 'true' and '$(SelfContained)' == 'true'">
+    <ItemGroup>
+      <_PhoenixRuntimePackLicense Include="%(ResolvedRuntimePack.PackageDirectory)/LICENSE*">
+        <RuntimePackId>%(ResolvedRuntimePack.NuGetPackageId)</RuntimePackId>
+      </_PhoenixRuntimePackLicense>
+      <_PhoenixRuntimePackNotice Include="%(ResolvedRuntimePack.PackageDirectory)/THIRD-PARTY-NOTICES*">
+        <RuntimePackId>%(ResolvedRuntimePack.NuGetPackageId)</RuntimePackId>
+      </_PhoenixRuntimePackNotice>
+      <_PhoenixRuntimePackLicense>
+        <RelativePath>legal/runtime-packs/%(RuntimePackId)/%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </_PhoenixRuntimePackLicense>
+      <_PhoenixRuntimePackNotice>
+        <RelativePath>legal/runtime-packs/%(RuntimePackId)/%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </_PhoenixRuntimePackNotice>
+      <ResolvedFileToPublish Include="@(_PhoenixRuntimePackLicense);@(_PhoenixRuntimePackNotice)" />
+      <ResolvedFileToPublish Include="$(MSBuildThisFileDirectory)legal/Microsoft-DotNet-Library-License.txt"
+                             Condition="$([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('win-'))">
+        <RelativePath>legal/Microsoft-DotNet-Library-License.txt</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+    <Error Condition="'@(ResolvedRuntimePack)' == ''"
+           Text="A self-contained Phoenix distribution requires resolved runtime packs before legal notices can be staged." />
+    <Error Condition="'@(_PhoenixRuntimePackLicense->Count())' != '@(ResolvedRuntimePack->Count())'"
+           Text="Every resolved runtime pack must provide exactly one LICENSE file for the Phoenix distribution." />
+  </Target>
+</Project>

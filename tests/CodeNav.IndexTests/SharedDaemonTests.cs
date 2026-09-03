@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using CodeNav.Core.Indexing;
 using CodeNav.Mcp;
@@ -227,6 +228,310 @@ public sealed class SharedDaemonTests
             try { await RetireDaemonForTestAsync(endpoint); } catch { }
             if (second is not null) await TryDisposeClientAsync(second);
             if (first is not null) await TryDisposeClientAsync(first);
+            writer.Dispose();
+            await CleanupEndpointForTestAsync(endpoint);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task CliDiscoversAndInvokesTheLiveSurfaceThroughTheSharedDaemon()
+    {
+        string root = Directory.CreateTempSubdirectory("Phoenix agent CLI ").FullName;
+        string argumentsFile = Path.GetTempFileName();
+        string executable = FindMcpExecutable();
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        McpClient? client = null;
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "CliTarget.cs"),
+                "namespace CliFixture; public sealed class CliTarget { } " +
+                "public sealed class CaféTarget { }");
+            File.WriteAllText(argumentsFile,
+                "{\"query\":\"CaféTarget\",\"lang\":\"csharp\",\"limit\":1}");
+
+            CliResult tools = await RunCliAsync(executable, root, ["tools"]);
+            Assert.Equal(0, tools.ExitCode);
+            Assert.Equal(27, tools.Payload.GetProperty("tools").GetArrayLength());
+            Assert.Equal(BuildInfo.Stamp,
+                tools.Payload.GetProperty("meta").GetProperty("build").GetString());
+            Assert.Equal(BuildInfo.IndexSchema,
+                tools.Payload.GetProperty("meta").GetProperty("indexSchema").GetString());
+            Assert.Contains(tools.Payload.GetProperty("tools").EnumerateArray(),
+                tool => tool.GetProperty("name").GetString() == "search_symbol");
+
+            CliResult help = await RunCliAsync(
+                executable, root, ["help", "search_symbol"]);
+            Assert.Equal(0, help.ExitCode);
+            Assert.Equal("search_symbol", help.Payload.GetProperty("name").GetString());
+            Assert.Equal("object", help.Payload.GetProperty("inputSchema")
+                .GetProperty("type").GetString());
+            Assert.Equal(BuildInfo.Stamp,
+                help.Payload.GetProperty("meta").GetProperty("build").GetString());
+
+            CliResult schema = await RunCliAsync(
+                executable, root, ["schema", "search_symbol"]);
+            Assert.Equal(0, schema.ExitCode);
+            Assert.True(schema.Payload.GetProperty("properties")
+                .TryGetProperty("query", out _));
+
+            CliResult offlineSchema = await RunCliAsync(
+                executable,
+                Path.Combine(root, "missing-workspace"),
+                ["schema", "search_symbol"]);
+            Assert.Equal(0, offlineSchema.ExitCode);
+            Assert.True(offlineSchema.Payload.GetProperty("properties")
+                .TryGetProperty("query", out _));
+
+            CliResult unknown = await RunCliAsync(
+                executable, root, ["not_a_phoenix_tool"]);
+            Assert.Equal(2, unknown.ExitCode);
+            Assert.Equal("bad_request", unknown.Payload.GetProperty("error").GetString());
+            Assert.Equal("unknown_tool", unknown.Payload.GetProperty("reason").GetString());
+
+            CliResult multibyteUnknown = await RunCliAsync(
+                executable, root, [new string('\u00e9', 20_000)]);
+            Assert.Equal(2, multibyteUnknown.ExitCode);
+            Assert.True(Encoding.UTF8.GetByteCount(multibyteUnknown.RawOutput) <=
+                        Json.HardBudgetBytes + Environment.NewLine.Length);
+            Assert.Contains(new string('\u00e9', 32), multibyteUnknown.RawOutput,
+                StringComparison.Ordinal);
+
+            string missingWorkspacePath = Path.Combine(root, "missing-cli-workspace");
+            CliResult missingWorkspace = await RunCliAsync(
+                executable, missingWorkspacePath, ["server_capabilities"]);
+            Assert.Equal(2, missingWorkspace.ExitCode);
+            Assert.Equal("bad_request",
+                missingWorkspace.Payload.GetProperty("error").GetString());
+            Assert.Equal("workspaceRoot",
+                missingWorkspace.Payload.GetProperty("field").GetString());
+            Assert.Equal("path_not_found",
+                missingWorkspace.Payload.GetProperty("reason").GetString());
+
+            CliResult wrongCase = await RunCliAsync(executable, root,
+                ["search_symbol", "--Query", "CliTarget"]);
+            Assert.Equal(2, wrongCase.ExitCode);
+            Assert.Equal("unknown_field", wrongCase.Payload.GetProperty("reason").GetString());
+            Assert.Equal("Query", wrongCase.Payload.GetProperty("field").GetString());
+
+            CliResult missingArgumentsFile = await RunCliAsync(executable, root,
+                ["search_symbol", "--args-file", Path.Combine(root, "missing.json")]);
+            Assert.Equal(2, missingArgumentsFile.ExitCode);
+            Assert.Equal("argument_source_unavailable",
+                missingArgumentsFile.Payload.GetProperty("reason").GetString());
+
+            CliResult nonRegularArgumentsFile = await RunCliAsync(executable, root,
+                ["search_symbol", "--args-file", root]);
+            Assert.Equal(2, nonRegularArgumentsFile.ExitCode);
+            Assert.Equal("argument_source_not_regular",
+                nonRegularArgumentsFile.Payload.GetProperty("reason").GetString());
+
+            if (!OperatingSystem.IsWindows())
+            {
+                string fifoArgumentsFile = Path.Combine(root, "cli-arguments.fifo");
+                Assert.Equal(0, mkfifo(fifoArgumentsFile, 0x180)); // 0600
+                CliResult fifoArguments = await RunCliAsync(executable, root,
+                    ["search_symbol", "--args-file", fifoArgumentsFile]);
+                Assert.Equal(2, fifoArguments.ExitCode);
+                Assert.Equal("argument_source_not_regular",
+                    fifoArguments.Payload.GetProperty("reason").GetString());
+            }
+
+            CliResult rebuild = await RunCliAsync(executable, root,
+                ["search_symbol", "--rebuild", "--query", "CliTarget"]);
+            Assert.Equal(2, rebuild.ExitCode);
+            Assert.Equal("unexpected_field", rebuild.Payload.GetProperty("reason").GetString());
+            Assert.Equal("rebuild", rebuild.Payload.GetProperty("field").GetString());
+            Assert.Contains("refresh_index", rebuild.Payload.GetProperty("detail").GetString());
+
+            CliResult keepAlive = await RunCliAsync(executable, root,
+                ["search_symbol", "--keepalive", "--query", "CliTarget"]);
+            Assert.Equal(2, keepAlive.ExitCode);
+            Assert.Equal("unexpected_field",
+                keepAlive.Payload.GetProperty("reason").GetString());
+            Assert.Equal("keepalive", keepAlive.Payload.GetProperty("field").GetString());
+
+            CliResult daemonIdle = await RunCliAsync(executable, root,
+                ["search_symbol", "--daemon-idle-ms", "100", "--query", "CliTarget"]);
+            Assert.Equal(2, daemonIdle.ExitCode);
+            Assert.Equal("unexpected_field",
+                daemonIdle.Payload.GetProperty("reason").GetString());
+            Assert.Equal("daemonIdleMs", daemonIdle.Payload.GetProperty("field").GetString());
+
+            CliResult prettyError = await RunCliAsync(executable, root,
+                ["search_symbol", "--pretty", "--rebuild"]);
+            Assert.Equal(2, prettyError.ExitCode);
+            Assert.Contains('\n', prettyError.RawOutput.TrimEnd('\r', '\n'));
+
+            Assert.False(File.Exists(endpoint.DescriptorPath));
+            Assert.False(File.Exists(endpoint.StartupLockPath));
+            Assert.False(File.Exists(endpoint.StartupStatusPath));
+            if (endpoint.SocketPath is not null)
+                Assert.False(File.Exists(endpoint.SocketPath));
+
+            client = await CreateClientAsync(executable, root);
+            await WaitForIndexStateAsync(client, "ready");
+            JsonElement mcpCapabilities = await CallAsync(client, "server_capabilities");
+            int daemonPid = mcpCapabilities.GetProperty("runtime")
+                .GetProperty("processId").GetInt32();
+
+            CliResult capabilities = await RunCliAsync(
+                executable, root, ["server_capabilities"]);
+            Assert.Equal(0, capabilities.ExitCode);
+            Assert.Equal(daemonPid, capabilities.Payload.GetProperty("runtime")
+                .GetProperty("processId").GetInt32());
+            Assert.Contains(capabilities.Payload.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() ==
+                           "agent-cli-tool-surface");
+
+            CliResult flags = await RunCliAsync(executable, root,
+                ["search_symbol", "--query", "CliTarget", "--lang", "csharp", "--limit", "1"]);
+            Assert.Equal(0, flags.ExitCode);
+            Assert.Equal("CliTarget", Assert.Single(flags.Payload.GetProperty("symbols")
+                .EnumerateArray()).GetProperty("name").GetString());
+
+            const string jsonArguments =
+                "{\"query\":\"CaféTarget\",\"lang\":\"csharp\",\"limit\":1}";
+            CliResult json = await RunCliAsync(
+                executable, root, ["search_symbol", "--json", jsonArguments]);
+            Assert.Equal(0, json.ExitCode);
+            Assert.Equal("CaféTarget", Assert.Single(json.Payload.GetProperty("symbols")
+                .EnumerateArray()).GetProperty("name").GetString());
+
+            CliResult file = await RunCliAsync(
+                executable, root, ["search_symbol", "--args-file", argumentsFile]);
+            Assert.Equal(0, file.ExitCode);
+            Assert.Equal("CaféTarget", Assert.Single(file.Payload.GetProperty("symbols")
+                .EnumerateArray()).GetProperty("name").GetString());
+
+            CliResult stdin = await RunCliAsync(
+                executable, root, ["search_symbol", "--args-file", "-"], jsonArguments);
+            Assert.Equal(0, stdin.ExitCode);
+            Assert.Equal("CaféTarget", Assert.Single(stdin.Payload.GetProperty("symbols")
+                .EnumerateArray()).GetProperty("name").GetString());
+
+            CliResult badRequest = await RunCliAsync(executable, root, ["definition"]);
+            Assert.Equal(2, badRequest.ExitCode);
+            Assert.Equal("bad_request",
+                badRequest.Payload.GetProperty("error").GetString());
+
+            CliResult domainFailure = await RunCliAsync(executable, root,
+                ["definition", "--documentationCommentId", "T:CliFixture.DoesNotExist"]);
+            Assert.Equal(1, domainFailure.ExitCode);
+            Assert.Equal("symbol_not_found",
+                domainFailure.Payload.GetProperty("error").GetString());
+        }
+        finally
+        {
+            if (client is not null) await TryDisposeClientAsync(client);
+            try { await RetireDaemonForTestAsync(endpoint); } catch { }
+            await CleanupEndpointForTestAsync(endpoint);
+            try { File.Delete(argumentsFile); } catch { }
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task ColdConcurrentCliCallsElectAndReuseOneSharedDaemon()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix cold concurrent agent CLI ").FullName;
+        string executable = FindMcpExecutable();
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        try
+        {
+            Assert.False(File.Exists(endpoint.DescriptorPath));
+
+            Task<CliResult> firstCall = RunCliAsync(
+                executable, root, ["server_capabilities"]);
+            Task<CliResult> secondCall = RunCliAsync(
+                executable, root, ["server_capabilities"]);
+            CliResult[] calls = await Task.WhenAll(firstCall, secondCall);
+
+            Assert.All(calls, call => Assert.Equal(0, call.ExitCode));
+            int firstPid = calls[0].Payload.GetProperty("runtime")
+                .GetProperty("processId").GetInt32();
+            int secondPid = calls[1].Payload.GetProperty("runtime")
+                .GetProperty("processId").GetInt32();
+            Assert.Equal(firstPid, secondPid);
+            Assert.Equal(BuildInfo.Version,
+                calls[0].Payload.GetProperty("build").GetProperty("version").GetString());
+            Assert.Equal(BuildInfo.IndexSchema,
+                calls[0].Payload.GetProperty("build").GetProperty("indexSchema").GetString());
+            Assert.True(File.Exists(endpoint.DescriptorPath));
+            DaemonDescriptorRecord descriptor = Assert.IsType<DaemonDescriptorRecord>(
+                DaemonDescriptor.TryRead(endpoint));
+            Assert.Equal(firstPid, descriptor.Pid);
+        }
+        finally
+        {
+            try { await RetireDaemonForTestAsync(endpoint); } catch { }
+            await CleanupEndpointForTestAsync(endpoint);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task CliReportsDaemonDeathDuringMcpExchangeAsUnavailable()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix CLI dying daemon ").FullName;
+        string executable = FindMcpExecutable();
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var listening = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Task dyingDaemon = ServeHandshakeThenCloseAsync(
+            endpoint, listening, timeout.Token);
+        try
+        {
+            await listening.Task.WaitAsync(timeout.Token);
+            CliResult result = await RunCliAsync(
+                executable, root, ["server_capabilities"]);
+
+            Assert.Equal(3, result.ExitCode);
+            Assert.Equal("unavailable",
+                result.Payload.GetProperty("meta").GetProperty("indexMode").GetString());
+            Assert.Equal("daemon_cli_transport_failed",
+                result.Payload.GetProperty("meta").GetProperty("cause").GetString());
+            Assert.True(result.Payload.GetProperty("meta").GetProperty("retryable").GetBoolean());
+            Assert.False(result.Payload.TryGetProperty("error", out _));
+            await dyingDaemon.WaitAsync(timeout.Token);
+        }
+        finally
+        {
+            timeout.Cancel();
+            try { await dyingDaemon; } catch { }
+            DaemonDescriptor.DeleteOwn(endpoint);
+            await CleanupEndpointForTestAsync(endpoint);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task CliReportsWriterRefusalAsJsonAndExitThree()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix agent CLI writer refusal ").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        string executable = FindMcpExecutable();
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        using var writer = new IndexManager(root, database);
+        try
+        {
+            writer.Start();
+            Assert.True(writer.IsWriter, writer.Health().Error);
+
+            CliResult refusal = await RunCliAsync(
+                executable, root, ["server_capabilities"]);
+            Assert.Equal(3, refusal.ExitCode);
+            Assert.Equal("unavailable", refusal.Payload.GetProperty("meta")
+                .GetProperty("indexMode").GetString());
+            Assert.Equal("daemon_writer_unavailable", refusal.Payload.GetProperty("meta")
+                .GetProperty("cause").GetString());
+        }
+        finally
+        {
             writer.Dispose();
             await CleanupEndpointForTestAsync(endpoint);
             TestWorkspaceCleanup.DeleteWorkspace(root);
@@ -1891,6 +2196,89 @@ public sealed class SharedDaemonTests
         try { await DisposeClientAsync(client); } catch { }
     }
 
+    private static async Task<CliResult> RunCliAsync(
+        string executable,
+        string root,
+        IReadOnlyList<string> arguments,
+        string? standardInput = null)
+    {
+        var start = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(executable)!,
+            RedirectStandardInput = standardInput is not null,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true),
+            StandardErrorEncoding = new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true),
+        };
+        foreach (string argument in arguments)
+            start.ArgumentList.Add(argument);
+        bool discovery = arguments.Count > 0 &&
+                         arguments[0] is "tools" or "help" or "schema";
+        if (discovery)
+        {
+            start.Environment["CODENAV_WORKSPACE_ROOT"] = root;
+        }
+        else
+        {
+            start.ArgumentList.Add("--workspace-root");
+            start.ArgumentList.Add(root);
+        }
+
+        using Process process = Process.Start(start) ??
+            throw new IOException("Phoenix CLI test process did not start.");
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderr = process.StandardError.ReadToEndAsync();
+        if (standardInput is not null)
+        {
+            byte[] inputBytes = Encoding.UTF8.GetBytes(standardInput);
+            await process.StandardInput.BaseStream.WriteAsync(inputBytes);
+            await process.StandardInput.BaseStream.FlushAsync();
+            process.StandardInput.BaseStream.Close();
+        }
+
+        try
+        {
+            await process.WaitForExitAsync()
+                .WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            throw;
+        }
+
+        string output = await stdout;
+        string diagnostics = await stderr;
+        string[] diagnosticLines = diagnostics.Split(
+            ['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.All(diagnosticLines, line => Assert.Equal(
+            DaemonRuntimeDiagnostics.DiscoveryFallbackWarning, line));
+        string compact = output.TrimEnd('\r', '\n');
+        bool pretty = arguments.Contains("--pretty", StringComparer.Ordinal);
+        if (!pretty)
+        {
+            Assert.DoesNotContain('\r', compact);
+            Assert.DoesNotContain('\n', compact);
+        }
+        using JsonDocument document = JsonDocument.Parse(output);
+        return new CliResult(
+            process.ExitCode,
+            document.RootElement.Clone(),
+            output);
+    }
+
+    private sealed record CliResult(
+        int ExitCode,
+        JsonElement Payload,
+        string RawOutput);
+
     private static Process LaunchDaemonForTest(
         string executable,
         string root,
@@ -2024,6 +2412,30 @@ public sealed class SharedDaemonTests
         }
     }
 
+    private static async Task ServeHandshakeThenCloseAsync(
+        DaemonEndpoint endpoint,
+        TaskCompletionSource listening,
+        CancellationToken cancellationToken)
+    {
+        await using IDaemonTransportListener listener = DaemonTransport.Listen(endpoint);
+        DaemonDescriptor.Publish(endpoint);
+        listening.TrySetResult();
+        try
+        {
+            await using Stream stream = await listener.AcceptAsync(cancellationToken);
+            (byte version, DaemonPreambleMode mode, DaemonHandshakeRequest? request) =
+                await DaemonProtocol.ReadRequestAsync(stream, cancellationToken);
+            DaemonHandshakeResponse response = DaemonProtocol.Evaluate(
+                endpoint, version, mode, request);
+            Assert.True(response.Accepted);
+            await DaemonProtocol.WriteResponseAsync(stream, response, cancellationToken);
+        }
+        finally
+        {
+            DaemonDescriptor.DeleteOwn(endpoint);
+        }
+    }
+
     private static string FindMcpExecutable()
     {
         string repository = FindRepositoryRoot();
@@ -2052,6 +2464,9 @@ public sealed class SharedDaemonTests
 
     [DllImport("libc", SetLastError = true)]
     private static extern int getsid(int processId);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int mkfifo(string path, uint mode);
 
     private sealed class FlakyDaemonListener : IDaemonTransportListener
     {

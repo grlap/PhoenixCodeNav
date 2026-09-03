@@ -671,7 +671,8 @@ public class Batch5GitRefreshTests
         // which DO consult fsmonitor — on a dev machine with global core.fsmonitor=true the spawned
         // daemon would inherit the pipe and hang the entire suite).
         string? outp = GitInfo.RunProcess("git", dir,
-            "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args, waitMs: 20000);
+            "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args,
+            waitMs: TestGit.ProcessExitTimeoutMilliseconds);
         return outp is null ? (1, "") : (0, outp);
     }
 

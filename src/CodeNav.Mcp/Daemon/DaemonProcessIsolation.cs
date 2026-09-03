@@ -10,6 +10,10 @@ internal static class DaemonProcessIsolation
     private const int StandardInputHandle = -10;
     private const int StandardOutputHandle = -11;
     private const int StandardErrorHandle = -12;
+    private const uint HandleFlagInherit = 0x00000001;
+    private const int GetFileDescriptorFlags = 1;
+    private const int SetFileDescriptorFlags = 2;
+    private const int CloseOnExec = 1;
 
     internal static Process Launch(
         DaemonEndpoint endpoint,
@@ -44,6 +48,39 @@ internal static class DaemonProcessIsolation
             idleLingerForTest,
             "--daemon");
 
+    /// <summary>
+    /// A launcher must keep its own stdout/stderr open while ensuring that its child cannot inherit
+    /// those caller-owned pipes as unrelated extra handles. The child receives dedicated redirected
+    /// startup streams from <see cref="LaunchProcess"/>.
+    /// </summary>
+    private static void PreventParentStreamInheritance()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            foreach (int kind in new[]
+                     {
+                         StandardOutputHandle, StandardErrorHandle,
+                     })
+            {
+                IntPtr handle = GetStdHandle(kind);
+                if (handle == IntPtr.Zero || handle == new IntPtr(-1)) continue;
+                if (!SetHandleInformation(handle, HandleFlagInherit, 0))
+                    throw new IOException(
+                        "Phoenix bootstrap could not isolate an inherited standard stream.");
+            }
+            return;
+        }
+
+        for (int descriptor = 1; descriptor <= 2; descriptor++)
+        {
+            int flags = fcntl(descriptor, GetFileDescriptorFlags, 0);
+            if (flags < 0 ||
+                fcntl(descriptor, SetFileDescriptorFlags, flags | CloseOnExec) < 0)
+                throw new IOException(
+                    "Phoenix bootstrap could not isolate an inherited standard stream.");
+        }
+    }
+
     private static Process LaunchProcess(
         DaemonEndpoint endpoint,
         string? indexDb,
@@ -52,6 +89,7 @@ internal static class DaemonProcessIsolation
         TimeSpan? idleLingerForTest,
         string mode)
     {
+        PreventParentStreamInheritance();
         (string executable, string? managedEntry) = CurrentLaunchAuthority();
         var start = new ProcessStartInfo
         {
@@ -62,6 +100,10 @@ internal static class DaemonProcessIsolation
             // Private daemon-startup IPC. This stream is consumed only by the parent Phoenix
             // process and is detached immediately after the one startup report.
             RedirectStandardOutput = true,
+            // Never let a long-lived daemon retain a one-shot CLI/MCP caller's captured stderr
+            // handle. The child detaches its own standard streams, but Console's managed writer
+            // may otherwise keep the inherited OS pipe alive long enough to prevent caller EOF.
+            RedirectStandardError = true,
         };
         if (managedEntry is not null) start.ArgumentList.Add(managedEntry);
         start.ArgumentList.Add(mode);
@@ -80,8 +122,25 @@ internal static class DaemonProcessIsolation
             start.ArgumentList.Add(((long)linger.TotalMilliseconds).ToString());
         }
 
-        Process? process = Process.Start(start);
-        return process ?? throw new IOException("Phoenix daemon process could not be started.");
+        Process process = Process.Start(start) ??
+            throw new IOException("Phoenix daemon process could not be started.");
+        _ = DrainStandardErrorAsync(process);
+        return process;
+    }
+
+    private static async Task DrainStandardErrorAsync(Process process)
+    {
+        try
+        {
+            await process.StandardError.BaseStream
+                .CopyToAsync(Console.OpenStandardError())
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // Diagnostics are best effort. Startup authority and cleanup remain on stdout and the
+            // process handle, so a closed caller stderr must never replace the real startup result.
+        }
     }
 
     internal static void DetachStandardStreams(bool preserveStandardOutput = false)
@@ -224,6 +283,9 @@ internal static class DaemonProcessIsolation
     [DllImport("libc")]
     private static extern int close(int fileDescriptor);
 
+    [DllImport("libc", SetLastError = true)]
+    private static extern int fcntl(int fileDescriptor, int command, int argument);
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateFileW(
         string fileName,
@@ -236,6 +298,13 @@ internal static class DaemonProcessIsolation
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr GetStdHandle(int standardHandle);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetHandleInformation(
+        IntPtr handle,
+        uint mask,
+        uint flags);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

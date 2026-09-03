@@ -270,6 +270,66 @@ env = { CODENAV_DEFAULT_QUERY_SCOPE = "first_party" }
 Then add the agent instructions from `docs/agent-instructions.md` to your repo's
 `CLAUDE.md` / `AGENTS.md` so agents prefer these tools over shell grep.
 
+### Use the same tools from a shell
+
+Shell-only agents can call the published MCP executable directly. This is a CLI view of the MCP
+surface, not a second implementation: discovery and structural validation use the executable's
+own MCP registration metadata without starting the daemon; a validated invocation then joins the
+same workspace daemon and returns the tool's unchanged JSON envelope.
+
+Invocation workspace precedence is `--workspace-root`, then `CODENAV_WORKSPACE_ROOT`, then the
+current working directory. This keeps the agent-natural `cd <repo>; PhoenixCodeNav.Mcp ...` form.
+
+```powershell
+PhoenixCodeNav.Mcp.exe tools
+PhoenixCodeNav.Mcp.exe help search_symbol
+PhoenixCodeNav.Mcp.exe schema search_symbol
+
+PhoenixCodeNav.Mcp.exe search_symbol --workspace-root C:\path\to\repo --query IndexManager --lang csharp --limit 5
+PhoenixCodeNav.Mcp.exe references --workspace-root C:\path\to\repo --json '{"documentationCommentId":"M:Example.Service.Run","mode":"semantic"}'
+PhoenixCodeNav.Mcp.exe context_pack --workspace-root C:\path\to\repo --args-file request.json
+Get-Content -Raw request.json | PhoenixCodeNav.Mcp.exe context_pack --workspace-root C:\path\to\repo --args-file -
+```
+
+Direct flags use the exact case-sensitive camelCase parameter names shown by `schema <tool>`.
+Strings, booleans, integers, and numbers can use either `--name value` or `--name=value`; the latter
+also passes a string that begins with `--` without ambiguity. Arrays and objects use `--json` or
+`--args-file <path|->`. Argument files must be regular files; symlinks, directories, and devices are
+refused. Standard input is one complete UTF-8 JSON object terminated by EOF. Do not combine
+complete JSON input with direct flags. `--pretty` is for humans; the default compact form
+writes exactly one JSON document to stdout so an agent can parse it without scraping prose.
+Pretty mode changes indentation only and uses the same UTF-8 encoder; Phoenix response budgets
+apply to the compact JSON form, not presentation whitespace. Diagnostics go to stderr.
+
+Discovery is executable-local and never workspace-scoped: `tools`, `help`, and `schema` accept but
+ignore global workspace/index flags and do not start a daemon. Their envelopes carry `meta.build` and
+`meta.indexSchema`, except that `schema <tool>` intentionally returns the bare registration-backed
+JSON Schema for direct machine consumption. Cache a schema together with the stamped `help <tool>`
+response from the same executable when build identity matters.
+
+The CLI reserves `--workspace-root`, `--index-db`, `--json`, `--args-file`, and `--pretty` for
+transport and presentation; no current MCP parameter uses those names. MCP host lifecycle flags do
+not carry into a one-shot tool call: `--rebuild` is rejected in favor of an explicit
+`refresh_index force:'full'` invocation, while `--keepalive` and `--daemon-idle-ms` remain host/test
+configuration.
+
+Exit code `0` means the MCP call completed successfully, including an honestly marked partial
+result. `1` means a structured Phoenix domain error, a daemon request rejection, an invalid daemon
+tool-result contract, or an internal CLI failure;
+`2` means invalid CLI/tool input; `3` exclusively means the shared daemon was unavailable; and
+`130` means the call was interrupted. An invalid result uses `phoenix_tool_result_invalid` with
+`retryable:false`, never the unavailable envelope. The CLI never retries a tool call automatically;
+CLI-generated and daemon-unavailable envelopes use `retryable`, while domain results relayed from
+the tool preserve the MCP `retryRecommended` / `retryHint` fields. Act on the stated recovery before
+retrying at most once. Treat `index_building` separately: inspect `server_capabilities.index.progress`,
+wait while its counters advance, and retry the original tool after `index.state` becomes `ready`—do
+not replace structured navigation with broad shell search. Never blindly repeat unchanged input or
+invent a name-based fallback. The CLI
+does not impose a second wall-clock timeout: MCP initialization has its transport bound, tool work
+uses that tool's own deadline arguments, and Ctrl-C/SIGTERM returns `130`. A host that needs a whole-
+process deadline should enforce it around the CLI process. Use a shell alias named `phoenix` if a
+shorter executable name is convenient; the alias must still point to this published binary.
+
 ### Operations Portal
 
 When you explicitly ask the agent to open the Phoenix Operations Portal, it calls
@@ -336,7 +396,7 @@ worktrees with per-index status (schema, indexed commit, in-sync) — loop it fo
 all". A worktree whose own Phoenix daemon is running reports `worktree_index_locked`; refresh from
 that worktree's Phoenix session (`refresh_index`) instead.
 
-## Server CLI
+## MCP host mode
 
 ```text
 PhoenixCodeNav.Mcp.exe --workspace-root <dir> [--index-db <path>] [--rebuild]
@@ -348,6 +408,20 @@ as an unnecessary compatibility alias, and the former `--daemon-fallback-standal
 inert compatibility no-op. `--standalone` is reserved for diagnostics and isolated tests; it never
 acts as a fallback and refuses to serve if it cannot own the writer lease. `--rebuild` is honored by
 the shared daemon or by an explicitly selected standalone writer.
+
+## License
+
+PhoenixCodeNav is licensed under the [Apache License 2.0](LICENSE).
+Copyright 2026 Greg Lapinski. Third-party components remain under their own licenses; see
+[NOTICE](NOTICE), [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt), and the exact upstream
+terms retained in [`legal/`](legal/). The pinned `external/roslyn` and `external/fsharp` Git
+submodules are independently MIT-licensed integration-test corpora and are not relicensed by
+PhoenixCodeNav.
+
+Framework-dependent publish directories contain the Phoenix and NuGet dependency notices.
+Self-contained publishes additionally carry the license and third-party notices from the exact
+runtime packs selected by the .NET SDK. Windows self-contained publishes also carry the separate
+Microsoft .NET Library License for runtime components to which Microsoft applies those terms.
 
 ## Development
 

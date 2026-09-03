@@ -1,0 +1,165 @@
+PhoenixCodeNav third-party notices
+==================================
+
+PhoenixCodeNav is licensed under the Apache License, Version 2.0. That license
+applies to PhoenixCodeNav itself, not to the third-party components listed
+below. Those components remain under their respective licenses.
+
+Production NuGet dependency inventory
+-------------------------------------
+
+This inventory is the complete non-project package closure for the net10.0
+target recorded by src/CodeNav.Mcp/obj/project.assets.json at the time of this
+distribution.
+
+MIT:
+
+- FSharp.Compiler.Service/43.12.204
+- FSharp.Core/10.1.204
+- Humanizer.Core/2.14.1
+- Microsoft.CodeAnalysis.Analyzers/5.3.0
+- Microsoft.CodeAnalysis.Common/5.6.0
+- Microsoft.CodeAnalysis.CSharp.Workspaces/5.6.0
+- Microsoft.CodeAnalysis.CSharp/5.6.0
+- Microsoft.CodeAnalysis.Workspaces.Common/5.6.0
+- Microsoft.Data.Sqlite.Core/10.0.10
+- Microsoft.Data.Sqlite/10.0.10
+- Microsoft.Extensions.AI.Abstractions/10.5.2
+- Microsoft.Extensions.Caching.Abstractions/10.0.7
+- Microsoft.Extensions.Configuration.Abstractions/10.0.10
+- Microsoft.Extensions.Configuration.Binder/10.0.10
+- Microsoft.Extensions.Configuration.CommandLine/10.0.10
+- Microsoft.Extensions.Configuration.EnvironmentVariables/10.0.10
+- Microsoft.Extensions.Configuration.FileExtensions/10.0.10
+- Microsoft.Extensions.Configuration.Json/10.0.10
+- Microsoft.Extensions.Configuration.UserSecrets/10.0.10
+- Microsoft.Extensions.Configuration/10.0.10
+- Microsoft.Extensions.DependencyInjection.Abstractions/10.0.10
+- Microsoft.Extensions.DependencyInjection/10.0.10
+- Microsoft.Extensions.Diagnostics.Abstractions/10.0.10
+- Microsoft.Extensions.Diagnostics/10.0.10
+- Microsoft.Extensions.FileProviders.Abstractions/10.0.10
+- Microsoft.Extensions.FileProviders.Physical/10.0.10
+- Microsoft.Extensions.FileSystemGlobbing/10.0.10
+- Microsoft.Extensions.Hosting.Abstractions/10.0.10
+- Microsoft.Extensions.Hosting/10.0.10
+- Microsoft.Extensions.Logging.Abstractions/10.0.10
+- Microsoft.Extensions.Logging.Configuration/10.0.10
+- Microsoft.Extensions.Logging.Console/10.0.10
+- Microsoft.Extensions.Logging.Debug/10.0.10
+- Microsoft.Extensions.Logging.EventLog/10.0.10
+- Microsoft.Extensions.Logging.EventSource/10.0.10
+- Microsoft.Extensions.Logging/10.0.10
+- Microsoft.Extensions.Options.ConfigurationExtensions/10.0.10
+- Microsoft.Extensions.Options/10.0.10
+- Microsoft.Extensions.Primitives/10.0.10
+- System.Composition.AttributedModel/10.0.1
+- System.Composition.Convention/10.0.1
+- System.Composition.Hosting/10.0.1
+- System.Composition.Runtime/10.0.1
+- System.Composition.TypedParts/10.0.1
+- System.Composition/10.0.1
+- System.Diagnostics.EventLog/10.0.10
+- System.IO.Hashing/10.0.10
+
+Apache-2.0 package declarations (with the qualifications below):
+
+- ModelContextProtocol.Core/1.4.0
+- ModelContextProtocol/1.4.0
+- SQLitePCLRaw.bundle_e_sqlite3/2.1.12
+- SQLitePCLRaw.core/2.1.12
+- SQLitePCLRaw.lib.e_sqlite3/2.1.12
+- SQLitePCLRaw.provider.e_sqlite3/2.1.12
+
+.NET, F#, Roslyn, Microsoft.Extensions, System.* and Humanizer
+----------------------------------------------------------------
+
+The MIT-licensed package families above carry these attribution statements in
+their package metadata or upstream license:
+
+Copyright (c) .NET Foundation and Contributors
+Copyright (c) Microsoft Corporation. All rights reserved.
+Humanizer copyright (c) .NET Foundation and Contributors; package authors
+Mehdi Khalili and Claire Novotny.
+
+The MIT License (MIT)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Model Context Protocol C# SDK 1.4.0
+----------------------------------
+
+Copyright (c) 2024-2026 Model Context Protocol a Series of LF Projects, LLC.
+
+The package declares Apache-2.0 in NuGet, but the upstream project is in a
+license transition. New and relicensed code and specification contributions
+are Apache-2.0; contributions whose authors have not consented to relicensing
+remain MIT; documentation other than specifications is CC-BY-4.0. No rights
+beyond each contribution's applicable original license are conveyed.
+
+The exact upstream license and third-party notice files for v1.4.0 are shipped
+as:
+
+- legal/ModelContextProtocol-1.4.0-LICENSE.txt
+- legal/ModelContextProtocol-1.4.0-THIRD-PARTY-NOTICES.txt
+
+Source:
+https://github.com/modelcontextprotocol/csharp-sdk/tree/v1.4.0
+
+SQLitePCLRaw 2.1.12 and SQLite
+--------------------------------
+
+Copyright 2014-2024 SourceGear, LLC.
+
+The SQLitePCLRaw wrapper is Apache-2.0; the full Apache-2.0 terms are in the
+top-level LICENSE. PhoenixCodeNav uses the e_sqlite3 bundle and provider.
+SQLite itself is dedicated to the public domain. The exact SQLitePCLRaw 2.1.12
+notice is shipped as legal/SQLitePCLRaw-2.1.12-NOTICE.txt.
+
+Sources:
+https://github.com/ericsink/SQLitePCL.raw/tree/v2.1.12
+https://www.sqlite.org/copyright.html
+
+.NET runtime files in self-contained distributions
+---------------------------------------------------
+
+A framework-dependent PhoenixCodeNav publish does not redistribute the .NET
+host runtime. A self-contained publish does. For a self-contained publish,
+MSBuild copies the LICENSE and THIRD-PARTY-NOTICES files from every exact
+runtime pack resolved by the .NET SDK into legal/runtime-packs/<package-id>/.
+Those files are runtime-version-specific and are deliberately sourced from the
+resolved packages instead of being frozen in this repository.
+
+On Windows, Microsoft states that coreclr.dll and .NET runtimes embedded in a
+single-file executable are governed by the Microsoft .NET Library License.
+That separate license is shipped as legal/Microsoft-DotNet-Library-License.txt
+for Windows single-file self-contained output. It does not change the
+Apache-2.0 license of PhoenixCodeNav source.
+
+Sources:
+https://github.com/dotnet/core/blob/main/license-information.md
+https://github.com/dotnet/core/blob/main/license-information-windows.md
+
+Source-only external repositories
+---------------------------------
+
+external/roslyn and external/fsharp are independently licensed MIT Git
+submodules used as pinned integration-test corpora. They are not PhoenixCodeNav
+source, are not relicensed by PhoenixCodeNav's Apache-2.0 license, and are not
+included in the PhoenixCodeNav binary publish payload.

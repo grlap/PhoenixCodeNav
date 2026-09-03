@@ -954,8 +954,20 @@ Phoenix runs MCP itself over the local transport rather than defining a second r
 SDK's stream server transport binds one accepted pipe/socket stream to one `McpServer` session;
 all sessions receive the same daemon service provider and therefore the same `IndexManager` and
 `SemanticService` singletons. Tool registration, JSON schemas, cancellation notifications, progress,
-and error envelopes remain single-sourced. The proxy owns only stdio framing relay, discovery,
-autostart, the pre-MCP handshake, liveness, and reconnect before an MCP session is initialized.
+and error envelopes remain single-sourced. CLI discovery and structural argument validation create
+the same reflection-backed `McpServerTool` registrations locally; their request-time factories do
+not construct `NavigationTools` or touch Core state. Only a validated tool invocation opens an MCP
+client on the private daemon stream and writes the returned structured content as one JSON document.
+Complete JSON files/stdin are parsed directly from UTF-8 streams; stdin is EOF-framed, and the CLI
+does not invent a second input-size limit. Discovery results carry the producing build/schema stamp.
+A daemon response that is not the expected structured or single-JSON-text MCP result is an honest
+non-retryable `phoenix_tool_result_invalid` exit-1 response, never daemon-unavailable. The CLI never
+opens SQLite or selects standalone mode. The proxy owns only stdio/CLI transport
+adaptation, discovery, autostart, the pre-MCP handshake, liveness, and reconnect before an MCP
+session is initialized.
+The short-lived bootstrap severs caller stdout/stderr handle inheritance as well as process-tree
+ancestry before it launches the daemon; the daemon receives fresh private startup output streams
+and detaches its inherited stdin immediately on entry.
 Each accepted stream is dispatched before any session handler runs, so a first client whose MCP
 reads and requests keep completing synchronously cannot monopolize the accept loop and starve a
 second client's preamble. If a connected endpoint nevertheless fails to answer the bounded preamble,

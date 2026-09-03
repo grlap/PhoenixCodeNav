@@ -71,6 +71,11 @@ Phoenix serves a concise route in the MCP handshake, keeps capability discovery 
 and exposes stable feature ids through `server_capabilities`. Broad find/search calls can use the
 host-configured `CODENAV_DEFAULT_QUERY_SCOPE` (`all` or `first_party`) and always echo what was
 applied; `queryScope: "all"` restores all indexed content without changing index-time inclusion.
+Shell-only agents can access that same live surface through the published executable's direct CLI:
+`tools`, `help <tool>`, and `schema <tool>` inspect the executable's own MCP registration without
+starting the daemon and stamp their build/schema identity, while an exact tool name invokes it with
+schema-derived flags or a complete JSON object. Validated invocations join the shared daemon and
+return the unchanged JSON response rather than reimplementing navigation in a separate process.
 
 Symbol and project dead ends include bounded recovery evidence rather than silent substitution.
 Project selectors use exact path, exact suffixed filename, extensionless stem, then assembly

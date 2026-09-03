@@ -5,5 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Authors>Greg Lapinski</Authors>
+    <Company>Greg Lapinski</Company>
+    <Copyright>Copyright 2026 Greg Lapinski</Copyright>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
   </PropertyGroup>
 </Project>

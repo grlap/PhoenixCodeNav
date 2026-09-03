@@ -4,11 +4,11 @@ using CodeNav.Core.Semantic;
 namespace CodeNav.Tests;
 
 /// <summary>
-/// Regression coverage for review batch 2: PhoenixCodeNav-hja (reload must not orphan
-/// dependents) and PhoenixCodeNav-797 (resolve + search must share one snapshot).
+/// Regression coverage for reloads that must not orphan dependents and for resolution/search
+/// operations that must share one snapshot.
 /// Uses its own IndexFixture instance (separate temp workspace + db).
 /// </summary>
-public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
+public class Batch2SemanticTests : IClassFixture<IndexFixture>
 {
     private readonly IndexFixture _fx;
     private readonly IndexManager _manager;
@@ -17,16 +17,8 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
     public Batch2SemanticTests(IndexFixture fx)
     {
         _fx = fx;
-        _manager = new IndexManager(_fx.Root, _fx.DbPath);
-        _manager.Start();
-        for (int i = 0; i < 600 && !_manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-        _semantic = new SemanticService(_manager);
-    }
-
-    public void Dispose()
-    {
-        _semantic.Dispose();
-        _manager.Dispose();
+        _manager = _fx.SharedManager;
+        _semantic = _fx.SharedSemantic;
     }
 
     [Fact]
@@ -36,13 +28,7 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
         Assert.True(_semantic.FrameworkRefsAvailable);
     }
 
-    /// <summary>
-    /// The hja/797 scenario: run references() for a widely-used symbol, edit its declaring
-    /// file (forcing an owner reload on the next call), then run references() again. The
-    /// cross-project usages must NOT silently vanish (the pre-fix bug returned them dropped
-    /// with confidence 'exact' / partial:false), and resolution must stay consistent.
-    /// </summary>
-    /// <summary>n7ly: service-level twin of SemanticRetry — the transient degrade classes
+    /// <summary>Service-level twin of SemanticRetry: the transient degrade classes
     /// (cluster_cold_load / index_snapshot_unavailable / timeout under suite load) are
     /// retryable per their own documented contract; a deterministic failure keeps its final
     /// reason and the caller's assert names it.</summary>
@@ -67,7 +53,7 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
         var guard = q.SearchSymbols("Guard", "exact", new[] { "class" }, 1).Single();
         Assert.Equal("Acme.Platform.Common", guard.Ns);
 
-        var (before, r1) = await ReferencesWithRetry(guard.FilePath, guard.StartLine); // n7ly
+        var (before, r1) = await ReferencesWithRetry(guard.FilePath, guard.StartLine);
         Assert.True(before is not null, $"first references failed: {r1}");
         int beforeCross = before!.Groups.Count(g => !g.Project.Equals("Acme.Platform.Common", StringComparison.OrdinalIgnoreCase));
         Assert.True(beforeCross > 0, "expected Guard to be referenced from dependent projects");
@@ -87,13 +73,13 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
                 q => q.ContentByPath(guard.FilePath)?.Contains("ReloadMarkerNoop", StringComparison.Ordinal) == true,
                 "the dependency edit was not indexed");
 
-            var (after, r2) = await ReferencesWithRetry(guard.FilePath, guard.StartLine); // n7ly
+            var (after, r2) = await ReferencesWithRetry(guard.FilePath, guard.StartLine);
             Assert.True(after is not null, $"second references failed: {r2}");
 
             int afterCross = after!.Groups.Count(g => !g.Project.Equals("Acme.Platform.Common", StringComparison.OrdinalIgnoreCase));
             Assert.True(afterCross >= beforeCross,
                 $"cross-project references dropped after owner reload: {beforeCross} -> {afterCross} " +
-                "(hja: dependents orphaned by a fresh ProjectId)");
+                "(dependents were orphaned by a fresh ProjectId)");
             Assert.True(after.TotalLocations >= beforeTotal,
                 $"total exact references dropped after reload: {beforeTotal} -> {after.TotalLocations}");
         }
@@ -149,7 +135,7 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>, IDisposable
                 using var secondLoad = await workspace.EnsureLoadedAsync(set, CancellationToken.None);
                 var sol2 = secondLoad.Solution;
                 Assert.True(await DependentSeesGuard(sol2, dependent),
-                    "dependent lost visibility of Guard after Platform.Common reload (hja)");
+                    "dependent lost visibility of Guard after Platform.Common reload");
             }
             finally
             {

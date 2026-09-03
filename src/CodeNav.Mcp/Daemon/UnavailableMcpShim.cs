@@ -15,6 +15,8 @@ internal sealed record DaemonUnavailableFailure(
 
 internal static class UnavailableMcpShim
 {
+    private static readonly JsonSerializerOptions Options = Json.Options;
+
     internal static async Task<int> RunAsync(
         DaemonUnavailableFailure failure,
         CancellationToken cancellationToken = default)
@@ -43,24 +45,13 @@ internal static class UnavailableMcpShim
         await host.RunAsync(cancellationToken).ConfigureAwait(false);
         return 4;
     }
-}
 
-internal sealed class UnavailableMcpServerTool : DelegatingMcpServerTool
-{
-    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
-    private readonly DaemonUnavailableFailure _failure;
-
-    internal UnavailableMcpServerTool(
-        McpServerTool inner,
-        DaemonUnavailableFailure failure)
-        : base(inner) => _failure = failure;
-
-    public override ValueTask<CallToolResult> InvokeAsync(
-        RequestContext<CallToolRequestParams> request,
-        CancellationToken cancellationToken = default)
+    internal static JsonElement CreatePayload(
+        DaemonUnavailableFailure failure,
+        string toolName)
     {
         bool capabilities = string.Equals(
-            ProtocolTool.Name, "server_capabilities", StringComparison.Ordinal);
+            toolName, "server_capabilities", StringComparison.Ordinal);
         object payload = capabilities
             ? new
             {
@@ -75,10 +66,10 @@ internal sealed class UnavailableMcpServerTool : DelegatingMcpServerTool
                 meta = new
                 {
                     indexMode = "unavailable",
-                    cause = _failure.Cause,
-                    detail = _failure.Detail,
-                    recovery = _failure.Recovery,
-                    retryable = _failure.Retryable,
+                    cause = failure.Cause,
+                    detail = failure.Detail,
+                    recovery = failure.Recovery,
+                    retryable = failure.Retryable,
                 },
                 features = new[]
                 {
@@ -97,14 +88,34 @@ internal sealed class UnavailableMcpServerTool : DelegatingMcpServerTool
             : new
             {
                 error = "phoenix_daemon_unavailable",
-                tool = ProtocolTool.Name,
-                cause = _failure.Cause,
-                detail = _failure.Detail,
-                recovery = _failure.Recovery,
-                retryable = _failure.Retryable,
+                tool = toolName,
+                cause = failure.Cause,
+                detail = failure.Detail,
+                recovery = failure.Recovery,
+                retryable = failure.Retryable,
                 meta = new { indexMode = "unavailable" },
             };
-        JsonElement structured = JsonSerializer.SerializeToElement(payload, Options);
+        return JsonSerializer.SerializeToElement(payload, Options);
+    }
+}
+
+internal sealed class UnavailableMcpServerTool : DelegatingMcpServerTool
+{
+    private readonly DaemonUnavailableFailure _failure;
+
+    internal UnavailableMcpServerTool(
+        McpServerTool inner,
+        DaemonUnavailableFailure failure)
+        : base(inner) => _failure = failure;
+
+    public override ValueTask<CallToolResult> InvokeAsync(
+        RequestContext<CallToolRequestParams> request,
+        CancellationToken cancellationToken = default)
+    {
+        bool capabilities = string.Equals(
+            ProtocolTool.Name, "server_capabilities", StringComparison.Ordinal);
+        JsonElement structured = UnavailableMcpShim.CreatePayload(
+            _failure, ProtocolTool.Name);
         return ValueTask.FromResult(new CallToolResult
         {
             IsError = capabilities ? null : true,

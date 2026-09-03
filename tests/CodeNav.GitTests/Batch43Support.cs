@@ -238,14 +238,16 @@ internal static class Batch43Support
     internal static void Git(string root, string gitExe, string args)
     {
         string? output = GitInfo.RunProcess(gitExe, root,
-            "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args, waitMs: 20000);
+            "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args,
+            waitMs: TestGit.ProcessExitTimeoutMilliseconds);
         Assert.NotNull(output);
     }
 
     internal static string GitOutput(string root, string gitExe, string args)
     {
         string? output = GitInfo.RunProcess(gitExe, root,
-            "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args, waitMs: 20000);
+            "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args,
+            waitMs: TestGit.ProcessExitTimeoutMilliseconds);
         Assert.NotNull(output);
         return output!;
     }

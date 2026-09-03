@@ -111,13 +111,13 @@ internal static class Batch42Support
         }, 20000), $"index did not reflect {relPath}");
     }
 
-    internal static void Git(string dir, string args) => TestGit.Run(dir, args); // n7ly: loud + retried
+    internal static void Git(string dir, string args) => TestGit.Run(dir, args);
 
     internal static string GitOutput(string dir, string args)
     {
         string? output = GitInfo.RunProcess("git", dir,
             "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args,
-            waitMs: 20000);
+            waitMs: TestGit.ProcessExitTimeoutMilliseconds);
         Assert.NotNull(output);
         return output!;
     }

@@ -31,9 +31,9 @@ public class IndexFixture : IDisposable
 
     /// <summary>
     /// One live IndexManager per fixture instance, created on first use and disposed with the
-    /// fixture. Writer ownership is exclusive per database — a manager per TEST would leak the
-    /// writer (xUnit never disposes test-created managers) and force every subsequent manager into
-    /// read-only follower mode, where fixture refreshes cannot run. Lazy so classes that
+    /// fixture. Writer ownership is exclusive per database — a manager per test can still be
+    /// draining background teardown when the next instance starts, forcing it into read-only
+    /// follower mode where fixture refreshes cannot run. Lazy so classes that
     /// only use Open() (direct read connections need no lease) never attach a live watcher.
     /// </summary>
     private void EnsureSharedHost()
@@ -43,12 +43,28 @@ public class IndexFixture : IDisposable
             if (_tools is not null) return;
 
             var manager = new IndexManager(Root, DbPath);
-            manager.Start();
-            for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-            Assert.True(manager.IsQueryable, "index did not become queryable");
-            _manager = manager;
-            _semantic = new CodeNav.Core.Semantic.SemanticService(manager);
-            _tools = new NavigationTools(manager, _semantic);
+            CodeNav.Core.Semantic.SemanticService? semantic = null;
+            try
+            {
+                manager.Start();
+                IndexManagerTestSupport.WaitUntilReady(
+                    manager,
+                    TimeSpan.FromSeconds(30),
+                    "shared fixture index did not become ready");
+                Assert.True(manager.IsWriter,
+                    $"shared fixture requires writer authority: {manager.Health().Error}");
+                semantic = new CodeNav.Core.Semantic.SemanticService(manager);
+                var tools = new NavigationTools(manager, semantic);
+                _manager = manager;
+                _semantic = semantic;
+                _tools = tools;
+            }
+            catch
+            {
+                semantic?.Dispose();
+                manager.Dispose();
+                throw;
+            }
         }
     }
 

@@ -245,7 +245,7 @@ public class Batch25GitRobustnessTests
 
     // ------------------------------------------------------------------ helpers
 
-    private static void Git(string dir, string args) => TestGit.Run(dir, args); // n7ly: loud + retried
+    private static void Git(string dir, string args) => TestGit.Run(dir, args);
 
     private static bool WaitUntil(Func<bool> cond, int timeoutMs)
     {
