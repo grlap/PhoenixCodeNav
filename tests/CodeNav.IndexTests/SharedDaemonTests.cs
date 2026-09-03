@@ -328,6 +328,14 @@ public sealed class SharedDaemonTests
 
             if (!OperatingSystem.IsWindows())
             {
+                string symlinkArgumentsFile = Path.Combine(root, "cli-arguments-link.json");
+                File.CreateSymbolicLink(symlinkArgumentsFile, argumentsFile);
+                CliResult symlinkArguments = await RunCliAsync(executable, root,
+                    ["search_symbol", "--args-file", symlinkArgumentsFile]);
+                Assert.Equal(2, symlinkArguments.ExitCode);
+                Assert.Equal("argument_source_not_regular",
+                    symlinkArguments.Payload.GetProperty("reason").GetString());
+
                 string fifoArgumentsFile = Path.Combine(root, "cli-arguments.fifo");
                 Assert.Equal(0, mkfifo(fifoArgumentsFile, 0x180)); // 0600
                 CliResult fifoArguments = await RunCliAsync(executable, root,

@@ -11,9 +11,6 @@ internal static class DaemonProcessIsolation
     private const int StandardOutputHandle = -11;
     private const int StandardErrorHandle = -12;
     private const uint HandleFlagInherit = 0x00000001;
-    private const int GetFileDescriptorFlags = 1;
-    private const int SetFileDescriptorFlags = 2;
-    private const int CloseOnExec = 1;
 
     internal static Process Launch(
         DaemonEndpoint endpoint,
@@ -55,27 +52,16 @@ internal static class DaemonProcessIsolation
     /// </summary>
     private static void PreventParentStreamInheritance()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            foreach (int kind in new[]
-                     {
-                         StandardOutputHandle, StandardErrorHandle,
-                     })
-            {
-                IntPtr handle = GetStdHandle(kind);
-                if (handle == IntPtr.Zero || handle == new IntPtr(-1)) continue;
-                if (!SetHandleInformation(handle, HandleFlagInherit, 0))
-                    throw new IOException(
-                        "Phoenix bootstrap could not isolate an inherited standard stream.");
-            }
-            return;
-        }
+        if (!OperatingSystem.IsWindows()) return;
 
-        for (int descriptor = 1; descriptor <= 2; descriptor++)
+        foreach (int kind in new[]
+                 {
+                     StandardOutputHandle, StandardErrorHandle,
+                 })
         {
-            int flags = fcntl(descriptor, GetFileDescriptorFlags, 0);
-            if (flags < 0 ||
-                fcntl(descriptor, SetFileDescriptorFlags, flags | CloseOnExec) < 0)
+            IntPtr handle = GetStdHandle(kind);
+            if (handle == IntPtr.Zero || handle == new IntPtr(-1)) continue;
+            if (!SetHandleInformation(handle, HandleFlagInherit, 0))
                 throw new IOException(
                     "Phoenix bootstrap could not isolate an inherited standard stream.");
         }
@@ -282,9 +268,6 @@ internal static class DaemonProcessIsolation
 
     [DllImport("libc")]
     private static extern int close(int fileDescriptor);
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int fcntl(int fileDescriptor, int command, int argument);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateFileW(

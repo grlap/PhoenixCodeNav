@@ -513,9 +513,7 @@ internal static class PhoenixCli
                 else
                 {
                     FileAttributes sourceAttributes = File.GetAttributes(argumentsPath);
-                    if ((sourceAttributes & (FileAttributes.Directory |
-                                             FileAttributes.Device |
-                                             FileAttributes.ReparsePoint)) != 0)
+                    if (!IsRegularWindowsArgumentSource(sourceAttributes))
                     {
                         return ArgumentBuildResult.Failed(new ArgumentValidationIssue(
                             "arguments",
@@ -580,6 +578,11 @@ internal static class PhoenixCli
                 "The complete CLI argument payload is not valid JSON."));
         }
     }
+
+    internal static bool IsRegularWindowsArgumentSource(FileAttributes attributes) =>
+        (attributes & (FileAttributes.Directory |
+                       FileAttributes.Device |
+                       FileAttributes.ReparsePoint)) == 0;
 
     private static async Task<ArgumentBuildResult> ParseJsonArgumentsAsync(
         Stream json,

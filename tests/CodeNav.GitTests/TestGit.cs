@@ -24,6 +24,7 @@ internal static class TestGit
         string? output = GitInfo.RunProcess("git", dir,
             "-c core.fsmonitor=false -c core.useBuiltinFSMonitor=false " + args,
             waitMs: ProcessExitTimeoutMilliseconds);
-        Assert.NotNull(output);
+        Assert.True(output is not null,
+            $"test-side git failed: git {args} (in {dir})");
     }
 }

@@ -262,7 +262,9 @@ public sealed class PhoenixCliArgumentTests
 
         foreach (McpServerTool tool in tools)
         {
-            JsonElement properties = tool.ProtocolTool.InputSchema.GetProperty("properties");
+            if (!tool.ProtocolTool.InputSchema.TryGetProperty(
+                    "properties", out JsonElement properties))
+                continue;
             string[] collisions = properties.EnumerateObject()
                 .Select(property => property.Name)
                 .Where(PhoenixCliCommand.ReservedToolParameterNames.Contains)
@@ -271,6 +273,14 @@ public sealed class PhoenixCliArgumentTests
                 $"{tool.ProtocolTool.Name} collides with CLI-reserved parameter(s): " +
                 string.Join(", ", collisions));
         }
+    }
+
+    [Fact]
+    public void WindowsArgumentSourcePredicateRejectsReparsePoints()
+    {
+        Assert.False(PhoenixCli.IsRegularWindowsArgumentSource(
+            FileAttributes.Normal | FileAttributes.ReparsePoint));
+        Assert.True(PhoenixCli.IsRegularWindowsArgumentSource(FileAttributes.Normal));
     }
 
     [Fact]
