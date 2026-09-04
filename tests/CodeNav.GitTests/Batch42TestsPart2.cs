@@ -542,15 +542,23 @@ public class Batch42TestsPart2
                        q.Outline(baseCurrent).Any(symbol => symbol.Name == "BaseChangedDomain42");
             }, 20_000), "index did not reflect the same-project survivors");
 
+            (string OldPath, string TypeName, string CurrentPath)[] expected =
+            [
+                (generatedOld, "GeneratedDomain42", generatedCurrent),
+                (baseOld, "BaseChangedDomain42", baseCurrent),
+            ];
             var pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
                 () => tools.ReviewPack(maxBytes: 24576),
-                j => j.TryGetProperty("deletedFiles", out _), "review_pack with deletedFiles");
+                response => response.TryGetProperty("deletedFiles", out JsonElement deleted) &&
+                    expected.All(item => deleted.EnumerateArray().Any(file =>
+                        file.TryGetProperty("path", out JsonElement path) &&
+                        path.GetString() == item.OldPath &&
+                        file.TryGetProperty("formerTypes", out JsonElement formerTypes) &&
+                        formerTypes.EnumerateArray().Any(symbol =>
+                            symbol.GetProperty("name").GetString() == item.TypeName))),
+                "review_pack with both deleted formerTypes");
             var deletedFiles = pack.GetProperty("deletedFiles").EnumerateArray().ToList();
-            foreach ((string oldPath, string typeName, string currentPath) in new[]
-                     {
-                         (generatedOld, "GeneratedDomain42", generatedCurrent),
-                         (baseOld, "BaseChangedDomain42", baseCurrent),
-                     })
+            foreach ((string oldPath, string typeName, string currentPath) in expected)
             {
                 JsonElement deleted = deletedFiles.Single(file =>
                     file.GetProperty("path").GetString() == oldPath);

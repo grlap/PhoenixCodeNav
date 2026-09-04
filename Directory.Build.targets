@@ -12,6 +12,10 @@
           Link="NOTICE"
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)skills/phoenix/SKILL.md"
+          Link="skills/phoenix/SKILL.md"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
     <None Include="$(MSBuildThisFileDirectory)THIRD-PARTY-NOTICES.txt"
           Link="THIRD-PARTY-NOTICES.txt"
           CopyToOutputDirectory="PreserveNewest"

@@ -330,6 +330,29 @@ uses that tool's own deadline arguments, and Ctrl-C/SIGTERM returns `130`. A hos
 process deadline should enforce it around the CLI process. Use a shell alias named `phoenix` if a
 shorter executable name is convenient; the alias must still point to this published binary.
 
+### Install Phoenix in a repository (for agents)
+
+Phoenix ships `skills/phoenix/SKILL.md` as a repository-installable template and copies it to
+`skills/phoenix/SKILL.md` under each Phoenix build and publish output tree. This skill is the
+shell-oriented install template; [the agent instructions](docs/agent-instructions.md) remain the
+full MCP and CLI guidance. An installing agent should:
+
+1. Locate an existing `PhoenixCodeNav.Mcp.exe`, or publish Phoenix and record its absolute path.
+   Use a space-free path written with forward slashes, such as
+   `C:/tools/phoenix/PhoenixCodeNav.Mcp.exe` or `/opt/phoenix/PhoenixCodeNav.Mcp`.
+2. Copy the template from this source checkout, or from
+   `<exe-dir>/skills/phoenix/SKILL.md`, to `<repo>/.claude/skills/phoenix/SKILL.md` for Claude
+   Code. When the repository uses GitHub Copilot, also copy it to
+   `<repo>/.github/skills/phoenix/SKILL.md`.
+3. In each copy, replace every `{{PHOENIX_EXE}}` with the executable's absolute path. Leave no
+   template placeholders behind.
+4. Add `.codenav/` to the target repository's `.gitignore`.
+5. From the target repository root, run `{{PHOENIX_EXE}} tools` after substitution. This
+   discovery check is offline and does not start a daemon.
+6. Optionally register the MCP server for Claude Code with
+   `claude mcp add phoenix -- <exe> --workspace-root <repo>`.
+7. Commit the installed skill so teammates' agents discover the same navigation guidance.
+
 ### Operations Portal
 
 When you explicitly ask the agent to open the Phoenix Operations Portal, it calls
