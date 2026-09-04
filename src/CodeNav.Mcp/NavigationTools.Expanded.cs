@@ -436,7 +436,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "dependency_path")]
-    [Description("Shortest project-reference chains explaining why one project depends on another. Project selectors accept an exact project-file path, project-file name, or AssemblyName metadata; ambiguous logical names return every physical match instead of choosing one.")]
+    [Description("Shortest project-reference chains explaining why one project depends on another. Project selectors accept an exact project-file path, project-file name, or AssemblyName metadata; ambiguous logical names return every physical match instead of choosing one. Graph answers are assembly-name-keyed; exact project-file selectors still identify physical index rows.")]
     public string DependencyPath(
         [Description("Depending project selector: exact .csproj/.fsproj path, project-file name, or AssemblyName.")] string fromProject,
         [Description("Dependency project selector: exact .csproj/.fsproj path, project-file name, or AssemblyName.")] string toProject,
@@ -763,7 +763,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "impact")]
-    [Description("First-pass blast radius before changing a symbol: reference volume by project, dependent-project count, public API exposure, related tests, and deterministic risk notes.")]
+    [Description("First-pass blast radius before changing a symbol: reference volume by project, dependent-project count, public API exposure, related tests, and deterministic risk notes. Owner and dependent-project answers are assembly-name-keyed; physical project rows remain separate.")]
     public string Impact(
         [Description("Symbol name to assess. Optional when symbolId given.")] string? name = null,
         [Description("Optional containing type/namespace fragment.")] string? container = null,

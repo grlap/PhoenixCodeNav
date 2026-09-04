@@ -364,18 +364,45 @@ only `.fs` (not unlisted `.fsi` signatures or `.fsx` scripts).
 
 ### Project and symbol-resolution authority
 
-Each discovered `.csproj` or `.fsproj` is a physical project whose compile items, language, and
-references are read from that project file. A side-by-side legacy project and SDK-style
-`.Net.csproj` remain
-separate physical projects under the established 0.11.7 model; their filename pairing alone
-is not evidence that they should be merged or expanded into a new variant model.
+Phoenix keeps two project-identity layers, and they are keyed differently on purpose.
 
-Project resolution uses directly parsed `ProjectReference`, `Reference`, `HintPath`, package,
-and recovered assembly-edge facts. Solution membership is editor inventory only, and FTS is
-never project-identity authority. The current architecture does not create duplicate Roslyn
-projects per target framework, select projects by output directory, or merge physical projects
-solely because they share an assembly name. Any such change requires a separately justified
-design backed by a concrete reproducer.
+The index is keyed by physical project file. Each discovered `.csproj` or `.fsproj` is one row
+with its own compile items, language, style (`legacy` or `sdk`), and parsed references. Project
+selectors first resolve an exact workspace-relative project-file path. For a bare selector, they
+next use either the exact suffixed project filename (when the selector ends in `.csproj` or
+`.fsproj`) or the extensionless stem, then `AssemblyName`. Lower-precedence matches are kept in
+`shadowedMatches`, and several physical matches return `project_ambiguous` instead of a first-match
+guess. A side-by-side legacy `project.csproj` and SDK-style `project.Net.csproj` are therefore two
+index rows.
+
+C# semantic compilation and the reference graph are keyed by assembly name. This is deliberate.
+A project's assembly name is its literal `<AssemblyName>` property when present, otherwise its
+project file name without extension; a `<Reference>` is matched by its `Include` simple name only,
+the `HintPath` directory serves solely to classify a binary as external when it points into a
+never-indexed location, the `HintPath` file name is never used for matching, and output paths are
+never consulted.
+`<Reference>` items with a `HintPath` — the multi-staged monorepo idiom, where an early phase builds
+assemblies into a common folder and later phases reference the assembly rather than the project —
+carry an assembly identity and no referenced project file, and physical-project-keyed alternatives
+that were tried failed to bind those consumers to their source project, which truncated
+`references` and `impact` answers. Graph edges therefore bind a referenced simple name to the
+in-workspace project with that assembly name: a same-language name collision binds to one physical
+row deterministically (the first), mixed C#/F# collisions keep one target per language, and a
+`HintPath` into a never-indexed directory is external and produces no edge. Solution membership is
+editor inventory only, and FTS is never project-identity authority.
+
+At this layer the legacy `project.csproj` / SDK `project.Net.csproj` companion pair is one project,
+never two competing ones: exactly two C# rows with one assembly name, one legacy-style and one
+SDK-style, where the SDK file is the exact `.Net` companion of the legacy file, are recognized as
+the pair and are not a collision. Any other set of same-name physical rows is a name-keyed
+collision, and the index rows are never merged. Documentation-comment-ID resolution discloses a
+non-pair collision in its owner set through `nameKeyedOwnerCollisionGroups` and the
+`documentation_id_name_keyed_owner_collision` note. Other semantic selectors and graph/composite
+tools use the same assembly-name-keyed model but do not currently emit that collision coverage;
+project selectors continue to expose the physical rows separately. The current architecture does
+not create duplicate Roslyn projects per target framework, select projects by output directory, or
+merge physical index rows solely because they share an assembly name; any such change requires a
+separately justified design backed by a concrete reproducer.
 
 `review_pack` preserves changed `.sln`, `.slnx`, and `.slnf` paths in
 `changedProjectFiles` and emits `review.solution_files_changed`, while treating those files as

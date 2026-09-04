@@ -38,11 +38,21 @@ ownership, dependencies, or likely tests.
    review surface.
 7. Use `projects_containing`, `project_graph`, and `dependency_path` for ownership and
    dependency direction. `dependencies` means canonical `downstream`; `dependents` means canonical
-   `upstream`. Project selectors prefer exact path, exact suffixed filename, extensionless stem,
-   then `AssemblyName`; an ambiguous result must be resolved with an exact path. Do not infer
-   ownership from folders. When shadow evidence is truncated, use `shadowedMatchCount` and
+   `upstream`. Project selectors first try an exact project-file path. A bare selector then uses
+   either the exact suffixed filename or the extensionless stem according to its shape, followed by
+   `AssemblyName`; an ambiguous result must be resolved with an exact path. Do not infer ownership
+   from folders. When shadow evidence is truncated, use `shadowedMatchCount` and
    `shadowedMatchesReturned` to distinguish the complete precedence decision from its diagnostic
    sample; the selected exact path or filename remains authoritative.
+
+   The index keeps one row per physical project file; C# semantic compilation and graph answers
+   are keyed by assembly name. Identical answers for two physical paths can reflect either the
+   recognized legacy `project.csproj` / SDK `project.Net.csproj` companion pair or another
+   same-name collision. Only documentation-comment-ID resolution exposes a non-pair collision
+   through `nameKeyedOwnerCollisionGroups` and
+   `documentation_id_name_keyed_owner_collision`; other semantic selectors and graph/composite
+   tools carry no collision count. Use an exact project-file path when you need the physical row.
+   The recognized companion pair is one semantic project at that layer and two rows in the index.
 
 ### Act on the response contract
 

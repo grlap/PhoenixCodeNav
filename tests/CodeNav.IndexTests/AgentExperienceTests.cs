@@ -180,6 +180,8 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
         Assert.Equal("project_ambiguous", ambiguous.GetProperty("error").GetString());
         Assert.Equal(2, ambiguous.GetProperty("totalMatches").GetInt32());
         Assert.Equal(2, ambiguous.GetProperty("matches").GetArrayLength());
+        Assert.Contains("assembly-name-keyed", ambiguous.GetProperty("detail").GetString(),
+            StringComparison.Ordinal);
 
         JsonElement projectNameWins = Parse(tools.ProjectGraph("Project.File"));
         Assert.Equal("Stem/Project.File.csproj",
@@ -696,6 +698,10 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
             Assert.Contains("documentationCommentId is semantic-only", description,
                 StringComparison.Ordinal);
             Assert.Contains("never", description, StringComparison.Ordinal);
+            Assert.Contains("C# semantic owner sets are assembly-name-keyed", description,
+                StringComparison.Ordinal);
+            Assert.Contains("only documentationCommentId requests disclose non-pair collisions through nameKeyedOwnerCollisionGroups", description,
+                StringComparison.Ordinal);
             string parameterDescription = typeof(NavigationTools).GetMethod(methodName)!
                 .GetParameters().Single(parameter =>
                     parameter.Name == "documentationCommentId")
@@ -884,6 +890,30 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
             collisionCoverage.GetProperty("nameKeyedOwnerCollisionGroups").GetInt32());
         Assert.Equal("documentation_id_name_keyed_owner_collision",
             collisionCoverage.GetProperty("noteId").GetString());
+        Assert.Contains("one binding for that name",
+            collisionCoverage.GetProperty("note").GetString(), StringComparison.Ordinal);
+        Assert.Contains("physical index rows remain separate",
+            collisionCoverage.GetProperty("note").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NameKeyedLayerIsDisclosedByEveryAffectedToolDescription()
+    {
+        foreach (string methodName in new[]
+                 {
+                     nameof(NavigationTools.ProjectGraph),
+                     nameof(NavigationTools.DependencyPath),
+                     nameof(NavigationTools.Impact),
+                     nameof(NavigationTools.References),
+                     nameof(NavigationTools.Definition),
+                     nameof(NavigationTools.Implementations),
+                     nameof(NavigationTools.ReviewPack),
+                 })
+        {
+            string description = typeof(NavigationTools).GetMethod(methodName)!
+                .GetCustomAttribute<DescriptionAttribute>()!.Description;
+            Assert.Contains("assembly-name-keyed", description, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -1025,6 +1055,11 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
             item.GetString() == "review.symbol_count_cap");
         Assert.Equal("split_review_by_explicit_paths",
             affected.GetProperty("recovery").GetProperty("action").GetString());
+        JsonElement indexedOnly = Assert.Single(response.GetProperty("notes")
+            .EnumerateArray(), note => note.GetProperty("id").GetString() ==
+                "review.indexed_only");
+        Assert.Contains("assembly-name-keyed", indexedOnly.GetProperty("text").GetString(),
+            StringComparison.Ordinal);
 
         JsonElement combined = Parse(_fixture.Tools.ReviewPack(
             paths: paths, maxBytes: 4096, maxSymbols: 20));

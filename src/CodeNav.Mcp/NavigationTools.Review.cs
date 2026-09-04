@@ -274,7 +274,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "review_pack")]
-    [Description("ONE budget-bounded review digest: diff -> touched symbols -> per-symbol impact. Default reviews the working tree against the index's recorded commit (falling back to HEAD when no indexed commit exists), so diff evidence and indexed symbols share one baseline; pass baseRef (sha or branch name, e.g. the merge-base) to choose another base, or pass explicit paths. Digests are INDEX-backed (confidence indexed) and each carries a symbolId handle. Former symbols in surviving files, exact file moves, deleted types, symbol-less C# changes, and file-level unsupported-language source changes are reported explicitly; every bounded section exposes coverage.")]
+    [Description("ONE budget-bounded review digest: diff -> touched symbols -> per-symbol impact. Default reviews the working tree against the index's recorded commit (falling back to HEAD when no indexed commit exists), so diff evidence and indexed symbols share one baseline; pass baseRef (sha or branch name, e.g. the merge-base) to choose another base, or pass explicit paths. Digests are INDEX-backed (confidence indexed) and each carries a symbolId handle. Former symbols in surviving files, exact file moves, deleted types, symbol-less C# changes, and file-level unsupported-language source changes are reported explicitly; every bounded section exposes coverage. Owner and dependent-graph facts are assembly-name-keyed; physical project rows remain separate.")]
     public string ReviewPack(
         [Description("Base to diff against: a commit sha or a ref name (strict charset; typically the merge-base). Default: the index's recorded commit, so diff evidence and indexed symbols share one baseline.")] string? baseRef = null,
         [Description("One to 256 exact workspace-relative paths as comma-separated text or a JSON-array string (maximum 64 KiB input) to review INSTEAD of a git diff (whole-file granularity; no git needed). Rooted, traversing, malformed, or control-character paths return bad_request.")] string? paths = null,
@@ -1289,7 +1289,7 @@ public sealed partial class NavigationTools
         }
 
         notes.Add(new ReviewNote(NoteIds.ReviewIndexedOnly,
-            "Digests are index-backed (confidence indexed): reference counts are whole-identifier candidates and dependents come from the stored graph. Escalate chosen symbols with references(symbolId, mode:'semantic') / impact(symbolId)."));
+            "Digests are index-backed (confidence indexed): reference counts are whole-identifier candidates, and owner/dependent graph facts are assembly-name-keyed while physical project rows remain separate. Escalate chosen symbols with references(symbolId, mode:'semantic') / impact(symbolId)."));
 
         int sampleListCount = (changedSubmoduleLinks.Count > 0 ? 1 : 0) +
                                (excludedSubmoduleWorktrees is not null ? 1 : 0) +
