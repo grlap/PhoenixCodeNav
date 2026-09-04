@@ -1,3 +1,5 @@
+using CodeNav.Core.Indexing;
+
 namespace CodeNav.Mcp.Daemon;
 
 internal sealed class DaemonRetirementRefusedException : IOException
@@ -11,10 +13,18 @@ internal sealed class DaemonRetirementRefusedException : IOException
     }
 }
 
+internal sealed class DaemonWriterLeaseUnverifiableException : IOException
+{
+    internal DaemonWriterLeaseUnverifiableException()
+        : base("Phoenix could not verify whether the retiring daemon released writer ownership.")
+    {
+    }
+}
+
 /// <summary>
 /// Retires a daemon through the authority-bound transport handshake. This deliberately never
 /// opens or terminates a process by PID: the descriptor is used only to observe that the
-/// authenticated daemon generation has relinquished discovery authority.
+/// authenticated daemon generation has relinquished discovery and writer authority.
 /// </summary>
 internal static class DaemonRetirement
 {
@@ -91,10 +101,12 @@ internal static class DaemonRetirement
         CancellationToken cancellationToken,
         Func<DaemonEndpoint, DaemonDescriptorRecord?>? readDescriptor = null,
         Func<DaemonEndpoint, CancellationToken, ValueTask<int>>? probeDaemonPid = null,
+        Func<DaemonEndpoint, IndexLeaseAcquireResult>? probeWriterLease = null,
         TimeSpan? pollDelay = null)
     {
         readDescriptor ??= DaemonDescriptor.TryRead;
         probeDaemonPid ??= ProbeDaemonPidAsync;
+        probeWriterLease ??= ProbeWriterLease;
         TimeSpan delay = pollDelay ?? RelinquishmentPollDelay;
         DaemonDescriptorRecord? expected =
             MatchesRetiringGeneration(endpoint, observed, daemonPid) ? observed : null;
@@ -128,11 +140,23 @@ internal static class DaemonRetirement
             }
             catch (DaemonEndpointUnavailableException)
             {
-                return;
+                IndexLeaseAcquireResult leaseResult = probeWriterLease(endpoint);
+                if (leaseResult == IndexLeaseAcquireResult.Acquired)
+                    return;
+                if (leaseResult == IndexLeaseAcquireResult.Failed)
+                    throw new DaemonWriterLeaseUnverifiableException();
             }
 
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private static IndexLeaseAcquireResult ProbeWriterLease(DaemonEndpoint endpoint)
+    {
+        // Writer ownership is workspace-identity keyed, so dbPath does not affect this probe.
+        return IndexOwnershipLease.ProbeOwnerDetailed(
+            endpoint.WorkspaceRoot,
+            IndexBuilder.DefaultDbPath(endpoint.WorkspaceRoot));
     }
 
     private static async ValueTask<int> ProbeDaemonPidAsync(

@@ -19,7 +19,6 @@ internal sealed class DaemonProxy
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromMilliseconds(500);
     internal static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(20);
-    private static readonly TimeSpan TakeoverTimeout = TimeSpan.FromMinutes(2);
 
     private readonly DaemonEndpoint _endpoint;
     private readonly string? _indexDb;
@@ -413,7 +412,7 @@ internal sealed class DaemonProxy
         CancellationToken cancellationToken)
     {
         using var takeover = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        takeover.CancelAfter(TakeoverTimeout);
+        takeover.CancelAfter(DaemonServer.SessionDrainTimeout);
         try
         {
             await DaemonRetirement.RetireOlderAsync(
@@ -423,15 +422,32 @@ internal sealed class DaemonProxy
         {
             throw Refusal(ex.Response);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (DaemonWriterLeaseUnverifiableException ex)
         {
-            throw Failure(
-                "daemon_takeover_timeout",
-                "Older Phoenix daemon did not relinquish discovery authority within the takeover deadline.",
-                "Allow existing agent requests to finish, then reconnect; do not kill an unverified process.",
-                retryable: true);
+            throw Failure(MapRetirementFailure(ex), ex);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw Failure(MapRetirementFailure(ex), ex);
         }
     }
+
+    internal static DaemonUnavailableFailure MapRetirementFailure(Exception exception) =>
+        exception switch
+        {
+            DaemonWriterLeaseUnverifiableException => new(
+                "daemon_writer_lease_unverifiable",
+                "Phoenix could not verify whether the retiring daemon released workspace writer ownership.",
+                "Reconnect; if this repeats, inspect workspace identity and named-mutex access for this user.",
+                Retryable: true),
+            OperationCanceledException => new(
+                "daemon_takeover_timeout",
+                "Older Phoenix daemon did not relinquish discovery and writer ownership within the takeover deadline.",
+                "Allow existing agent requests to finish, then reconnect; do not kill an unverified process.",
+                Retryable: true),
+            _ => throw new ArgumentException(
+                "Unsupported daemon retirement failure.", nameof(exception)),
+        };
 
     private FileStream? TryAcquireStartupLock()
     {

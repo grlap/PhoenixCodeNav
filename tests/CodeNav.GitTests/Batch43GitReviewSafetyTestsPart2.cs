@@ -730,7 +730,10 @@ public class Batch43GitReviewSafetyTestsPart2
                 Git(root, realGit, "add -A");
                 Git(root, realGit, $"commit -q -m blob-{i}");
                 latest = GitOutput(root, realGit, "rev-parse HEAD").Trim();
-                Assert.Equal(contents[i], GitInfo.ShowFile(root, latest, relativePath, wrapper));
+                Assert.Equal(contents[i], GitInfo.ShowFile(
+                    root, latest, relativePath, wrapper,
+                    maxBlobBytes: 8 * 1024 * 1024,
+                    timeoutMs: TestGit.ProcessExitTimeoutMilliseconds));
             }
 
             Git(root, realGit, "tag release-light");
@@ -741,7 +744,10 @@ public class Batch43GitReviewSafetyTestsPart2
             Assert.Equal(latest, GitInfo.ResolveRef(root, "release-annotated", wrapper));
             Assert.Equal(latest, GitInfo.ResolveRef(root, latest, wrapper));
             Assert.Null(GitInfo.ResolveRef(root, "missing-ref", wrapper));
-            Assert.Null(GitInfo.ShowFile(root, latest, "Lib/missing.cs", wrapper));
+            Assert.Null(GitInfo.ShowFile(
+                root, latest, "Lib/missing.cs", wrapper,
+                maxBlobBytes: 8 * 1024 * 1024,
+                timeoutMs: TestGit.ProcessExitTimeoutMilliseconds));
 
             string argsLog = File.ReadAllText(Path.Combine(wrapperDir, "args.txt"));
             Assert.Contains("cat-file --batch-check", argsLog);

@@ -1971,6 +1971,8 @@ public sealed class SharedDaemonTests
                 timeout.Token,
                 readDescriptor: _ => null,
                 probeDaemonPid: ProbeAsync,
+                probeWriterLease: _ => throw new InvalidOperationException(
+                    "a successor endpoint must not be mistaken for a free lease"),
                 pollDelay: TimeSpan.Zero);
 
             await firstProbe.Task.WaitAsync(timeout.Token);
@@ -1985,6 +1987,197 @@ public sealed class SharedDaemonTests
         }
         finally
         {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task RetirementWaitsUntilTheWriterLeaseIsProvenFree()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix daemon retirement lease probe ").FullName;
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        var firstLeaseProbe = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        int leaseReleased = 0;
+        int probeCount = 0;
+
+        ValueTask<int> MissingEndpoint(DaemonEndpoint _, CancellationToken __) =>
+            ValueTask.FromException<int>(new DaemonEndpointUnavailableException(
+                "test endpoint is gone"));
+
+        IndexLeaseAcquireResult ProbeLease(DaemonEndpoint _)
+        {
+            Interlocked.Increment(ref probeCount);
+            firstLeaseProbe.TrySetResult();
+            return Volatile.Read(ref leaseReleased) == 0
+                ? IndexLeaseAcquireResult.Contended
+                : IndexLeaseAcquireResult.Acquired;
+        }
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            Task wait = DaemonRetirement.WaitForRelinquishmentAsync(
+                endpoint,
+                daemonPid: 4242,
+                observed: null,
+                timeout.Token,
+                readDescriptor: _ => null,
+                probeDaemonPid: MissingEndpoint,
+                probeWriterLease: ProbeLease,
+                pollDelay: TimeSpan.FromMilliseconds(10));
+
+            await firstLeaseProbe.Task.WaitAsync(timeout.Token);
+            Assert.False(wait.IsCompleted);
+            Volatile.Write(ref leaseReleased, 1);
+            await wait.WaitAsync(timeout.Token);
+            Assert.True(Volatile.Read(ref probeCount) >= 2);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task RetirementLeaseWaitCancellationMapsToTypedTakeoverFailure()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix daemon retirement lease timeout ").FullName;
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+
+        ValueTask<int> MissingEndpoint(DaemonEndpoint _, CancellationToken __) =>
+            ValueTask.FromException<int>(new DaemonEndpointUnavailableException(
+                "test endpoint is gone"));
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+            OperationCanceledException exception = await Assert.ThrowsAnyAsync<
+                OperationCanceledException>(() =>
+                DaemonRetirement.WaitForRelinquishmentAsync(
+                    endpoint,
+                    daemonPid: 4242,
+                    observed: null,
+                    timeout.Token,
+                    readDescriptor: _ => null,
+                    probeDaemonPid: MissingEndpoint,
+                    probeWriterLease: _ => IndexLeaseAcquireResult.Contended,
+                    pollDelay: TimeSpan.FromMilliseconds(10)));
+
+            DaemonUnavailableFailure failure = DaemonProxy.MapRetirementFailure(exception);
+            Assert.Equal("daemon_takeover_timeout", failure.Cause);
+            Assert.True(failure.Retryable);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task UnverifiableWriterLeaseMapsToItsOwnRetryableCause()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix daemon retirement lease unverifiable ").FullName;
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+
+        ValueTask<int> MissingEndpoint(DaemonEndpoint _, CancellationToken __) =>
+            ValueTask.FromException<int>(new DaemonEndpointUnavailableException(
+                "test endpoint is gone"));
+
+        try
+        {
+            DaemonWriterLeaseUnverifiableException exception = await Assert.ThrowsAsync<
+                DaemonWriterLeaseUnverifiableException>(() =>
+                DaemonRetirement.WaitForRelinquishmentAsync(
+                    endpoint,
+                    daemonPid: 4242,
+                    observed: null,
+                    CancellationToken.None,
+                    readDescriptor: _ => null,
+                    probeDaemonPid: MissingEndpoint,
+                    probeWriterLease: _ => IndexLeaseAcquireResult.Failed,
+                    pollDelay: TimeSpan.Zero));
+
+            DaemonUnavailableFailure failure = DaemonProxy.MapRetirementFailure(exception);
+            Assert.Equal("daemon_writer_lease_unverifiable", failure.Cause);
+            Assert.True(failure.Retryable);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task RetirementWaitsForDeferredDisposeBeforeStartingSuccessor()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix daemon deferred retirement lease ").FullName;
+        File.WriteAllText(Path.Combine(root, "Held.cs"),
+            "namespace RetirementLease; public sealed class Held { }");
+        IndexBuilder.Build(root);
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        using var startupEntered = new ManualResetEventSlim();
+        using var releaseStartup = new ManualResetEventSlim();
+        using var daemonLifetime = new CancellationTokenSource();
+        McpClient? successor = null;
+        var daemon = new DaemonServer(
+            endpoint,
+            indexDb: null,
+            rebuild: false,
+            keepAlive: true,
+            configureIndexForTest: manager =>
+            {
+                manager.DisposeWaitTimeoutForTest = TimeSpan.FromMilliseconds(50);
+                manager.StartupAfterLeaseAcquiredForTest = () =>
+                {
+                    startupEntered.Set();
+                    releaseStartup.Wait();
+                };
+            });
+        Task<int> daemonTask = daemon.RunAsync(daemonLifetime.Token);
+        try
+        {
+            await WaitUntilAsync(
+                () => DaemonDescriptor.TryRead(endpoint)?.Pid == Environment.ProcessId,
+                TimeSpan.FromSeconds(15));
+            Assert.True(startupEntered.Wait(TimeSpan.FromSeconds(10)));
+            Assert.True(IndexOwnershipLease.IsHeld(
+                root, IndexBuilder.DefaultDbPath(root)));
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            Task retirement = DaemonRetirement.RetireForHarnessAsync(
+                endpoint, timeout.Token);
+            await WaitUntilAsync(
+                () => !File.Exists(endpoint.DescriptorPath),
+                TimeSpan.FromSeconds(10));
+            Assert.True(IndexOwnershipLease.IsHeld(
+                root, IndexBuilder.DefaultDbPath(root)));
+            Assert.False(retirement.IsCompleted);
+
+            releaseStartup.Set();
+            await retirement.WaitAsync(timeout.Token);
+            successor = await CreateClientAsync(FindMcpExecutable(), root);
+            JsonElement capabilities = await CallAsync(successor, "server_capabilities");
+            Assert.Equal("daemon", capabilities.GetProperty("runtime")
+                .GetProperty("indexMode").GetString());
+            Assert.Equal(0, await daemonTask.WaitAsync(timeout.Token));
+        }
+        finally
+        {
+            releaseStartup.Set();
+            if (successor is not null)
+            {
+                try { await RetireDaemonForTestAsync(endpoint); } catch { }
+                await TryDisposeClientAsync(successor);
+            }
+            daemonLifetime.Cancel();
+            try { await daemonTask; } catch (OperationCanceledException) { }
+            PhoenixRuntimeMode.Set(PhoenixProcessMode.Standalone);
+            await CleanupEndpointForTestAsync(endpoint);
             TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }

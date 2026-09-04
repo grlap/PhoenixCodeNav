@@ -12,7 +12,7 @@ namespace CodeNav.Mcp.Daemon;
 
 internal sealed class DaemonServer
 {
-    private static readonly TimeSpan SessionDrainTimeout = TimeSpan.FromMinutes(2);
+    internal static readonly TimeSpan SessionDrainTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan AcceptRetryDelay = TimeSpan.FromMilliseconds(100);
 
     private readonly DaemonEndpoint _endpoint;

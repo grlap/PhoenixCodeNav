@@ -1079,10 +1079,17 @@ broader compatible range requires a later explicit contract and evidence.
 - an older client facing a newer daemon receives a typed `daemon_newer_than_client` response that
   tells the host to restart/update its agent;
 - a newer client may request `retire-and-replace`; a compatible older daemon stops accepting new
-  sessions, drains admitted sessions under the existing operation deadline ceiling, removes its
-  ready descriptor/endpoint, and exits; and
-- if graceful retirement exceeds the bounded drain, the new client reports a typed takeover timeout
-  instead of killing an unverified process or serving mixed-version results.
+  sessions, removes its endpoint, drains admitted sessions under the existing operation deadline
+  ceiling, releases the workspace writer lease, removes its ready descriptor, and exits. Endpoint
+  disappearance alone is not completion: unless another successor generation already owns
+  discovery, the newer client must acquire and release a transient lease probe before starting its
+  successor;
+- if graceful retirement exceeds the bounded drain, the new client reports the typed
+  `daemon_takeover_timeout` cause instead of killing an unverified process or serving mixed-version
+  results; and
+- if the lease probe itself cannot establish whether writer ownership is free, the client reports
+  the distinct retryable `daemon_writer_lease_unverifiable` cause rather than claiming that the
+  older daemon still holds the lease.
 
 The daemon stays alive for a 15-minute linger after its last client disconnects so normal agent
 restarts retain the watcher and semantic estate. Another connection cancels the idle shutdown. A
