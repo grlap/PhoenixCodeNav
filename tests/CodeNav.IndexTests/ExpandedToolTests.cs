@@ -200,7 +200,8 @@ public class ExpandedToolTests
     public void ContextPackBundlesWithinBudget()
     {
         string raw = _tools.ContextPack("Guard", maxBytes: 8192, timeoutMs: 30000);
-        Assert.True(raw.Length <= 8192 + 512, $"context pack {raw.Length} bytes exceeds requested budget");
+        Assert.True(Json.Utf8Bytes(raw) <= 8192,
+            $"context pack {Json.Utf8Bytes(raw)} bytes exceeds requested budget");
         var json = Parse(raw);
         Assert.Contains("Guard", json.GetProperty("summary").GetString());
         Assert.True(json.GetProperty("references").GetProperty("totalCandidates").GetInt32() > 0);

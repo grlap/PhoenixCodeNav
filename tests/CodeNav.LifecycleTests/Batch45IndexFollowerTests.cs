@@ -863,6 +863,8 @@ public sealed class Batch45IndexFollowerTests
             follower.Start();
             Assert.True(WaitUntil(() => follower.IsQueryable, 20_000),
                 follower.Health().Error);
+            using var semantic = new SemanticService(follower);
+            var tools = new NavigationTools(follower, semantic);
 
             int blocked = 0;
             follower.FollowerMetadataAfterPublishForTest = _ =>
@@ -880,6 +882,18 @@ public sealed class Batch45IndexFollowerTests
             IndexHealth concurrent = follower.Health();
             Assert.Equal("failed", concurrent.State);
             Assert.False(follower.IsQueryable);
+            using (JsonDocument unavailable = JsonDocument.Parse(tools.RepoOverview()))
+            {
+                JsonElement response = unavailable.RootElement;
+                Assert.Equal("index_unavailable", response.GetProperty("error").GetString());
+                Assert.Equal("failed", response.GetProperty("state").GetString());
+                Assert.True(response.GetProperty("retryRecommended").GetBoolean());
+                Assert.Contains("server_capabilities.index.progress",
+                    response.GetProperty("retryHint").GetString()!, StringComparison.Ordinal);
+                Assert.Contains("wait for the writer",
+                    response.GetProperty("detail").GetString()!,
+                    StringComparison.OrdinalIgnoreCase);
+            }
 
             release.Set();
             IndexHealth firstResult =
@@ -890,6 +904,9 @@ public sealed class Batch45IndexFollowerTests
             destination.SetReady();
             Assert.True(WaitUntil(() => follower.IsQueryable, 10_000),
                 follower.Health().Error);
+            using JsonDocument recovered = JsonDocument.Parse(tools.RepoOverview());
+            Assert.False(recovered.RootElement.TryGetProperty("error", out _),
+                recovered.RootElement.ToString());
         }
         finally
         {

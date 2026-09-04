@@ -32,6 +32,7 @@ public sealed partial class NavigationTools
         {
             return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
         }
+        int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
 
         var (target, hint) = ResolveSemanticTarget(name, null,
             ["method", "property", "constructor"], path, line, column);
@@ -53,7 +54,7 @@ public sealed partial class NavigationTools
             else
             {
                 (result, coverage, skippedCandidateProjects, projectModelUnproven, reason) = _semantic
-                    .CallersAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs)
+                    .CallersAsync(t.Path, t.Line, t.Column, hint, maxProjects, deadlineMs)
                     .GetAwaiter().GetResult();
             }
             reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
@@ -94,14 +95,17 @@ public sealed partial class NavigationTools
                         retryRecommended = SemanticRetryRecommended(partialCause)
                             ? true
                             : (bool?)null,
-                        retryHint = SemanticRetryHint(partialCause, "callers"),
+                        retryHint = SemanticRetryHint(partialCause, "callers", deadlineMs,
+                            SemanticNavigationDeadlineMaxMs),
                         truncated,
                         meta,
                     });
             }
-            return IndexedReferencesFallback(name ?? hint, reason, "callers");
+            return IndexedReferencesFallback(name ?? hint, reason, "callers", deadlineMs,
+                SemanticNavigationDeadlineMaxMs);
         }
-        return IndexedReferencesFallback(name, "target_not_found_in_index", "callers");
+        return IndexedReferencesFallback(name, "target_not_found_in_index", "callers",
+            deadlineMs, SemanticNavigationDeadlineMaxMs);
     }
 
     [McpServerTool(Name = "callees")]
@@ -120,6 +124,7 @@ public sealed partial class NavigationTools
         {
             return Json.Serialize(new { error = "bad_request", detail = "Provide 'name', or 'path'+'line'." });
         }
+        int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
 
         var (target, hint) = ResolveSemanticTarget(name, null,
             ["method", "constructor"], path, line, column);
@@ -141,7 +146,7 @@ public sealed partial class NavigationTools
         else
         {
             (result, coverage, projectModelUnproven, reason) = _semantic
-                .CalleesAsync(t.Path, t.Line, t.Column, hint, timeoutMs)
+                .CalleesAsync(t.Path, t.Line, t.Column, hint, deadlineMs)
                 .GetAwaiter().GetResult();
         }
         reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
@@ -152,7 +157,8 @@ public sealed partial class NavigationTools
                 error = "semantic_unavailable",
                 partialReason = reason,
                 retryRecommended = SemanticRetryRecommended(reason) ? true : (bool?)null,
-                retryHint = SemanticRetryHint(reason, "callees"),
+                retryHint = SemanticRetryHint(reason, "callees", deadlineMs,
+                    SemanticNavigationDeadlineMaxMs),
                 meta = Meta.From(_manager.Health(), "indexed", "semantic"),
             });
         }
@@ -175,7 +181,8 @@ public sealed partial class NavigationTools
             partial = partial ? true : (bool?)null,
             partialReason = partialCause,
             retryRecommended = SemanticRetryRecommended(partialCause) ? true : (bool?)null,
-            retryHint = SemanticRetryHint(partialCause, "callees"),
+            retryHint = SemanticRetryHint(partialCause, "callees", deadlineMs,
+                SemanticNavigationDeadlineMaxMs),
             truncated,
             meta = meta0,
         });
@@ -208,7 +215,7 @@ public sealed partial class NavigationTools
         bool allowHeuristicFallback = selection.AllowHeuristicFallback;
 
         // Deadline visibility (field 0.7.0: type_hierarchy was the one exact tool without timing).
-        int deadlineMs = Math.Clamp(timeoutMs, 500, 120000); // mirrors TypeHierarchyAsync's clamp
+        int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
         var swSem = System.Diagnostics.Stopwatch.StartNew();
         var (target, hint) = ResolveSemanticTarget(
             name, null, ["class", "interface", "struct", "record", "enum"], path,
@@ -231,7 +238,7 @@ public sealed partial class NavigationTools
         else
         {
             (result, coverage, skippedCandidateProjects, reason) = _semantic
-                .TypeHierarchyAsync(t.Path, t.Line, t.Column, hint, maxProjects, timeoutMs, arity)
+                .TypeHierarchyAsync(t.Path, t.Line, t.Column, hint, maxProjects, deadlineMs, arity)
                 .GetAwaiter().GetResult();
         }
         reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
@@ -264,7 +271,8 @@ public sealed partial class NavigationTools
                     noteId = NoteIds.HierarchyHeuristicFallback, // a0b: stable, machine-matchable
                     partialReason = reason,
                     retryRecommended = SemanticRetryRecommended(reason) ? true : (bool?)null,
-                    retryHint = SemanticRetryHint(reason, "type_hierarchy"),
+                    retryHint = SemanticRetryHint(reason, "type_hierarchy", deadlineMs,
+                        SemanticNavigationDeadlineMaxMs),
                     note = "Semantic resolution unavailable (see partialReason) — these types name it in their base list (confidence heuristic). baseTypes/interfaces are omitted: they need the compiler. Verify with source_context, or retry for exact.",
                     timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
                     truncated = truncated || candidates.Count >= 50,
@@ -276,7 +284,8 @@ public sealed partial class NavigationTools
                 error = "semantic_unavailable",
                 partialReason = reason,
                 retryRecommended = SemanticRetryRecommended(reason) ? true : (bool?)null,
-                retryHint = SemanticRetryHint(reason, "type_hierarchy"),
+                retryHint = SemanticRetryHint(reason, "type_hierarchy", deadlineMs,
+                    SemanticNavigationDeadlineMaxMs),
                 hint = "Use 'implementations' for its indexed fallback, or search_symbol.",
                 timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
                 meta = Meta.From(_manager.Health(), "indexed", "semantic"),
@@ -641,18 +650,25 @@ public sealed partial class NavigationTools
     {
         if (NotReady() is { } notReady) return notReady;
         maxBytes = Math.Clamp(maxBytes, 2048, Json.HardBudgetBytes);
+        int deadlineMs = Math.Clamp(timeoutMs, 500, DefinitionDeadlineMaxMs);
         using var q = _manager.OpenQueries();
 
         // 1. Definition (semantic first, indexed fallback).
         var (target, _) = ResolveSemanticTarget(name, container, null, null, 0, 0);
         SemanticDeclaration? semDecl = null;
+        string? semanticFailReason = null;
         string? semanticPartialReason = null;
-        if (target is { } t)
+        if (TestOnlySemanticFailureReason is { } forcedFailure)
         {
-            (semDecl, _, _, semanticPartialReason) = _semantic
-                .DefinitionAsync(t.Path, t.Line, t.Column, name, timeoutMs)
+            semanticFailReason = forcedFailure;
+        }
+        else if (target is { } t)
+        {
+            (semDecl, semanticFailReason, _, semanticPartialReason) = _semantic
+                .DefinitionAsync(t.Path, t.Line, t.Column, name, deadlineMs)
                 .GetAwaiter().GetResult();
         }
+        string? semanticReason = ExpandReason(semanticPartialReason ?? semanticFailReason);
         var indexedDecls = q.SearchSymbols(name, "exact", null, 5,
             includeGenerated: false, language: "cs");
         if (container is { } c)
@@ -701,8 +717,8 @@ public sealed partial class NavigationTools
                 .Select(s => new { s.Name, s.Kind, s.StartLine }).Take(10).ToList<object>()
             : new List<object>();
 
-        var meta = Meta.From(_manager.Health(),
-            semDecl is not null && semanticPartialReason is null ? "exact" : "indexed",
+        var meta = Meta.From(TestOnlyContextPackHealth ?? _manager.Health(),
+            semDecl is not null && semanticReason is null ? "exact" : "indexed",
             semDecl is not null ? "semantic" : "syntax");
         var omitted = new List<string>();
 
@@ -711,8 +727,13 @@ public sealed partial class NavigationTools
             name,
             summary = $"{name}: declared in {owner ?? "unknown project"}; {refTotal} candidate references across {refGroups.Count} projects; {tests.Count} related test groups.",
             symbol = semDecl is not null ? SemanticSymbolJson(semDecl) : null,
-            partial = semanticPartialReason is not null ? true : (bool?)null,
-            partialReason = semanticPartialReason,
+            partial = semanticReason is not null ? true : (bool?)null,
+            partialReason = semanticReason,
+            retryRecommended = SemanticRetryRecommended(semanticReason)
+                ? true
+                : (bool?)null,
+            retryHint = SemanticRetryHint(semanticReason, "context_pack", deadlineMs,
+                DefinitionDeadlineMaxMs),
             declarations = indexedDecls.Select(SymbolJson),
             primarySource = dropSource ? null : primarySource,
             references = new
@@ -759,7 +780,60 @@ public sealed partial class NavigationTools
             omitted.Add(drop);
             json = apply();
         }
-        return json;
+        if (Json.Utf8Bytes(json) <= maxBytes) return json;
+
+        string[] fullyOmitted =
+        [
+            "symbol",
+            "declarations",
+            "primarySource",
+            "references",
+            "relatedTests",
+            "ownerProjectEdges",
+            "siblings",
+        ];
+        string[]? omittedMeta = meta.IncompleteSourcePaths is { Count: > 0 }
+            ? ["incompleteSourcePaths"]
+            : null;
+        return Json.WithStringBudget(name, maxBytes, (boundedName, nameTruncated) => new
+        {
+            name = boundedName,
+            nameTruncated = nameTruncated ? true : (bool?)null,
+            nameBytes = nameTruncated ? Json.Utf8Bytes(name) : (int?)null,
+            summary = "Context details were omitted to satisfy maxBytes; retry with a larger maxBytes for the full bundle.",
+            partial = semanticReason is not null ? true : (bool?)null,
+            partialReason = semanticReason,
+            retryRecommended = SemanticRetryRecommended(semanticReason)
+                ? true
+                : (bool?)null,
+            retryHint = SemanticRetryHint(semanticReason, "context_pack", deadlineMs,
+                DefinitionDeadlineMaxMs),
+            declarations = Array.Empty<object>(),
+            omittedBecauseBudget = fullyOmitted,
+            meta = new
+            {
+                meta.IndexStatus,
+                meta.IndexVersion,
+                meta.IndexedAtUtc,
+                meta.LastRefreshUtc,
+                meta.PendingChanges,
+                meta.Confidence,
+                meta.NavigationLayer,
+                meta.ConfidenceNote,
+                meta.StatusNote,
+                meta.Build,
+                meta.IndexSchema,
+                meta.IndexMode,
+                meta.PartialReason,
+                meta.IncompleteSourcePathCount,
+                meta.IncompleteSourcePathCountLowerBound,
+                incompleteSourcePathsTruncated = omittedMeta is not null ||
+                    meta.IncompleteSourcePathsTruncated == true
+                    ? true
+                    : (bool?)null,
+                omittedBecauseBudget = omittedMeta,
+            },
+        }, maxBytes: maxBytes);
     }
 
     [McpServerTool(Name = "impact")]
@@ -885,7 +959,8 @@ public sealed partial class NavigationTools
 
     // ---------------------------------------------------------------- shared fallback
 
-    private string IndexedReferencesFallback(string? name, string? reason, string operation)
+    private string IndexedReferencesFallback(string? name, string? reason, string operation,
+        int deadlineMs, int maxDeadlineMs)
     {
         if (string.IsNullOrEmpty(name))
         {
@@ -894,7 +969,7 @@ public sealed partial class NavigationTools
                 error = "symbol_not_resolved",
                 partialReason = reason,
                 retryRecommended = SemanticRetryRecommended(reason) ? true : (bool?)null,
-                retryHint = SemanticRetryHint(reason, operation),
+                retryHint = SemanticRetryHint(reason, operation, deadlineMs, maxDeadlineMs),
             });
         }
         using var q = _manager.OpenQueries();
@@ -905,7 +980,7 @@ public sealed partial class NavigationTools
             name,
             partialReason = reason,
             retryRecommended = SemanticRetryRecommended(reason) ? true : (bool?)null,
-            retryHint = SemanticRetryHint(reason, operation),
+            retryHint = SemanticRetryHint(reason, operation, deadlineMs, maxDeadlineMs),
             note = "Semantic resolution unavailable — indexed whole-identifier candidates instead.",
             totalCandidates = total,
             groups = items.Select(g => new

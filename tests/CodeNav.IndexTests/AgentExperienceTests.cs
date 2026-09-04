@@ -1005,12 +1005,18 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
     {
         var transientTools = new NavigationTools(_fixture.Manager, _fixture.Semantic)
         {
-            TestOnlySemanticFailureReason = "semantic_timeout",
+            TestOnlySemanticFailureReason = "cluster_cold_load",
         };
         foreach ((string operation, JsonElement response) in Responses(transientTools))
         {
+            Assert.StartsWith("cluster_cold_load",
+                response.GetProperty("partialReason").GetString(), StringComparison.Ordinal);
             Assert.True(response.GetProperty("retryRecommended").GetBoolean(), response.ToString());
-            Assert.Contains(operation, response.GetProperty("retryHint").GetString()!,
+            string retryHint = response.GetProperty("retryHint").GetString()!;
+            Assert.Contains(operation, retryHint, StringComparison.Ordinal);
+            Assert.Contains("larger timeoutMs", retryHint, StringComparison.Ordinal);
+            Assert.Contains("maximum is", retryHint, StringComparison.Ordinal);
+            Assert.DoesNotContain("server_capabilities.index", retryHint,
                 StringComparison.Ordinal);
         }
 
@@ -1024,6 +1030,19 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
             Assert.False(response.TryGetProperty("retryHint", out _), response.ToString());
         }
 
+        if (_fixture.Semantic.FrameworkRefsAvailable)
+        {
+            JsonElement warmContext = Parse(_fixture.Tools.ContextPack(
+                "Worker", maxBytes: 12288, timeoutMs: 30000));
+            Assert.False(warmContext.TryGetProperty("error", out _), warmContext.ToString());
+            Assert.False(warmContext.TryGetProperty("partialReason", out _),
+                warmContext.ToString());
+            Assert.False(warmContext.TryGetProperty("retryRecommended", out _),
+                warmContext.ToString());
+            Assert.False(warmContext.TryGetProperty("retryHint", out _),
+                warmContext.ToString());
+        }
+
         static Dictionary<string, JsonElement> Responses(NavigationTools tools) => new()
         {
             ["definition"] = Parse(tools.Definition("Worker")),
@@ -1032,7 +1051,78 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
             ["callers"] = Parse(tools.Callers("Work")),
             ["callees"] = Parse(tools.Callees("Work")),
             ["type_hierarchy"] = Parse(tools.TypeHierarchy("Worker")),
+            ["context_pack"] = Parse(tools.ContextPack("Worker")),
         };
+    }
+
+    [Fact]
+    public void ContextPackFallbackHardBoundsMultibyteIdentityAndPreservesColdRetry()
+    {
+        string oversizedName = new('界', 30_000);
+        var tools = new NavigationTools(_fixture.Manager, _fixture.Semantic)
+        {
+            TestOnlySemanticFailureReason = "cluster_cold_load",
+            TestOnlyContextPackHealth = new IndexHealth(
+                "stale", "stale-version", "2026-09-03T10:00:00Z",
+                "2026-09-03T10:01:00Z", 3,
+                IndexManager.RefreshInputUnavailableCause, 123,
+                "/workspace", "/workspace/.codenav/index.db",
+                AccessMode: IndexManager.FollowerAccessMode,
+                RefreshIncompleteReason: IndexManager.RefreshInputUnavailableCause,
+                RefreshIncompletePaths: ["Locked.cs"],
+                RefreshIncompletePathCount: 1,
+                RefreshIncompletePathCountIsLowerBound: true),
+        };
+
+        string minimumRaw = tools.ContextPack(oversizedName, maxBytes: 2048,
+            timeoutMs: 2500);
+        Assert.True(Json.Utf8Bytes(minimumRaw) <= 2048,
+            $"context_pack minimum response used {Json.Utf8Bytes(minimumRaw)} bytes");
+        JsonElement minimum = Parse(minimumRaw);
+        Assert.False(minimum.TryGetProperty("error", out _), minimum.ToString());
+        Assert.True(minimum.GetProperty("nameTruncated").GetBoolean());
+        Assert.Equal(Json.Utf8Bytes(oversizedName),
+            minimum.GetProperty("nameBytes").GetInt32());
+        Assert.Equal(0, minimum.GetProperty("declarations").GetArrayLength());
+        Assert.Equal(
+            new[]
+            {
+                "symbol", "declarations", "primarySource", "references", "relatedTests",
+                "ownerProjectEdges", "siblings",
+            },
+            minimum.GetProperty("omittedBecauseBudget").EnumerateArray()
+                .Select(item => item.GetString()).ToArray());
+        Assert.StartsWith("cluster_cold_load",
+            minimum.GetProperty("partialReason").GetString(), StringComparison.Ordinal);
+        Assert.True(minimum.GetProperty("retryRecommended").GetBoolean());
+        string hint = minimum.GetProperty("retryHint").GetString()!;
+        Assert.Contains("2500 ms", hint, StringComparison.Ordinal);
+        Assert.Contains("60000 ms", hint, StringComparison.Ordinal);
+        JsonElement meta = minimum.GetProperty("meta");
+        Assert.Equal("stale", meta.GetProperty("indexStatus").GetString());
+        Assert.Equal("stale-version", meta.GetProperty("indexVersion").GetString());
+        Assert.Equal("2026-09-03T10:00:00Z",
+            meta.GetProperty("indexedAtUtc").GetString());
+        Assert.Equal("2026-09-03T10:01:00Z",
+            meta.GetProperty("lastRefreshUtc").GetString());
+        Assert.Equal(3, meta.GetProperty("pendingChanges").GetInt32());
+        Assert.Contains("non-writer compatibility reader",
+            meta.GetProperty("statusNote").GetString(), StringComparison.Ordinal);
+        Assert.Equal(IndexManager.RefreshInputUnavailableCause,
+            meta.GetProperty("partialReason").GetString());
+        Assert.Equal(1, meta.GetProperty("incompleteSourcePathCount").GetInt32());
+        Assert.True(meta.GetProperty("incompleteSourcePathCountLowerBound").GetBoolean());
+        Assert.True(meta.GetProperty("incompleteSourcePathsTruncated").GetBoolean());
+        Assert.False(meta.TryGetProperty("incompleteSourcePaths", out _));
+        Assert.Equal(["incompleteSourcePaths"],
+            meta.GetProperty("omittedBecauseBudget").EnumerateArray()
+                .Select(item => item.GetString()!).ToArray());
+
+        string cappedRaw = tools.ContextPack(oversizedName,
+            maxBytes: Json.HardBudgetBytes + 1, timeoutMs: 2500);
+        Assert.True(Json.Utf8Bytes(cappedRaw) <= Json.HardBudgetBytes,
+            $"context_pack hard-cap response used {Json.Utf8Bytes(cappedRaw)} bytes");
+        Assert.True(Parse(cappedRaw).GetProperty("nameTruncated").GetBoolean());
     }
 
     [Fact]

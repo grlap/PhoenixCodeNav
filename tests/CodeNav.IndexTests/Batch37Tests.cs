@@ -117,7 +117,7 @@ public class Batch37Tests
         // The token must stay the string PREFIX (machine-matchable), advice appended.
         string? expanded = NavigationTools.ExpandReason("cluster_cold_load");
         Assert.StartsWith("cluster_cold_load", expanded);
-        Assert.Contains("retry", expanded, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("increasing timeoutMs", expanded, StringComparison.Ordinal);
         // Every other reason passes through untouched.
         Assert.Equal("semantic_timeout", NavigationTools.ExpandReason("semantic_timeout"));
         Assert.Null(NavigationTools.ExpandReason(null));
@@ -132,8 +132,20 @@ public class Batch37Tests
         string reason)
     {
         Assert.True(NavigationTools.SemanticRetryRecommended(reason));
-        string hint = Assert.IsType<string>(NavigationTools.SemanticRetryHint(reason, "implementations"));
-        Assert.Contains("Retry implementations once", hint, StringComparison.Ordinal);
+        string hint = Assert.IsType<string>(NavigationTools.SemanticRetryHint(reason,
+            "implementations", 15_000, NavigationTools.SemanticNavigationDeadlineMaxMs));
+        if (reason.StartsWith("cluster_cold_load", StringComparison.Ordinal))
+        {
+            Assert.Contains("larger timeoutMs", hint, StringComparison.Ordinal);
+            Assert.Contains("15000 ms", hint, StringComparison.Ordinal);
+            Assert.Contains("120000 ms", hint, StringComparison.Ordinal);
+            Assert.DoesNotContain("server_capabilities.index", hint,
+                StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Contains("Retry implementations once", hint, StringComparison.Ordinal);
+        }
         Assert.DoesNotContain("automatically", hint, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -145,7 +157,22 @@ public class Batch37Tests
     public void ImplementationsDeterministicFallbacksDoNotRecommendRetry(string? reason)
     {
         Assert.False(NavigationTools.SemanticRetryRecommended(reason));
-        Assert.Null(NavigationTools.SemanticRetryHint(reason, "implementations"));
+        Assert.Null(NavigationTools.SemanticRetryHint(reason, "implementations", 15_000,
+            NavigationTools.SemanticNavigationDeadlineMaxMs));
+    }
+
+    [Fact]
+    public void ClusterColdLoadAtTheFamilyMaximumRecommendsOneUnchangedRetry()
+    {
+        string hint = Assert.IsType<string>(NavigationTools.SemanticRetryHint(
+            "cluster_cold_load", "implementations",
+            NavigationTools.SemanticNavigationDeadlineMaxMs,
+            NavigationTools.SemanticNavigationDeadlineMaxMs));
+
+        Assert.Contains("same arguments", hint, StringComparison.Ordinal);
+        Assert.Contains("maximum timeoutMs", hint, StringComparison.Ordinal);
+        Assert.Contains("prepared inputs are reused", hint, StringComparison.Ordinal);
+        Assert.DoesNotContain("larger timeoutMs", hint, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -228,8 +255,11 @@ public class Batch37Tests
             Assert.Equal("heuristic",
                 coldImplementations.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.True(coldImplementations.GetProperty("retryRecommended").GetBoolean());
-            Assert.Contains("same arguments",
-                coldImplementations.GetProperty("retryHint").GetString(),
+            Assert.Contains("5000 ms",
+                coldImplementations.GetProperty("retryHint").GetString()!,
+                StringComparison.Ordinal);
+            Assert.Contains("120000 ms",
+                coldImplementations.GetProperty("retryHint").GetString()!,
                 StringComparison.Ordinal);
             var coldMemberImplementations = SemanticRetry.ParseWithRetry(
                 () => tools.Implementations(name: "Run", timeoutMs: 5000),
@@ -270,7 +300,7 @@ public class Batch37Tests
                 timeoutImplementations.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.True(timeoutImplementations.GetProperty("retryRecommended").GetBoolean());
             Assert.Contains("same arguments",
-                timeoutImplementations.GetProperty("retryHint").GetString(),
+                timeoutImplementations.GetProperty("retryHint").GetString()!,
                 StringComparison.Ordinal);
             string timeoutTelemetryLine = m.Telemetry.Snapshot().Last(line =>
                 line.Contains("\"tool\":\"references\"") &&

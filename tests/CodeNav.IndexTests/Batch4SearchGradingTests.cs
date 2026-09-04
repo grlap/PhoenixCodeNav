@@ -407,6 +407,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("operations-portal-deterministic-semantic-summary", ids);
         Assert.Contains("mcp-structured-argument-errors", ids);
         Assert.Contains("implementations-semantic-retry-guidance", ids);
+        Assert.Contains("cold-start-retry-contract", ids);
         Assert.Contains("refresh-recovery-self-heal", ids);
         Assert.Contains("git-awareness", ids);
         Assert.Contains("batch-outline-json-array-paths", ids);
@@ -466,6 +467,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(
             1,
             idList.Count(id => id == "implementations-semantic-retry-guidance"));
+        Assert.Equal(1, idList.Count(id => id == "cold-start-retry-contract"));
         string fsharpSymbolSearch = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -660,6 +662,22 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("machine-readable semantic cause", retryGuidance);
         Assert.Contains("retryRecommended", retryGuidance);
         Assert.Contains("does not retry automatically", retryGuidance);
+        string coldStartRetry = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "cold-start-retry-contract")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("typed cold-start retry contract", coldStartRetry);
+        Assert.Contains("access-mode-aware", coldStartRetry);
+        Assert.Contains("server_capabilities.index.progress", coldStartRetry);
+        Assert.Contains("index.error", coldStartRetry);
+        Assert.Contains("index.state", coldStartRetry);
+        Assert.Contains("context_pack", coldStartRetry);
+        Assert.Contains("larger timeoutMs", coldStartRetry);
+        Assert.Contains("documented family maximum", coldStartRetry);
+        Assert.Contains("unchanged at that maximum", coldStartRetry);
+        Assert.Contains("never retries automatically", coldStartRetry);
         Assert.Contains("open_operations_portal",
             json.GetProperty("tools").EnumerateArray().Select(tool => tool.GetString()));
         string refreshRecovery = Assert.Single(
@@ -1126,7 +1144,9 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("first bounded NUL", "portal-directory-entry-nul-decoding"),
                       ("away from MCP stdout", "operations-portal-mcp-launcher"),
                       ("structured bad_request", "mcp-structured-argument-errors"),
-                      ("retryRecommended", "implementations-semantic-retry-guidance"),
+                      ("v0.12.50 transient implementations",
+                          "implementations-semantic-retry-guidance"),
+                      ("typed cold-start retry contract", "cold-start-retry-contract"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),
                       ("target-bearing names", "csharp-conversion-operator-indexing"),
                       ("implicitConversion", "csharp-conversion-usage-enumeration"),

@@ -69,11 +69,19 @@ public sealed class McpArgumentValidationTests
                      {
                          "repo_overview", "context_pack", "impact", "related_tests",
                          "review_pack", "structured domain error", "retryRecommended",
-                         "retryHint", "C#", "F#",
+                         "retryHint", "symbol_at", "config_lookup", "C#", "F#",
                      })
             {
                 Assert.Contains(token, instructions, StringComparison.Ordinal);
             }
+            Assert.Contains(
+                "symbol_at(path, line) for stack traces, build errors, and diff hunks",
+                instructions, StringComparison.Ordinal);
+            Assert.Contains(
+                "config_lookup for keys in its indexed configuration partition and search_text " +
+                "for literals, messages, comments, other non-symbol text, and configuration " +
+                "text outside that partition",
+                instructions, StringComparison.Ordinal);
 
             IList<McpClientTool> tools = await client.ListToolsAsync(
                 cancellationToken: timeout.Token);

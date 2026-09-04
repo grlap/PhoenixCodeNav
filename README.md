@@ -321,9 +321,12 @@ tool-result contract, or an internal CLI failure;
 `retryable:false`, never the unavailable envelope. The CLI never retries a tool call automatically;
 CLI-generated and daemon-unavailable envelopes use `retryable`, while domain results relayed from
 the tool preserve the MCP `retryRecommended` / `retryHint` fields. Act on the stated recovery before
-retrying at most once. Treat `index_building` separately: inspect `server_capabilities.index.progress`,
-wait while its counters advance, and retry the original tool after `index.state` becomes `ready`—do
-not replace structured navigation with broad shell search. Never blindly repeat unchanged input or
+retrying at most once. For `index_building` or `index_unavailable`, a recommended retry means inspect
+`server_capabilities.index.progress` and `index.state`, wait until the state is `ready`, then retry
+once; a non-recommended retry means read `index.error` and the stated recovery instead of waiting.
+For `cluster_cold_load`, the index was already queryable: use a larger `timeoutMs` when the prior
+request was below the documented maximum, or retry unchanged when it was already at that maximum.
+Do not replace structured navigation with broad shell search, blindly repeat unchanged input, or
 invent a name-based fallback. The CLI
 does not impose a second wall-clock timeout: MCP initialization has its transport bound, tool work
 uses that tool's own deadline arguments, and Ctrl-C/SIGTERM returns `130`. A host that needs a whole-
@@ -562,7 +565,9 @@ watcher, and lifecycle test projects under `tests/`.
 - When `implementations` falls back to indexed heuristics because the compiler path reports
   `cluster_cold_load` or `semantic_timeout`, it preserves that `partialReason` and heuristic
   confidence while returning `retryRecommended:true` plus a one-retry `retryHint`. Phoenix does
-  not retry automatically or silently raise the requested deadline; non-partial exact responses
+  not retry automatically or silently raise the requested deadline. A cold-load hint names the
+  effective deadline and family maximum when a larger timeout remains available; at the maximum it
+  recommends one unchanged retry because prepared inputs can be reused. Non-partial exact responses
   omit the retry fields.
 - Multi-TFM projects index a single symbol row per declaration (net472-first design).
 - Git awareness covers freshness (indexed vs HEAD commit/branch), not navigation — a

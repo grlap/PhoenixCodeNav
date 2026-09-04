@@ -43,6 +43,7 @@ public sealed partial class NavigationTools
     internal int? TestOnlySearchSymbolResponseMaxBytes { get; set; }
     internal int? TestOnlyReferencesResponseMaxBytes { get; set; }
     internal int? TestOnlyProjectSelectorResponseMaxBytes { get; set; }
+    internal IndexHealth? TestOnlyContextPackHealth { get; set; }
 
     public NavigationTools(IndexManager manager, SemanticService semantic)
         : this(manager, semantic, new OperationsPortalLauncher())
@@ -186,6 +187,7 @@ public sealed partial class NavigationTools
                 new { id = "dual-list-string-inputs", summary = "list-like string arguments accept their established comma-separated form or a JSON-array encoded string while retaining host-compatible string schemas" },
                 new { id = "documentation-comment-selectors", summary = "definition, references, and implementations accept stable C# T:/M:/P:/F:/E: documentationCommentId selectors, preserve assembly ambiguity, and refuse unsupported implementation targets without retargeting" },
                 new { id = "semantic-retry-guidance", summary = "definition, references, implementations, callers, callees, and type_hierarchy use the same bounded retry recommendation and hint contract for cluster_cold_load and semantic_timeout" },
+                new { id = "cold-start-retry-contract", summary = "The shared navigation and bounded review_pack non-ready index gates carry an access-mode-aware retryRecommended value and a retryHint naming server_capabilities.index.progress plus index.state for transitional writer/follower states or index.error for terminal writer/unavailable failure; context_pack preserves the same typed cold-start retry contract for cluster_cold_load, whose canceled load should be retried once with a larger timeoutMs when below the documented family maximum or unchanged at that maximum, and Phoenix never retries automatically" },
                 new { id = "default-query-scope", summary = "CODENAV_DEFAULT_QUERY_SCOPE configures all or first_party for broad indexed find/search tools; queryScope='all' overrides it, affected responses echo the effective scope, and exact semantic operations remain unscoped" },
                 new { id = "dependency-direction-aliases", summary = "project_graph accepts dependencies as downstream and dependents as upstream while echoing the canonical direction and preserving established names" },
                 new { id = "review-pack-actionable-budget-gaps", summary = "review_pack discloses a separately bounded affected-path sample with total/returned/truncated coverage, stable reason ids, and explicit recovery when evidence is clipped" },
@@ -1872,7 +1874,8 @@ public sealed partial class NavigationTools
                         retryRecommended = SemanticRetryRecommended(semanticPartialReason)
                             ? true
                             : (bool?)null,
-                        retryHint = SemanticRetryHint(semanticPartialReason, "definition"),
+                        retryHint = SemanticRetryHint(semanticPartialReason, "definition",
+                            deadlineMs, DefinitionDeadlineMaxMs),
                         timing = new
                         {
                             deadlineMs,
@@ -1911,7 +1914,8 @@ public sealed partial class NavigationTools
                         : (bool?)null,
                     partialReason = failReason,
                     retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-                    retryHint = SemanticRetryHint(failReason, "definition"),
+                    retryHint = SemanticRetryHint(failReason, "definition", deadlineMs,
+                        DefinitionDeadlineMaxMs),
                     retry = requestedDocumentationCommentId is null
                         ? null
                         : new
@@ -1973,7 +1977,8 @@ public sealed partial class NavigationTools
             body,
             partialReason = failReason,
             retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-            retryHint = SemanticRetryHint(failReason, "definition"),
+            retryHint = SemanticRetryHint(failReason, "definition", deadlineMs,
+                DefinitionDeadlineMaxMs),
             hint = items.Count == 0
                 ? "No declaration found. Try search_symbol with match='substring', or the name may come from a package/generated source."
                 : null,
@@ -2240,7 +2245,8 @@ public sealed partial class NavigationTools
                         retryRecommended = SemanticRetryRecommended(partialCause)
                             ? true
                             : (bool?)null,
-                        retryHint = SemanticRetryHint(partialCause, "implementations"),
+                        retryHint = SemanticRetryHint(partialCause, "implementations",
+                            deadlineMs, SemanticNavigationDeadlineMaxMs),
                         // t2b: where the budget went — cluster load+resolve vs the finder passes.
                         timing = new
                         {
@@ -2296,7 +2302,8 @@ public sealed partial class NavigationTools
                         retryRecommended = SemanticRetryRecommended(partialReason)
                             ? true
                             : (bool?)null,
-                        retryHint = SemanticRetryHint(partialReason, "implementations"),
+                        retryHint = SemanticRetryHint(partialReason, "implementations",
+                            deadlineMs, SemanticNavigationDeadlineMaxMs),
                         timing = new
                         {
                             deadlineMs,
@@ -2323,7 +2330,8 @@ public sealed partial class NavigationTools
                     retryRecommended = SemanticRetryRecommended(failReason)
                         ? true
                         : (bool?)null,
-                    retryHint = SemanticRetryHint(failReason, "implementations"),
+                    retryHint = SemanticRetryHint(failReason, "implementations", deadlineMs,
+                        SemanticNavigationDeadlineMaxMs),
                     retry = new
                     {
                         tool = "search_symbol",
@@ -2409,7 +2417,8 @@ public sealed partial class NavigationTools
                 error = "symbol_not_resolved",
                 partialReason = failReason,
                 retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-                retryHint = SemanticRetryHint(failReason, "implementations"),
+                retryHint = SemanticRetryHint(failReason, "implementations", deadlineMs,
+                    SemanticNavigationDeadlineMaxMs),
                 meta = Meta.From(_manager.Health(), "heuristic", "syntax"),
             });
         }
@@ -2460,7 +2469,8 @@ public sealed partial class NavigationTools
                     partialReason = "member_scoped_syntactic",
                     semanticReason = failReason,
                     retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-                    retryHint = SemanticRetryHint(failReason, "implementations"),
+                    retryHint = SemanticRetryHint(failReason, "implementations", deadlineMs,
+                        SemanticNavigationDeadlineMaxMs),
                     note = $"Same-named members of the syntactic implementers of {targetSym!.Container} (confidence heuristic — compiler-exact override resolution found none, likely a type-twin identity mismatch)."
                         + (omitted > 0 ? $" {omitted} of {implementerCount} implementer(s) declare no such member and were omitted." : "")
                         + " Verify with source_context.",
@@ -2479,7 +2489,8 @@ public sealed partial class NavigationTools
                 partialReason = "member_fallback_type_scoped",
                 semanticReason = failReason, // why the exact path returned nothing (context, not actionable)
                 retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-                retryHint = SemanticRetryHint(failReason, "implementations"),
+                retryHint = SemanticRetryHint(failReason, "implementations", deadlineMs,
+                    SemanticNavigationDeadlineMaxMs),
                 note = "No compiler-exact member implementations in the loaded cluster (possibly a type-twin identity mismatch), and no same-named member found in the declaring type's implementers. Run implementations on the declaring interface/type, then read this member in each implementer.",
                 meta,
             });
@@ -2501,7 +2512,8 @@ public sealed partial class NavigationTools
             implementations = items.Select(SymbolJson),
             partialReason = failReason ?? "semantic_unavailable",
             retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-            retryHint = SemanticRetryHint(failReason, "implementations"),
+            retryHint = SemanticRetryHint(failReason, "implementations", deadlineMs,
+                SemanticNavigationDeadlineMaxMs),
             note = items.Count > 0 && failReason is "no_semantic_implementers" or "candidate_cluster_bounded"
                 // Field (lhg): the old "declared in more than one assembly / generated twin" wording
                 // went stale once compiled-awareness + assembly-ref edges landed — say what we now
@@ -2863,7 +2875,8 @@ public sealed partial class NavigationTools
                                 retryRecommended = SemanticRetryRecommended(partialReason)
                                     ? true
                                     : (bool?)null,
-                                retryHint = SemanticRetryHint(partialReason, "references"),
+                                retryHint = SemanticRetryHint(partialReason, "references",
+                                    deadlineMs, SemanticNavigationDeadlineMaxMs),
                                 skippedCandidateProjects = skippedItems.Count > 0 ? skippedItems : null,
                                 skippedCandidateProjectCount = result.SkippedCandidateProjects.Count > 0
                             ? result.SkippedCandidateProjects.Count
@@ -2926,7 +2939,8 @@ public sealed partial class NavigationTools
                         : (bool?)null,
                     partialReason = failReason,
                     retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-                    retryHint = SemanticRetryHint(failReason, "references"),
+                    retryHint = SemanticRetryHint(failReason, "references", deadlineMs,
+                        SemanticNavigationDeadlineMaxMs),
                     retry = requestedDocumentationCommentId is null
                         ? null
                         : new
@@ -2968,7 +2982,8 @@ public sealed partial class NavigationTools
                 error = "symbol_not_resolved",
                 partialReason = failReason,
                 retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-                retryHint = SemanticRetryHint(failReason, "references"),
+                retryHint = SemanticRetryHint(failReason, "references", deadlineMs,
+                    SemanticNavigationDeadlineMaxMs),
             });
         }
         var excludes = excludePath is { Length: > 0 } ex ? new[] { ex } : null;
@@ -3005,7 +3020,8 @@ public sealed partial class NavigationTools
             partial = candidateFilesCapHit ? true : (bool?)null,
             partialReason = indexedPartialReason,
             retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
-            retryHint = SemanticRetryHint(failReason, "references"),
+            retryHint = SemanticRetryHint(failReason, "references", deadlineMs,
+                SemanticNavigationDeadlineMaxMs),
             summary = candidateFilesCapHit
                 ? $"At least {total} candidate reference lines across {groups.Count} returned project groups ({mix}); the indexed scan covered {candidates.CandidateFilesScanned} of at least {candidates.CandidateFilesAtLeast} matching files."
                 : $"{total} candidate reference lines across {groups.Count} projects ({mix}).",
@@ -3566,15 +3582,13 @@ public sealed partial class NavigationTools
         meta = Meta.From(_manager.Health(), "indexed", "semantic"),
     });
 
-    /// <summary>t2b: expand the cluster_cold_load token with inline advice at the moment of
-    /// confusion — the deadline died LOADING compilations (the first call after an index build
-    /// or cluster reload), and an immediate retry usually returns exact. The uniform
-    /// "semantic_timeout" sent agents raising timeoutMs (or distrusting the tool) when the fix
-    /// was simply to call again. Every other reason passes through untouched, and the token
-    /// stays the string's PREFIX so it remains machine-matchable.</summary>
+    /// <summary>Expands the cluster_cold_load token at the point of confusion: the deadline
+    /// canceled compilation loading, so the one advised retry should use more of the family's
+    /// documented timeout budget when available. Every other reason passes through untouched,
+    /// and the token stays the string's prefix so it remains machine-matchable.</summary>
     internal static string? ExpandReason(string? reason) => // internal: token contract pinned by tests
         reason == "cluster_cold_load"
-            ? "cluster_cold_load — the deadline expired while loading compilations (first call after an index build or cluster reload); an immediate retry usually returns exact"
+            ? "cluster_cold_load — the request deadline canceled compilation loading; retry once, increasing timeoutMs when the prior request was below the tool's documented maximum"
             : reason;
 
     /// <summary>Transient semantic failures keep their established partialReason token while
@@ -3586,14 +3600,19 @@ public sealed partial class NavigationTools
          reason.StartsWith("semantic_timeout", StringComparison.Ordinal) ||
          reason.StartsWith("index_snapshot_changed", StringComparison.Ordinal));
 
-    internal static string? SemanticRetryHint(string? reason, string operation)
+    internal static string? SemanticRetryHint(string? reason, string operation,
+        int deadlineMs, int maxDeadlineMs)
     {
         if (!SemanticRetryRecommended(reason)) return null;
         if (reason!.StartsWith("index_snapshot_changed", StringComparison.Ordinal))
             return $"Retry {operation} once with the same arguments; an index refresh landed during the request.";
-        return reason.StartsWith("cluster_cold_load", StringComparison.Ordinal)
-            ? $"Retry {operation} once with the same arguments; the semantic cluster may now be warm and return exact results."
-            : $"Retry {operation} once with the same arguments; if it remains partial, narrow the target or explicitly choose a larger timeoutMs.";
+        if (reason.StartsWith("cluster_cold_load", StringComparison.Ordinal))
+        {
+            return deadlineMs < maxDeadlineMs
+                ? $"Retry {operation} once with a larger timeoutMs (this request used {deadlineMs} ms; the maximum is {maxDeadlineMs} ms); the request deadline canceled the semantic cluster load."
+                : $"Retry {operation} once with the same arguments; the load canceled at the maximum timeoutMs may complete because prepared inputs are reused.";
+        }
+        return $"Retry {operation} once with the same arguments; if it remains partial, narrow the target or explicitly choose a larger timeoutMs.";
     }
 
     /// <summary>Wire vocabulary for edge provenance (bxw): the stored kind ('project'/'assembly')
@@ -3697,6 +3716,7 @@ public sealed partial class NavigationTools
     {
         if (_manager.IsQueryable) return null;
         var h = _manager.Health();
+        bool retryRecommended = IndexRetryRecommended(h);
         return Json.Serialize(new
         {
             error = h.State == "building" ? "index_building" : "index_unavailable",
@@ -3709,7 +3729,41 @@ public sealed partial class NavigationTools
             hint = h.State == "building"
                 ? "The workspace index is still building (first run). Inspect server_capabilities index.progress, wait while it advances, and retry after index.state is ready."
                 : "The workspace index is unavailable. Inspect server_capabilities for the cause and recovery before retrying.",
+            retryRecommended,
+            retryHint = retryRecommended
+                ? IndexProgressRetryHint
+                : IndexTerminalRetryHint,
         });
+    }
+
+    private const string IndexProgressRetryHint =
+        "Inspect server_capabilities.index.progress. If server_capabilities.index.state is not ready, wait until it becomes ready; then retry the original call once.";
+
+    private const string IndexTerminalRetryHint =
+        "Inspect server_capabilities.index.error and the reported recovery; retrying does not help until the cause is resolved.";
+
+    /// <summary>The complete IndexManager state vocabulary is mapped explicitly in the context of
+    /// an already non-queryable gate. A follower's failed publication is the writer's transient
+    /// rebuild window; a writer/unavailable failed publication remains terminal. Unknown state or
+    /// access-mode values fail closed instead of silently becoming retryable.</summary>
+    internal static bool IndexRetryRecommended(IndexHealth health)
+    {
+        if (health.AccessMode is not (IndexManager.WriterAccessMode or
+            IndexManager.FollowerAccessMode or IndexManager.UnavailableAccessMode))
+            return false;
+
+        return health.State switch
+        {
+            "missing" => true,
+            "building" => true,
+            "refreshing" => true,
+            "stale" => true,
+            // This helper is called only after IsQueryable returned false. A nominally ready
+            // manager at that gate is crossing a publication or destination-authority boundary.
+            "ready" => true,
+            "failed" => health.AccessMode == IndexManager.FollowerAccessMode,
+            _ => false,
+        };
     }
 
     /// <summary>Test seam: the shared progress emitter — the silent-when-zero (efa) and
@@ -4016,7 +4070,8 @@ public sealed partial class NavigationTools
                 retryRecommended = SemanticRetryRecommended(resolution.FailReason)
                     ? true
                     : (bool?)null,
-                retryHint = SemanticRetryHint(resolution.FailReason, operation),
+                retryHint = SemanticRetryHint(resolution.FailReason, operation, deadlineMs,
+                    maxDeadlineMs),
                 retry = truncated
                     ? null
                     : new

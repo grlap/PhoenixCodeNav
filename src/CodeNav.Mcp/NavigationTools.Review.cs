@@ -2126,6 +2126,7 @@ public sealed partial class NavigationTools
     {
         int cap = Math.Clamp(maxBytes, 2048, Json.HardBudgetBytes);
         string error = health.State == "building" ? "index_building" : "index_unavailable";
+        bool retryRecommended = IndexRetryRecommended(health);
         string hint = health.State == "building"
             ? "The workspace index is still building (first run). Inspect server_capabilities index.progress, wait while it advances, and retry after index.state is ready."
             : "The workspace index is unavailable. Inspect server_capabilities for the cause and recovery before retrying.";
@@ -2136,6 +2137,10 @@ public sealed partial class NavigationTools
             detail = health.Error,
             progress = ProgressJson(health),
             hint,
+            retryRecommended,
+            retryHint = retryRecommended
+                ? IndexProgressRetryHint
+                : IndexTerminalRetryHint,
         });
         if (Json.Utf8Bytes(json) <= cap) return json;
 
@@ -2148,6 +2153,10 @@ public sealed partial class NavigationTools
             stateTruncated = stateTruncated ? true : (bool?)null,
             stateBytes = stateTruncated ? Json.Utf8Bytes(health.State) : (int?)null,
             detail = "Index status detail and progress were omitted to satisfy maxBytes; poll server_capabilities for the bounded health envelope.",
+            retryRecommended,
+            retryHint = retryRecommended
+                ? IndexProgressRetryHint
+                : IndexTerminalRetryHint,
             meta = new
             {
                 confidence = "indexed",

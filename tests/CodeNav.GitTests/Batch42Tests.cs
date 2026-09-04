@@ -378,6 +378,11 @@ public class Batch42Tests
         Assert.Equal("scanning", progress.GetProperty("phase").GetString());
         Assert.Equal(7, progress.GetProperty("filesIndexed").GetInt32());
         Assert.Equal(20, progress.GetProperty("filesTotal").GetInt32());
+        Assert.True(normal.GetProperty("retryRecommended").GetBoolean());
+        Assert.Contains("server_capabilities.index.progress",
+            normal.GetProperty("retryHint").GetString()!, StringComparison.Ordinal);
+        Assert.Contains("server_capabilities.index.state",
+            normal.GetProperty("retryHint").GetString()!, StringComparison.Ordinal);
 
         string oversized = "HEALTH_DETAIL_MUST_NOT_LEAK_" + new string('x', 32 * 1024);
         var oversizedHealth = new IndexHealth("building", oversized, oversized, oversized, 0,
@@ -399,6 +404,72 @@ public class Batch42Tests
         Assert.Equal("text", meta.GetProperty("navigationLayer").GetString());
         Assert.Equal(BuildInfo.Stamp, meta.GetProperty("build").GetString());
         Assert.Equal(BuildInfo.IndexSchema, meta.GetProperty("indexSchema").GetString());
+        Assert.True(bounded.GetProperty("retryRecommended").GetBoolean());
+        Assert.Contains("server_capabilities.index.progress",
+            bounded.GetProperty("retryHint").GetString()!, StringComparison.Ordinal);
+
+        var failedHealth = new IndexHealth("failed", "11", "indexed", "build failed", 0,
+            "compiler unavailable", 0, "C:/workspace", "index.db");
+        JsonElement failed = Parse(NavigationTools.BoundedReviewNotReady(failedHealth, 2048));
+        Assert.False(failed.GetProperty("retryRecommended").GetBoolean());
+        Assert.Contains("server_capabilities.index.error",
+            failed.GetProperty("retryHint").GetString()!, StringComparison.Ordinal);
+        Assert.DoesNotContain("server_capabilities.index.progress",
+            failed.GetProperty("retryHint").GetString()!, StringComparison.Ordinal);
+
+        var followerFailedHealth = failedHealth with
+        {
+            Error = "writer rebuilding",
+            AccessMode = IndexManager.FollowerAccessMode,
+        };
+        JsonElement followerFailed = Parse(
+            NavigationTools.BoundedReviewNotReady(followerFailedHealth, 2048));
+        Assert.True(followerFailed.GetProperty("retryRecommended").GetBoolean());
+        Assert.Contains("server_capabilities.index.progress",
+            followerFailed.GetProperty("retryHint").GetString()!, StringComparison.Ordinal);
+
+        var publicationHealth = failedHealth with
+        {
+            State = "ready",
+            Error = "index replacement is being published",
+        };
+        JsonElement publication = Parse(
+            NavigationTools.BoundedReviewNotReady(publicationHealth, 2048));
+        Assert.True(publication.GetProperty("retryRecommended").GetBoolean());
+        Assert.Contains("server_capabilities.index.state",
+            publication.GetProperty("retryHint").GetString()!, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [MemberData(nameof(IndexRetryCases))]
+    public void IndexRetryRecommendationMapsEveryKnownStateAndFailsClosed(
+        string state, string accessMode, bool expected)
+    {
+        var health = new IndexHealth(state, "11", "indexed", "refreshed", 0, null,
+            0, "C:/workspace", "index.db", AccessMode: accessMode);
+
+        Assert.Equal(expected, NavigationTools.IndexRetryRecommended(health));
+    }
+
+    public static IEnumerable<object[]> IndexRetryCases()
+    {
+        string[] states = ["missing", "building", "refreshing", "stale", "ready", "failed"];
+        string[] modes =
+        [
+            IndexManager.WriterAccessMode,
+            IndexManager.FollowerAccessMode,
+            IndexManager.UnavailableAccessMode,
+        ];
+        foreach (string state in states)
+        foreach (string mode in modes)
+        {
+            yield return [state, mode,
+                state != "failed" || mode == IndexManager.FollowerAccessMode];
+        }
+        foreach (string mode in modes)
+            yield return ["future_state", mode, false];
+        foreach (string state in states)
+            yield return [state, "future_access_mode", false];
     }
 
     [Fact]

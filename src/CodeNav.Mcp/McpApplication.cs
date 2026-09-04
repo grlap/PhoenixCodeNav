@@ -14,7 +14,8 @@ internal static class McpApplication
         "Agent-first code navigation for large C# and mixed C#/F# workspaces. Prefer Phoenix over broad shell grep: " +
         "start with repo_overview; use search_symbol then context_pack to orient on an identifier; " +
         "use definition/references/implementations for exact C# evidence; use impact and related_tests before risky changes; " +
-        "use review_pack for a bounded change-set surface; use search_text for literals and config keys; " +
+        "use review_pack for a bounded change-set surface; use symbol_at(path, line) for stack traces, build errors, and diff hunks; " +
+        "use config_lookup for keys in its indexed configuration partition and search_text for literals, messages, comments, other non-symbol text, and configuration text outside that partition; " +
         "outline a large file before fetching only needed spans with source_context. A transport-successful call can " +
         "still contain a structured domain error, so inspect error, coverage, confidence, partial, and truncation fields. " +
         "When retryRecommended is true, follow retryHint without inventing an unbounded retry loop. " +

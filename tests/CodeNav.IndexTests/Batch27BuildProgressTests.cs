@@ -121,11 +121,20 @@ public class Batch27BuildProgressTests
             Assert.True(errProg.GetProperty("filesIndexed").GetInt32() >= 0);
             Assert.Contains(errProg.GetProperty("phase").GetString(),
                 new[] { "scanning", "parsing_projects", "indexing_files", "finalizing" });
+            Assert.True(buildingError!.Value.GetProperty("retryRecommended").GetBoolean());
+            string retryHint = buildingError.Value.GetProperty("retryHint").GetString()!;
+            Assert.Contains("server_capabilities.index.progress", retryHint,
+                StringComparison.Ordinal);
+            Assert.Contains("server_capabilities.index.state", retryHint,
+                StringComparison.Ordinal);
 
             // Ready => the field is GONE (fields absent when state == ready), not zeroed.
             var readyCaps = Parse(tools.ServerCapabilities());
             Assert.False(readyCaps.GetProperty("index").TryGetProperty("progress", out _),
                 "progress must be omitted once ready");
+            var readyResult = Parse(tools.SearchSymbol("Anything"));
+            Assert.False(readyResult.TryGetProperty("retryRecommended", out _));
+            Assert.False(readyResult.TryGetProperty("retryHint", out _));
         }
         finally { Cleanup(root); }
     }

@@ -62,7 +62,7 @@ Always inspect the JSON even when the process exits nonzero. CLI-generated envel
 
 When `daemon_request_rejected` is retryable, rerun the unchanged call once so it can join the successor daemon.
 
-Treat `index_building` separately. Poll `server_capabilities`, inspect `index.progress`, do other useful work while its counters advance, and retry the original call after `index.state` becomes `ready`. Do not replace structured navigation with broad shell search.
+For `index_building` or `index_unavailable`, follow `retryRecommended` and `retryHint`: when retry is recommended, inspect `server_capabilities.index.progress` and `server_capabilities.index.state`, wait until the state is `ready`, then retry once; otherwise, read `server_capabilities.index.error` and the stated recovery instead of waiting. For `cluster_cold_load`, the index was already queryable: follow the returned deadline-aware hint, using a larger `timeoutMs` when the prior request was below the documented maximum or retrying unchanged when it was already at that maximum. Do not replace structured navigation with broad shell search.
 
 ## Route code-navigation work
 

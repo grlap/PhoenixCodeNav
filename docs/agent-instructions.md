@@ -119,9 +119,14 @@ separate. Exit codes are `0` success/partial, `1` domain/request-rejected/invali
 `3` daemon unavailable only, and `130` interrupted. A validated tool call joins the same shared
 daemon and preserves the same response contract. CLI-generated and daemon-unavailable envelopes use
 `retryable`; relayed tool-domain results keep their MCP `retryRecommended` / `retryHint` fields. Act
-on the stated recovery before retrying at most once. Treat `index_building` separately: inspect
-`server_capabilities.index.progress`, wait while its counters advance, and retry the original tool
-after `index.state` becomes `ready`; do not replace structured navigation with broad shell search.
+on the stated recovery before retrying at most once. For `index_building` or `index_unavailable`,
+follow `retryRecommended` and `retryHint`: when retry is recommended, inspect
+`server_capabilities.index.progress` and `server_capabilities.index.state`, wait until the state is
+`ready`, then retry once; otherwise, read `server_capabilities.index.error` and the stated recovery
+instead of waiting. For `cluster_cold_load`, the index was already queryable: follow the returned
+deadline-aware hint, using a larger `timeoutMs` when the prior request was below the documented
+maximum or retrying unchanged when it was already at that maximum. Do not replace structured
+navigation with broad shell search.
 The CLI is not permission to invent automatic retries or name-based fallbacks;
 `phoenix_tool_result_invalid` is non-retryable. The CLI adds no
 second wall-clock timeout: tool work keeps each tool's own deadline, Ctrl-C/SIGTERM returns `130`,
