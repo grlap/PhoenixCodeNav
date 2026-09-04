@@ -652,6 +652,17 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("v0.12.50", argumentErrors);
         Assert.Contains("structured bad_request", argumentErrors);
         Assert.Contains("expected type", argumentErrors);
+        string selectorIncompatibility = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "semantic-selector-incompatibility-errors")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("structured semantic-selector incompatibility errors",
+            selectorIncompatibility);
+        Assert.Contains("incompatible_mode", selectorIncompatibility);
+        Assert.Contains("incompatible_filter", selectorIncompatibility);
+        Assert.Contains("semantic_required", selectorIncompatibility);
         string retryGuidance = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -1143,8 +1154,10 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                       ("Linux ARM64 ABI", "linux-arm64-anchored-authority"),
                       ("first bounded NUL", "portal-directory-entry-nul-decoding"),
                       ("away from MCP stdout", "operations-portal-mcp-launcher"),
-                      ("structured bad_request", "mcp-structured-argument-errors"),
-                      ("v0.12.50 transient implementations",
+                       ("structured bad_request", "mcp-structured-argument-errors"),
+                       ("structured semantic-selector incompatibility errors",
+                           "semantic-selector-incompatibility-errors"),
+                       ("v0.12.50 transient implementations",
                           "implementations-semantic-retry-guidance"),
                       ("typed cold-start retry contract", "cold-start-retry-contract"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),

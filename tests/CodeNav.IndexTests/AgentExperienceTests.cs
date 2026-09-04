@@ -130,8 +130,12 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
         JsonElement oneCharacterMiss = Parse(tools.SearchSymbol("Z", match: "exact"));
         Assert.Equal("symbol_not_found",
             oneCharacterMiss.GetProperty("zeroResult").GetProperty("reason").GetString());
-        Assert.False(oneCharacterMiss.GetProperty("zeroResult")
-            .TryGetProperty("suggestionCoverage", out _));
+        JsonElement oneCharacterZero = oneCharacterMiss.GetProperty("zeroResult");
+        Assert.False(oneCharacterZero.TryGetProperty("suggestionCoverage", out _));
+        JsonElement oneCharacterScope = oneCharacterZero.GetProperty("effectiveScope");
+        Assert.Equal("all", oneCharacterScope.GetProperty("language").GetString());
+        Assert.Equal("first_party", oneCharacterScope.GetProperty("queryScope").GetString());
+        Assert.False(oneCharacterScope.TryGetProperty("availableLanguages", out _));
 
         JsonElement unsupportedDocument = Parse(tools.SearchSymbol(
             "Anything", match: "exact", pathGlob: "README.md", lang: "csharp"));
@@ -142,8 +146,11 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
             "FsOnly", match: "exact", pathGlob: "CollisionFs/**", lang: "csharp"));
         Assert.False(fsharpScopedCsharp.TryGetProperty("error", out _));
         Assert.Empty(fsharpScopedCsharp.GetProperty("symbols").EnumerateArray());
-        Assert.Contains(fsharpScopedCsharp.GetProperty("zeroResult")
-                .GetProperty("effectiveScope").GetProperty("availableLanguages")
+        JsonElement fsharpOnlyScope = fsharpScopedCsharp.GetProperty("zeroResult")
+            .GetProperty("effectiveScope");
+        Assert.Equal("csharp", fsharpOnlyScope.GetProperty("language").GetString());
+        Assert.Equal("CollisionFs/**", fsharpOnlyScope.GetProperty("pathGlob").GetString());
+        Assert.Contains(fsharpOnlyScope.GetProperty("availableLanguages")
                 .EnumerateArray(),
             item => item.GetString() == "fs");
 
@@ -188,6 +195,8 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
             projectNameWins.GetProperty("root").GetProperty("path").GetString());
         JsonElement shadowed = projectNameWins.GetProperty("projectSelectorResolution");
         Assert.Equal(1, shadowed.GetProperty("shadowedMatchCount").GetInt32());
+        Assert.Equal("Metadata/Other.csproj", shadowed.GetProperty("shadowedMatches")[0]
+            .GetProperty("path").GetString());
         Assert.Equal("assemblyName", shadowed.GetProperty("shadowedMatches")[0]
             .GetProperty("matchedBy").GetString());
 
@@ -360,10 +369,68 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
     }
 
     [Fact]
-    public void DocumentationCommentIdsResolveStableDeclarationsAndKinds()
+    public async Task DocumentationCommentIdsResolveStableDeclarationsAndKinds()
     {
-        if (!_fixture.Semantic.FrameworkRefsAvailable) return;
         var tools = _fixture.Tools;
+        var modeValidationTools = new NavigationTools(_fixture.Manager, _fixture.Semantic)
+        {
+            TestOnlyDocumentationIdResolutionTransform = _ =>
+                throw new InvalidOperationException(
+                    "invalid mode or filter reached documentationCommentId resolution"),
+        };
+        foreach (JsonElement invalidMode in new[]
+                 {
+                     Parse(modeValidationTools.Definition(
+                         mode: "mystery", documentationCommentId: "T:Agent.IWorker")),
+                     Parse(modeValidationTools.References(
+                         mode: "mystery", documentationCommentId: "T:Agent.IWorker")),
+                 })
+        {
+            Assert.Equal("bad_request", invalidMode.GetProperty("error").GetString());
+            Assert.Equal("mode", invalidMode.GetProperty("field").GetString());
+            Assert.Equal(new[] { "auto", "semantic", "indexed" }, invalidMode
+                .GetProperty("validValues").EnumerateArray()
+                .Select(item => item.GetString()).ToArray());
+        }
+        foreach ((string Operation, JsonElement Response) incompatibleMode in new[]
+                 {
+                     ("definition", Parse(modeValidationTools.Definition(
+                         mode: "indexed", documentationCommentId: "T:Agent.IWorker"))),
+                     ("references", Parse(modeValidationTools.References(
+                         mode: "indexed", documentationCommentId: "T:Agent.IWorker"))),
+                 })
+        {
+            JsonElement response = incompatibleMode.Response;
+            Assert.Equal("bad_request", response.GetProperty("error").GetString());
+            Assert.Equal("mode", response.GetProperty("field").GetString());
+            Assert.Equal("incompatible_mode", response.GetProperty("reason").GetString());
+            Assert.Equal("auto or semantic", response.GetProperty("expected").GetString());
+            Assert.Equal(incompatibleMode.Operation,
+                response.GetProperty("operation").GetString());
+            Assert.Equal("T:Agent.IWorker",
+                response.GetProperty("documentationCommentId").GetString());
+            Assert.False(response.TryGetProperty("documentationCommentIdTruncated", out _));
+            Assert.False(response.TryGetProperty("documentationCommentIdBytes", out _));
+        }
+        foreach ((string? PathGlob, string? ExcludePath, string Field) filterCase in new[]
+                 {
+                     ("**/*.cs", null, "pathGlob"),
+                     (null, "generated/**", "excludePath"),
+                     ("**/*.cs", "generated/**", "pathGlob"),
+                 })
+        {
+            JsonElement response = Parse(modeValidationTools.References(
+                mode: "semantic", pathGlob: filterCase.PathGlob,
+                excludePath: filterCase.ExcludePath,
+                documentationCommentId: "T:Agent.IWorker"));
+            Assert.Equal("bad_request", response.GetProperty("error").GetString());
+            Assert.Equal(filterCase.Field, response.GetProperty("field").GetString());
+            Assert.Equal("incompatible_filter", response.GetProperty("reason").GetString());
+            Assert.Equal("omit pathGlob and excludePath",
+                response.GetProperty("expected").GetString());
+        }
+
+        if (!_fixture.Semantic.FrameworkRefsAvailable) return;
         string[] ids =
         [
             "T:Agent.IWorker",
@@ -451,14 +518,14 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
             sameLine.GetProperty("symbol").GetProperty("documentationCommentId").GetString());
         Assert.Equal(secondSameLineOverload,
             sameLine.GetProperty("documentationCommentId").GetString());
-
-        JsonElement invalidDefinitionMode = Parse(tools.Definition(
-            mode: "mystery", documentationCommentId: "T:Agent.IWorker"));
-        Assert.Equal("bad_request", invalidDefinitionMode.GetProperty("error").GetString());
-        Assert.Equal("mode", invalidDefinitionMode.GetProperty("field").GetString());
-        JsonElement indexedReferences = Parse(tools.References(
-            mode: "indexed", documentationCommentId: "T:Agent.IWorker"));
-        Assert.Equal("semantic_required", indexedReferences.GetProperty("error").GetString());
+        JsonElement sameLineReferences = Parse(tools.References(
+            mode: "semantic", documentationCommentId: secondSameLineOverload));
+        Assert.False(sameLineReferences.TryGetProperty("error", out _),
+            sameLineReferences.ToString());
+        Assert.Equal(secondSameLineOverload,
+            sameLineReferences.GetProperty("documentationCommentId").GetString());
+        Assert.Equal(secondSameLineOverload, sameLineReferences.GetProperty("symbol")
+            .GetProperty("documentationCommentId").GetString());
 
         JsonElement noSeed = Parse(tools.Definition(
             documentationCommentId: "T:Missing.Nowhere"));
@@ -648,6 +715,10 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
         Assert.Equal("search_symbol", seedRetry.GetProperty("tool").GetString());
         Assert.Equal("IWorker",
             seedRetry.GetProperty("arguments").GetProperty("query").GetString());
+        Assert.Equal("exact",
+            seedRetry.GetProperty("arguments").GetProperty("match").GetString());
+        Assert.Equal("csharp",
+            seedRetry.GetProperty("arguments").GetProperty("lang").GetString());
 
         using (IndexQueries queries = _fixture.Manager.OpenQueries())
         {
@@ -685,6 +756,55 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
         Assert.True(hugeMissing.GetProperty("documentationCommentIdTruncated").GetBoolean());
         Assert.True(hugeMissing.GetProperty("documentationCommentIdBytes").GetInt32() >
                     Json.HardBudgetBytes);
+
+        string hugeMalformedId = "M:Agent." +
+                                 new string('界', Json.HardBudgetBytes) + " invalid";
+        string hugeMalformedRaw = tools.Definition(
+            documentationCommentId: hugeMalformedId);
+        JsonElement hugeMalformed = Parse(hugeMalformedRaw);
+        Assert.True(Json.Utf8Bytes(hugeMalformedRaw) <= Json.HardBudgetBytes,
+            hugeMalformedRaw);
+        Assert.Equal("bad_request", hugeMalformed.GetProperty("error").GetString());
+        Assert.True(hugeMalformed.GetProperty("documentationCommentIdTruncated").GetBoolean());
+        Assert.Equal(Json.Utf8Bytes(hugeMalformedId),
+            hugeMalformed.GetProperty("documentationCommentIdBytes").GetInt32());
+
+        DocumentationIdResolutionResult ambiguityTemplate = await _fixture.Semantic
+            .ResolveDocumentationCommentIdAsync(
+                "IWorker", "T:Agent.IWorker", 60_000);
+        Assert.Null(ambiguityTemplate.FailReason);
+        Assert.NotNull(ambiguityTemplate.Matches);
+        DocumentationIdResolution firstAmbiguous = Assert.Single(ambiguityTemplate.Matches!);
+        var hugeAmbiguousTools = new NavigationTools(_fixture.Manager, _fixture.Semantic)
+        {
+            TestOnlyDocumentationIdResolutionTransform = result => result with
+            {
+                Matches =
+                [
+                    firstAmbiguous,
+                    firstAmbiguous with
+                    {
+                        ProjectName = "Ambiguous.Second",
+                        NavigationColumn = firstAmbiguous.NavigationColumn + 1,
+                        Declaration = firstAmbiguous.Declaration with
+                        {
+                            Assembly = "Ambiguous.Second",
+                        },
+                    },
+                ],
+                Coverage = ambiguityTemplate.Coverage,
+            },
+        };
+        string hugeAmbiguousId = "T:" + new string('界', Json.HardBudgetBytes);
+        string hugeAmbiguousRaw = hugeAmbiguousTools.Definition(
+            documentationCommentId: hugeAmbiguousId);
+        JsonElement hugeAmbiguous = Parse(hugeAmbiguousRaw);
+        Assert.True(Json.Utf8Bytes(hugeAmbiguousRaw) <= Json.HardBudgetBytes,
+            hugeAmbiguousRaw);
+        Assert.Equal("symbol_ambiguous", hugeAmbiguous.GetProperty("error").GetString());
+        Assert.True(hugeAmbiguous.GetProperty("documentationCommentIdTruncated").GetBoolean());
+        Assert.Equal(Json.Utf8Bytes(hugeAmbiguousId),
+            hugeAmbiguous.GetProperty("documentationCommentIdBytes").GetInt32());
 
         foreach (string methodName in new[]
                  {
@@ -757,6 +877,15 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
             documentationCommentId: "T:Agent.IWorker"));
         Assert.Equal("semantic_unavailable", implementations.GetProperty("error").GetString());
         Assert.False(implementations.TryGetProperty("implementations", out _));
+
+        const string collidingId = "T:DuplicateA.Alpha";
+        JsonElement collidingReferences = Parse(tools.References(
+            documentationCommentId: collidingId));
+        Assert.Equal("semantic_unavailable",
+            collidingReferences.GetProperty("error").GetString());
+        Assert.Equal(collidingId,
+            collidingReferences.GetProperty("documentationCommentId").GetString());
+        Assert.False(collidingReferences.TryGetProperty("groups", out _));
 
         foreach (JsonElement response in new[] { definition, references, implementations })
         {
@@ -877,6 +1006,10 @@ public sealed class AgentExperienceTests : IClassFixture<AgentExperienceFixture>
         Assert.Equal("T:Agent.PairedIdentity", match.CanonicalDocumentationCommentId);
         Assert.Equal("Agent.Paired", match.Declaration.Assembly);
         Assert.Equal(1, resolution.Coverage.SeedProjects);
+        Assert.Equal(1, resolution.Coverage.RequestedProjects);
+        Assert.Equal(1, resolution.Coverage.LoadedProjects);
+        Assert.Equal(1, resolution.Coverage.ScannedProjects);
+        Assert.Empty(resolution.Coverage.SkippedProjects);
         Assert.True(resolution.Coverage.CompilerScanned);
         Assert.Equal(0, resolution.Coverage.NameKeyedOwnerCollisionGroups);
 
@@ -1241,7 +1374,7 @@ public sealed class AgentExperienceFixture : IDisposable
                 public partial class RepeatedSeed { }
                 public partial class RepeatedSeed { }
                 """),
-            ("SharedDuplicate.cs", "namespace Shared; public class Duplicate { }") ,
+            ("SharedDuplicate.cs", "namespace Shared; public class Duplicate { }"),
             ("external/Vendor.cs", "namespace Agent; public class VendorOnly { }"));
         for (int index = 0; index < 40; index++)
         {

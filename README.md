@@ -99,7 +99,9 @@ retaining their MCP string schemas. C# `definition`, `references`, and `implemen
 Roslyn `documentationCommentId` selectors (`T:`, `M:`, `P:`, `F:`, and `E:`); assembly ambiguity is
 returned as evidence, and operations reject unsupported constructors, fields, or operators instead
 of retargeting their containing type. Documentation IDs always use compiler semantics: `auto`
-means semantic, `indexed` is rejected, the full operation shares one deadline, and semantic failure
+means semantic, `indexed` is rejected as `bad_request` with reason `incompatible_mode`, the full
+  operation shares one deadline, and `references` rejects `pathGlob`/`excludePath` as
+  `bad_request` with reason `incompatible_filter`. Semantic failure
 never degrades to a name scan. Seed discovery reports distinct indexed seed files for only the
 innermost declaring type, and incomplete
 compiler coverage returns byte-bounded exact candidates as evidence without selecting one as
@@ -549,8 +551,10 @@ watcher, and lifecycle test projects under `tests/`.
   conversions are reported as `implicitConversion`, `explicitConversion`, and
   `checkedConversion`. Exact zero is returned only after the complete loaded scope contains no
   matching conversion. Distinct same-line operations remain distinct through source-span dedup.
-  Indexed definitions retain the exact resolved operator row, while indexed or failed-automatic
-  operator references fail closed because text candidates cannot preserve overload identity.
+  Indexed definitions retain the exact resolved operator row. Operator-handle `references` reject
+  indexed mode as `bad_request`/`incompatible_mode` and path filters as
+  `bad_request`/`incompatible_filter`; failed automatic semantic resolution returns
+  `semantic_required` because text candidates cannot preserve overload identity.
   Operator handles are explicitly rejected by `implementations` and `type_hierarchy`; Phoenix
   does not yet model the meaningful static-abstract-interface implementations subcase.
 - Semantic `definition` and `references` normally fit the advertised 64 KiB `hardBytes` target.

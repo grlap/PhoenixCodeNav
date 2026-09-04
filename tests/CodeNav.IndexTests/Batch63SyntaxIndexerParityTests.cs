@@ -417,11 +417,12 @@ public sealed class Batch63SyntaxIndexerParityTests
             }
             using var manager = new IndexManager(root, dbPath);
             using var semantic = new SemanticService(manager);
-            if (!semantic.FrameworkRefsAvailable) return;
             manager.Start();
             IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
                 "conversion-handle index did not become fresh");
             var tools = new NavigationTools(manager, semantic);
+            AssertOperatorHandleIncompatibilityErrors(tools);
+            if (!semantic.FrameworkRefsAvailable) return;
 
             // Every handle must survive both semantic entry points and pin the same declaration.
             // Positive compiler-operation scans prove implicit assignment, explicit cast, and
@@ -1180,6 +1181,39 @@ public sealed class Batch63SyntaxIndexerParityTests
             .Single(symbol => symbol.GetProperty("signature").GetString() == storedSignature);
     }
 
+    private static void AssertOperatorHandleIncompatibilityErrors(NavigationTools tools)
+    {
+        JsonElement hit = IndexedOperatorHit(tools, "implicit operator Scalar",
+            "implicit operator Scalar(int value)");
+        string symbolId = hit.GetProperty("symbolId").GetString()!;
+
+        JsonElement indexedReferences = ParseJson(tools.References(
+            symbolId: symbolId, mode: "indexed"));
+        Assert.Equal("bad_request", indexedReferences.GetProperty("error").GetString());
+        Assert.Equal("mode", indexedReferences.GetProperty("field").GetString());
+        Assert.Equal("incompatible_mode", indexedReferences.GetProperty("reason").GetString());
+        Assert.Equal("auto or semantic", indexedReferences.GetProperty("expected").GetString());
+
+        foreach ((string? PathGlob, string? ExcludePath, string Field) filterCase in new[]
+                 {
+                     ("**/*.cs", null, "pathGlob"),
+                     (null, "generated/**", "excludePath"),
+                     ("**/*.cs", "generated/**", "pathGlob"),
+                 })
+        {
+            JsonElement filteredReferences = ParseJson(tools.References(
+                symbolId: symbolId, mode: "semantic", pathGlob: filterCase.PathGlob,
+                excludePath: filterCase.ExcludePath));
+            Assert.Equal("bad_request", filteredReferences.GetProperty("error").GetString());
+            Assert.Equal(filterCase.Field,
+                filteredReferences.GetProperty("field").GetString());
+            Assert.Equal("incompatible_filter",
+                filteredReferences.GetProperty("reason").GetString());
+            Assert.Equal("omit pathGlob and excludePath",
+                filteredReferences.GetProperty("expected").GetString());
+        }
+    }
+
     private static void AssertSameLineCappedSemanticHandles(NavigationTools tools,
         string target, string sourceAlpha, string sourceBeta)
     {
@@ -1217,12 +1251,6 @@ public sealed class Batch63SyntaxIndexerParityTests
                 .GetProperty("declarations").EnumerateArray());
             Assert.Equal(symbolId,
                 indexedDeclaration.GetProperty("symbolId").GetString());
-            JsonElement indexedReferences = ParseJson(tools.References(
-                symbolId: symbolId, mode: "indexed"));
-            Assert.Equal("semantic_required",
-                indexedReferences.GetProperty("error").GetString());
-            Assert.Equal("operator_handle_indexed_mode_unavailable",
-                indexedReferences.GetProperty("partialReason").GetString());
             return documentationId;
         }).ToArray();
 

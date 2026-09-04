@@ -22,8 +22,12 @@ ownership, dependencies, or likely tests.
    when the question needs compiler-resolved facts rather than an orientation bundle.
    Carry a returned C# `documentationCommentId` into `definition`, `references`, or
    `implementations` when identity must survive reindexing; keep `symbolId` for cheap same-index
-   follow-ups. A documentation ID is semantic-only: never request indexed mode and never replace a
-   semantic failure with a same-name result. When documentation-ID coverage is incomplete, treat
+   follow-ups. A documentation ID is semantic-only: indexed mode is a `bad_request` with reason
+   `incompatible_mode`; `references` with either `pathGlob` or `excludePath` is a `bad_request`
+   with reason `incompatible_filter`. Operator `idx:` handles use the same mode/filter refusals,
+   while genuine operator semantic unavailability remains `semantic_required`. Never replace a
+   semantic failure with a same-name result. When
+   documentation-ID coverage is incomplete, treat
    returned candidates as evidence and follow their explicit position recovery. If
    `documentation_id_position_shared` is present, the current tool cannot distinguish the linked
    assemblies by position; inspect the reported project and assembly evidence instead.

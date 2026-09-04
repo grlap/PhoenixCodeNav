@@ -186,6 +186,7 @@ public sealed partial class NavigationTools
                 new { id = "agent-request-patch-recovery", summary = "caller-dependent recovery emits replayOriginalRequest plus an explicit selector-removal list and replacement arguments, preserving the original filters, limits, and budgets without reflecting or truncating them into a different request" },
                 new { id = "dual-list-string-inputs", summary = "list-like string arguments accept their established comma-separated form or a JSON-array encoded string while retaining host-compatible string schemas" },
                 new { id = "documentation-comment-selectors", summary = "definition, references, and implementations accept stable C# T:/M:/P:/F:/E: documentationCommentId selectors, preserve assembly ambiguity, and refuse unsupported implementation targets without retargeting" },
+                new { id = "semantic-selector-incompatibility-errors", summary = "definition and references return structured semantic-selector incompatibility errors as bad_request: documentationCommentId rejects indexed mode with incompatible_mode, while references rejects pathGlob/excludePath for documentationCommentId and operator idx handles with incompatible_filter; operator idx handles also reject indexed mode, and genuine semantic unavailability remains semantic_required" },
                 new { id = "semantic-retry-guidance", summary = "definition, references, implementations, callers, callees, and type_hierarchy use the same bounded retry recommendation and hint contract for cluster_cold_load and semantic_timeout" },
                 new { id = "cold-start-retry-contract", summary = "The shared navigation and bounded review_pack non-ready index gates carry an access-mode-aware retryRecommended value and a retryHint naming server_capabilities.index.progress plus index.state for transitional writer/follower states or index.error for terminal writer/unavailable failure; context_pack preserves the same typed cold-start retry contract for cluster_cold_load, whose canceled load should be retried once with a larger timeoutMs when below the documented family maximum or unchanged at that maximum, and Phoenix never retries automatically" },
                 new { id = "default-query-scope", summary = "CODENAV_DEFAULT_QUERY_SCOPE configures all or first_party for broad indexed find/search tools; queryScope='all' overrides it, affected responses echo the effective scope, and exact semantic operations remain unscoped" },
@@ -1717,17 +1718,20 @@ public sealed partial class NavigationTools
             {
                 return DocumentationIdError(documentationCommentId,
                     (boundedId, truncated) => new
-                {
-                    error = "semantic_required",
-                    operation = "definition",
-                    documentationCommentId = boundedId,
-                    documentationCommentIdTruncated = truncated ? true : (bool?)null,
-                    documentationCommentIdBytes = truncated
-                        ? Json.Utf8Bytes(documentationCommentId)
-                        : (int?)null,
-                    detail = "documentationCommentId is compiler identity and requires mode='auto' or mode='semantic'.",
-                    meta = Meta.From(_manager.Health(), "indexed", "semantic"),
-                });
+                    {
+                        error = "bad_request",
+                        field = "mode",
+                        reason = "incompatible_mode",
+                        expected = "auto or semantic",
+                        operation = "definition",
+                        documentationCommentId = boundedId,
+                        documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                        documentationCommentIdBytes = truncated
+                            ? Json.Utf8Bytes(documentationCommentId)
+                            : (int?)null,
+                        detail = "documentationCommentId is compiler identity and cannot be combined with mode='indexed'; use mode='auto' or mode='semantic'.",
+                        meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                    });
             }
             var (documentedTarget, documentedError) = ResolveDocumentationTarget(
                 documentationCommentId, "definition", deadlineMs, implementationsOnly: false,
@@ -2526,7 +2530,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "references")]
-    [Description("Where a symbol is used across the workspace, grouped by project with counts and sample lines. mode='auto' tries compiler-exact references (target by stable C# documentationCommentId, position path+line, symbolId, or name) scoped to candidate projects. A documentationCommentId is semantic-only and never falls back to indexed name candidates; other selectors may. Exact references are usage-kind classified (kinds breakdown: call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/implicitConversion/explicitConversion/checkedConversion/other) — filter with usageKinds (e.g. 'call' to skip doc mentions) or publicConsumersOnly for external callers. Pass pathGlob/excludePath to scope candidates (e.g. excludePath='3rdparty/**'); a path filter runs the indexed candidate path so counts reflect the filter. Call before changing behavior. C# semantic owner sets are assembly-name-keyed; only documentationCommentId requests disclose non-pair collisions through nameKeyedOwnerCollisionGroups.")]
+    [Description("Where a symbol is used across the workspace, grouped by project with counts and sample lines. mode='auto' tries compiler-exact references (target by stable C# documentationCommentId, position path+line, symbolId, or name) scoped to candidate projects. A documentationCommentId is semantic-only and never falls back to indexed name candidates; other selectors may. Exact references are usage-kind classified (kinds breakdown: call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/implicitConversion/explicitConversion/checkedConversion/other) — filter with usageKinds (e.g. 'call' to skip doc mentions) or publicConsumersOnly for external callers. Pass pathGlob/excludePath to scope ordinary indexed candidates (e.g. excludePath='3rdparty/**'); documentationCommentId and operator idx handles reject either path filter as bad_request with reason incompatible_filter, and operator idx handles reject mode='indexed' with reason incompatible_mode. Genuine operator semantic unavailability remains semantic_required. Call before changing behavior. C# semantic owner sets are assembly-name-keyed; only documentationCommentId requests disclose non-pair collisions through nameKeyedOwnerCollisionGroups.")]
     public string References(
         [Description("Symbol name (whole-identifier). Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of a usage or declaration (position mode — most precise).")] string? path = null,
@@ -2537,14 +2541,14 @@ public sealed partial class NavigationTools
         [Description("Include usages in generated files (default false).")] bool includeGenerated = false,
         [Description("Comma-separated usage-kind filter or JSON-array encoded string — SEMANTIC (exact) path only: call, construction, typeMention, attribute, nameof, xmldoc, usingDirective, baseList, typeof, implicitConversion, explicitConversion, checkedConversion, other. Null or an empty string = all; whitespace-only values, empty CSV items, and empty JSON arrays are bad_request. Counts and groups honor it (e.g. 'call,construction' = real executions only).")] string? usageKinds = null,
         [Description("Only usages OUTSIDE the symbol's own declaring PROJECT (project-scoped, NOT accessibility-scoped — the name is about API blast radius, not access modifiers). The external-consumer view; semantic path only.")] bool publicConsumersOnly = false,
-        [Description("Restrict candidate paths to this glob (supplying a path filter runs indexed candidates).")] string? pathGlob = null,
-        [Description("Exclude candidate paths matching this glob, e.g. '3rdparty/**' (supplying a path filter runs indexed candidates).")] string? excludePath = null,
+        [Description("Restrict ordinary indexed candidate paths to this glob. Incompatible with documentationCommentId and operator idx handles; those selectors return bad_request with reason incompatible_filter.")] string? pathGlob = null,
+        [Description("Exclude ordinary indexed candidate paths matching this glob, e.g. '3rdparty/**'. Incompatible with documentationCommentId and operator idx handles; those selectors return bad_request with reason incompatible_filter.")] string? excludePath = null,
         [Description("Max candidate files scanned in indexed mode (default 500).")] int maxFiles = 500,
         [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
         [Description("Sample lines per project group (default 3).")] int samplesPerGroup = 3,
         [Description("Semantic deadline in ms (default 15000, max 120000).")] int timeoutMs = 15000,
-        [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex.")] string? symbolId = null,
-        [Description("Stable C# Roslyn declaration id (T:/M:/P:/F:/E:). Empty means omitted; whitespace-only is bad_request. Mutually exclusive with symbolId, name, and path+line. A successful response echoes the compiler-canonical id, which is safe to reuse directly; failures echo a bounded form of the caller input.")] string? documentationCommentId = null)
+        [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex. Operator handles require mode='auto' or 'semantic' and reject pathGlob/excludePath.")] string? symbolId = null,
+        [Description("Stable C# Roslyn declaration id (T:/M:/P:/F:/E:). Empty means omitted; whitespace-only is bad_request. Mutually exclusive with symbolId, name, path+line, pathGlob, and excludePath; mode must be 'auto' or 'semantic'. A successful response echoes the compiler-canonical id, which is safe to reuse directly; failures echo a bounded form of the caller input.")] string? documentationCommentId = null)
     {
         if (NotReady() is { } notReady) return notReady;
         if (NormalizeDocumentationCommentId(ref documentationCommentId) is { } idError)
@@ -2581,21 +2585,46 @@ public sealed partial class NavigationTools
                     detail = "documentationCommentId is mutually exclusive with symbolId, name, path, line, and column.",
                 });
             }
-            if (mode == "indexed" || pathGlob is { Length: > 0 } || excludePath is { Length: > 0 })
+            if (mode == "indexed")
             {
                 return DocumentationIdError(documentationCommentId,
                     (boundedId, truncated) => new
-                {
-                    error = "semantic_required",
-                    operation = "references",
-                    documentationCommentId = boundedId,
-                    documentationCommentIdTruncated = truncated ? true : (bool?)null,
-                    documentationCommentIdBytes = truncated
-                        ? Json.Utf8Bytes(documentationCommentId)
-                        : (int?)null,
-                    detail = "documentationCommentId is compiler identity and cannot be combined with indexed mode or path filters.",
-                    meta = Meta.From(_manager.Health(), "indexed", "semantic"),
-                });
+                    {
+                        error = "bad_request",
+                        field = "mode",
+                        reason = "incompatible_mode",
+                        expected = "auto or semantic",
+                        operation = "references",
+                        documentationCommentId = boundedId,
+                        documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                        documentationCommentIdBytes = truncated
+                            ? Json.Utf8Bytes(documentationCommentId)
+                            : (int?)null,
+                        detail = "documentationCommentId is compiler identity and cannot be combined with mode='indexed'; use mode='auto' or mode='semantic'.",
+                        meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                    });
+            }
+            if (pathGlob is { Length: > 0 } || excludePath is { Length: > 0 })
+            {
+                string incompatibleField = pathGlob is { Length: > 0 }
+                    ? "pathGlob"
+                    : "excludePath";
+                return DocumentationIdError(documentationCommentId,
+                    (boundedId, truncated) => new
+                    {
+                        error = "bad_request",
+                        field = incompatibleField,
+                        reason = "incompatible_filter",
+                        expected = "omit pathGlob and excludePath",
+                        operation = "references",
+                        documentationCommentId = boundedId,
+                        documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                        documentationCommentIdBytes = truncated
+                            ? Json.Utf8Bytes(documentationCommentId)
+                            : (int?)null,
+                        detail = "documentationCommentId is compiler identity and cannot be combined with path filters.",
+                        meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                    });
             }
             var (documentedTarget, documentedError) = ResolveDocumentationTarget(
                 documentationCommentId, "references", deadlineMs, implementationsOnly: false,
@@ -2630,12 +2659,18 @@ public sealed partial class NavigationTools
         // Path filters are honored precisely only on the indexed candidate path (semantic counts
         // are project-level and cannot be re-derived per path), so a filter forces indexed mode.
         bool hasPathFilter = pathGlob is { Length: > 0 } || excludePath is { Length: > 0 };
-        if (resolvedHandleHit is { Kind: "operator" } &&
-            (mode == "indexed" || hasPathFilter))
+        if (resolvedHandleHit is { Kind: "operator" } && mode == "indexed")
         {
-            return OperatorReferencesRequireSemantic(mode == "indexed"
-                ? "operator_handle_indexed_mode_unavailable"
-                : "operator_handle_path_filter_requires_indexed_mode");
+            return OperatorReferencesBadRequest(
+                "mode", "incompatible_mode", "auto or semantic",
+                "Operator idx handles require compiler-semantic references so the canonical declaration key remains pinned; mode='indexed' cannot distinguish overload identity.");
+        }
+        if (resolvedHandleHit is { Kind: "operator" } && hasPathFilter)
+        {
+            return OperatorReferencesBadRequest(
+                pathGlob is { Length: > 0 } ? "pathGlob" : "excludePath",
+                "incompatible_filter", "omit pathGlob and excludePath",
+                "Operator idx handles require compiler-semantic references so the canonical declaration key remains pinned; path filters force indexed candidates and cannot distinguish overload identity.");
         }
         string? failReason = hasPathFilter && mode != "indexed" ? "path_filter_ran_indexed_candidates" : null;
         // Usage-kind buckets + external-consumers view are syntax/compiler facts — semantic path only.
@@ -3581,6 +3616,19 @@ public sealed partial class NavigationTools
         hint = "Retry without pathGlob/excludePath using mode='semantic' or mode='auto'.",
         meta = Meta.From(_manager.Health(), "indexed", "semantic"),
     });
+
+    private string OperatorReferencesBadRequest(
+        string field, string reason, string expected, string detail) => Json.Serialize(new
+        {
+            error = "bad_request",
+            field,
+            reason,
+            expected,
+            operation = "references",
+            kind = "operator",
+            detail,
+            meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+        });
 
     /// <summary>Expands the cluster_cold_load token at the point of confusion: the deadline
     /// canceled compilation loading, so the one advised retry should use more of the family's
