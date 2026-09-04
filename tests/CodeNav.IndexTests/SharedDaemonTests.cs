@@ -238,7 +238,7 @@ public sealed class SharedDaemonTests
     public async Task CliDiscoversAndInvokesTheLiveSurfaceThroughTheSharedDaemon()
     {
         string root = Directory.CreateTempSubdirectory("Phoenix agent CLI ").FullName;
-        string argumentsFile = Path.GetTempFileName();
+        string argumentsFile = Path.Combine(root, "cli-arguments.json");
         string executable = FindMcpExecutable();
         DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
         McpClient? client = null;

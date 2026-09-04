@@ -46,12 +46,14 @@ internal static class DaemonProcessIsolation
             "--daemon");
 
     /// <summary>
-    /// A launcher must keep its own stdout/stderr open while ensuring that its child cannot inherit
-    /// those caller-owned pipes as unrelated extra handles. The child receives dedicated redirected
-    /// startup streams from <see cref="LaunchProcess"/>.
+    /// On Windows, a launcher must keep its own stdout/stderr open while ensuring that its child
+    /// cannot inherit those caller-owned pipes as unrelated extra handles. The child receives
+    /// dedicated redirected startup streams from <see cref="LaunchProcess"/>.
     /// </summary>
     private static void PreventParentStreamInheritance()
     {
+        // On Unix, redirected stdout/stderr replace the child's descriptors 1 and 2 before exec,
+        // so the caller-owned descriptors do not require a separate inheritance mutation.
         if (!OperatingSystem.IsWindows()) return;
 
         foreach (int kind in new[]

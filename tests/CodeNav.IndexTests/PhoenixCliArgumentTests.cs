@@ -259,13 +259,19 @@ public sealed class PhoenixCliArgumentTests
     public void ReservedCliNamesCannotShadowLiveMcpParameters()
     {
         IReadOnlyList<McpServerTool> tools = PhoenixCli.RegisteredTools;
+        int inspectedPropertyCount = 0;
 
         foreach (McpServerTool tool in tools)
         {
             if (!tool.ProtocolTool.InputSchema.TryGetProperty(
                     "properties", out JsonElement properties))
                 continue;
-            string[] collisions = properties.EnumerateObject()
+
+            Assert.True(properties.ValueKind == JsonValueKind.Object,
+                $"{tool.ProtocolTool.Name} input schema 'properties' must be an object.");
+            JsonProperty[] schemaProperties = properties.EnumerateObject().ToArray();
+            inspectedPropertyCount += schemaProperties.Length;
+            string[] collisions = schemaProperties
                 .Select(property => property.Name)
                 .Where(PhoenixCliCommand.ReservedToolParameterNames.Contains)
                 .ToArray();
@@ -273,14 +279,22 @@ public sealed class PhoenixCliArgumentTests
                 $"{tool.ProtocolTool.Name} collides with CLI-reserved parameter(s): " +
                 string.Join(", ", collisions));
         }
+
+        Assert.True(inspectedPropertyCount > 0,
+            "The reserved CLI-name contract test did not inspect any MCP input-schema properties.");
     }
 
     [Fact]
-    public void WindowsArgumentSourcePredicateRejectsReparsePoints()
+    public void WindowsArgumentSourcePredicateRejectsEveryNonRegularAttribute()
     {
         Assert.False(PhoenixCli.IsRegularWindowsArgumentSource(
             FileAttributes.Normal | FileAttributes.ReparsePoint));
-        Assert.True(PhoenixCli.IsRegularWindowsArgumentSource(FileAttributes.Normal));
+        Assert.False(PhoenixCli.IsRegularWindowsArgumentSource(
+            FileAttributes.Normal | FileAttributes.Directory));
+        Assert.False(PhoenixCli.IsRegularWindowsArgumentSource(
+            FileAttributes.Normal | FileAttributes.Device));
+        Assert.True(PhoenixCli.IsRegularWindowsArgumentSource(
+            FileAttributes.Normal | FileAttributes.Archive | FileAttributes.ReadOnly));
     }
 
     [Fact]
