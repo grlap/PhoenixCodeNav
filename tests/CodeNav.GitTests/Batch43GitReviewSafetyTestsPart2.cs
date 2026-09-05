@@ -788,8 +788,12 @@ public class Batch43GitReviewSafetyTestsPart2
             string longPath = string.Join('/', Enumerable.Range(0, 6)
                 .Select(i => new string((char)('a' + i), 90))) + "/Long.cs";
 
-            Assert.Equal(expected, GitInfo.ShowFile(root, head, "Quoted\"Path.cs", wrapper));
-            Assert.Equal(expected, GitInfo.ShowFile(root, head, longPath, wrapper));
+            Assert.Equal(expected, GitInfo.ShowFile(root, head, "Quoted\"Path.cs", wrapper,
+                maxBlobBytes: 8 * 1024 * 1024,
+                timeoutMs: TestGit.ProcessExitTimeoutMilliseconds));
+            Assert.Equal(expected, GitInfo.ShowFile(root, head, longPath, wrapper,
+                maxBlobBytes: 8 * 1024 * 1024,
+                timeoutMs: TestGit.ProcessExitTimeoutMilliseconds));
         }
         finally { Cleanup(root); }
     }
@@ -860,6 +864,7 @@ public class Batch43GitReviewSafetyTestsPart2
     {
         string? gitExe = FindRealGitExe();
         if (gitExe is null) return;
+        using var processHeavyTestIsolation = ProcessHeavyTestIsolation.Acquire();
         string root = Directory.CreateTempSubdirectory("codenav-y8e-snapshot-final-gap").FullName;
         try
         {

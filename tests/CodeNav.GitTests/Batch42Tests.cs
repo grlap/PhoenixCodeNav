@@ -461,11 +461,11 @@ public class Batch42Tests
             IndexManager.UnavailableAccessMode,
         ];
         foreach (string state in states)
-        foreach (string mode in modes)
-        {
-            yield return [state, mode,
+            foreach (string mode in modes)
+            {
+                yield return [state, mode,
                 state != "failed" || mode == IndexManager.FollowerAccessMode];
-        }
+            }
         foreach (string mode in modes)
             yield return ["future_state", mode, false];
         foreach (string state in states)
@@ -1085,6 +1085,7 @@ public class Batch42Tests
     public void RemovingCheckedOperatorKeepsUncheckedTwinAndReportsFormerSymbol()
     {
         if (!GitInfo.GitAvailable) return;
+        using var processHeavyTestIsolation = ProcessHeavyTestIsolation.Acquire();
         string root = Path.GetFullPath(
             Directory.CreateTempSubdirectory("codenav-42-checked-operator").FullName);
         try

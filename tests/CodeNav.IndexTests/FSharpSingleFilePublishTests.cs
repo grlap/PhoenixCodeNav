@@ -147,7 +147,7 @@ public sealed class FSharpSingleFilePublishTests
                 cancellationToken: mcpTimeout.Token);
             JsonElement capabilities = await WaitForReadyAsync(client, TimeSpan.FromSeconds(60),
                 mcpTimeout.Token);
-            Assert.Equal("0.12.79", capabilities.GetProperty("version").GetString());
+            Assert.Equal("0.12.80", capabilities.GetProperty("version").GetString());
             JsonElement detailedCapabilities = await CallJsonAsync(client,
                 "server_capabilities", new Dictionary<string, object?>
                 {
@@ -175,6 +175,10 @@ public sealed class FSharpSingleFilePublishTests
                 semantic.GetProperty("symbol").GetProperty("name").GetString());
             Assert.Contains("fsharp_core_reference_host_fallback",
                 semantic.GetProperty("partialReason").GetString());
+            Assert.Contains("fsharp_core_reference_defaulted",
+                semantic.GetProperty("partialReason").GetString());
+            Assert.Equal("indexed",
+                semantic.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.NotEqual("fsharp_core_reference_unavailable",
                 semantic.TryGetProperty("error", out JsonElement error)
                     ? error.GetString()

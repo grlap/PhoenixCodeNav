@@ -214,6 +214,7 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-indexed-parse-context-budget", summary = "v0.12.55 schema v28 processes at most 64 deterministic owner/TFM parse contexts per .fs/.fsi file, reserves one context per valid compile owner while capacity remains, persists total/processed/truncated plus truncatedOwnerProjects coverage across cold and delta indexing, and makes affected search_symbol scopes partial with fsharp_parse_contexts_truncated" },
                 new { id = "fsharp-symbol-at-semantic", summary = "v0.12.5 FCS position resolution for one explicit physical .fsproj + TFM type-check context" },
                 new { id = "fsharp-definition-same-project", summary = "v0.12.5 FCS signature/implementation declarations within the selected physical F# project" },
+                new { id = "fsharp-semantic-confidence-authority", summary = "v0.12.80 F# semantic confidence is exact when the selected context carries only disclosed assumptions or immutable-evidence provenance; indexed when anything was substituted, errored, or removed from the context, or a reason is not yet classified; partial reasons remain visible in either case; server_capabilities.semantic.fsharpIndexedTools is renamed fsharpSemanticTools" },
                 new { id = "fsharp-type-check-context-selection", summary = "v0.12.5 ambiguous owner/TFM sets fail closed and expose bounded selected/available F# type-check contexts" },
                 new { id = "fsharp-semantic-snapshot", summary = "v0.12.5 immutable source/project snapshot from one pinned index epoch plus request-private snapshots of verified workspace HintPath binaries; exact-path opened-handle verification covers Windows and Linux, plus macOS since v0.12.56; bounded deadline, inputs, checker cache, and concurrency" },
                 new { id = "workspace-msbuild-config-indexing", summary = "schema v16 persists arbitrary workspace .props/.targets as config inputs for find_file/config_lookup and pinned bounded project evaluation" },
@@ -373,8 +374,8 @@ public sealed partial class NavigationTools
             },
             confidenceModel = new
             {
-                exact = "compiler-verified Roslyn semantic resolution",
-                indexed = "index/syntax-backed evidence, including bounded FCS compiler checks that remain partial — inspect partialReason and confirm source before edits",
+                exact = "compiler-verified Roslyn semantic resolution, or a successful bounded FCS semantic result whose disclosed partial reasons preserve selected-context authority",
+                indexed = "index/syntax-backed evidence, or a bounded FCS semantic result with an error, authority loss, or an unclassified partial reason — inspect error and partialReason before edits",
                 heuristic = "naming/text inference — a lead, verify before relying on it",
             },
             semantic = new
@@ -385,9 +386,9 @@ public sealed partial class NavigationTools
                 exactTools = new[] { "definition", "references", "implementations" },
                 exactToolsLanguage = "cs",
                 csharpExactTools = new[] { "definition", "references", "implementations" },
-                fsharpIndexedTools = new[] { "symbol_at", "definition" },
+                fsharpSemanticTools = new[] { "symbol_at", "definition" },
                 fsharpSyntaxIndexedTools = new[] { "search_symbol" },
-                note = "C# exact results are scoped to loaded candidate clusters. F# is compiler-checked but indexed/partial and limited to one proven physical project/TFM; restored package compile assets are snapshotted, project closure remains unsupported, and partial fields report bounded authority.",
+                note = "C# exact results are scoped to loaded candidate clusters. F# symbol_at and definition are compiler-checked within one proven physical project/TFM: successful results are exact only while disclosed partial reasons preserve selected-context authority; every error, authority loss, or unclassified partial reason is indexed. Restored package compile assets are snapshotted, project closure remains unsupported, and partial fields report bounded authority.",
                 fsharpSyntaxNote = "F# search_symbol is syntax-indexed across the available owner/TFM parse contexts, including orphaned .fs/.fsi files; it is not compiler-checked, reports actionable incomplete context coverage as partial, and keeps ordinary SDK/import limits advisory.",
             },
             index = new

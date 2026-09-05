@@ -20,6 +20,12 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!-- Git integration tests can each launch multiple processes; four parallel collections keep
+       useful concurrency on a 24-core host without recreating the observed process-starvation failures. -->
+  <ItemGroup>
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\CodeNav.Core\CodeNav.Core.csproj" />
     <ProjectReference Include="..\..\src\CodeNav.Mcp\CodeNav.Mcp.csproj" />
@@ -27,6 +33,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\TestSupport\ProcessHeavyTestIsolation.cs" Link="TestSupport\ProcessHeavyTestIsolation.cs" />
     <Compile Include="..\TestSupport\SemanticRetry.cs" Link="TestSupport\SemanticRetry.cs" />
     <Compile Include="..\TestSupport\TestWorkspaceCleanup.cs" Link="TestSupport\TestWorkspaceCleanup.cs" />
   </ItemGroup>

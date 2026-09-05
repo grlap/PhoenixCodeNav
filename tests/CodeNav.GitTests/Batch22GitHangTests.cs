@@ -17,6 +17,7 @@ public class Batch22GitHangTests
     public void RunnerDegradesWhenAGrandchildHoldsThePipe()
     {
         if (!OperatingSystem.IsWindows()) return; // cmd.exe reproduction is Windows-shaped
+        using var processHeavyTestIsolation = ProcessHeavyTestIsolation.Acquire();
 
         var sw = Stopwatch.StartNew();
         // start /b: the ping grandchild inherits the redirected stdout and holds it ~20s;

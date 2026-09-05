@@ -46,9 +46,12 @@ public partial class FSharpSemanticStage2Tests
             Assert.Equal("net10.0", at.GetProperty("selectedFSharpTypeCheckContext")
                 .GetProperty("targetFramework").GetString());
             Assert.Equal("semantic", at.GetProperty("meta").GetProperty("navigationLayer").GetString());
+            Assert.True(at.GetProperty("partial").GetBoolean());
+            Assert.Contains("fsharp_semantic_sdk_implicit_authority",
+                at.GetProperty("partialReason").GetString());
             Assert.Contains("fsharp_core_reference_defaulted",
                 at.GetProperty("partialReason").GetString());
-            Assert.Equal("indexed", at.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.Equal("exact", at.GetProperty("meta").GetProperty("confidence").GetString());
 
             JsonElement definition = Parse(CallSemantic(() => fixture.Tools.Definition(
                 path: "Core/Use.fs", line: 4, column: 25, mode: "semantic")));
@@ -64,6 +67,9 @@ public partial class FSharpSemanticStage2Tests
             Assert.Equal(2, sites.Count);
             Assert.False(definition.TryGetProperty("declarationsOutsideSelectedProjectCount",
                 out _));
+            Assert.True(definition.GetProperty("partial").GetBoolean());
+            Assert.Equal("exact",
+                definition.GetProperty("meta").GetProperty("confidence").GetString());
         }
         finally
         {
@@ -160,6 +166,8 @@ public partial class FSharpSemanticStage2Tests
                 fixture.Tools.SymbolAt("Paired/Shared.fs", 2, 5)));
             Assert.Equal("fsharp_type_check_context_required",
                 response.GetProperty("error").GetString());
+            Assert.Equal("indexed",
+                response.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.Equal(3, response.GetProperty("fsharpTypeCheckContextsTotal").GetInt32());
             Assert.Equal(3, response.GetProperty("fsharpTypeCheckContextsReturned").GetInt32());
             Assert.False(response.GetProperty("fsharpTypeCheckContextsTruncated").GetBoolean());
@@ -184,6 +192,9 @@ public partial class FSharpSemanticStage2Tests
                 legacy.GetProperty("partialReason").GetString());
             Assert.DoesNotContain("fsharp_project_options_imported",
                 legacy.GetProperty("partialReason").GetString());
+            Assert.True(legacy.GetProperty("partial").GetBoolean());
+            Assert.Equal("exact",
+                legacy.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.NotNull(snapshotPath);
             Assert.False(File.Exists(snapshotPath));
             Assert.False(Directory.Exists(Path.GetDirectoryName(snapshotPath)!));
@@ -321,6 +332,9 @@ public partial class FSharpSemanticStage2Tests
                 response.GetProperty("symbol").GetProperty("assembly").GetString());
             Assert.Contains("fsharp_package_references_snapshotted",
                 response.GetProperty("partialReason").GetString());
+            Assert.True(response.GetProperty("partial").GetBoolean());
+            Assert.Equal("exact",
+                response.GetProperty("meta").GetProperty("confidence").GetString());
         }
         finally
         {
@@ -834,6 +848,8 @@ public partial class FSharpSemanticStage2Tests
 
             Assert.Equal("fsharp_semantic_timeout",
                 response.GetProperty("error").GetString());
+            Assert.Equal("indexed",
+                response.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.Equal(1, Volatile.Read(ref probes));
         }
         finally
@@ -1514,6 +1530,7 @@ public partial class FSharpSemanticStage2Tests
             JsonElement response = Parse(raw);
             Assert.True(response.TryGetProperty("error", out JsonElement error), raw);
             Assert.Equal("fsharp_semantic_response_too_large", error.GetString());
+            Assert.Equal("indexed", response.GetProperty("meta").GetProperty("confidence").GetString());
         }
         finally
         {
@@ -1917,6 +1934,8 @@ public partial class FSharpSemanticStage2Tests
 
             Assert.Equal("fsharp_semantic_reference_bytes_limit",
                 response.GetProperty("error").GetString());
+            Assert.Equal("indexed",
+                response.GetProperty("meta").GetProperty("confidence").GetString());
         }
         finally
         {
@@ -1998,6 +2017,26 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Fact]
+    public void FSharpSemanticConfidenceDefaultsUnknownAndAuthorityLossToIndexed()
+    {
+        Assert.Equal("exact", NavigationTools.FSharpSemanticConfidence(null));
+        Assert.Equal("exact", NavigationTools.FSharpSemanticConfidence(string.Join(';',
+            "fsharp_semantic_sdk_implicit_authority",
+            "fsharp_semantic_toolchain_implicit_authority",
+            "fsharp_core_reference_defaulted",
+            "fsharp_binary_references_snapshotted",
+            "fsharp_package_references_snapshotted")));
+        Assert.Equal("indexed", NavigationTools.FSharpSemanticConfidence(
+            "fsharp_core_reference_host_fallback"));
+        Assert.Equal("indexed", NavigationTools.FSharpSemanticConfidence(
+            "fsharp_semantic_diagnostics_present"));
+        Assert.Equal("indexed", NavigationTools.FSharpSemanticConfidence(
+            "fsharp_core_reference_defaulted;fsharp_core_reference_host_fallback"));
+        Assert.Equal("indexed", NavigationTools.FSharpSemanticConfidence(
+            "fsharp_future_authority_cause"));
+    }
+
+    [Fact]
     public void ErrorDiagnosticsAreStructuredSanitizedAndMakeTheResultPartial()
     {
         string root = Directory.CreateTempSubdirectory("codenav-fsharp-diagnostics").FullName;
@@ -2018,6 +2057,7 @@ public partial class FSharpSemanticStage2Tests
             Assert.True(response.GetProperty("found").GetBoolean(), raw);
             Assert.Contains("fsharp_semantic_diagnostics_present",
                 response.GetProperty("partialReason").GetString());
+            Assert.True(response.GetProperty("partial").GetBoolean());
             Assert.Equal("indexed",
                 response.GetProperty("meta").GetProperty("confidence").GetString());
             JsonElement diagnostic = Assert.Single(response.GetProperty("diagnostics")

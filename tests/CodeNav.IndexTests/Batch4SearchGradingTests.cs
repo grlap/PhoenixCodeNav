@@ -193,14 +193,19 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
     public void CapabilitiesAdvertiseHeuristicConfidence()
     {
         var tools = new NavigationTools(_manager, _semantic);
-        var json = Parse(tools.ServerCapabilities(detail: true));
+        var json = Parse(tools.ServerCapabilities());
         // confidenceModel is an object mapping each tier to its meaning (r2o steering).
         var model = json.GetProperty("confidenceModel");
         Assert.False(string.IsNullOrEmpty(model.GetProperty("heuristic").GetString()));
         string indexed = model.GetProperty("indexed").GetString()!;
-        Assert.Contains("bounded FCS compiler checks", indexed);
-        Assert.Contains("remain partial", indexed);
+        Assert.Contains("bounded FCS semantic result", indexed);
+        Assert.Contains("with an error", indexed);
+        Assert.Contains("authority loss", indexed);
+        Assert.Contains("unclassified partial reason", indexed);
         Assert.Contains("Roslyn", model.GetProperty("exact").GetString());
+        Assert.Contains("bounded FCS semantic result", model.GetProperty("exact").GetString());
+        Assert.Contains("preserve selected-context authority",
+            model.GetProperty("exact").GetString());
         var languages = json.GetProperty("languages").EnumerateArray()
             .Select(language => language.GetString())
             .ToHashSet(StringComparer.Ordinal);
@@ -218,13 +223,18 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal("cs", semantic.GetProperty("exactToolsLanguage").GetString());
         Assert.Contains("definition", semantic.GetProperty("csharpExactTools")
             .EnumerateArray().Select(tool => tool.GetString()));
-        Assert.Contains("definition", semantic.GetProperty("fsharpIndexedTools")
+        Assert.Contains("definition", semantic.GetProperty("fsharpSemanticTools")
             .EnumerateArray().Select(tool => tool.GetString()));
-        Assert.DoesNotContain("search_symbol", semantic.GetProperty("fsharpIndexedTools")
+        Assert.DoesNotContain("search_symbol", semantic.GetProperty("fsharpSemanticTools")
             .EnumerateArray().Select(tool => tool.GetString()));
+        Assert.False(semantic.TryGetProperty("fsharpIndexedTools", out _));
         Assert.Contains("search_symbol", semantic.GetProperty("fsharpSyntaxIndexedTools")
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.Contains("compiler-checked", semantic.GetProperty("note").GetString());
+        Assert.Contains("successful results are exact only", semantic.GetProperty("note").GetString());
+        Assert.Contains("every error", semantic.GetProperty("note").GetString());
+        Assert.Contains("unclassified partial reason is indexed",
+            semantic.GetProperty("note").GetString());
         Assert.Contains("syntax-indexed", semantic.GetProperty("fsharpSyntaxNote").GetString());
         Assert.Contains("SDK/import limits advisory",
             semantic.GetProperty("fsharpSyntaxNote").GetString());
@@ -348,6 +358,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("fsharp-symbol-at-semantic", ids);
         Assert.Contains("fsharp-definition-same-project", ids);
         Assert.Contains("fsharp-type-check-context-selection", ids);
+        Assert.Contains("fsharp-semantic-confidence-authority", ids);
         Assert.Contains("fsharp-semantic-snapshot", ids);
         Assert.Contains("fsharp-semantic-bounded-project-evaluation", ids);
         Assert.Contains("fsharp-semantic-package-asset-closure", ids);
@@ -497,6 +508,22 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("total/processed/truncated", fsharpIndexedContextBudget);
         Assert.Contains("truncatedOwnerProjects", fsharpIndexedContextBudget);
         Assert.Contains("fsharp_parse_contexts_truncated", fsharpIndexedContextBudget);
+        string fsharpSemanticConfidence = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-semantic-confidence-authority")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.80", fsharpSemanticConfidence);
+        Assert.Contains("selected context", fsharpSemanticConfidence);
+        Assert.Contains("disclosed assumptions", fsharpSemanticConfidence);
+        Assert.Contains("immutable-evidence provenance", fsharpSemanticConfidence);
+        Assert.Contains("substituted", fsharpSemanticConfidence);
+        Assert.Contains("errored", fsharpSemanticConfidence);
+        Assert.Contains("removed from the context", fsharpSemanticConfidence);
+        Assert.Contains("not yet classified", fsharpSemanticConfidence);
+        Assert.Contains("partial reasons remain visible", fsharpSemanticConfidence);
+        Assert.Contains("renamed fsharpSemanticTools", fsharpSemanticConfidence);
         string fsharpSnapshot = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -1189,6 +1216,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                        ("timing.semanticColdStart", "semantic-cold-start-phase-timing"),
                        ("queryStages.compilationPreparation.gcPauseMs",
                            "references-gc-pause-attribution"),
+                       ("immutable-evidence provenance",
+                           "fsharp-semantic-confidence-authority"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),
                       ("target-bearing names", "csharp-conversion-operator-indexing"),
                       ("implicitConversion", "csharp-conversion-usage-enumeration"),

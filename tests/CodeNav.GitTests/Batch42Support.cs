@@ -94,7 +94,8 @@ internal static class Batch42Support
         IndexBuilder.Build(root, dbPath);
         var m = new IndexManager(root, dbPath);
         m.Start();
-        Assert.True(WaitUntil(() => m.IsQueryable && m.Health().IndexedCommit is not null, 30000),
+        Assert.True(WaitUntil(() => m.IsQueryable && m.Health().IndexedCommit is not null,
+                TestGit.ProcessExitTimeoutMilliseconds),
             "manager did not become queryable with a git baseline");
         return m;
     }

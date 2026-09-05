@@ -71,6 +71,9 @@ ownership, dependencies, or likely tests.
 - Treat `meta.confidence: exact` as compiler-verified within the stated coverage.
   `indexed` is a strong syntax/index lead that may need source verification. Never hide
   `partial`, `partialReason`, stale status, omitted counts, or truncation from your conclusion.
+  For F# semantic results, `exact` means the selected context carries only disclosed assumptions
+  or immutable-evidence provenance; `indexed` means something was substituted, errored, or removed
+  from that context.
 - `timing.semanticColdStart` attributes where a cold first semantic call spent time; it is
   diagnostic and never changes the answer. The fields are attribution, not an additive equation,
   and `metadataReferenceWorkMs` is summed worker activity rather than wall time. It is present only
@@ -98,8 +101,10 @@ ownership, dependencies, or likely tests.
 - C# supports compiler-exact semantic navigation when its project model closes.
 - F# `.fs` and `.fsi` files support indexed declarations, outlines, position-based
   `symbol_at`, and same-project definitions in a selected compiler context. Broader F#
-  semantic operations may return explicit unsupported or partial reasons. `.fsx` remains
-  text-only.
+  semantic operations may return explicit unsupported or partial reasons. F# semantic confidence
+  is exact when the selected context carries only disclosed assumptions or immutable-evidence
+  provenance; it is indexed when anything was substituted, errored, or removed from the context.
+  `.fsx` remains text-only.
 - Mixed-language results are only as complete as the reported per-language coverage. Treat
   an F# parse or project-option failure as missing F# evidence, not proof that the requested
   C# symbol is absent.

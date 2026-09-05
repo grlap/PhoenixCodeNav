@@ -256,13 +256,36 @@ Structural facts (`project_graph`, `projects_containing`, `dependency_path`,
 
 Every response carries a `confidence`:
 
-- `exact` — compiler-verified by a closed Roslyn project model.
-- `indexed` — trustworthy indexed/syntax evidence, including bounded FCS compiler checks
-  whose deliberately incomplete project model remains partial.
+- `exact` — compiler-verified by a closed Roslyn project model, or by an F# selected context whose
+  disclosed partial reasons preserve authority under the table below.
+- `indexed` — trustworthy indexed/syntax evidence, including F# semantic checks whose selected
+  context substituted, lost, or removed authority.
 - `heuristic` — inferred from naming, base-list text, or project relationships
   (`implementations` fallback, `related_tests`) — leads, not facts.
 - degradation flags: `partial` (a deadline/coverage limit was hit), `stale` (index older
   than the working tree), plus `coverage` counts.
+
+F# semantic confidence is exact when the selected context carries only disclosed assumptions or
+immutable-evidence provenance; it is indexed when anything was substituted, errored, or removed
+from the context. `partial:true` and `partialReason` remain visible independently of that confidence:
+
+| F# semantic partial reason | Confidence | Authority meaning |
+| --- | --- | --- |
+| `fsharp_semantic_sdk_implicit_authority` | exact | The selected standard SDK supplied disclosed implicit authority. |
+| `fsharp_semantic_toolchain_implicit_authority` | exact | The selected recognized compiler toolchain supplied disclosed implicit authority. |
+| `fsharp_core_reference_defaulted` | exact | The selected context used the expected `FSharp.Core` default without host fallback. |
+| `fsharp_binary_references_snapshotted` | exact | Binary inputs were copied and verified as immutable request evidence. |
+| `fsharp_package_references_snapshotted` | exact | Restored package inputs were copied and verified as immutable request evidence. |
+| `fsharp_core_reference_host_fallback` | indexed | A host-selected `FSharp.Core` substituted for project authority. |
+| `fsharp_semantic_diagnostics_present` | indexed | Compiler errors mean the selected context did not close cleanly. |
+
+Successful responses use a closed partial-reason classifier: any unclassified partial reason is
+`indexed` until deliberately admitted. Every error envelope is `indexed` regardless of its
+partial reasons; this includes bounded `*_limit`, `*_unavailable`, and `*_unresolved` error causes.
+Indexed-layer
+`fsharp_parse_failed`, `fsharp_parse_contexts_truncated`, and
+`fsharp_alternate_parse_contexts` coverage reasons are not copied into semantic results merely to
+influence confidence.
 
 The MCP registration boundary wraps every attributed navigation tool without changing its
 generated required-field schema. Missing or mistyped arguments are rejected before SDK method

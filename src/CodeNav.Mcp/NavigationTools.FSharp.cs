@@ -165,6 +165,33 @@ public sealed partial class NavigationTools
             Math.Clamp(timeoutMs, 500, 60_000), stopwatch.ElapsedMilliseconds);
     }
 
+    internal static string FSharpSemanticConfidence(string? partialReason)
+    {
+        if (string.IsNullOrEmpty(partialReason)) return "exact";
+
+        foreach (string reason in partialReason.Split(';',
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            switch (reason)
+            {
+                // These disclose how complete inputs were obtained; they neither remove
+                // authority nor substitute a target-incompatible input.
+                case "fsharp_semantic_sdk_implicit_authority":
+                case "fsharp_semantic_toolchain_implicit_authority":
+                case "fsharp_core_reference_defaulted":
+                case "fsharp_binary_references_snapshotted":
+                case "fsharp_package_references_snapshotted":
+                    continue;
+                // Closed by design: known authority loss and every future unclassified cause
+                // remain conservative until deliberately admitted above.
+                default:
+                    return "indexed";
+            }
+        }
+
+        return "exact";
+    }
+
     private string ShapeFSharpSemanticResult(string operation, string path, int line, int column,
         FSharpSemanticResult result, int deadlineMs, long elapsedMs)
     {
@@ -301,7 +328,10 @@ public sealed partial class NavigationTools
             null => null,
             _ => "FCS could not produce a trustworthy semantic result for this project snapshot.",
         };
-        var meta = Meta.From(result.Health ?? _manager.Health(), "indexed", "semantic");
+        string confidence = result.Error is null
+            ? FSharpSemanticConfidence(result.PartialReason)
+            : "indexed";
+        var meta = Meta.From(result.Health ?? _manager.Health(), confidence, "semantic");
 
         object? symbol = result.Symbol is null ? null : new
         {
@@ -392,6 +422,7 @@ public sealed partial class NavigationTools
         // Lists can be reduced to zero, but FCS-derived symbol names are fixed members of the
         // normal envelope and F# permits very long quoted identifiers. Fail closed with a bounded
         // diagnostic instead of violating the process-wide hard response contract.
+        var fallbackMeta = Meta.From(result.Health ?? _manager.Health(), "indexed", "semantic");
         return Json.WithStringBudget(path, 4096, (boundedPath, pathTruncated) => new
         {
             error = "fsharp_semantic_response_too_large",
@@ -406,7 +437,7 @@ public sealed partial class NavigationTools
                 deadlineMs,
                 elapsedMs,
             },
-            meta,
+            meta = fallbackMeta,
         });
     }
 }

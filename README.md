@@ -31,7 +31,7 @@ navigation questions in four layers, each labeled with how trustworthy it is:
 | **Indexed text** (SQLite FTS5, C# + F# + Markdown + SQL) | `find_file`, `search_text`, `source_context`, `config_lookup`, `references` (candidates) | `indexed` |
 | **Syntax (C#)** (Roslyn parse, no compile; includes implicit/explicit conversion operators) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
 | **Syntax (F#)** (FCS parse, no type check) | `search_symbol`; `outline` for project-owned `.fs` / `.fsi` | `indexed` |
-| **Semantic** (Roslyn for C#; bounded FCS type checks for F#) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at` and same-project `definition` | C# may be `exact`; bounded F# is `indexed` with explicit partial causes |
+| **Semantic** (Roslyn for C#; bounded FCS type checks for F#) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at` and same-project `definition` | C# may be `exact`; successful bounded F# results may be `exact` when disclosed partial reasons preserve selected-context authority, while errors and authority loss are `indexed` |
 
 Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`project_graph`,
 `projects_containing`, `dependency_path`, `repo_overview`) and composites (`context_pack`,
@@ -78,7 +78,10 @@ evaluates a documented subset of project files (simple properties and conditions
 `.props`, and the nearest ancestor `Directory.Build.props`/`.targets`). Unsupported authority either
 fails closed with a stable cause or continues only with an explicit partial cause; partial
 continuation is limited to standard `Microsoft.NET.Sdk` / recognized compiler-toolchain implicit
-authority and a host-selected `FSharp.Core`. See [`docs/design.md`](docs/design.md) for the exact
+authority and a host-selected `FSharp.Core`. F# semantic confidence is `exact` when the selected
+context carries only disclosed assumptions or immutable-evidence provenance; it is `indexed`
+when anything was substituted, errored, or removed from the context. See
+[`docs/design.md`](docs/design.md) for the exact
 evaluation boundaries and how ambiguous project/TFM ownership is disclosed.
 
 **A miss is recoverable, and never disguised.** A first-page empty `search_symbol` response stays a
@@ -529,7 +532,10 @@ watcher, and lifecycle test projects under `tests/`.
   F# semantics are position-only (`symbol_at`, `definition`) within one physical project and target
   framework, over a documented MSBuild-evaluation subset. Unsupported authority either fails closed
   with a stable cause or continues only through the explicitly partial standard-SDK/toolchain and
-  host-selected `FSharp.Core` boundaries described above. F# references, implementations,
+  host-selected `FSharp.Core` boundaries described above. Within a successful F# semantic result,
+  `exact` means the selected context carries only disclosed assumptions or immutable-evidence
+  provenance; `indexed` means something was substituted, errored, or removed from that context.
+  F# references, implementations,
   callers/callees, and hierarchy are not supported. Unscoped and explicit F# `search_symbol`
   scopes query the shared syntax index; results are partial when the scope contains a text-only
   language or when any F# parse context is failed/truncated or any actionable project-option
