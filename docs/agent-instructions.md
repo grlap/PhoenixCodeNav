@@ -158,6 +158,13 @@ instead of waiting. For `cluster_cold_load`, the index was already queryable: fo
 deadline-aware hint, using a larger `timeoutMs` when the prior request was below the documented
 maximum or retrying unchanged when it was already at that maximum. Do not replace structured
 navigation with broad shell search.
+Ordinary launches bind the default or explicit `--index-db` destination to the physical worktree
+plus a host-canonical database path. On Windows, drive-letter case, slash direction, a trailing
+workspace separator, `.` from that workspace, and workspace junction/symlink aliases join the same
+daemon. A same-version `daemon_index_destination_mismatch` therefore means a genuinely different
+destination. A newer client replaces an older daemon automatically; an old client refused by a
+new daemon must follow the returned recovery by relaunching with the daemon's `--workspace-root`
+spelling or upgrading the client.
 The CLI is not permission to invent automatic retries or name-based fallbacks;
 `phoenix_tool_result_invalid` is non-retryable. The CLI adds no
 second wall-clock timeout: tool work keeps each tool's own deadline, Ctrl-C/SIGTERM returns `130`,

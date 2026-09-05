@@ -675,6 +675,19 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("without respawn storms", startupDiagnostics);
         Assert.Contains("stale or corrupt advisory state", startupDiagnostics);
         Assert.Contains("without exposing daemon controls", startupDiagnostics);
+        string canonicalDaemonDestination = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "shared-daemon-canonical-index-destination")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.85", canonicalDaemonDestination);
+        Assert.Contains("physical workspace identity", canonicalDaemonDestination);
+        Assert.Contains("Windows drive-letter case", canonicalDaemonDestination);
+        Assert.Contains("without endpoint filesystem side effects", canonicalDaemonDestination);
+        Assert.Contains("legacy key during upgrade", canonicalDaemonDestination);
+        Assert.Contains("same-version genuinely different destinations still fail closed",
+            canonicalDaemonDestination);
         string portalReadOnly = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

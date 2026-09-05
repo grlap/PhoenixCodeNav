@@ -60,6 +60,8 @@ Always inspect the JSON even when the process exits nonzero. CLI-generated envel
 
 `server_capabilities` is the exception: when the daemon is unavailable it has no top-level `error`; read `meta.indexMode == "unavailable"`, `meta.cause`, `meta.recovery`, and `meta.retryable`. Every other tool returns top-level `error: "phoenix_daemon_unavailable"` with `cause`, `recovery`, and `retryable`.
 
+Ordinary launches bind the default or explicit `--index-db` destination to the physical worktree plus a host-canonical database path. On Windows, drive-letter case, slash direction, a trailing workspace separator, `.` from that workspace, and workspace junction/symlink aliases join the same daemon. A same-version `daemon_index_destination_mismatch` therefore means a genuinely different destination. A newer client replaces an older daemon automatically; an old client refused by a new daemon must follow the returned recovery by relaunching with the daemon's `--workspace-root` spelling or upgrading the client.
+
 `symbolId` handles (`idx:NNN`) are valid only against the same index snapshot that returned them; `documentationCommentId` is the stable C# selector across sessions. A zero-hit answer carries suggestions and retry arguments; act on them explicitly, never guess a substitute.
 
 When `daemon_request_rejected` is retryable, rerun the unchanged call once so it can join the successor daemon.

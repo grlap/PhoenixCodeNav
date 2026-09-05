@@ -135,6 +135,7 @@ internal static partial class DaemonProtocol
         DaemonHandshakeRequest? request)
     {
         string nonce = request?.Nonce ?? "";
+        string responseDatabaseKey = endpoint.DatabaseKey;
         DaemonHandshakeResponse Refuse(string cause, string detail) => new(
             false,
             cause,
@@ -142,7 +143,7 @@ internal static partial class DaemonProtocol
             BuildInfo.Version,
             BuildInfo.IndexSchema,
             endpoint.WorkspaceIdentity,
-            endpoint.DatabaseKey,
+            responseDatabaseKey,
             Environment.ProcessId,
             nonce);
 
@@ -165,9 +166,20 @@ internal static partial class DaemonProtocol
             !string.Equals(request.WorkspaceIdentity, endpoint.WorkspaceIdentity,
                 StringComparison.Ordinal))
             return Refuse("daemon_workspace_mismatch", "Phoenix daemon belongs to another physical worktree.");
-        if (!string.Equals(request.DatabaseKey, endpoint.DatabaseKey, StringComparison.Ordinal))
+        if (!endpoint.MatchesDatabaseKey(request.DatabaseKey))
+        {
+            bool clientIsOlder = IsOlderToolVersion(
+                request.ToolVersion, BuildInfo.Version);
             return Refuse("daemon_index_destination_mismatch",
-                "Phoenix daemon is bound to a different index destination for this worktree.");
+                clientIsOlder
+                    ? "Phoenix daemon uses a different index-destination identity; relaunch this client with the daemon's --workspace-root spelling or upgrade the client."
+                    : "Phoenix daemon is bound to a different index destination for this worktree.");
+        }
+
+        // An old client validates every later response against the legacy key it sent. Echo the
+        // matched authority key so a new daemon can report version recovery (or accept retirement)
+        // without turning the compatibility bridge into an authority failure in that client.
+        responseDatabaseKey = request.DatabaseKey;
 
         int versionOrder = CompareVersion(request.ToolVersion, BuildInfo.Version);
         int schemaOrder = CompareSchema(request.SchemaVersion, BuildInfo.IndexSchema);
@@ -184,7 +196,7 @@ internal static partial class DaemonProtocol
                 BuildInfo.Version,
                 BuildInfo.IndexSchema,
                 endpoint.WorkspaceIdentity,
-                endpoint.DatabaseKey,
+                responseDatabaseKey,
                 Environment.ProcessId,
                 request.Nonce,
                 Retiring: true);
@@ -207,10 +219,13 @@ internal static partial class DaemonProtocol
             BuildInfo.Version,
             BuildInfo.IndexSchema,
             endpoint.WorkspaceIdentity,
-            endpoint.DatabaseKey,
+            responseDatabaseKey,
             Environment.ProcessId,
             request.Nonce);
     }
+
+    internal static bool IsOlderToolVersion(string candidate, string current) =>
+        CompareVersion(candidate, current) < 0;
 
     private static async ValueTask WriteFrameAsync<T>(
         Stream stream,

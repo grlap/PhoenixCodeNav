@@ -18,7 +18,9 @@ internal sealed record DaemonEndpoint(
     string WorkspaceRoot,
     string WorkspaceIdentity,
     string UserIdentity,
+    string DatabasePath,
     string DatabaseKey,
+    string LegacyDatabaseKey,
     string EndpointKey,
     string PipeName,
     string? SocketPath,
@@ -62,10 +64,14 @@ internal sealed record DaemonEndpoint(
     {
         string lexicalRoot = WorkspacePaths.NormalizeFullForComparison(workspaceRoot);
         string physicalIdentity = WorkspacePhysicalIdentity.Get(lexicalRoot);
+        string physicalRoot = WorkspacePhysicalIdentity.GetCanonicalPath(lexicalRoot);
         string userIdentity = CurrentUserIdentity();
         string endpointKey = Hash($"{userIdentity}\0{physicalIdentity}")[..32].ToLowerInvariant();
         string database = Path.GetFullPath(indexDb ?? IndexBuilder.DefaultDbPath(lexicalRoot));
-        string databaseKey = Hash(WorkspacePaths.NormalizeFullForComparison(database));
+        string normalizedDatabase = WorkspacePaths.NormalizeFullForComparison(database);
+        string databaseKey = Hash(CanonicalDatabaseIdentity(
+            lexicalRoot, physicalRoot, physicalIdentity, normalizedDatabase));
+        string legacyDatabaseKey = Hash(normalizedDatabase);
 
         string runtimeDirectory;
         string? socketPath;
@@ -99,7 +105,9 @@ internal sealed record DaemonEndpoint(
             lexicalRoot,
             physicalIdentity,
             userIdentity,
+            database,
             databaseKey,
+            legacyDatabaseKey,
             endpointKey,
             pipeName,
             socketPath,
@@ -109,6 +117,48 @@ internal sealed record DaemonEndpoint(
             Path.Combine(runtimeDirectory, endpointKey + ".daemon.json"),
             stableRuntime);
     }
+
+    /// <summary>
+    /// True for the current canonical destination key or the exact pre-v0.12.85 key computed
+    /// from this process's own database spelling. The latter is a bounded upgrade bridge: it
+    /// preserves old clients whose spelling already matched the daemon without making a
+    /// differently configured destination equivalent.
+    /// </summary>
+    internal bool MatchesDatabaseKey(string databaseKey) =>
+        string.Equals(databaseKey, DatabaseKey, StringComparison.Ordinal) ||
+        string.Equals(databaseKey, LegacyDatabaseKey, StringComparison.Ordinal);
+
+    private static string CanonicalDatabaseIdentity(
+        string lexicalRoot,
+        string physicalRoot,
+        string physicalWorkspaceIdentity,
+        string normalizedDatabase)
+    {
+        _ = lexicalRoot;
+        string canonicalDatabase =
+            WorkspacePhysicalIdentity.GetCanonicalDestinationPath(normalizedDatabase);
+        string pathIdentity;
+        if (WorkspacePaths.IsSameOrDescendantPath(canonicalDatabase, physicalRoot))
+        {
+            string relative = WorkspacePaths.ToGitPath(
+                Path.GetRelativePath(physicalRoot, canonicalDatabase));
+            pathIdentity = "workspace:" + HostCanonicalPath(relative);
+        }
+        else
+        {
+            pathIdentity = "absolute:" + HostCanonicalPath(canonicalDatabase);
+        }
+
+        // The physical workspace identity and canonical destination make aliases converge. The
+        // path component keeps multiple databases for one worktree distinct. Resolving through
+        // the nearest existing ancestor creates nothing, so first-start and later clients derive
+        // the same key even before the database parent exists.
+        return $"{physicalWorkspaceIdentity}\0{pathIdentity}";
+    }
+
+    private static string HostCanonicalPath(string path) => OperatingSystem.IsWindows()
+        ? path.ToUpperInvariant()
+        : path;
 
     internal static string SelectUnixRuntimeDirectory(
         string? stableParent,

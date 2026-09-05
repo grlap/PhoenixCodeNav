@@ -551,6 +551,212 @@ public sealed class SharedDaemonTests
     }
 
     [Fact]
+    public void CanonicalDatabaseIdentityFollowsHostPathRulesWithoutFirstStartDrift()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix daemon destination identity ").FullName;
+        string external = Directory.CreateTempSubdirectory(
+            "Phoenix external destination identity ").FullName;
+        string aliasParent = Directory.CreateTempSubdirectory(
+            "Phoenix daemon root alias ").FullName;
+        string alias = Path.Combine(aliasParent, "workspace-link");
+        try
+        {
+            DaemonEndpoint beforeDirectory = DaemonEndpoint.Create(root, null);
+            Assert.False(Directory.Exists(Path.Combine(root, ".codenav")));
+            Assert.True(TestWorkspaceCleanup.TryCreateDirectoryLink(
+                alias, root, out string? linkFailure), linkFailure);
+            DaemonEndpoint throughAliasBeforeDirectory = DaemonEndpoint.Create(alias, null);
+            Assert.Equal(beforeDirectory.DatabaseKey, throughAliasBeforeDirectory.DatabaseKey);
+            Assert.Equal(beforeDirectory.DatabaseKey,
+                DaemonEndpoint.Create(root, IndexBuilder.DefaultDbPath(alias)).DatabaseKey);
+            Assert.False(Directory.Exists(Path.Combine(root, ".codenav")));
+
+            Directory.CreateDirectory(Path.Combine(root, ".codenav"));
+            DaemonEndpoint afterDirectory = DaemonEndpoint.Create(
+                Path.Combine(root, "."), null);
+            Assert.Equal(beforeDirectory.DatabaseKey, afterDirectory.DatabaseKey);
+
+            DaemonEndpoint throughAlias = DaemonEndpoint.Create(alias, null);
+            Assert.Equal(beforeDirectory.WorkspaceIdentity, throughAlias.WorkspaceIdentity);
+            Assert.Equal(WorkspacePhysicalIdentity.GetCanonicalPath(root),
+                WorkspacePhysicalIdentity.GetCanonicalPath(alias));
+            Assert.Equal(beforeDirectory.DatabaseKey, throughAlias.DatabaseKey);
+            Assert.Equal(beforeDirectory.DatabaseKey,
+                DaemonEndpoint.Create(alias, beforeDirectory.DatabasePath).DatabaseKey);
+
+            string firstExternal = Path.Combine(external, "first.db");
+            string secondExternal = Path.Combine(external, "second.db");
+            DaemonEndpoint first = DaemonEndpoint.Create(root, firstExternal);
+            DaemonEndpoint same = DaemonEndpoint.Create(
+                Path.Combine(root, "."), firstExternal);
+            DaemonEndpoint second = DaemonEndpoint.Create(root, secondExternal);
+            Assert.Equal(first.DatabaseKey, same.DatabaseKey);
+            Assert.NotEqual(first.DatabaseKey, second.DatabaseKey);
+
+            if (OperatingSystem.IsWindows())
+            {
+                string lowerRoot = char.ToLowerInvariant(root[0]) + root[1..];
+                string slashRoot = lowerRoot.Replace('\\', '/');
+                string lowerExternal = char.ToLowerInvariant(firstExternal[0]) +
+                    firstExternal[1..];
+                Assert.Equal(beforeDirectory.DatabaseKey,
+                    DaemonEndpoint.Create(lowerRoot, null).DatabaseKey);
+                Assert.Equal(beforeDirectory.DatabaseKey,
+                    DaemonEndpoint.Create(slashRoot + "/", null).DatabaseKey);
+                Assert.Equal(first.DatabaseKey,
+                    DaemonEndpoint.Create(lowerRoot, lowerExternal.Replace('\\', '/'))
+                        .DatabaseKey);
+            }
+            else
+            {
+                Assert.NotEqual(
+                    DaemonEndpoint.Create(root, Path.Combine(root, "Case.db")).DatabaseKey,
+                    DaemonEndpoint.Create(root, Path.Combine(root, "case.db")).DatabaseKey);
+            }
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(aliasParent);
+            TestWorkspaceCleanup.DeleteWorkspace(external);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void WindowsAuditedDaemonAuthoritiesUseCaseInsensitivePathIdentity()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix daemon authority casing ").FullName;
+        string database = IndexBuilder.DefaultDbPath(root);
+        Directory.CreateDirectory(Path.GetDirectoryName(database)!);
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        try
+        {
+            string lowerRoot = char.ToLowerInvariant(root[0]) + root[1..];
+            string lowerDatabase = char.ToLowerInvariant(database[0]) + database[1..];
+            string lowerRuntime = char.ToLowerInvariant(endpoint.RuntimeDirectory[0]) +
+                endpoint.RuntimeDirectory[1..];
+            Assert.Equal(WorkspacePhysicalIdentity.Get(root),
+                WorkspacePhysicalIdentity.Get(lowerRoot));
+
+            Assert.Equal(IndexDestinationClaimAcquireResult.Acquired,
+                IndexDestinationClaim.TryAcquire(root, database,
+                    out IndexDestinationClaim? claim));
+            using (IndexDestinationClaim activeClaim =
+                   Assert.IsType<IndexDestinationClaim>(claim))
+            {
+                activeClaim.SetReady();
+                Assert.True(activeClaim.IsActiveFor(
+                    WorkspacePhysicalIdentity.Get(lowerRoot), lowerDatabase));
+                Assert.Equal(IndexDestinationClaimState.Ready,
+                    IndexDestinationClaim.ReadState(lowerRoot, lowerDatabase));
+            }
+
+            DaemonEndpoint alternateRuntimeSpelling = endpoint with
+            {
+                RuntimeDirectory = lowerRuntime,
+            };
+            DaemonDescriptor.Publish(alternateRuntimeSpelling);
+            Assert.NotNull(DaemonDescriptor.TryRead(endpoint));
+            DaemonDescriptor.DeleteOwn(endpoint);
+        }
+        finally
+        {
+            DaemonDescriptor.DeleteOwn(endpoint);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public async Task WindowsWorkspaceSpellingsAndAliasesJoinOneDaemon()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix daemon Windows spelling ").FullName;
+        string aliasParent = Directory.CreateTempSubdirectory(
+            "Phoenix daemon Windows alias ").FullName;
+        string alias = Path.Combine(aliasParent, "workspace-link");
+        var clients = new List<McpClient>();
+        Process? daemon = null;
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        try
+        {
+            Assert.False(Directory.Exists(Path.Combine(root, ".codenav")));
+            Assert.True(TestWorkspaceCleanup.TryCreateDirectoryLink(
+                alias, root, out string? linkFailure,
+                forceWindowsJunctionFallback: true), linkFailure);
+
+            string executable = FindMcpExecutable();
+            string lowerRoot = char.ToLowerInvariant(root[0]) + root[1..];
+            daemon = LaunchDaemonForTest(
+                executable, lowerRoot.Replace('\\', '/'),
+                keepAlive: true, idleMilliseconds: 30_000);
+
+            clients.Add(await CreateClientAsync(executable, root));
+            clients.Add(await CreateClientAsync(
+                executable, root + Path.DirectorySeparatorChar));
+            clients.Add(await CreateClientAsync(
+                executable, root.Replace('\\', '/')));
+            clients.Add(await CreateClientAtWorkingDirectoryAsync(
+                executable, ".", root));
+            clients.Add(await CreateClientAsync(executable, alias));
+            clients.Add(await CreateClientAsync(
+                executable,
+                alias,
+                "--index-db", IndexBuilder.DefaultDbPath(root)));
+            clients.Add(await CreateClientAsync(
+                executable,
+                root,
+                "--index-db", IndexBuilder.DefaultDbPath(alias)));
+
+            JsonElement[] capabilities = await Task.WhenAll(
+                clients.Select(client => CallAsync(client, "server_capabilities")));
+            Assert.All(capabilities, capability => Assert.Equal(
+                daemon.Id,
+                capability.GetProperty("runtime").GetProperty("processId").GetInt32()));
+
+            DaemonDescriptorRecord descriptor = Assert.IsType<DaemonDescriptorRecord>(
+                DaemonDescriptor.TryRead(endpoint));
+            Assert.Equal(endpoint.DatabaseKey, descriptor.DatabaseKey);
+            Assert.All(new[]
+            {
+                root,
+                root + Path.DirectorySeparatorChar,
+                root.Replace('\\', '/'),
+                Path.Combine(root, "."),
+                alias,
+            }, spelling => Assert.Equal(
+                endpoint.DatabaseKey,
+                DaemonEndpoint.Create(spelling, null).DatabaseKey));
+            Assert.Equal(endpoint.DatabaseKey,
+                DaemonEndpoint.Create(root, IndexBuilder.DefaultDbPath(alias)).DatabaseKey);
+        }
+        finally
+        {
+            foreach (McpClient client in clients)
+                await TryDisposeClientAsync(client);
+            try { await RetireDaemonForTestAsync(endpoint); } catch { }
+            if (daemon is not null)
+            {
+                try
+                {
+                    await daemon.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                }
+                catch
+                {
+                    if (!daemon.HasExited) daemon.Kill(entireProcessTree: false);
+                }
+                daemon.Dispose();
+            }
+            await CleanupEndpointForTestAsync(endpoint);
+            TestWorkspaceCleanup.DeleteWorkspace(aliasParent);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
     public void HandshakeRequiresExactAuthorityAndAllowsOnlyNewerRetirement()
     {
         string root = Directory.CreateTempSubdirectory("Phoenix daemon protocol ").FullName;
@@ -563,6 +769,15 @@ public sealed class SharedDaemonTests
                 endpoint, DaemonProtocol.CurrentVersion, DaemonPreambleMode.Connect, exact);
             Assert.True(accepted.Accepted);
             Assert.Equal("ok", accepted.Cause);
+
+            DaemonHandshakeRequest legacy = exact with
+            {
+                DatabaseKey = endpoint.LegacyDatabaseKey,
+            };
+            DaemonHandshakeResponse legacyAccepted = DaemonProtocol.Evaluate(
+                endpoint, DaemonProtocol.CurrentVersion, DaemonPreambleMode.Connect, legacy);
+            Assert.True(legacyAccepted.Accepted);
+            Assert.Equal(endpoint.LegacyDatabaseKey, legacyAccepted.DatabaseKey);
 
             DaemonHandshakeResponse wrongUser = DaemonProtocol.Evaluate(
                 endpoint,
@@ -579,6 +794,22 @@ public sealed class SharedDaemonTests
                 exact with { DatabaseKey = new string('A', 64) });
             Assert.False(wrongDatabase.Accepted);
             Assert.Equal("daemon_index_destination_mismatch", wrongDatabase.Cause);
+
+            DaemonHandshakeResponse oldClientWrongSpelling = DaemonProtocol.Evaluate(
+                endpoint,
+                DaemonProtocol.CurrentVersion,
+                DaemonPreambleMode.Connect,
+                exact with
+                {
+                    ToolVersion = "0.12.84",
+                    DatabaseKey = new string('B', 64),
+                });
+            Assert.False(oldClientWrongSpelling.Accepted);
+            Assert.Equal("daemon_index_destination_mismatch",
+                oldClientWrongSpelling.Cause);
+            Assert.Contains("relaunch this client with the daemon's --workspace-root spelling",
+                oldClientWrongSpelling.Detail);
+            Assert.Contains("upgrade the client", oldClientWrongSpelling.Detail);
 
             DaemonHandshakeResponse wrongWorkspace = DaemonProtocol.Evaluate(
                 endpoint,
@@ -1996,6 +2227,47 @@ public sealed class SharedDaemonTests
     }
 
     [Fact]
+    public async Task ProxyRetiresOlderDaemonUsingItsReturnedLegacyDestinationKey()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "Phoenix legacy destination upgrade ").FullName;
+        DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        using var fakeLifetime = new CancellationTokenSource();
+        var retiredKey = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Task fakeDaemon = ServeOlderDestinationMismatchDaemonAsync(
+            endpoint, retiredKey, fakeLifetime.Token);
+        McpClient? client = null;
+        try
+        {
+            await WaitUntilAsync(
+                () => DaemonDescriptor.TryRead(endpoint)?.Pid == Environment.ProcessId,
+                TimeSpan.FromSeconds(15));
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            client = await CreateClientAsync(FindMcpExecutable(), root);
+
+            Assert.Equal(endpoint.LegacyDatabaseKey,
+                await retiredKey.Task.WaitAsync(timeout.Token));
+            JsonElement capabilities = await CallAsync(client, "server_capabilities");
+            DaemonDescriptorRecord successor = Assert.IsType<DaemonDescriptorRecord>(
+                DaemonDescriptor.TryRead(endpoint));
+            Assert.NotEqual(Environment.ProcessId, successor.Pid);
+            Assert.Equal(successor.Pid, capabilities.GetProperty("runtime")
+                .GetProperty("processId").GetInt32());
+            Assert.Equal(endpoint.DatabaseKey, successor.DatabaseKey);
+        }
+        finally
+        {
+            if (client is not null) await TryDisposeClientAsync(client);
+            fakeLifetime.Cancel();
+            try { await fakeDaemon; } catch (OperationCanceledException) { }
+            try { await RetireDaemonForTestAsync(endpoint); } catch { }
+            await CleanupEndpointForTestAsync(endpoint);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
     public async Task RetirementWaitsUntilTheWriterLeaseIsProvenFree()
     {
         string root = Directory.CreateTempSubdirectory(
@@ -2250,6 +2522,26 @@ public sealed class SharedDaemonTests
             WorkingDirectory = Path.GetDirectoryName(executable)!,
             Arguments = arguments,
             EnvironmentVariables = environmentVariables,
+        });
+        using var timeout = new CancellationTokenSource(
+            TimeSpan.FromMilliseconds(TestProcessExitTimeoutMilliseconds));
+        return await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
+    }
+
+    private static async Task<McpClient> CreateClientAtWorkingDirectoryAsync(
+        string executable,
+        string rootArgument,
+        string workingDirectory)
+    {
+        var transport = new StdioClientTransport(new StdioClientTransportOptions
+        {
+            Name = "Phoenix shared daemon working-directory test",
+            Command = executable,
+            WorkingDirectory = workingDirectory,
+            Arguments = [
+                "--workspace-root", rootArgument,
+                "--daemon-idle-ms", "600",
+            ],
         });
         using var timeout = new CancellationTokenSource(
             TimeSpan.FromMilliseconds(TestProcessExitTimeoutMilliseconds));
@@ -2647,6 +2939,68 @@ public sealed class SharedDaemonTests
                 await listener.DisposeAsync();
             DaemonDescriptor.DeleteOwn(endpoint);
             if (retirementAccepted) retired.TrySetResult();
+        }
+    }
+
+    private static async Task ServeOlderDestinationMismatchDaemonAsync(
+        DaemonEndpoint endpoint,
+        TaskCompletionSource<string> retiredKey,
+        CancellationToken cancellationToken)
+    {
+        IDaemonTransportListener? listener = null;
+        try
+        {
+            listener = DaemonTransport.Listen(endpoint);
+            DaemonDescriptor.Publish(endpoint);
+
+            await using (Stream connect = await listener.AcceptAsync(cancellationToken))
+            {
+                (byte _, DaemonPreambleMode mode, DaemonHandshakeRequest? request) =
+                    await DaemonProtocol.ReadRequestAsync(connect, cancellationToken);
+                Assert.Equal(DaemonPreambleMode.Connect, mode);
+                Assert.NotNull(request);
+                var mismatch = new DaemonHandshakeResponse(
+                    false,
+                    "daemon_index_destination_mismatch",
+                    "Older daemon uses its legacy destination identity.",
+                    "0.12.84",
+                    BuildInfo.IndexSchema,
+                    endpoint.WorkspaceIdentity,
+                    endpoint.LegacyDatabaseKey,
+                    Environment.ProcessId,
+                    request.Nonce);
+                await DaemonProtocol.WriteResponseAsync(
+                    connect, mismatch, cancellationToken);
+            }
+
+            await using (Stream retire = await listener.AcceptAsync(cancellationToken))
+            {
+                (byte _, DaemonPreambleMode mode, DaemonHandshakeRequest? request) =
+                    await DaemonProtocol.ReadRequestAsync(retire, cancellationToken);
+                Assert.Equal(DaemonPreambleMode.RetireAndReplace, mode);
+                Assert.NotNull(request);
+                Assert.Equal(endpoint.LegacyDatabaseKey, request.DatabaseKey);
+                var accepted = new DaemonHandshakeResponse(
+                    true,
+                    "daemon_retiring",
+                    "Older Phoenix daemon accepted graceful retirement.",
+                    "0.12.84",
+                    BuildInfo.IndexSchema,
+                    endpoint.WorkspaceIdentity,
+                    request.DatabaseKey,
+                    Environment.ProcessId,
+                    request.Nonce,
+                    Retiring: true);
+                await DaemonProtocol.WriteResponseAsync(
+                    retire, accepted, cancellationToken);
+                retiredKey.TrySetResult(request.DatabaseKey);
+            }
+        }
+        finally
+        {
+            if (listener is not null)
+                await listener.DisposeAsync();
+            DaemonDescriptor.DeleteOwn(endpoint);
         }
     }
 

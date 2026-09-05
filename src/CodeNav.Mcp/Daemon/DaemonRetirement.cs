@@ -34,8 +34,10 @@ internal static class DaemonRetirement
     internal static Task RetireOlderAsync(
         DaemonEndpoint endpoint,
         string clientName,
+        string? databaseKeyOverride,
         CancellationToken cancellationToken) =>
-        RetireAsync(endpoint, clientName, forceNewerIdentity: false, cancellationToken);
+        RetireAsync(endpoint, clientName, forceNewerIdentity: false,
+            databaseKeyOverride, cancellationToken);
 
     internal static async Task RetireForHarnessAsync(
         DaemonEndpoint endpoint,
@@ -47,6 +49,7 @@ internal static class DaemonRetirement
                 endpoint,
                 "integration-harness-retire",
                 forceNewerIdentity: true,
+                databaseKeyOverride: null,
                 cancellationToken).ConfigureAwait(false);
         }
         catch (DaemonEndpointUnavailableException)
@@ -60,12 +63,15 @@ internal static class DaemonRetirement
         DaemonEndpoint endpoint,
         string clientName,
         bool forceNewerIdentity,
+        string? databaseKeyOverride,
         CancellationToken cancellationToken)
     {
         DaemonDescriptorRecord? observed = DaemonDescriptor.TryRead(endpoint);
         await using Stream stream = await DaemonTransport.ConnectAsync(
             endpoint, ConnectTimeout, cancellationToken).ConfigureAwait(false);
         DaemonHandshakeRequest request = DaemonProtocol.CreateRequest(endpoint, clientName);
+        if (!string.IsNullOrWhiteSpace(databaseKeyOverride))
+            request = request with { DatabaseKey = databaseKeyOverride };
         if (forceNewerIdentity)
         {
             request = request with
@@ -91,7 +97,8 @@ internal static class DaemonRetirement
 
         observed ??= DaemonDescriptor.TryRead(endpoint);
         await WaitForRelinquishmentAsync(
-            endpoint, response.DaemonPid, observed, cancellationToken).ConfigureAwait(false);
+            endpoint, response.DaemonPid, observed, cancellationToken,
+            databaseKey: request.DatabaseKey).ConfigureAwait(false);
     }
 
     internal static async Task WaitForRelinquishmentAsync(
@@ -102,14 +109,17 @@ internal static class DaemonRetirement
         Func<DaemonEndpoint, DaemonDescriptorRecord?>? readDescriptor = null,
         Func<DaemonEndpoint, CancellationToken, ValueTask<int>>? probeDaemonPid = null,
         Func<DaemonEndpoint, IndexLeaseAcquireResult>? probeWriterLease = null,
-        TimeSpan? pollDelay = null)
+        TimeSpan? pollDelay = null,
+        string? databaseKey = null)
     {
         readDescriptor ??= DaemonDescriptor.TryRead;
         probeDaemonPid ??= ProbeDaemonPidAsync;
         probeWriterLease ??= ProbeWriterLease;
         TimeSpan delay = pollDelay ?? RelinquishmentPollDelay;
         DaemonDescriptorRecord? expected =
-            MatchesRetiringGeneration(endpoint, observed, daemonPid) ? observed : null;
+            MatchesRetiringGeneration(endpoint, observed, daemonPid, databaseKey)
+                ? observed
+                : null;
 
         while (true)
         {
@@ -121,7 +131,7 @@ internal static class DaemonRetirement
                 continue;
             }
 
-            if (MatchesRetiringGeneration(endpoint, current, daemonPid))
+            if (MatchesRetiringGeneration(endpoint, current, daemonPid, databaseKey))
             {
                 expected = current;
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
@@ -156,7 +166,7 @@ internal static class DaemonRetirement
         // Writer ownership is workspace-identity keyed, so dbPath does not affect this probe.
         return IndexOwnershipLease.ProbeOwnerDetailed(
             endpoint.WorkspaceRoot,
-            IndexBuilder.DefaultDbPath(endpoint.WorkspaceRoot));
+            endpoint.DatabasePath);
     }
 
     private static async ValueTask<int> ProbeDaemonPidAsync(
@@ -192,7 +202,7 @@ internal static class DaemonRetirement
             !string.Equals(response.WorkspaceIdentity, endpoint.WorkspaceIdentity,
                 StringComparison.Ordinal) ||
             response.Cause != "daemon_index_destination_mismatch" &&
-            !string.Equals(response.DatabaseKey, endpoint.DatabaseKey, StringComparison.Ordinal))
+            !string.Equals(response.DatabaseKey, request.DatabaseKey, StringComparison.Ordinal))
             throw new DaemonAuthorityException(
                 "Phoenix daemon retirement response did not prove the requested authority.");
     }
@@ -200,13 +210,16 @@ internal static class DaemonRetirement
     private static bool MatchesRetiringGeneration(
         DaemonEndpoint endpoint,
         DaemonDescriptorRecord? descriptor,
-        int daemonPid) =>
+        int daemonPid,
+        string? databaseKey) =>
         descriptor is not null &&
         descriptor.Pid == daemonPid &&
         string.Equals(descriptor.EndpointKey, endpoint.EndpointKey, StringComparison.Ordinal) &&
         string.Equals(descriptor.WorkspaceIdentity, endpoint.WorkspaceIdentity,
             StringComparison.Ordinal) &&
-        string.Equals(descriptor.DatabaseKey, endpoint.DatabaseKey, StringComparison.Ordinal);
+        (databaseKey is null
+            ? endpoint.MatchesDatabaseKey(descriptor.DatabaseKey)
+            : string.Equals(descriptor.DatabaseKey, databaseKey, StringComparison.Ordinal));
 
     private static bool SameGeneration(
         DaemonDescriptorRecord expected,

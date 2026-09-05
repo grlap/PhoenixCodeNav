@@ -160,9 +160,16 @@ internal sealed class DaemonProxy
             if (response!.Accepted) return stream;
 
             await stream.DisposeAsync().ConfigureAwait(false);
-            if (response.Cause == "daemon_older_than_client")
+            bool olderDestinationIdentity =
+                response.Cause == "daemon_index_destination_mismatch" &&
+                DaemonProtocol.IsOlderToolVersion(
+                    response.ToolVersion, BuildInfo.Version);
+            if (response.Cause == "daemon_older_than_client" || olderDestinationIdentity)
             {
-                await RetireOlderDaemonAsync(endpoint, cancellationToken).ConfigureAwait(false);
+                await RetireOlderDaemonAsync(
+                    endpoint,
+                    olderDestinationIdentity ? response.DatabaseKey : null,
+                    cancellationToken).ConfigureAwait(false);
                 return await StartAndConnectAsync(cancellationToken).ConfigureAwait(false);
             }
             throw Refusal(response);
@@ -391,8 +398,7 @@ internal sealed class DaemonProxy
                 StringComparison.Ordinal) ||
             !string.Equals(descriptor.WorkspaceIdentity, _endpoint.WorkspaceIdentity,
                 StringComparison.Ordinal) ||
-            !string.Equals(descriptor.DatabaseKey, _endpoint.DatabaseKey,
-                StringComparison.Ordinal) ||
+            !_endpoint.MatchesDatabaseKey(descriptor.DatabaseKey) ||
             !DateTimeOffset.TryParse(descriptor.StartedAtUtc, out DateTimeOffset published))
             return false;
         try
@@ -409,6 +415,7 @@ internal sealed class DaemonProxy
 
     private async Task RetireOlderDaemonAsync(
         DaemonEndpoint endpoint,
+        string? databaseKeyOverride,
         CancellationToken cancellationToken)
     {
         using var takeover = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -416,7 +423,8 @@ internal sealed class DaemonProxy
         try
         {
             await DaemonRetirement.RetireOlderAsync(
-                endpoint, _clientName, takeover.Token).ConfigureAwait(false);
+                endpoint, _clientName, databaseKeyOverride, takeover.Token)
+                .ConfigureAwait(false);
         }
         catch (DaemonRetirementRefusedException ex)
         {
@@ -518,7 +526,8 @@ internal sealed class DaemonProxy
             !string.Equals(response.WorkspaceIdentity, _endpoint.WorkspaceIdentity,
                 StringComparison.Ordinal) ||
             response.Cause != "daemon_index_destination_mismatch" &&
-            !string.Equals(response.DatabaseKey, _endpoint.DatabaseKey, StringComparison.Ordinal))
+            (!string.Equals(response.DatabaseKey, request.DatabaseKey, StringComparison.Ordinal) ||
+             !_endpoint.MatchesDatabaseKey(response.DatabaseKey)))
             throw Failure(
                 "daemon_response_authority_failed",
                 "Phoenix daemon handshake response did not prove the requested authority.",
