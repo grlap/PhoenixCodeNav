@@ -156,6 +156,88 @@ public partial class FSharpSemanticStage2Tests
         Assert.Contains("--define:SELECTED", result.CommandLineArgs);
         Assert.DoesNotContain("--define:WRONG", result.CommandLineArgs);
         Assert.Equal(["Core/Core.fs"], result.SourceFiles);
+        Assert.Empty(result.ProjectReferences);
+    }
+
+    [Fact]
+    public void ProjectReferencesPreserveLiteralOrderAndBoundedMetadataSemantics()
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("""
+            <ItemGroup>
+              <ProjectReference Include="../A/A.fsproj">
+                <Project>{11111111-1111-1111-1111-111111111111}</Project>
+                <Name>A</Name>
+              </ProjectReference>
+              <ProjectReference Include="../Skipped/Skipped.fsproj">
+                <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+              </ProjectReference>
+              <ProjectReference Include="../B/B.fsproj" ReferenceOutputAssembly="true" />
+              <ProjectReference Include="../A/A.fsproj" />
+            </ItemGroup>
+            """);
+
+        Assert.Null(result.Error);
+        Assert.Equal(
+        [
+            new FSharpProjectReferenceSnapshot("A/A.fsproj"),
+            new FSharpProjectReferenceSnapshot("B/B.fsproj"),
+        ], result.ProjectReferences);
+
+        FSharpSemanticOptionsSnapshot unsupported = EvaluateBoundedProject("""
+            <ItemGroup>
+              <ProjectReference Include="../A/A.fsproj" Aliases="alternate" />
+            </ItemGroup>
+            """);
+        Assert.Equal("fsharp_semantic_project_reference_metadata_unsupported",
+            unsupported.Error);
+
+        FSharpSemanticOptionsSnapshot unsupportedLanguage = EvaluateBoundedProject("""
+            <ItemGroup>
+              <ProjectReference Include="../VisualBasic/VisualBasic.vbproj" />
+            </ItemGroup>
+            """);
+        Assert.Equal("fsharp_semantic_project_references_unsupported",
+            unsupportedLanguage.Error);
+    }
+
+    [Fact]
+    public void ProjectReferencesHonorSdkTransitivityPolicyAndLegacyDirectness()
+    {
+        static FSharpSemanticOptionsSnapshot Evaluate(string project) =>
+            ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(
+                "Core/Core.fsproj", project, "net10.0", "net10.0");
+
+        const string sdkBody = """
+            <PropertyGroup>
+              <TargetFramework>net10.0</TargetFramework>
+              <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+            </PropertyGroup>
+            <ItemGroup>
+              <Compile Include="Core.fs" />
+              <ProjectReference Include="../Dependency/Dependency.fsproj" />
+            </ItemGroup>
+            """;
+        FSharpSemanticOptionsSnapshot sdkDefault = Evaluate(
+            $"<Project Sdk=\"Microsoft.NET.Sdk\">{sdkBody}</Project>");
+        Assert.Null(sdkDefault.Error);
+        Assert.True(sdkDefault.ProjectReferencesTransitive);
+
+        FSharpSemanticOptionsSnapshot sdkDirect = Evaluate(
+            $"<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+            "<DisableTransitiveProjectReferences>true" +
+            $"</DisableTransitiveProjectReferences></PropertyGroup>{sdkBody}</Project>");
+        Assert.Null(sdkDirect.Error);
+        Assert.False(sdkDirect.ProjectReferencesTransitive);
+
+        FSharpSemanticOptionsSnapshot unresolved = Evaluate(
+            $"<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+            "<DisableTransitiveProjectReferences>$(Unknown)" +
+            $"</DisableTransitiveProjectReferences></PropertyGroup>{sdkBody}</Project>");
+        Assert.Equal("fsharp_semantic_property_unresolved", unresolved.Error);
+
+        FSharpSemanticOptionsSnapshot legacy = Evaluate($"<Project>{sdkBody}</Project>");
+        Assert.Null(legacy.Error);
+        Assert.False(legacy.ProjectReferencesTransitive);
     }
 
     [Fact]
@@ -181,6 +263,7 @@ public partial class FSharpSemanticStage2Tests
                     <Reference Remove="@(ReferencesToRemove)" />
                     <Reference Include="@(ReferencesToAdd)" />
                     <Reference Include="@(InactiveReferences)" />
+                    <ProjectReference Include="Shared/Targets.fsproj" />
                   </ItemGroup>
                 </Project>
                 """,
@@ -195,6 +278,10 @@ public partial class FSharpSemanticStage2Tests
         Assert.Equal(["System.Runtime", "System.Xml.Linq"],
             result.BareReferences!.OrderBy(reference => reference,
                 StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+        [
+            new FSharpProjectReferenceSnapshot("Core/Shared/Targets.fsproj"),
+        ], result.ProjectReferences);
     }
 
     [Theory]
@@ -682,7 +769,9 @@ public partial class FSharpSemanticStage2Tests
                 ["Build/Projects.props"] =
                     "<Project><ItemGroup><ProjectReference Include=\"Imported.fsproj\" /></ItemGroup></Project>",
             });
-        Assert.Equal("fsharp_semantic_project_references_unsupported", importedProject.Error);
+        Assert.Null(importedProject.Error);
+        Assert.Equal([new FSharpProjectReferenceSnapshot("Core/Imported.fsproj")],
+            importedProject.ProjectReferences);
 
         FSharpSemanticOptionsSnapshot cycle = EvaluateBoundedProject(
             "<Import Project=\"../Build/A.props\" />",
@@ -1791,6 +1880,57 @@ public partial class FSharpSemanticStage2Tests
 
             using var queries = new IndexQueries(dbPath);
             Assert.Null(queries.FileByPathForHost("BUILD/DEFINES.PROPS"));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void HostAwareIndexedProjectLookupUsesExactCaseAndRejectsAmbiguousAliases()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-indexed-project-case").FullName;
+        try
+        {
+            string singleDbPath = Path.Combine(root, "single.sqlite");
+            using (var store = new IndexStore(singleDbPath, createNew: true))
+            using (var transaction = store.BeginTransaction())
+            {
+                store.InsertProject(transaction, new ParsedProject(
+                    "Deps/Dependency.fsproj", "Dependency", "sdk", null,
+                    "net10.0", false, [], [], null, [], "parsed", Language: "fs"));
+                transaction.Commit();
+            }
+            using (var single = new IndexQueries(singleDbPath))
+            {
+                Assert.Equal("Deps/Dependency.fsproj",
+                    single.ProjectByPathForHost("Deps/Dependency.fsproj")?.Path);
+                if (OperatingSystem.IsWindows())
+                    Assert.Equal("Deps/Dependency.fsproj",
+                        single.ProjectByPathForHost("DEPS/DEPENDENCY.FSPROJ")?.Path);
+                else
+                    Assert.Null(single.ProjectByPathForHost("DEPS/DEPENDENCY.FSPROJ"));
+            }
+
+            string ambiguousDbPath = Path.Combine(root, "ambiguous.sqlite");
+            using (var store = new IndexStore(ambiguousDbPath, createNew: true))
+            using (var transaction = store.BeginTransaction())
+            {
+                foreach (string path in new[]
+                         { "Deps/Dependency.fsproj", "deps/dependency.fsproj" })
+                    store.InsertProject(transaction, new ParsedProject(
+                        path, Path.GetFileNameWithoutExtension(path), "sdk", null,
+                        "net10.0", false, [], [], null, [], "parsed", Language: "fs"));
+                transaction.Commit();
+            }
+            using var ambiguous = new IndexQueries(ambiguousDbPath);
+            Assert.Equal("Deps/Dependency.fsproj",
+                ambiguous.ProjectByPathForHost("Deps/Dependency.fsproj")?.Path);
+            Assert.Equal("deps/dependency.fsproj",
+                ambiguous.ProjectByPathForHost("deps/dependency.fsproj")?.Path);
+            Assert.Null(ambiguous.ProjectByPathForHost("DEPS/DEPENDENCY.FSPROJ"));
         }
         finally
         {

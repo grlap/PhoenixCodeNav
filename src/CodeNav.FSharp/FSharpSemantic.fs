@@ -88,6 +88,22 @@ type SemanticCheckResult(
     member _.Diagnostics = diagnostics
     member _.References = references
 
+[<Sealed>]
+type SemanticProjectInput(
+    projectFileName: string,
+    sourceFiles: string array,
+    sourceTexts: string array,
+    commandLineArgs: string array,
+    outputFile: string,
+    referencedProjectIndices: int array
+) =
+    member _.ProjectFileName = projectFileName
+    member _.SourceFiles = sourceFiles
+    member _.SourceTexts = sourceTexts
+    member _.CommandLineArgs = commandLineArgs
+    member _.OutputFile = outputFile
+    member _.ReferencedProjectIndices = referencedProjectIndices
+
 module private Semantic =
     let nullString: string = Unchecked.defaultof<string>
     let nullSymbol: SemanticSymbol = Unchecked.defaultof<SemanticSymbol>
@@ -317,10 +333,8 @@ module private Semantic =
         lineSpan, columnSpan, range.StartColumn, safeString (fun () -> symbolUse.Symbol.FullName)
 
     let resolve
-        projectFileName
-        (sourceFiles: string array)
-        (sourceTexts: string array)
-        (commandLineArgs: string array)
+        (projects: SemanticProjectInput array)
+        rootProjectIndex
         fingerprint
         cacheRuntime
         targetFileName
@@ -331,55 +345,91 @@ module private Semantic =
         =
         async {
             let! cancellationToken = Async.CancellationToken
-            if sourceFiles.Length = 0 || sourceFiles.Length <> sourceTexts.Length then
+            if projects.Length = 0 || rootProjectIndex < 0 ||
+               rootProjectIndex >= projects.Length ||
+               projects |> Array.exists (fun project ->
+                   project.SourceFiles.Length = 0 ||
+                   project.SourceFiles.Length <> project.SourceTexts.Length) ||
+               projects |> Array.mapi (fun index project ->
+                   project.ReferencedProjectIndices |> Array.exists (fun child ->
+                       child < 0 || child >= index)) |> Array.exists id then
                 return checkResult nullSymbol "fsharp_semantic_snapshot_invalid" Array.empty
             else
+                let rootProject = projects[rootProjectIndex]
+                let sourceFiles = projects |> Array.collect (fun project -> project.SourceFiles)
+                let sourceTexts = projects |> Array.collect (fun project -> project.SourceTexts)
                 let runtime = runtime fingerprint sourceFiles sourceTexts cacheRuntime
                 let checker = runtime.Checker
-                let options =
-                    checker.GetProjectOptionsFromCommandLineArgs(
-                        projectFileName,
-                        commandLineArgs,
-                        loadedTimeStamp = DateTime.UnixEpoch,
-                        isEditing = false,
-                        isInteractive = false
-                    )
+                let optionsByIndex = Array.zeroCreate<FSharpProjectOptions> projects.Length
+                for index in 0 .. projects.Length - 1 do
+                    let project = projects[index]
+                    let baseOptions =
+                        checker.GetProjectOptionsFromCommandLineArgs(
+                            project.ProjectFileName,
+                            project.CommandLineArgs,
+                            loadedTimeStamp = DateTime.UnixEpoch,
+                            isEditing = false,
+                            isInteractive = false
+                        )
+                    let referencedProjects =
+                        project.ReferencedProjectIndices
+                        |> Array.map (fun child ->
+                            FSharpReferencedProject.FSharpReference(
+                                projects[child].OutputFile,
+                                optionsByIndex[child]
+                            ))
+                    optionsByIndex[index] <-
+                        { baseOptions with ReferencedProjects = referencedProjects }
+                let options = optionsByIndex[rootProjectIndex]
                 let operationName =
                     if includeReferences then "PhoenixCodeNav.references" else "PhoenixCodeNav.symbol_at"
-                let! checkedProject = checker.ParseAndCheckProject(options, userOpName = operationName)
-                if checkedProject.HasCriticalErrors then
+                let checkedProjects = Array.zeroCreate projects.Length
+                let projectDiagnostics = ResizeArray<FSharpDiagnostic>()
+                let mutable hasCriticalErrors = false
+                for index in 0 .. projects.Length - 1 do
+                    let! checkedProject =
+                        checker.ParseAndCheckProject(optionsByIndex[index], userOpName = operationName)
+                    checkedProjects[index] <- checkedProject
+                    projectDiagnostics.AddRange(checkedProject.Diagnostics)
+                    hasCriticalErrors <- hasCriticalErrors || checkedProject.HasCriticalErrors
+                let allProjectDiagnostics =
+                    projectDiagnostics
+                    |> Seq.distinctBy diagnosticKey
+                    |> Seq.toArray
+                let checkedProject = checkedProjects[rootProjectIndex]
+                if hasCriticalErrors then
                     return
-                        checkResult nullSymbol "fsharp_semantic_check_failed" checkedProject.Diagnostics
+                        checkResult nullSymbol "fsharp_semantic_check_failed" allProjectDiagnostics
                 else
                     let targetIndex =
-                        sourceFiles
+                        rootProject.SourceFiles
                         |> Array.tryFindIndex (fun fileName ->
                             pathComparer.Equals(fileName, targetFileName))
                     match targetIndex with
                     | None ->
                         return
-                            checkResult nullSymbol "fsharp_semantic_target_not_in_project" checkedProject.Diagnostics
+                            checkResult nullSymbol "fsharp_semantic_target_not_in_project" allProjectDiagnostics
                     | Some targetIndex ->
                         let! _, answer =
                             checker.ParseAndCheckFileInProject(
                                 targetFileName,
                                 0,
-                                SourceText.ofString sourceTexts[targetIndex],
+                                SourceText.ofString rootProject.SourceTexts[targetIndex],
                                 options,
                                 userOpName = operationName
                             )
                         match answer with
                         | FSharpCheckFileAnswer.Aborted ->
                             return
-                                checkResult nullSymbol "fsharp_semantic_check_aborted" checkedProject.Diagnostics
+                                checkResult nullSymbol "fsharp_semantic_check_aborted" allProjectDiagnostics
                         | FSharpCheckFileAnswer.Succeeded checkedFile when
                             not checkedFile.HasFullTypeCheckInfo ->
-                            let diagnostics = mergeDiagnostics checkedProject.Diagnostics checkedFile.Diagnostics
+                            let diagnostics = mergeDiagnostics allProjectDiagnostics checkedFile.Diagnostics
                             return
                                 checkResult nullSymbol "fsharp_semantic_check_incomplete" diagnostics
                         | FSharpCheckFileAnswer.Succeeded checkedFile ->
-                            let diagnostics = mergeDiagnostics checkedProject.Diagnostics checkedFile.Diagnostics
-                            let sourceText = SourceText.ofString sourceTexts[targetIndex]
+                            let diagnostics = mergeDiagnostics allProjectDiagnostics checkedFile.Diagnostics
+                            let sourceText = SourceText.ofString rootProject.SourceTexts[targetIndex]
                             let candidates =
                                 if column > 0 && line >= 1 && line <= sourceText.GetLineCount() then
                                     let lineText = sourceText.GetLineString(line - 1)
@@ -394,7 +444,7 @@ module private Semantic =
                                             | Some symbolUse -> [| symbolUse |]
                                             | None -> Array.empty
                                         | None -> Array.empty
-                                elif column <= 0 && sourceTexts[targetIndex].Length <= maxLineOnlySourceChars then
+                                elif column <= 0 && rootProject.SourceTexts[targetIndex].Length <= maxLineOnlySourceChars then
                                     checkedFile.GetAllUsesOfAllSymbolsInFile()
                                     |> Seq.filter (fun symbolUse -> containsPosition line column symbolUse.Range)
                                     |> Seq.sortBy rangeScore
@@ -404,7 +454,7 @@ module private Semantic =
                                     Array.empty
                             if candidates.Length = 0 then
                                 let error =
-                                    if column <= 0 && sourceTexts[targetIndex].Length > maxLineOnlySourceChars then
+                                    if column <= 0 && rootProject.SourceTexts[targetIndex].Length > maxLineOnlySourceChars then
                                         "fsharp_semantic_line_only_source_limit"
                                     else
                                         "fsharp_symbol_not_resolved"
@@ -470,10 +520,8 @@ module private Semantic =
 [<AbstractClass; Sealed>]
 type SemanticResolver private () =
     static member ResolveAsync(
-        projectFileName: string,
-        sourceFiles: string array,
-        sourceTexts: string array,
-        commandLineArgs: string array,
+        projects: SemanticProjectInput array,
+        rootProjectIndex: int,
         fingerprint: string,
         cacheRuntime: bool,
         targetFileName: string,
@@ -482,15 +530,13 @@ type SemanticResolver private () =
         maxLineOnlySourceChars: int,
         cancellationToken: CancellationToken
     ) : Task<SemanticCheckResult> =
-        Semantic.resolve projectFileName sourceFiles sourceTexts commandLineArgs fingerprint cacheRuntime
+        Semantic.resolve projects rootProjectIndex fingerprint cacheRuntime
             targetFileName line column maxLineOnlySourceChars false
         |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)
 
     static member ResolveReferencesAsync(
-        projectFileName: string,
-        sourceFiles: string array,
-        sourceTexts: string array,
-        commandLineArgs: string array,
+        projects: SemanticProjectInput array,
+        rootProjectIndex: int,
         fingerprint: string,
         cacheRuntime: bool,
         targetFileName: string,
@@ -499,6 +545,6 @@ type SemanticResolver private () =
         maxLineOnlySourceChars: int,
         cancellationToken: CancellationToken
     ) : Task<SemanticCheckResult> =
-        Semantic.resolve projectFileName sourceFiles sourceTexts commandLineArgs fingerprint cacheRuntime
+        Semantic.resolve projects rootProjectIndex fingerprint cacheRuntime
             targetFileName line column maxLineOnlySourceChars true
         |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)

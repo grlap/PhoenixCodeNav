@@ -1658,6 +1658,29 @@ public sealed partial class IndexQueries : IDisposable
         "ORDER BY path, name LIMIT $lim",
         ReadProject, ("$lim", Math.Max(0, limit)));
 
+    /// <summary>Looks up one physical project path under the same pinned host path policy used
+    /// for files. Windows accepts one unambiguous ASCII-case-equivalent row; case-sensitive hosts
+    /// require the indexed spelling.</summary>
+    public ProjectRow? ProjectByPathForHost(string projectPath)
+    {
+        string normalized = WorkspacePaths.Normalize(projectPath);
+        List<ProjectRow> exact = Query(
+            "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects " +
+            "WHERE path = $path COLLATE BINARY LIMIT 1",
+            ReadProject, ("$path", normalized));
+        if (exact.Count == 1 || !OperatingSystem.IsWindows())
+            return exact.Count == 1 ? exact[0] : null;
+
+        ProjectRow[] matches = Query(
+                "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects " +
+                "WHERE path = $path COLLATE NOCASE LIMIT 2",
+                ReadProject, ("$path", normalized))
+            .Where(row => WorkspacePaths.FileSystemPathComparer.Equals(row.Path, normalized))
+            .Take(2)
+            .ToArray();
+        return matches.Length == 1 ? matches[0] : null;
+    }
+
     /// <summary>Current declarations matching source identity while deliberately ignoring the
     /// signature. Type base-list/signature edits do not change declaration identity, and generated
     /// declarations remain eligible. The caller supplies a bound and can probe one extra row when

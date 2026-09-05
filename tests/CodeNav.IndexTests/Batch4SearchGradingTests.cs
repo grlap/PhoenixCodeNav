@@ -378,6 +378,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("fsharp-symbol-at-semantic", ids);
         Assert.Contains("fsharp-definition-same-project", ids);
         Assert.Contains("fsharp-references-same-project", ids);
+        Assert.Contains("fsharp-semantic-project-reference-closure", ids);
         Assert.Contains("fsharp-type-check-context-selection", ids);
         Assert.Contains("fsharp-semantic-confidence-authority", ids);
         Assert.Contains("fsharp-semantic-snapshot", ids);
@@ -460,6 +461,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(1, idList.Count(id => id == "fsharp-indexed-parse-context-budget"));
         Assert.Equal(1,
             idList.Count(id => id == "fsharp-parse-owner-coverage-breakdown"));
+        Assert.Equal(1,
+            idList.Count(id => id == "fsharp-semantic-project-reference-closure"));
         Assert.Equal(1, idList.Count(id => id == "csharp-symbol-free-outline"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-operator-indexing"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-semantic-handles"));
@@ -795,6 +798,33 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.DoesNotContain("exact", fsharpReferences, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("indexed", fsharpReferences, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("heuristic", fsharpReferences, StringComparison.OrdinalIgnoreCase);
+        string fsharpProjectReferenceClosure = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-semantic-project-reference-closure")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.83", fsharpProjectReferenceClosure);
+        Assert.Contains("exact selected TFM", fsharpProjectReferenceClosure);
+        Assert.Contains("literal physical project paths", fsharpProjectReferenceClosure);
+        Assert.Contains("in-memory referenced-project options", fsharpProjectReferenceClosure);
+        Assert.Contains("without emitted or last-built DLLs", fsharpProjectReferenceClosure);
+        Assert.Contains("flat transitive SDK default", fsharpProjectReferenceClosure);
+        Assert.Contains("DisableTransitiveProjectReferences=true",
+            fsharpProjectReferenceClosure);
+        Assert.Contains("legacy-style projects remain direct-only",
+            fsharpProjectReferenceClosure);
+        Assert.Contains("child compiler errors retain their source paths",
+            fsharpProjectReferenceClosure);
+        Assert.Contains("fsharp_semantic_diagnostics_present",
+            fsharpProjectReferenceClosure);
+        Assert.Contains("declarationsFromProjectReferenceClosureCount",
+            fsharpProjectReferenceClosure);
+        Assert.Contains("declarationsOutsideSelectedProjectCount retains its not-returned meaning",
+            fsharpProjectReferenceClosure);
+        Assert.Contains("references still count only the selected root",
+            fsharpProjectReferenceClosure);
+        Assert.Contains("same-assembly", fsharpProjectReferenceClosure);
         string fsharpBoundary = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -1284,6 +1314,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                            "fsharp-semantic-confidence-authority"),
                        ("compiler-bound non-definition uses",
                            "fsharp-references-same-project"),
+                       ("in-memory referenced-project options",
+                           "fsharp-semantic-project-reference-closure"),
                        ("unrepresentedOwnerProjects",
                            "fsharp-parse-owner-coverage-breakdown"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),

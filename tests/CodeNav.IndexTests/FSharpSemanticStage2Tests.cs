@@ -503,7 +503,7 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Fact]
-    public void Stage2ARejectsProjectReferenceClosureWithoutFallingBackToIndexedFSharpSymbols()
+    public void ProjectReferenceClosureResolvesDefinitionsAndCountsOnlyRootProjectUses()
     {
         string root = Directory.CreateTempSubdirectory("codenav-fsharp-semantic-reference").FullName;
         try
@@ -517,26 +517,752 @@ public partial class FSharpSemanticStage2Tests
                   </ItemGroup>
                 </Project>
                 """);
-            WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
+            WriteProject(root, "Core/Core.fs",
+                "module Core\nlet value = Dependency.value\nlet second = Dependency.value\n");
             WriteProject(root, "Dependency/Dependency.fsproj", SdkProject("net10.0",
                 "Dependency.fs"));
             WriteProject(root, "Dependency/Dependency.fs", "module Dependency\nlet value = 1\n");
 
             using var fixture = Fixture.Create(root);
-            JsonElement response = Parse(CallSemantic(() => fixture.Tools.Definition(
-                path: "Core/Core.fs", line: 2, column: 5, mode: "auto")));
-            Assert.Equal("fsharp_semantic_project_references_unsupported",
-                response.GetProperty("error").GetString());
-            Assert.False(response.TryGetProperty("found", out JsonElement found) &&
-                         found.ValueKind == JsonValueKind.True);
+            string symbolRaw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Core.fs", 2, 25, timeoutMs: 60_000));
+            JsonElement symbol = Parse(symbolRaw);
+            Assert.True(symbol.GetProperty("found").GetBoolean(), symbolRaw);
+            Assert.Equal("Dependency.value",
+                symbol.GetProperty("symbol").GetProperty("fullName").GetString());
+            Assert.False(symbol.TryGetProperty("declarationsOutsideSelectedProjectCount",
+                out _));
+            Assert.Equal(1, symbol.GetProperty(
+                "declarationsFromProjectReferenceClosureCount").GetInt32());
 
-            JsonElement references = Parse(CallSemantic(() => fixture.Tools.References(
-                path: "Core/Core.fs", line: 2, column: 5, mode: "semantic",
-                timeoutMs: 60_000)));
-            Assert.Equal("fsharp_semantic_project_references_unsupported",
-                references.GetProperty("error").GetString());
-            Assert.False(references.TryGetProperty("totalReferences", out _));
-            Assert.False(references.TryGetProperty("totalCandidates", out _));
+            string definitionRaw = CallSemantic(() => fixture.Tools.Definition(
+                path: "Core/Core.fs", line: 2, column: 25, mode: "auto",
+                timeoutMs: 60_000));
+            JsonElement definition = Parse(definitionRaw);
+            Assert.True(definition.GetProperty("found").GetBoolean(), definitionRaw);
+            Assert.Contains(definition.GetProperty("declarations").EnumerateArray(), declaration =>
+                declaration.GetProperty("path").GetString() ==
+                "Dependency/Dependency.fs");
+
+            string referencesRaw = CallSemantic(() => fixture.Tools.References(
+                path: "Core/Core.fs", line: 2, column: 25, mode: "semantic",
+                timeoutMs: 60_000));
+            JsonElement references = Parse(referencesRaw);
+            Assert.True(references.GetProperty("found").GetBoolean(), referencesRaw);
+            Assert.Equal(2, references.GetProperty("totalReferences").GetInt32());
+            Assert.All(references.GetProperty("groups")[0].GetProperty("samples")
+                .EnumerateArray(), sample => Assert.Equal("Core/Core.fs",
+                    sample.GetProperty("path").GetString()));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void TransitiveProjectReferenceClosureTypeChecksChildAgainstLeafWithoutCountingChildUses()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-transitive").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Mid/Mid.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs",
+                "module App\nlet observed = (Mid.make()).Value\n");
+            WriteProject(root, "Mid/Mid.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="Mid.fs" />
+                  <ProjectReference Include="../Leaf/Leaf.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "Mid/Mid.fs",
+                "module Mid\nlet make () = Leaf.Widget(42)\n");
+            WriteProject(root, "Leaf/Leaf.fsproj", SdkProject("net10.0", "Leaf.fs"));
+            WriteProject(root, "Leaf/Leaf.fs", """
+                namespace Leaf
+                type Widget(value: int) =
+                    member _.Value = value
+                """);
+
+            using var fixture = Fixture.Create(root);
+            string definitionRaw = CallSemantic(() => fixture.Tools.Definition(
+                path: "App/App.fs", line: 2, column: 31, mode: "semantic",
+                timeoutMs: 60_000));
+            JsonElement definition = Parse(definitionRaw);
+            Assert.True(definition.GetProperty("found").GetBoolean(), definitionRaw);
+            Assert.Contains(definition.GetProperty("declarations").EnumerateArray(), declaration =>
+                declaration.GetProperty("path").GetString() == "Leaf/Leaf.fs");
+            Assert.Equal("exact",
+                definition.GetProperty("meta").GetProperty("confidence").GetString());
+
+            string referencesRaw = CallSemantic(() => fixture.Tools.References(
+                path: "App/App.fs", line: 2, column: 31, mode: "semantic",
+                timeoutMs: 60_000));
+            JsonElement references = Parse(referencesRaw);
+            Assert.Equal(1, references.GetProperty("totalReferences").GetInt32());
+            Assert.All(references.GetProperty("groups")[0].GetProperty("samples")
+                .EnumerateArray(), sample => Assert.Equal("App/App.fs",
+                    sample.GetProperty("path").GetString()));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceClosureMergesChildDiagnosticsWithoutLosingRootDiagnostics()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-diagnostics").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs", """
+                module App
+                let rootBroken : int = "root"
+                let targetValue = 42
+                """);
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProject("net10.0", "Dependency.fs"));
+            WriteProject(root, "Dependency/Dependency.fs", """
+                module Dependency
+                let childBroken : int = "child"
+                """);
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "App/App.fs", 3, 7, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+
+            Assert.True(response.GetProperty("found").GetBoolean(), raw);
+            Assert.Equal("targetValue",
+                response.GetProperty("symbol").GetProperty("name").GetString());
+            Assert.Contains("fsharp_semantic_diagnostics_present",
+                response.GetProperty("partialReason").GetString());
+            Assert.Equal("indexed",
+                response.GetProperty("meta").GetProperty("confidence").GetString());
+            JsonElement[] errors = response.GetProperty("diagnostics").EnumerateArray()
+                .Where(diagnostic => diagnostic.GetProperty("severity").GetString() == "error")
+                .ToArray();
+            Assert.Contains(errors, diagnostic =>
+                diagnostic.GetProperty("path").GetString() == "App/App.fs");
+            Assert.Contains(errors, diagnostic =>
+                diagnostic.GetProperty("path").GetString() ==
+                "Dependency/Dependency.fs");
+            Assert.Equal(2, response.GetProperty("diagnosticCount").GetInt32());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceDiamondReportsLeafDiagnosticsOnce()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-diamond-diagnostics").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Left/Left.fsproj" />
+                  <ProjectReference Include="../Right/Right.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs", "module App\nlet targetValue = 42\n");
+            foreach (string side in new[] { "Left", "Right" })
+            {
+                WriteProject(root, $"{side}/{side}.fsproj", SdkProjectWithBody("net10.0", $"""
+                    <ItemGroup>
+                      <Compile Include="{side}.fs" />
+                      <ProjectReference Include="../Leaf/Leaf.fsproj" />
+                    </ItemGroup>
+                    """));
+                WriteProject(root, $"{side}/{side}.fs",
+                    $"module {side}\nlet observed = Leaf.value\n");
+            }
+            WriteProject(root, "Leaf/Leaf.fsproj", SdkProject("net10.0", "Leaf.fs"));
+            WriteProject(root, "Leaf/Leaf.fs",
+                "module Leaf\nlet value : int = \"broken\"\n");
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "App/App.fs", 2, 7, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+
+            Assert.True(response.GetProperty("found").GetBoolean(), raw);
+            Assert.Equal("indexed",
+                response.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.Equal(1, response.GetProperty("diagnostics").EnumerateArray().Count(
+                diagnostic => diagnostic.GetProperty("severity").GetString() == "error" &&
+                              diagnostic.GetProperty("path").GetString() == "Leaf/Leaf.fs"));
+            Assert.Equal(1, response.GetProperty("diagnosticCount").GetInt32());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void DisableTransitiveProjectReferencesKeepsTheRootDirectOnly()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-direct-only").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <PropertyGroup>
+                  <DisableTransitiveProjectReferences>true</DisableTransitiveProjectReferences>
+                </PropertyGroup>
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Mid/Mid.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs",
+                "module App\nlet observed = (Mid.make()).Value\n");
+            WriteProject(root, "Mid/Mid.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="Mid.fs" />
+                  <ProjectReference Include="../Leaf/Leaf.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "Mid/Mid.fs", """
+                module Mid
+                let make () = Leaf.Widget(42)
+                let observed = (make()).Value
+                """);
+            WriteProject(root, "Leaf/Leaf.fsproj", SdkProject("net10.0", "Leaf.fs"));
+            WriteProject(root, "Leaf/Leaf.fs", """
+                namespace Leaf
+                type Widget(value: int) =
+                    member _.Value = value
+                """);
+
+            using var fixture = Fixture.Create(root);
+            string appRaw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "App/App.fs", 2, 31, timeoutMs: 60_000));
+            JsonElement app = Parse(appRaw);
+            Assert.False(app.GetProperty("found").GetBoolean(), appRaw);
+            Assert.Contains("fsharp_semantic_diagnostics_present",
+                app.GetProperty("partialReason").GetString());
+
+            string midRaw = CallSemantic(() => fixture.Tools.Definition(
+                path: "Mid/Mid.fs", line: 3, column: 27, mode: "semantic",
+                timeoutMs: 60_000));
+            JsonElement mid = Parse(midRaw);
+            Assert.True(mid.GetProperty("found").GetBoolean(), midRaw);
+            Assert.Contains(mid.GetProperty("declarations").EnumerateArray(), declaration =>
+                declaration.GetProperty("path").GetString() == "Leaf/Leaf.fs");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void LegacyProjectReferencesKeepEachConsumerDirectOnly()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-legacy-direct-only").FullName;
+        try
+        {
+            string? fsharpCore = ReferenceAssemblyLocator.FSharpCoreReferencePath(
+                "net472", out _);
+            Assert.NotNull(fsharpCore);
+            string copiedFSharpCore = Path.Combine(root, "Lib", "FSharp.Core.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(copiedFSharpCore)!);
+            File.Copy(fsharpCore!, copiedFSharpCore);
+
+            WriteProject(root, "App/App.fsproj", LegacyProjectWithBody("App", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Mid/Mid.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs",
+                "module App\nlet observed = (Mid.make()).Value\n");
+            WriteProject(root, "Mid/Mid.fsproj", LegacyProjectWithBody("Mid", """
+                <ItemGroup>
+                  <Compile Include="Mid.fs" />
+                  <ProjectReference Include="../Leaf/Leaf.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "Mid/Mid.fs", """
+                module Mid
+                let make () = Leaf.Widget(42)
+                let observed = (make()).Value
+                """);
+            WriteProject(root, "Leaf/Leaf.fsproj", LegacyProjectWithBody("Leaf", """
+                <ItemGroup><Compile Include="Leaf.fs" /></ItemGroup>
+                """));
+            WriteProject(root, "Leaf/Leaf.fs", """
+                namespace Leaf
+                type Widget(value: int) =
+                    member _.Value = value
+                """);
+
+            using var fixture = Fixture.Create(root);
+            string appRaw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "App/App.fs", 2, 31, timeoutMs: 60_000));
+            JsonElement app = Parse(appRaw);
+            Assert.False(app.GetProperty("found").GetBoolean(), appRaw);
+            Assert.Contains("fsharp_semantic_diagnostics_present",
+                app.GetProperty("partialReason").GetString());
+
+            string midRaw = CallSemantic(() => fixture.Tools.Definition(
+                path: "Mid/Mid.fs", line: 3, column: 27, mode: "semantic",
+                timeoutMs: 60_000));
+            JsonElement mid = Parse(midRaw);
+            Assert.True(mid.GetProperty("found").GetBoolean(), midRaw);
+            Assert.Contains(mid.GetProperty("declarations").EnumerateArray(), declaration =>
+                declaration.GetProperty("path").GetString() == "Leaf/Leaf.fs");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceClosureFailsClosedForCSharpCycleAndMissingExactTfm()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-boundaries").FullName;
+        try
+        {
+            WriteProject(root, "CSharp/CSharp.csproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                </Project>
+                """);
+            WriteProject(root, "CSharp/Class.cs", "namespace CSharp; public class Class;");
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../CSharp/CSharp.csproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs", "module App\nlet value = 1\n");
+
+            using (var csharpFixture = Fixture.Create(root))
+            {
+                JsonElement csharp = Parse(CallSemantic(() => csharpFixture.Tools.SymbolAt(
+                    "App/App.fs", 2, 5, timeoutMs: 60_000)));
+                Assert.Equal("fsharp_semantic_project_references_unsupported",
+                    csharp.GetProperty("error").GetString());
+                Assert.Contains("stale last-built project DLL",
+                    csharp.GetProperty("detail").GetString());
+            }
+
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Missing/Missing.fsproj" />
+                </ItemGroup>
+                """));
+            using (var missingFixture = Fixture.Create(root))
+            {
+                JsonElement missing = Parse(CallSemantic(() => missingFixture.Tools.SymbolAt(
+                    "App/App.fs", 2, 5, timeoutMs: 60_000)));
+                Assert.Equal("fsharp_semantic_project_reference_unavailable",
+                    missing.GetProperty("error").GetString());
+                Assert.Contains("missing, unindexed, unreadable",
+                    missing.GetProperty("detail").GetString());
+            }
+
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj"
+                                    Aliases="alternate" />
+                </ItemGroup>
+                """));
+            using (var metadataFixture = Fixture.Create(root))
+            {
+                JsonElement metadata = Parse(CallSemantic(() => metadataFixture.Tools.SymbolAt(
+                    "App/App.fs", 2, 5, timeoutMs: 60_000)));
+                Assert.Equal("fsharp_semantic_project_reference_metadata_unsupported",
+                    metadata.GetProperty("error").GetString());
+                Assert.Contains("metadata or item operations",
+                    metadata.GetProperty("detail").GetString());
+            }
+
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProject("netstandard2.0", "Dependency.fs"));
+            WriteProject(root, "Dependency/Dependency.fs", "module Dependency\nlet value = 1\n");
+            using (var tfmFixture = Fixture.Create(root))
+            {
+                JsonElement tfm = Parse(CallSemantic(() => tfmFixture.Tools.SymbolAt(
+                    "App/App.fs", 2, 5, timeoutMs: 60_000)));
+                Assert.Equal("fsharp_semantic_project_reference_target_framework_unavailable",
+                    tfm.GetProperty("error").GetString());
+                Assert.Contains("Dependency/Dependency.fsproj",
+                    tfm.GetProperty("detail").GetString());
+                Assert.Contains("netstandard2.0", tfm.GetProperty("detail").GetString());
+                Assert.Contains("Compatible netstandard selection is not yet supported",
+                    tfm.GetProperty("detail").GetString());
+            }
+
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProjectWithBody("net10.0", """
+                    <ItemGroup>
+                      <Compile Include="Dependency.fs" />
+                      <ProjectReference Include="../App/App.fsproj" />
+                    </ItemGroup>
+                    """));
+            using var cycleFixture = Fixture.Create(root);
+            JsonElement cycle = Parse(CallSemantic(() => cycleFixture.Tools.SymbolAt(
+                "App/App.fs", 2, 5, timeoutMs: 60_000)));
+            Assert.Equal("fsharp_semantic_project_reference_cycle",
+                cycle.GetProperty("error").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceClosureFailsClosedForAnAmbiguousHostPath()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-case-ambiguous").FullName;
+        string dbPath = IndexBuilder.DefaultDbPath(root);
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../DEPS/DEPENDENCY.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs", "module App\nlet value = 1\n");
+            WriteProject(root, "Deps/Dependency.fsproj",
+                SdkProject("net10.0", "Dependency.fs"));
+            WriteProject(root, "Deps/Dependency.fs", "module Dependency\nlet value = 1\n");
+
+            using var fixture = Fixture.Create(root);
+            using (var store = new IndexStore(dbPath, createNew: false))
+            using (var transaction = store.BeginTransaction())
+            {
+                store.InsertProject(transaction, new ParsedProject(
+                    "deps/dependency.fsproj", "dependency", "sdk", null, "net10.0",
+                    false, [], [], null, [], "parsed", Language: "fs"));
+                transaction.Commit();
+            }
+
+            JsonElement response = Parse(CallSemantic(() => fixture.Tools.SymbolAt(
+                "App/App.fs", 2, 5, timeoutMs: 60_000)));
+            Assert.Equal("fsharp_semantic_project_reference_unavailable",
+                response.GetProperty("error").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceClosureRejectsDistinctProjectsWithSameAssemblyIdentity()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-assembly-conflict").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../First/First.fsproj" />
+                  <ProjectReference Include="../Second/Second.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs", "module App\nlet value = 1\n");
+            WriteProject(root, "First/First.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <AssemblyName>Shared.Dependency</AssemblyName>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="First.fs" /></ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "First/First.fs", "module First\nlet value = 1\n");
+            WriteProject(root, "Second/Second.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <AssemblyName>Shared.Dependency</AssemblyName>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="Second.fs" /></ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Second/Second.fs", "module Second\nlet value = 2\n");
+
+            using var fixture = Fixture.Create(root);
+            JsonElement response = Parse(CallSemantic(() => fixture.Tools.SymbolAt(
+                "App/App.fs", 2, 5, timeoutMs: 60_000)));
+            Assert.Equal("fsharp_project_options_conflict",
+                response.GetProperty("error").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceClosureUsesLiteralPhysicalCompanionPath()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-physical-companion").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs",
+                "module App\nlet result = Dependency.value\n");
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProject("net10.0", "Dependency.fs"));
+            WriteProject(root, "Dependency/Dependency.fs",
+                "module Dependency\nlet value = 1\n");
+            WriteProject(root, "Dependency/Dependency.Net.fsproj",
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                    <AssemblyName>Dependency</AssemblyName>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="Dependency.Net.fs" /></ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Dependency/Dependency.Net.fs",
+                "module Dependency\nlet value = 2\n");
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.Definition(
+                path: "App/App.fs", line: 2, column: 26, mode: "semantic",
+                timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.True(response.GetProperty("found").GetBoolean(), raw);
+            Assert.Contains(response.GetProperty("declarations").EnumerateArray(), declaration =>
+                declaration.GetProperty("path").GetString() ==
+                "Dependency/Dependency.fs");
+            Assert.DoesNotContain(response.GetProperty("declarations").EnumerateArray(),
+                declaration => declaration.GetProperty("path").GetString() ==
+                    "Dependency/Dependency.Net.fs");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceClosureSharesEvaluationBudgetsAcrossProjects()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-evaluation-budget").FullName;
+        try
+        {
+            string properties = string.Join(Environment.NewLine,
+                Enumerable.Range(0, 300).Select(index =>
+                    $"<ClosureProperty{index}>value</ClosureProperty{index}>"));
+            WriteProject(root, "App/App.fsproj", $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    {properties}
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="App.fs" />
+                    <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "App/App.fs", "module App\nlet value = 1\n");
+            WriteProject(root, "Dependency/Dependency.fsproj", $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    {properties}
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="Dependency.fs" /></ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Dependency/Dependency.fs",
+                "module Dependency\nlet value = 1\n");
+
+            using var fixture = Fixture.Create(root);
+            JsonElement response = Parse(CallSemantic(() => fixture.Tools.SymbolAt(
+                "App/App.fs", 2, 5, timeoutMs: 60_000)));
+            Assert.Equal("fsharp_semantic_property_limit",
+                response.GetProperty("error").GetString());
+            Assert.Contains("ProjectReference closure",
+                response.GetProperty("detail").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceClosureRefusesSourceBudgetsBeforeReadingTheRemainder()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-source-budget").FullName;
+        try
+        {
+            WriteProject(root, "Core/Core.fsproj",
+                SdkProject("net10.0", "First.fs", "Use.fs"));
+            WriteProject(root, "Core/First.fs", "module First\nlet value = 1\n");
+            WriteProject(root, "Core/Use.fs", "module Use\nlet target = First.value\n");
+
+            using var fixture = Fixture.Create(root);
+            int sourceReads = 0;
+            fixture.Semantic.BeforeFSharpSemanticSourceReadForTest = _ => sourceReads++;
+            fixture.Semantic.FSharpSemanticSourceFilesLimitForTest = 1;
+            JsonElement countLimited = Parse(CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 2, 7, timeoutMs: 60_000)));
+            Assert.Equal("fsharp_semantic_source_limit",
+                countLimited.GetProperty("error").GetString());
+            Assert.Equal(0, sourceReads);
+
+            sourceReads = 0;
+            fixture.Semantic.FSharpSemanticSourceFilesLimitForTest = null;
+            fixture.Semantic.FSharpSemanticSourceBytesLimitForTest = 1;
+            JsonElement bytesLimited = Parse(CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 2, 7, timeoutMs: 60_000)));
+            Assert.Equal("fsharp_semantic_source_bytes_limit",
+                bytesLimited.GetProperty("error").GetString());
+            Assert.Equal(1, sourceReads);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceClosureUsesPinnedChildSourceAfterDiskMutation()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-source-snapshot").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs",
+                "module App\nlet result = Dependency.value\n");
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProject("net10.0", "Dependency.fs"));
+            string dependencyPath = Path.Combine(root, "Dependency", "Dependency.fs");
+            WriteProject(root, "Dependency/Dependency.fs",
+                "module Dependency\nlet value = 42\n");
+
+            using var fixture = Fixture.Create(root);
+            fixture.Semantic.FSharpSemanticSnapshotCapturedForTest = () =>
+                File.WriteAllText(dependencyPath,
+                    "module ChangedOnDisk\nlet replacement = 0\n");
+            string raw = CallSemantic(() => fixture.Tools.Definition(
+                path: "App/App.fs", line: 2, column: 26, mode: "semantic",
+                timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.True(response.GetProperty("found").GetBoolean(), raw);
+            Assert.Equal("Dependency.value",
+                response.GetProperty("symbol").GetProperty("fullName").GetString());
+            Assert.Contains(response.GetProperty("declarations").EnumerateArray(), declaration =>
+                declaration.GetProperty("path").GetString() ==
+                "Dependency/Dependency.fs");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ProjectReferenceClosureReverifiesChildBinaryOriginsAfterFcs()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-reference-binary-snapshot").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs",
+                "module App\nlet result = Dependency.value\n");
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProjectWithBody("net10.0", """
+                    <ItemGroup>
+                      <Compile Include="Dependency.fs" />
+                      <Reference Include="CodeNav.Core">
+                        <HintPath>../Lib/CodeNav.Core.dll</HintPath>
+                      </Reference>
+                    </ItemGroup>
+                    """));
+            WriteProject(root, "Dependency/Dependency.fs",
+                "module Dependency\nlet value = 42\n");
+            string binary = Path.Combine(root, "Lib", "CodeNav.Core.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(binary)!);
+            File.Copy(typeof(SemanticService).Assembly.Location, binary);
+            DateTime originalWriteTime = File.GetLastWriteTimeUtc(binary);
+
+            using var fixture = Fixture.Create(root);
+            fixture.Semantic.FSharpSemanticSnapshotCapturedForTest = () =>
+            {
+                using var stream = new FileStream(binary, FileMode.Open,
+                    FileAccess.ReadWrite, FileShare.Read);
+                stream.Position = 32;
+                int original = stream.ReadByte();
+                Assert.True(original >= 0);
+                stream.Position = 32;
+                stream.WriteByte((byte)(original ^ 1));
+                File.SetLastWriteTimeUtc(binary, originalWriteTime);
+            };
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "App/App.fs", 2, 26, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.Equal("fsharp_semantic_reference_changed",
+                response.GetProperty("error").GetString());
+            Assert.Contains("fsharp_binary_references_snapshotted",
+                response.GetProperty("partialReason").GetString());
         }
         finally
         {
@@ -2727,6 +3453,39 @@ public partial class FSharpSemanticStage2Tests
             </Project>
             """;
     }
+
+    private static string SdkProjectWithBody(string targetFrameworks, string body)
+    {
+        string frameworkProperty = targetFrameworks.Contains(';')
+            ? $"<TargetFrameworks>{targetFrameworks}</TargetFrameworks>"
+            : $"<TargetFramework>{targetFrameworks}</TargetFramework>";
+        return $$"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                {{frameworkProperty}}
+                <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+              </PropertyGroup>
+              {{body}}
+            </Project>
+            """;
+    }
+
+    private static string LegacyProjectWithBody(string assemblyName, string body) => $$"""
+        <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+          <Import Project="$(MSBuildToolsPath)\Microsoft.Common.props" Condition="Exists('$(MSBuildToolsPath)\Microsoft.Common.props')" />
+          <PropertyGroup>
+            <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+            <AssemblyName>{{assemblyName}}</AssemblyName>
+          </PropertyGroup>
+          <ItemGroup>
+            <Reference Include="FSharp.Core">
+              <HintPath>..\Lib\FSharp.Core.dll</HintPath>
+            </Reference>
+          </ItemGroup>
+          {{body}}
+          <Import Project="$(FSharpTargetsPath)" />
+        </Project>
+        """;
 
     private static void WriteProject(string root, string relativePath, string content)
     {

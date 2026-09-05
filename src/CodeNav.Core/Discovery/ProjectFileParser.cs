@@ -54,6 +54,8 @@ public sealed record FSharpParsingOptionsSnapshot(
 
 public sealed record FSharpPackageReferenceSnapshot(string Id, string? RequestedVersion);
 
+public sealed record FSharpProjectReferenceSnapshot(string ProjectPath);
+
 internal sealed record CSharpPackageReferenceSnapshot(
     string Id,
     string Version,
@@ -72,7 +74,11 @@ public sealed record FSharpSemanticOptionsSnapshot(
     string? PartialReason = null,
     string? Error = null,
     List<string>? BareReferences = null,
-    List<FSharpPackageReferenceSnapshot>? PackageReferences = null);
+    List<FSharpPackageReferenceSnapshot>? PackageReferences = null)
+{
+    public List<FSharpProjectReferenceSnapshot> ProjectReferences { get; init; } = [];
+    public bool ProjectReferencesTransitive { get; init; }
+}
 
 /// <summary>
 /// Owns: reading a single .csproj/.fsproj (legacy or SDK style) into a ParsedProject without
@@ -365,10 +371,10 @@ public static partial class ProjectFileParser
     /// document-ordered simple properties, conditions, Choose branches, workspace-local .props,
     /// the nearest indexed ancestor Directory.Packages.props PackageVersion projection, the nearest
     /// indexed ancestor Directory.Build props/targets reference projection, ordered F# Compile
-    /// items, resolvable HintPath references, and active package identities. Package
+    /// items, resolvable HintPath references, active package identities, and bounded active
+    /// ProjectReference identities. Package
     /// compile assets are resolved separately from an already-restored target-specific assets
-    /// snapshot; project-reference closure remains a hard boundary so a compiler-backed result
-    /// cannot overstate an incomplete project model.
+    /// snapshot; the semantic service closes F# ProjectReferences from the same pinned index epoch.
     /// </summary>
     public static FSharpSemanticOptionsSnapshot ParseFSharpSemanticOptionsSnapshot(
         string relPath, string projectXml, string indexedTargetFrameworks,
@@ -381,6 +387,44 @@ public static partial class ProjectFileParser
         CancellationToken cancellationToken = default,
         bool hasAmbiguousDirectoryBuildAuthority = false,
         bool hasAmbiguousDirectoryPackagesAuthority = false)
+        => ParseFSharpSemanticOptionsSnapshotCore(relPath, projectXml,
+            indexedTargetFrameworks, selectedTargetFramework, importResolver,
+            importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
+            directoryBuildTargetsPath, cancellationToken,
+            hasAmbiguousDirectoryBuildAuthority, hasAmbiguousDirectoryPackagesAuthority,
+            new FSharpSemanticEvaluationBudget());
+
+    internal static FSharpSemanticOptionsSnapshot ParseFSharpSemanticOptionsClosureSnapshot(
+        FSharpSemanticEvaluationBudget budget,
+        string relPath, string projectXml, string indexedTargetFrameworks,
+        string selectedTargetFramework,
+        Func<string, string?>? importResolver,
+        Func<string, long?>? importSizeResolver,
+        string? directoryPackagesPropsPath,
+        string? directoryBuildPropsPath,
+        string? directoryBuildTargetsPath,
+        CancellationToken cancellationToken,
+        bool hasAmbiguousDirectoryBuildAuthority,
+        bool hasAmbiguousDirectoryPackagesAuthority)
+        => ParseFSharpSemanticOptionsSnapshotCore(relPath, projectXml,
+            indexedTargetFrameworks, selectedTargetFramework, importResolver,
+            importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
+            directoryBuildTargetsPath, cancellationToken,
+            hasAmbiguousDirectoryBuildAuthority, hasAmbiguousDirectoryPackagesAuthority,
+            budget);
+
+    private static FSharpSemanticOptionsSnapshot ParseFSharpSemanticOptionsSnapshotCore(
+        string relPath, string projectXml, string indexedTargetFrameworks,
+        string selectedTargetFramework,
+        Func<string, string?>? importResolver,
+        Func<string, long?>? importSizeResolver,
+        string? directoryPackagesPropsPath,
+        string? directoryBuildPropsPath,
+        string? directoryBuildTargetsPath,
+        CancellationToken cancellationToken,
+        bool hasAmbiguousDirectoryBuildAuthority,
+        bool hasAmbiguousDirectoryPackagesAuthority,
+        FSharpSemanticEvaluationBudget budget)
     {
         cancellationToken.ThrowIfCancellationRequested();
         FSharpParsingOptionsSnapshot selection = ParseFSharpParsingOptionsSnapshot(
@@ -443,22 +487,32 @@ public static partial class ProjectFileParser
             selection.SelectedTargetFramework,
             selection.AvailableTargetFrameworks?.ToArray() ?? [], importResolver,
             importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
-            directoryBuildTargetsPath, cancellationToken);
+            directoryBuildTargetsPath, cancellationToken, budget);
         FSharpSemanticEvaluation evaluation = evaluator.Evaluate(root);
         cancellationToken.ThrowIfCancellationRequested();
         if (evaluation.Error is not null)
         {
-            return new([], evaluation.CommandLineArgs, evaluation.HintPathReferences,
+            return new FSharpSemanticOptionsSnapshot([], evaluation.CommandLineArgs,
+                evaluation.HintPathReferences,
                 evaluation.AssemblyName, selection.SelectedTargetFramework,
                 evaluation.PartialReason ?? selection.PartialReason, evaluation.Error,
-                evaluation.BareReferences, evaluation.PackageReferences);
+                evaluation.BareReferences, evaluation.PackageReferences)
+            {
+                ProjectReferences = evaluation.ProjectReferences,
+                ProjectReferencesTransitive = evaluation.ProjectReferencesTransitive,
+            };
         }
 
-        return new(evaluation.SourceFiles, evaluation.CommandLineArgs,
+        return new FSharpSemanticOptionsSnapshot(evaluation.SourceFiles,
+            evaluation.CommandLineArgs,
             evaluation.HintPathReferences, evaluation.AssemblyName,
             selection.SelectedTargetFramework, evaluation.PartialReason,
             BareReferences: evaluation.BareReferences,
-            PackageReferences: evaluation.PackageReferences);
+            PackageReferences: evaluation.PackageReferences)
+        {
+            ProjectReferences = evaluation.ProjectReferences,
+            ProjectReferencesTransitive = evaluation.ProjectReferencesTransitive,
+        };
     }
 
     private static bool IsKnownFSharpSemanticImport(string project)

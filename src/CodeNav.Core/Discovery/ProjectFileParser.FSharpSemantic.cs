@@ -20,13 +20,50 @@ public static partial class ProjectFileParser
     internal const int MaxFSharpSemanticItemListEntries = 1024;
     internal const int MaxFSharpSemanticDependencyNodes = 1024;
 
+    internal sealed class FSharpSemanticEvaluationBudget
+    {
+        private int _importFiles;
+        private int _importOccurrences;
+        private long _importBytes;
+        private int _propertyAssignments;
+        private int _itemListEntries;
+
+        public bool TryReserveImportFile() =>
+            ++_importFiles <= MaxFSharpSemanticImportFiles;
+
+        public bool TryReserveImportOccurrence() =>
+            ++_importOccurrences <= MaxFSharpSemanticImportOccurrences;
+
+        public bool TryReserveImportBytes(long bytes)
+        {
+            if (bytes < 0 || bytes > MaxFSharpSemanticImportBytes) return false;
+            try
+            {
+                _importBytes = checked(_importBytes + bytes);
+            }
+            catch (OverflowException)
+            {
+                return false;
+            }
+            return _importBytes <= MaxFSharpSemanticImportBytes;
+        }
+
+        public bool TryReservePropertyAssignment() =>
+            ++_propertyAssignments <= MaxFSharpSemanticProperties;
+
+        public bool TryReserveItemListEntry() =>
+            ++_itemListEntries <= MaxFSharpSemanticItemListEntries;
+    }
+
     private sealed record FSharpSemanticEvaluation(
         List<string> SourceFiles,
         List<string> CommandLineArgs,
         List<string> HintPathReferences,
         List<string> BareReferences,
         List<FSharpPackageReferenceSnapshot> PackageReferences,
+        List<FSharpProjectReferenceSnapshot> ProjectReferences,
         string AssemblyName,
+        bool ProjectReferencesTransitive,
         string? PartialReason = null,
         string? Error = null);
 
@@ -84,6 +121,7 @@ public static partial class ProjectFileParser
         private readonly string? _directoryBuildTargetsPath;
         private readonly string? _directoryPackagesPropsPath;
         private readonly CancellationToken _cancellationToken;
+        private readonly FSharpSemanticEvaluationBudget _budget;
         private readonly Dictionary<string, FSharpSemanticProperty> _properties =
             new(StringComparer.OrdinalIgnoreCase);
         private readonly List<string> _sources = [];
@@ -92,6 +130,9 @@ public static partial class ProjectFileParser
         private readonly List<FSharpSemanticReference> _references = [];
         private readonly Dictionary<string, string?> _packageReferences =
             new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<FSharpProjectReferenceSnapshot> _projectReferences = [];
+        private readonly HashSet<string> _projectReferenceSet =
+            new(WorkspacePaths.FileSystemPathComparer);
         private readonly Dictionary<string, string> _packageVersions =
             new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, List<string>> _itemLists =
@@ -112,11 +153,6 @@ public static partial class ProjectFileParser
             new(WorkspacePaths.FileSystemPathComparer);
         private readonly SortedSet<string> _partialReasons = new(StringComparer.Ordinal);
 
-        private int _importFiles;
-        private int _importOccurrences;
-        private long _importBytes;
-        private int _propertyAssignments;
-        private int _itemListEntries;
         private int _evaluationDepth;
         private bool _semanticItemPhaseStarted;
         private bool _directSemanticItemPhaseStarted;
@@ -131,7 +167,8 @@ public static partial class ProjectFileParser
             string? directoryPackagesPropsPath,
             string? directoryBuildPropsPath,
             string? directoryBuildTargetsPath,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            FSharpSemanticEvaluationBudget budget)
         {
             _projectPath = WorkspacePaths.ToGitPath(projectPath).TrimStart('/');
             _projectDir = WorkspacePaths.ToGitPath(
@@ -145,6 +182,7 @@ public static partial class ProjectFileParser
             _directoryBuildPropsPath = NormalizeOptionalWorkspacePath(directoryBuildPropsPath);
             _directoryBuildTargetsPath = NormalizeOptionalWorkspacePath(directoryBuildTargetsPath);
             _cancellationToken = cancellationToken;
+            _budget = budget;
             _properties["TargetFramework"] = new(selectedTargetFramework, true);
         }
 
@@ -161,6 +199,8 @@ public static partial class ProjectFileParser
 
             if (!ValidateSdkAuthority(root, allowStandardSdk: true))
                 return Failure("fsharp_semantic_sdk_unsupported");
+            bool isSdkStyle = root.Attributes().Any(attribute =>
+                attribute.Name.LocalName.Equals("Sdk", StringComparison.OrdinalIgnoreCase));
             RegisterDirectoryBuildDependencies(root);
             if (_error is not null) return Failure(_error);
             if (_directoryBuildTargetsPath is not null &&
@@ -211,6 +251,20 @@ public static partial class ProjectFileParser
                 return Failure("fsharp_semantic_property_unresolved", assemblyName);
             }
 
+            bool projectReferencesTransitive = false;
+            if (isSdkStyle)
+            {
+                if (!TryCompilerProperty("DisableTransitiveProjectReferences",
+                        out string disableTransitiveText))
+                    return Failure("fsharp_semantic_property_unresolved", assemblyName);
+                bool disableTransitiveProjectReferences = false;
+                if (disableTransitiveText.Length > 0 &&
+                    !bool.TryParse(disableTransitiveText,
+                        out disableTransitiveProjectReferences))
+                    return Failure("fsharp_semantic_property_unresolved", assemblyName);
+                projectReferencesTransitive = !disableTransitiveProjectReferences;
+            }
+
             bool disableImplicitFrameworkDefines = false;
             if (disableImplicitText.Length > 0 &&
                 !bool.TryParse(disableImplicitText, out disableImplicitFrameworkDefines))
@@ -238,7 +292,8 @@ public static partial class ProjectFileParser
                         StringComparer.OrdinalIgnoreCase)
                     .Select(reference => new FSharpPackageReferenceSnapshot(
                         reference.Key, reference.Value)).ToList(),
-                assemblyName, parsing.PartialReason);
+                _projectReferences,
+                assemblyName, projectReferencesTransitive, parsing.PartialReason);
         }
 
         private void CheckCancellation() =>
@@ -294,7 +349,9 @@ public static partial class ProjectFileParser
                         StringComparer.OrdinalIgnoreCase)
                     .Select(reference => new FSharpPackageReferenceSnapshot(
                         reference.Key, reference.Value)).ToList(),
+                _projectReferences,
                 assemblyName ?? Path.GetFileNameWithoutExtension(_projectPath),
+                false,
                 _partialReasons.Count == 0 ? null : string.Join(';', _partialReasons), error);
 
         private void ProcessContainer(XElement container, string documentPath,
@@ -409,7 +466,7 @@ public static partial class ProjectFileParser
                     continue;
                 if (!ShouldProcess(property, documentPath, out process)) return;
                 if (!process) continue;
-                if (property.HasElements || ++_propertyAssignments > MaxFSharpSemanticProperties)
+                if (property.HasElements || !_budget.TryReservePropertyAssignment())
                 {
                     _error = property.HasElements
                         ? "fsharp_semantic_property_unsupported"
@@ -500,12 +557,11 @@ public static partial class ProjectFileParser
                 if (role == FSharpSemanticDocumentRole.ExplicitImport)
                 {
                     _error = itemName.Equals("ProjectReference",
-                        StringComparison.OrdinalIgnoreCase)
-                        ? "fsharp_semantic_project_references_unsupported"
-                        : itemName.Equals("PackageReference",
-                            StringComparison.OrdinalIgnoreCase)
-                            ? null
-                            : "fsharp_semantic_import_items_unsupported";
+                                     StringComparison.OrdinalIgnoreCase) ||
+                                 itemName.Equals("PackageReference",
+                                     StringComparison.OrdinalIgnoreCase)
+                        ? null
+                        : "fsharp_semantic_import_items_unsupported";
                     if (_error is not null) return;
                 }
                 if (IsDirectoryBuildRole(role) &&
@@ -526,7 +582,7 @@ public static partial class ProjectFileParser
                 else if (itemName.Equals("ProjectReference",
                              StringComparison.OrdinalIgnoreCase))
                 {
-                    _error = "fsharp_semantic_project_references_unsupported";
+                    ProcessProjectReference(item, documentPath);
                 }
                 else if (itemName.Equals("PackageReference",
                              StringComparison.OrdinalIgnoreCase))
@@ -573,7 +629,7 @@ public static partial class ProjectFileParser
             var ids = new List<string>(specs.Count);
             foreach (string spec in specs)
             {
-                if (++_itemListEntries > MaxFSharpSemanticItemListEntries)
+                if (!_budget.TryReserveItemListEntry())
                 {
                     _error = "fsharp_semantic_item_list_limit";
                     return;
@@ -653,6 +709,108 @@ public static partial class ProjectFileParser
             }
         }
 
+        private void ProcessProjectReference(XElement item, string documentPath)
+        {
+            string? rawInclude = item.Attribute("Include")?.Value.Trim();
+            if (rawInclude is null || item.Attribute("Update") is not null ||
+                item.Attribute("Remove") is not null || item.Attribute("Exclude") is not null ||
+                item.Attributes().Any(attribute =>
+                    !attribute.Name.LocalName.Equals("Include", StringComparison.OrdinalIgnoreCase) &&
+                    !attribute.Name.LocalName.Equals("Condition", StringComparison.OrdinalIgnoreCase) &&
+                    !attribute.Name.LocalName.Equals("Label", StringComparison.OrdinalIgnoreCase) &&
+                    !attribute.Name.LocalName.Equals("ReferenceOutputAssembly",
+                        StringComparison.OrdinalIgnoreCase)))
+            {
+                _error = "fsharp_semantic_project_reference_metadata_unsupported";
+                return;
+            }
+
+            bool referenceOutputAssembly = true;
+            var activeReferenceOutputAssembly = new List<string>();
+            XAttribute? outputAttribute = item.Attributes().FirstOrDefault(attribute =>
+                attribute.Name.LocalName.Equals("ReferenceOutputAssembly",
+                    StringComparison.OrdinalIgnoreCase));
+            if (outputAttribute is not null)
+                activeReferenceOutputAssembly.Add(outputAttribute.Value);
+
+            foreach (XElement metadata in item.Elements())
+            {
+                CheckCancellation();
+                if (metadata.HasElements || metadata.Attributes().Any(attribute =>
+                        !attribute.Name.LocalName.Equals("Condition",
+                            StringComparison.OrdinalIgnoreCase) &&
+                        !attribute.Name.LocalName.Equals("Label",
+                            StringComparison.OrdinalIgnoreCase)))
+                {
+                    _error = "fsharp_semantic_project_reference_metadata_unsupported";
+                    return;
+                }
+                if (!ShouldProcess(metadata, documentPath, out bool process)) return;
+                if (!process) continue;
+                string name = metadata.Name.LocalName;
+                if (name.Equals("Name", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("Project", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!name.Equals("ReferenceOutputAssembly",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    _error = "fsharp_semantic_project_reference_metadata_unsupported";
+                    return;
+                }
+                activeReferenceOutputAssembly.Add(metadata.Value);
+            }
+
+            if (activeReferenceOutputAssembly.Count > 1)
+            {
+                _error = "fsharp_semantic_project_reference_metadata_unsupported";
+                return;
+            }
+            if (activeReferenceOutputAssembly.Count == 1 &&
+                (!TryExpandProperties(activeReferenceOutputAssembly[0].Trim(), null,
+                     out string expanded, out bool complete) || !complete ||
+                 !bool.TryParse(expanded, out referenceOutputAssembly)))
+            {
+                _error = "fsharp_semantic_project_reference_metadata_unsupported";
+                return;
+            }
+            if (!referenceOutputAssembly) return;
+
+            if (!TryExpandItemSpecs(rawInclude, out List<string> specs))
+            {
+                if (_error == "fsharp_semantic_reference_unresolved")
+                    _error = "fsharp_semantic_project_reference_metadata_unsupported";
+                return;
+            }
+            if (specs.Count == 0)
+            {
+                _error = "fsharp_semantic_project_reference_unavailable";
+                return;
+            }
+            foreach (string spec in specs)
+            {
+                CheckCancellation();
+                if (!_budget.TryReserveItemListEntry())
+                {
+                    _error = "fsharp_semantic_item_list_limit";
+                    return;
+                }
+                if (!TryNormalizeSemanticRelative(_projectDir, spec,
+                        out string projectPath))
+                {
+                    _error = "fsharp_semantic_path_outside_workspace";
+                    return;
+                }
+                if (!projectPath.EndsWith(".fsproj", StringComparison.OrdinalIgnoreCase) &&
+                    !projectPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+                {
+                    _error = "fsharp_semantic_project_references_unsupported";
+                    return;
+                }
+                if (_projectReferenceSet.Add(projectPath))
+                    _projectReferences.Add(new(projectPath));
+            }
+        }
+
         private bool PackageReferenceCompilerMetadataIsSupported(XElement item,
             string documentPath)
         {
@@ -718,7 +876,7 @@ public static partial class ProjectFileParser
 
             foreach (string spec in specs)
             {
-                if (++_itemListEntries > MaxFSharpSemanticItemListEntries)
+                if (!_budget.TryReserveItemListEntry())
                 {
                     _error = "fsharp_semantic_item_list_limit";
                     return;
@@ -904,7 +1062,7 @@ public static partial class ProjectFileParser
                 if (!_itemLists.ContainsKey(name)) _itemLists[name] = list;
                 foreach (string spec in includeSpecs)
                 {
-                    if (++_itemListEntries > MaxFSharpSemanticItemListEntries)
+                    if (!_budget.TryReserveItemListEntry())
                     {
                         _error = "fsharp_semantic_item_list_limit";
                         return;
@@ -1250,7 +1408,7 @@ public static partial class ProjectFileParser
         private void ProcessResolvedImport(string importPath,
             FSharpSemanticDocumentRole role, int depth)
         {
-            if (++_importOccurrences > MaxFSharpSemanticImportOccurrences)
+            if (!_budget.TryReserveImportOccurrence())
             {
                 _error = "fsharp_semantic_import_occurrence_limit";
                 return;
@@ -1765,7 +1923,7 @@ public static partial class ProjectFileParser
         {
             CheckCancellation();
             if (_importSnapshots.TryGetValue(path, out content)) return true;
-            if (++_importFiles > MaxFSharpSemanticImportFiles)
+            if (!_budget.TryReserveImportFile())
             {
                 _error = "fsharp_semantic_import_count_limit";
                 content = null;
@@ -1787,21 +1945,9 @@ public static partial class ProjectFileParser
             CheckCancellation();
             if (content is not null)
             {
-                long bytes;
-                try
-                {
-                    int actualBytes = Encoding.UTF8.GetByteCount(content);
-                    bytes = Math.Max(actualBytes, indexedBytes ?? 0L);
-                    _importBytes = checked(_importBytes + bytes);
-                }
-                catch (OverflowException)
-                {
-                    _error = "fsharp_semantic_import_bytes_limit";
-                    content = null;
-                    return false;
-                }
-                if (bytes > MaxFSharpSemanticImportBytes ||
-                    _importBytes > MaxFSharpSemanticImportBytes)
+                int actualBytes = Encoding.UTF8.GetByteCount(content);
+                long bytes = Math.Max(actualBytes, indexedBytes ?? 0L);
+                if (!_budget.TryReserveImportBytes(bytes))
                 {
                     _error = "fsharp_semantic_import_bytes_limit";
                     content = null;
@@ -1930,6 +2076,8 @@ public static partial class ProjectFileParser
              name.Equals("FscAdditionalArgs", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("AssemblyName", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("DisableImplicitFrameworkDefines", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("DisableTransitiveProjectReferences",
+                 StringComparison.OrdinalIgnoreCase) ||
              name.Equals("EnableDefaultCompileItems", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("ManagePackageVersionsCentrally",
                  StringComparison.OrdinalIgnoreCase) ||

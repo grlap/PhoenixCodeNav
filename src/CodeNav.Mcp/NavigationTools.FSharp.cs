@@ -240,7 +240,17 @@ public sealed partial class NavigationTools
             "fsharp_semantic_line_only_source_limit" =>
                 "Line-only F# lookup is disabled for this source size; provide a 1-based column.",
             "fsharp_semantic_project_references_unsupported" =>
-                "This F# type-check context requires project-reference closure that is not available yet.",
+                "This F# closure reaches a non-F# ProjectReference. FCS cannot type-check that source project, and Phoenix never substitutes a potentially stale last-built project DLL.",
+            "fsharp_semantic_project_reference_metadata_unsupported" =>
+                "An active ProjectReference changes compiler closure through metadata or item operations outside the bounded F# evaluator.",
+            "fsharp_semantic_project_reference_unavailable" =>
+                "An active ProjectReference is missing, unindexed, unreadable, or not an evaluable physical project snapshot.",
+            "fsharp_semantic_project_reference_target_framework_unavailable" =>
+                FSharpProjectReferenceTargetFrameworkDetail(result.ProjectReferenceFailure),
+            "fsharp_semantic_project_reference_cycle" =>
+                "The active F# ProjectReference closure contains a cycle; Phoenix stopped instead of constructing recursive FCS options.",
+            "fsharp_project_options_conflict" =>
+                "Two distinct physical projects in the F# closure produce the same assembly identity.",
             "fsharp_semantic_reference_changed" =>
                 "A captured binary or package reference changed during FCS checking; the result was discarded.",
             "fsharp_semantic_timeout" =>
@@ -414,7 +424,7 @@ public sealed partial class NavigationTools
         var declarations = result.Symbol?.Declarations ?? [];
         int declarationsOutsideSelectedProject = result.Symbol is null
             ? 0
-            : Math.Max(0, result.Symbol.DeclarationCount - declarations.Count);
+            : result.Symbol.DeclarationsOutsideSelectedProjectCount;
         var diagnostics = result.Diagnostics ?? [];
         bool diagnosticLimitTruncated = result.DiagnosticCount > diagnostics.Count;
         string? error = result.Error;
@@ -431,7 +441,17 @@ public sealed partial class NavigationTools
             "fsharp_semantic_position_invalid" =>
                 "F# semantic positions require line >= 1 and column >= 0 (0 means line-only).",
             "fsharp_semantic_project_references_unsupported" =>
-                "This F# type-check context requires project-reference closure that is not available yet.",
+                "This F# closure reaches a non-F# ProjectReference. FCS cannot type-check that source project, and Phoenix never substitutes a potentially stale last-built project DLL.",
+            "fsharp_semantic_project_reference_metadata_unsupported" =>
+                "An active ProjectReference changes compiler closure through metadata or item operations outside the bounded F# evaluator.",
+            "fsharp_semantic_project_reference_unavailable" =>
+                "An active ProjectReference is missing, unindexed, unreadable, or not an evaluable physical project snapshot.",
+            "fsharp_semantic_project_reference_target_framework_unavailable" =>
+                FSharpProjectReferenceTargetFrameworkDetail(result.ProjectReferenceFailure),
+            "fsharp_semantic_project_reference_cycle" =>
+                "The active F# ProjectReference closure contains a cycle; Phoenix stopped instead of constructing recursive FCS options.",
+            "fsharp_project_options_conflict" =>
+                "Two distinct physical projects in the F# closure produce the same assembly identity.",
             "fsharp_semantic_package_reference_unresolved" =>
                 "An active PackageReference identity could not be resolved by the bounded project evaluator.",
             "fsharp_semantic_package_reference_metadata_unsupported" =>
@@ -465,15 +485,15 @@ public sealed partial class NavigationTools
             "fsharp_semantic_import_unavailable" =>
                 "A required literal workspace project import is missing, unindexed, unreadable, or invalid XML.",
             "fsharp_semantic_import_cycle" =>
-                "The selected project contains a cycle of bounded workspace project imports.",
+                "The selected F# ProjectReference closure contains a cycle of bounded workspace project imports.",
             "fsharp_semantic_import_count_limit" =>
-                "The selected project exceeds the bounded number of inspected workspace project imports.",
+                "The selected F# ProjectReference closure exceeds the bounded number of inspected workspace project imports.",
             "fsharp_semantic_import_occurrence_limit" =>
-                "The selected project exceeds the bounded number of active workspace project-import occurrences.",
+                "The selected F# ProjectReference closure exceeds the bounded number of active workspace project-import occurrences.",
             "fsharp_semantic_import_depth_limit" =>
-                "The selected project exceeds the bounded workspace project-import depth.",
+                "A project in the selected F# ProjectReference closure exceeds the bounded workspace project-import depth.",
             "fsharp_semantic_import_bytes_limit" =>
-                "The selected project's workspace project imports/inputs exceed the bounded aggregate UTF-8 byte limit.",
+                "The selected F# ProjectReference closure's workspace project imports/inputs exceed the bounded aggregate UTF-8 byte limit.",
             "fsharp_semantic_item_list_limit" =>
                 "Project/package reference input lists exceed the bounded F# semantic item count.",
             "fsharp_semantic_dependency_limit" =>
@@ -487,7 +507,7 @@ public sealed partial class NavigationTools
             "fsharp_semantic_condition_property_unresolved" =>
                 "An MSBuild condition depends on an unresolved property that may be supplied by the build environment.",
             "fsharp_semantic_evaluation_depth_limit" =>
-                "The selected project exceeds the bounded F# semantic evaluator nesting depth.",
+                "A project in the selected F# ProjectReference closure exceeds the bounded F# semantic evaluator nesting depth.",
             "fsharp_semantic_evaluation_order_unsupported" =>
                 "A property assignment appears after semantic items; the bounded F# semantic evaluator cannot reproduce MSBuild's property-before-item evaluation phases for this project.",
             "fsharp_semantic_property_function_unsupported" =>
@@ -496,7 +516,7 @@ public sealed partial class NavigationTools
                 "fsharp_semantic_property_unresolved" =>
                 "A compiler-affecting project property could not be resolved by the bounded F# semantic evaluator.",
             "fsharp_semantic_property_limit" =>
-                "The selected project exceeds the bounded number of property assignments.",
+                "The selected F# ProjectReference closure exceeds the bounded number of property assignments.",
             "fsharp_semantic_property_value_limit" =>
                 "A project property value exceeds the bounded F# semantic evaluator character limit.",
             "fsharp_semantic_target_evaluation_unsupported" =>
@@ -525,7 +545,7 @@ public sealed partial class NavigationTools
             "fsharp_symbol_not_resolved" =>
                 "FCS found no symbol at this exact source position.",
             "fsharp_definition_not_in_selected_project" =>
-                "The resolved symbol has no declaration in the selected physical F# project.",
+                "The resolved symbol has no declaration in the selected physical F# project or its captured F# ProjectReference closure.",
             null => null,
             _ => "FCS could not produce a trustworthy semantic result for this project snapshot.",
         };
@@ -575,6 +595,11 @@ public sealed partial class NavigationTools
                     ? (int?)null
                     : declarationsOutsideSelectedProject > 0
                         ? declarationsOutsideSelectedProject
+                        : (int?)null,
+                    declarationsFromProjectReferenceClosureCount = result.Symbol is null
+                    ? (int?)null
+                    : result.Symbol.DeclarationsFromProjectReferenceClosureCount > 0
+                        ? result.Symbol.DeclarationsFromProjectReferenceClosureCount
                         : (int?)null,
                     declarationsTruncated = declarationsTruncated ? true : (bool?)null,
                     partial = result.PartialReason is not null ? true : (bool?)null,
@@ -637,5 +662,17 @@ public sealed partial class NavigationTools
             },
             meta = fallbackMeta,
         });
+    }
+
+    private static string FSharpProjectReferenceTargetFrameworkDetail(
+        FSharpProjectReferenceFailure? failure)
+    {
+        string project = failure?.Project ?? "the referenced F# project";
+        string available = failure?.AvailableTargetFrameworks.Count > 0
+            ? string.Join(", ", failure.AvailableTargetFrameworks)
+            : "none";
+        return $"Referenced project '{project}' has no exact target-framework match. " +
+               $"Available TFMs: {available}. Compatible netstandard selection is not yet " +
+               "supported; select projects with the same explicit TFM.";
     }
 }

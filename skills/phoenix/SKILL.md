@@ -83,8 +83,15 @@ A transport-successful response can still contain a structured domain error. Ins
 
 - C# supports compiler-exact semantic navigation when its project model closes.
 - F# `.fs` and `.fsi` files support indexed declarations, outlines, position-based
-  `symbol_at`, and same-project definitions and references in one selected physical project +
-  target-framework compiler context. Reference counts are exact for that context but remain
+  `symbol_at`, definitions through the selected root's exact-TFM F# `ProjectReference` closure
+  under the evaluated MSBuild transitivity policy, and references counted only in that selected
+  physical root project. Literal physical
+  project paths are authoritative; non-F# targets, cycles, unsupported metadata, missing projects,
+  and unavailable exact target frameworks fail closed without borrowing a last-built DLL.
+  SDK-style projects are transitive by default; `DisableTransitiveProjectReferences=true` and
+  legacy-style projects are direct-only. Child compiler diagnostics retain their physical source
+  paths and downgrade confidence through `fsharp_semantic_diagnostics_present` like root errors.
+  Reference counts are exact for the selected root context but remain
   workspace lower bounds because dependent projects are not scanned. F# semantic confidence is
   exact when the selected context carries only disclosed assumptions or immutable-evidence
   provenance; it is indexed when anything was substituted, errored, or removed from the context.

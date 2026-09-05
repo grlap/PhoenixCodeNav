@@ -78,9 +78,10 @@ for code identifiers.
     marks the result partial.
 4. **Semantic** — C# uses lazy Roslyn compilations for `definition`, `references`,
    `implementations`, `callers`, `callees`, and `type_hierarchy`. F# uses a bounded FCS
-   type check for position-based `symbol_at`, same-physical-project `definition`, and
-   same-physical-project `references`. F# references enumerate compiler-bound non-definition uses
-   from the selected context, keep the selected-project count exact while bounding only response
+   type check for position-based `symbol_at` and `definition` through the selected root's
+   exact-TFM F# `ProjectReference` closure under the evaluated MSBuild transitivity policy, plus `references` counted within the selected
+   physical root. F# references enumerate compiler-bound non-definition uses from that root,
+   keep the selected-project count exact while bounding only response
    samples, and expose that count as a workspace lower bound because dependent projects are not
    scanned. An F# type-check
    context is exactly one physical `.fsproj` plus one target framework; ambiguous files require
@@ -233,9 +234,25 @@ root exclusively when it is set; when it is absent, the ordinary user-profile gl
 supported. Resolution is bounded by the existing dependency/reference/byte budgets and request cancellation,
 copied to immutable request-private files, and reverified
 after FCS. Missing, stale, mismatched, changed, non-managed, or path-unsafe package inputs fail with
-explicit `fsharp_semantic_package_*` causes. Same-project references use that identical captured
-context and post-check binary reverification boundary; sample text comes only from captured source
-strings and never from a live filesystem or index reread. Project-reference closure remains unsupported.
+explicit `fsharp_semantic_package_*` causes. Selected-project references use that identical captured
+context and post-check binary reverification boundary; sample text comes only from captured root
+source strings and never from a live filesystem or index reread. Active F# `ProjectReference`
+items are evaluated from the same pinned index snapshot and recursively captured dependency-first at
+the exact selected TFM. Each FCS project receives in-memory referenced-project options plus a matching
+virtual `-r:` output identity; SDK-style projects receive the flat transitive compiler reference set
+unless `DisableTransitiveProjectReferences=true`, while legacy-style projects remain direct-only.
+Phoenix neither emits nor reads a project DLL. Every physical node is checked once dependency-first;
+child diagnostics retain their source provenance and use the existing
+`fsharp_semantic_diagnostics_present` confidence downgrade. The closure memoizes
+physical path + exact TFM and separately reports returned dependency declarations through
+`declarationsFromProjectReferenceClosureCount`; `declarationsOutsideSelectedProjectCount` remains
+the count of declarations omitted from the response. It fingerprints
+children into parents, applies source, binary, import,
+property, and item-list budgets across the aggregate request, and reverifies every captured binary
+after the root check. Literal physical Include paths remain authoritative for legacy/`.Net` companion
+pairs. Missing or unreadable projects, unsupported metadata, cycles, same-assembly conflicts,
+non-F# targets, and unavailable exact TFMs fail closed with stable causes. Compatible
+`netstandard` selection remains a separate bounded follow-up rather than an implicit guess.
 Exact-path opened-handle verification is available on Windows, Linux, and macOS; the macOS
 `proc_pidfdinfo` path added in v0.12.56 applies equally to workspace `HintPath` binaries and restored
 package assets. A platform verification failure remains fail-closed and produces no semantic result.
@@ -249,10 +266,11 @@ with stable causes. Standard `Microsoft.NET.Sdk` and recognized toolchain implic
 partial, including unobservable build authority above the workspace root; custom/child/qualified SDK
 declarations, Directory.Build mutations outside the bounded reference projection, and ordinary
 project/import property assignment after semantic items fail closed. Workspace-contained managed `HintPath` snapshots have their original identity
-verified after the check; declarations remain same-project only. The host's target-compatible
+verified after the check; declarations may come from the captured F# project-reference closure while
+reference counts remain selected-root-only. The host's target-compatible
 `FSharp.Core` fallback is always disclosed as partial because it was not selected by evaluated
-project authority. Project-reference closure and the
-remaining semantic operations still disclose stable unsupported boundaries. Generic indexed search
+project authority. C#-targeted F# project references, compatible-TFM selection, and the remaining
+semantic operations still disclose stable unsupported boundaries. Generic indexed search
 is language-neutral for C# and F# `.fs/.fsi`: an `.fsx`-only or other text-only scope is refused,
 while a mixed scope reports `unsupported_language_files_skipped`. This keeps
 cross-language graph holes visible without fabricating semantics for unsupported F# project shapes.
@@ -778,10 +796,12 @@ the per-symbol context digest: v3 handle fingerprints instead bind the existing 
 hash to the declaration's deterministic syntax ordinal among declarations on its source line. That
 ordinal is projected with the symbol row from existing indexed order, distinguishing same-file twins
 without follow-up queries and conservatively invalidating every handle when that file changes without
-adding hashing, allocation, or storage to the cold symbol-index path. F# semantic
-resolution currently captures and type-checks one selected physical project behind its own
-single-slot gate; same-project reference enumeration shares it, while cross-project F# loading or parallel FCS requests require a separate design and
-must not be implied by this change.
+adding hashing, allocation, or storage to the cold symbol-index path. F# semantic resolution
+captures one selected physical root plus its exact-TFM F# `ProjectReference` closure under the
+evaluated MSBuild transitivity policy behind
+one single-slot gate. The pinned SQLite snapshot is released before dependency-first FCS checking;
+selected-root reference enumeration shares the closure but never counts dependency-project uses.
+Parallel FCS requests, C# dependencies, and compatible-TFM selection remain outside this design.
 
 Cold-cluster latency and working set still scale with the selected project budget. Use
 `CodeNav.Bench --db <scratch.db> --rebuild --build-only` as the non-destructive cold-index
