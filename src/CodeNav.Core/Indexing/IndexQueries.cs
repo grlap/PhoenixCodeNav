@@ -46,6 +46,10 @@ public sealed record FSharpParseCoverage(
     int PartialOptionProjects,
     IReadOnlyList<string> OptionPartialReasons)
 {
+    public int UnrepresentedOwnerProjects { get; init; }
+    public int PartiallyTruncatedOwnerProjects =>
+        TruncatedOwnerProjects - UnrepresentedOwnerProjects;
+
     public bool IsIncomplete => FailedFiles > 0 || TruncatedFiles > 0 ||
         FailedOptionProjects > 0 ||
         OptionPartialReasons.Any(reason =>
@@ -565,6 +569,7 @@ public sealed partial class IndexQueries : IDisposable
                                 THEN coverage.processed_contexts ELSE 0 END), 0),
               COALESCE(SUM(coverage.truncated_contexts), 0),
               COALESCE(SUM(coverage.truncated_owner_projects), 0),
+              COALESCE(SUM(coverage.unrepresented_owner_projects), 0),
               COALESCE(SUM(CASE WHEN coverage.option_failed_projects > 0 OR
                                      coverage.option_partial_projects > 0
                                 THEN 1 ELSE 0 END), 0),
@@ -588,12 +593,15 @@ public sealed partial class IndexQueries : IDisposable
                     reader.GetInt32(6),
                     reader.GetInt32(7),
                     reader.GetInt32(8),
-                    reader.GetInt32(9),
                     reader.GetInt32(10),
                     reader.GetInt32(11),
                     reader.GetInt32(12),
-                    []),
-                Reasons: reader.GetString(13)), args.ToArray()).Single();
+                    reader.GetInt32(13),
+                    [])
+                {
+                    UnrepresentedOwnerProjects = reader.GetInt32(9),
+                },
+                Reasons: reader.GetString(14)), args.ToArray()).Single();
         var optionReasons = aggregate.Reasons.Split([';', ','],
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.Ordinal).OrderBy(reason => reason, StringComparer.Ordinal)

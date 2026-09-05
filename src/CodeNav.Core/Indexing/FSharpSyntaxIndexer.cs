@@ -20,11 +20,16 @@ public sealed record ParsedFSharpFile(
     int PartialOptionProjectCount,
     IReadOnlyList<string> OptionPartialReasons)
 {
+    public int UnrepresentedOwnerProjectCount { get; init; }
+    public int PartiallyTruncatedOwnerProjectCount =>
+        TruncatedOwnerProjectCount - UnrepresentedOwnerProjectCount;
+
     internal FSharpIndexCoverage Coverage => new(
         ParseContextCount,
         TotalParseContextCount,
         TruncatedParseContextCount,
         TruncatedOwnerProjectCount,
+        UnrepresentedOwnerProjectCount,
         FailedParseContextCount,
         OptionProjectCount,
         FailedOptionProjectCount,
@@ -37,6 +42,7 @@ internal sealed record FSharpIndexCoverage(
     int TotalParseContextCount,
     int TruncatedParseContextCount,
     int TruncatedOwnerProjectCount,
+    int UnrepresentedOwnerProjectCount,
     int FailedParseContextCount,
     int OptionProjectCount,
     int FailedOptionProjectCount,
@@ -58,15 +64,29 @@ internal sealed record FSharpParsingContextSelection(
 {
     internal int TruncatedContextCount => TotalContextCount - Contexts.Count;
 
-    internal int TruncatedOwnerProjectCount
+    internal int TruncatedOwnerProjectCount => OwnerProjectCoverage.Truncated;
+    internal int UnrepresentedOwnerProjectCount => OwnerProjectCoverage.Unrepresented;
+    internal int PartiallyTruncatedOwnerProjectCount => OwnerProjectCoverage.Partial;
+
+    private (int Truncated, int Unrepresented, int Partial) OwnerProjectCoverage
     {
         get
         {
-            if (TruncatedContextCount == 0 || ContextOwners.Count == 0) return 0;
+            if (TruncatedContextCount == 0 || ContextOwners.Count == 0)
+                return (0, 0, 0);
             var retained = Contexts.Select(FSharpSyntaxIndexer.ContextKey)
                 .ToHashSet(StringComparer.Ordinal);
-            return ContextOwners.Count(owner => owner.Contexts.Any(context =>
-                !retained.Contains(FSharpSyntaxIndexer.ContextKey(context))));
+            int truncated = 0;
+            int unrepresented = 0;
+            foreach (FSharpParsingContextOwner owner in ContextOwners)
+            {
+                int retainedContexts = owner.Contexts.Count(context =>
+                    retained.Contains(FSharpSyntaxIndexer.ContextKey(context)));
+                if (retainedContexts == owner.Contexts.Count) continue;
+                truncated++;
+                if (retainedContexts == 0) unrepresented++;
+            }
+            return (truncated, unrepresented, truncated - unrepresented);
         }
     }
 
@@ -164,14 +184,18 @@ public static class FSharpSyntaxIndexer
                 declaration.Key));
         }
 
-        return new(relPath, content, lineCount, generated, symbols,
+        return new ParsedFSharpFile(relPath, content, lineCount, generated, symbols,
             contexts.Count, contextSelection.TotalContextCount,
             contextSelection.TruncatedContextCount,
             contextSelection.TruncatedOwnerProjectCount, failedParseContexts,
             contextSelection.ProjectCount,
             contextSelection.FailedProjects,
             contextSelection.PartialProjects,
-            contextSelection.PartialReasons);
+            contextSelection.PartialReasons)
+        {
+            UnrepresentedOwnerProjectCount =
+                contextSelection.UnrepresentedOwnerProjectCount,
+        };
     }
 
     internal static FSharpParsingContextSelection ParsingContextsForProject(

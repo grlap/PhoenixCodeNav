@@ -241,6 +241,21 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("syntax-indexed", semantic.GetProperty("fsharpSyntaxNote").GetString());
         Assert.Contains("SDK/import limits advisory",
             semantic.GetProperty("fsharpSyntaxNote").GetString());
+        JsonElement ownerCoverage = json.GetProperty("index")
+            .GetProperty("fsharpParseOwnerCoverage");
+        Assert.Equal("search_symbol.fsharpParseCoverage",
+            ownerCoverage.GetProperty("response").GetString());
+        Assert.Equal("per_file_owner_incidences",
+            ownerCoverage.GetProperty("aggregation").GetString());
+        Assert.Contains("at least one omitted",
+            ownerCoverage.GetProperty("truncatedOwnerProjects").GetString());
+        Assert.Contains("no retained",
+            ownerCoverage.GetProperty("unrepresentedOwnerProjects").GetString());
+        Assert.Contains("some but not all",
+            ownerCoverage.GetProperty("partiallyTruncatedOwnerProjects").GetString());
+        Assert.Equal(
+            "truncatedOwnerProjects = unrepresentedOwnerProjects + partiallyTruncatedOwnerProjects",
+            ownerCoverage.GetProperty("invariant").GetString());
     }
 
     // Deploy-verifiability (field feedback: an agent could not confirm a deploy because the version
@@ -259,6 +274,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
+        Assert.Equal("30", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -358,6 +374,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("fsharp-outline-parse-context-budget", ids);
         Assert.Contains("fsharp-indexed-symbol-name-search", ids);
         Assert.Contains("fsharp-indexed-parse-context-budget", ids);
+        Assert.Contains("fsharp-parse-owner-coverage-breakdown", ids);
         Assert.Contains("fsharp-symbol-at-semantic", ids);
         Assert.Contains("fsharp-definition-same-project", ids);
         Assert.Contains("fsharp-references-same-project", ids);
@@ -441,6 +458,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Equal(1, idList.Count(id => id == "markdown-sql-text-indexing"));
         Assert.Equal(1, idList.Count(id => id == "fsharp-indexed-symbol-name-search"));
         Assert.Equal(1, idList.Count(id => id == "fsharp-indexed-parse-context-budget"));
+        Assert.Equal(1,
+            idList.Count(id => id == "fsharp-parse-owner-coverage-breakdown"));
         Assert.Equal(1, idList.Count(id => id == "csharp-symbol-free-outline"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-operator-indexing"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-semantic-handles"));
@@ -512,6 +531,22 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("total/processed/truncated", fsharpIndexedContextBudget);
         Assert.Contains("truncatedOwnerProjects", fsharpIndexedContextBudget);
         Assert.Contains("fsharp_parse_contexts_truncated", fsharpIndexedContextBudget);
+        string fsharpOwnerCoverage = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-parse-owner-coverage-breakdown")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.82", fsharpOwnerCoverage);
+        Assert.Contains("schema v30", fsharpOwnerCoverage);
+        Assert.Contains("search_symbol.fsharpParseCoverage", fsharpOwnerCoverage);
+        Assert.Contains("truncatedOwnerProjects", fsharpOwnerCoverage);
+        Assert.Contains("unrepresentedOwnerProjects", fsharpOwnerCoverage);
+        Assert.Contains("partiallyTruncatedOwnerProjects", fsharpOwnerCoverage);
+        Assert.Contains("truncatedOwnerProjects = unrepresentedOwnerProjects + partiallyTruncatedOwnerProjects",
+            fsharpOwnerCoverage);
+        Assert.Contains("incidences per affected file", fsharpOwnerCoverage);
+        Assert.Contains("not distinct project identities", fsharpOwnerCoverage);
         string fsharpSemanticConfidence = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -1249,6 +1284,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                            "fsharp-semantic-confidence-authority"),
                        ("compiler-bound non-definition uses",
                            "fsharp-references-same-project"),
+                       ("unrepresentedOwnerProjects",
+                           "fsharp-parse-owner-coverage-breakdown"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),
                       ("target-bearing names", "csharp-conversion-operator-indexing"),
                       ("implicitConversion", "csharp-conversion-usage-enumeration"),

@@ -254,6 +254,9 @@ public sealed class IndexStore : IDisposable
                       truncated_contexts = total_contexts - processed_contexts),
               truncated_owner_projects INTEGER NOT NULL
                 CHECK(truncated_owner_projects >= 0),
+              unrepresented_owner_projects INTEGER NOT NULL
+                CHECK(unrepresented_owner_projects >= 0 AND
+                      unrepresented_owner_projects <= truncated_owner_projects),
               failed_contexts INTEGER NOT NULL
                 CHECK(failed_contexts >= 0 AND failed_contexts <= processed_contexts),
               option_project_count INTEGER NOT NULL DEFAULT 0
@@ -1253,6 +1256,9 @@ public sealed class IndexStore : IDisposable
             coverage.TruncatedParseContextCount !=
                 coverage.TotalParseContextCount - coverage.ParseContextCount ||
             coverage.TruncatedOwnerProjectCount < 0 ||
+            coverage.UnrepresentedOwnerProjectCount < 0 ||
+            coverage.UnrepresentedOwnerProjectCount >
+                coverage.TruncatedOwnerProjectCount ||
             coverage.FailedParseContextCount < 0 ||
             coverage.FailedParseContextCount > coverage.ParseContextCount ||
             coverage.OptionProjectCount < 0 || coverage.FailedOptionProjectCount < 0 ||
@@ -1266,16 +1272,18 @@ public sealed class IndexStore : IDisposable
         ExecTx(tx, """
             INSERT INTO fsharp_parse_coverage(
               file_id, total_contexts, processed_contexts, truncated_contexts,
-              truncated_owner_projects, failed_contexts,
+              truncated_owner_projects, unrepresented_owner_projects, failed_contexts,
               option_project_count, option_failed_projects,
               option_partial_projects, option_partial_reasons)
-            VALUES($id, $total, $processed, $truncated, $truncatedOwners, $failed,
+            VALUES($id, $total, $processed, $truncated, $truncatedOwners,
+                   $unrepresentedOwners, $failed,
                    $projects, $optionFailed, $optionPartial, $reasons)
             ON CONFLICT(file_id) DO UPDATE SET
               total_contexts=excluded.total_contexts,
               processed_contexts=excluded.processed_contexts,
               truncated_contexts=excluded.truncated_contexts,
               truncated_owner_projects=excluded.truncated_owner_projects,
+              unrepresented_owner_projects=excluded.unrepresented_owner_projects,
               failed_contexts=excluded.failed_contexts,
               option_project_count=excluded.option_project_count,
               option_failed_projects=excluded.option_failed_projects,
@@ -1286,6 +1294,7 @@ public sealed class IndexStore : IDisposable
             ("$processed", coverage.ParseContextCount),
             ("$truncated", coverage.TruncatedParseContextCount),
             ("$truncatedOwners", coverage.TruncatedOwnerProjectCount),
+            ("$unrepresentedOwners", coverage.UnrepresentedOwnerProjectCount),
             ("$failed", coverage.FailedParseContextCount),
             ("$projects", coverage.OptionProjectCount),
             ("$optionFailed", coverage.FailedOptionProjectCount),

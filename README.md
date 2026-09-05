@@ -71,9 +71,12 @@ selected owner/TFM parse contexts per file, reserving one context per valid comp
 capacity remains before filling the budget in global ordinal order. FCS syntax parse failures, context truncation, and
 unavailable/unevaluated project-option contexts are retained as index coverage evidence:
 `search_symbol` returns stable joined `partialReason` / `partialReasons` causes plus
-total/processed/truncated parse and project-file-context counts, including
-`truncatedOwnerProjects`, instead of treating missing rows as
-authoritative absence. Ordinary SDK/import limitations remain visible in
+total/processed/truncated parse and project-file-context counts. `truncatedOwnerProjects` remains
+the compatibility total for owners missing at least one context; `unrepresentedOwnerProjects`
+retained none, while `partiallyTruncatedOwnerProjects` retained some but not all, and the two
+disjoint counts sum to the total. Scoped counts sum owner incidences per affected file, not
+distinct project identities. Missing rows are never treated as authoritative absence. Ordinary
+SDK/import limitations remain visible in
 `fsharpProjectOptionCoverage` as advisory evidence without making every search partial. F# implementations, callers/callees, and hierarchy stay
 **unsupported** rather than
 returning an empty or falsely exact answer. Phoenix never executes MSBuild targets or tasks: it
@@ -526,7 +529,10 @@ watcher, and lifecycle test projects under `tests/`.
 - F# `search_symbol` persists syntax declarations from `.fs` / `.fsi` across indexed owner/TFM
   parse contexts, processing at most 64 deterministic contexts per file with one context reserved
   per valid compile owner while capacity remains, and disclosing exact
-  total/processed/truncated coverage plus `truncatedOwnerProjects`; paired signature/implementation files remain separate deterministic hits, linked
+  total/processed/truncated coverage. `truncatedOwnerProjects` counts affected owner/file
+  incidences, `unrepresentedOwnerProjects` identifies owners with no retained context, and
+  `partiallyTruncatedOwnerProjects` identifies owners with some but not all contexts retained;
+  the latter two sum to the compatibility total. Paired signature/implementation files remain separate deterministic hits, linked
   multi-owner files remain one physical declaration set, orphaned files are labeled, and failed
   parses, truncated contexts, or unavailable/unevaluated project-option contexts are disclosed as partial coverage;
   ordinary SDK/import limitations remain advisory structured coverage. `.fsx` stays text-only: script-only scopes are

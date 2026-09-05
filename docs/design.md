@@ -59,7 +59,11 @@ for code identifiers.
     without type checking; `.fsx` stays text-only. Stored symbol search deterministically composes
     every available owner/TFM parser context, reserves one context per valid compile owner while
     the 64-context budget has capacity, fills the remainder in global ordinal order, and persists exact
-    total/processed/truncated counts plus `truncatedOwnerProjects` alongside FCS parse failures and project-option
+    total/processed/truncated counts. `truncatedOwnerProjects` remains the compatibility total for
+    owner/file incidences missing at least one context; `unrepresentedOwnerProjects` retained none,
+    while `partiallyTruncatedOwnerProjects` retained some but not all, and the two disjoint counts
+    sum to the total. These scope aggregates are incidences per affected file rather than distinct
+    project identities. The counts sit alongside FCS parse failures and project-option
     unavailable/partial causes, so a hit or miss remains explicitly partial whenever actionable
     context authority is incomplete or contexts were omitted. Ordinary SDK/import limitations remain advisory structured
     coverage rather than making every search partial. Cold build and delta refresh use the same
@@ -141,7 +145,11 @@ separate rows, linked multi-owner files are stored once, generic arity is retain
 exposes it, and source or project-option refreshes replace affected rows transactionally. Search
 filters, generated-file policy, namespace scoping, ownership/orphan disclosure, paging, and indexed
 confidence use the same shared contract as C#. Per-file FCS parse coverage records total, processed,
-truncated, and failed contexts plus the number of owners whose distinct contexts were truncated;
+truncated, and failed contexts plus a compatibility total for owners with omitted contexts,
+partitioned into owners with no retained context and owners with some but not all retained.
+Search scopes sum those owner/file incidences, so one physical project can contribute once for each
+affected file; they do not claim a distinct-project census. Bounded `outline` and semantic recovery
+lists retain their separate total/returned/truncated contract and do not reuse these stored counts;
 affected search scopes report `fsharp_parse_failed` and/or
 `fsharp_parse_contexts_truncated`, including partial-context recovery where successful declarations
 remain searchable. `.fsx` remains text-only, so script-only scopes fail

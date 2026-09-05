@@ -586,6 +586,7 @@ public static class DeltaRefresher
                     selection.TotalContextCount,
                     selection.TruncatedContextCount,
                     selection.TruncatedOwnerProjectCount,
+                    selection.UnrepresentedOwnerProjectCount,
                     failedContexts,
                     selection.ProjectCount,
                     selection.FailedProjects,

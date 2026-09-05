@@ -1771,6 +1771,11 @@ public class FSharpTierATests
         Assert.Equal(65, selection.TotalContextCount);
         Assert.Equal(1, selection.TruncatedContextCount);
         Assert.Equal(1, selection.TruncatedOwnerProjectCount);
+        Assert.Equal(1, selection.UnrepresentedOwnerProjectCount);
+        Assert.Equal(0, selection.PartiallyTruncatedOwnerProjectCount);
+        Assert.Equal(selection.TruncatedOwnerProjectCount,
+            selection.UnrepresentedOwnerProjectCount +
+            selection.PartiallyTruncatedOwnerProjectCount);
         Assert.DoesNotContain(selection.Contexts,
             context => context.Contains("--define:CONTEXT_64", StringComparer.Ordinal));
 
@@ -1780,6 +1785,8 @@ public class FSharpTierATests
         Assert.Equal(64, boundary.TotalContextCount);
         Assert.Equal(0, boundary.TruncatedContextCount);
         Assert.Equal(0, boundary.TruncatedOwnerProjectCount);
+        Assert.Equal(0, boundary.UnrepresentedOwnerProjectCount);
+        Assert.Equal(0, boundary.PartiallyTruncatedOwnerProjectCount);
     }
 
     [Fact]
@@ -1847,10 +1854,14 @@ public class FSharpTierATests
             Assert.Contains(combined.Contexts,
                 context => context.Contains("--define:ZZZ_OWNER_B", StringComparer.Ordinal));
             Assert.Equal(1, combined.TruncatedOwnerProjectCount);
+            Assert.Equal(0, combined.UnrepresentedOwnerProjectCount);
+            Assert.Equal(1, combined.PartiallyTruncatedOwnerProjectCount);
             ParsedFSharpFile directlyParsed = FSharpSyntaxIndexer.Parse(
                 "Shared/Library.fs", sharedSource, combined);
             Assert.Contains(directlyParsed.Symbols,
                 symbol => symbol.Name == "ownerBContextMarker");
+            Assert.Equal(0, directlyParsed.UnrepresentedOwnerProjectCount);
+            Assert.Equal(1, directlyParsed.PartiallyTruncatedOwnerProjectCount);
 
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
@@ -1878,8 +1889,97 @@ public class FSharpTierATests
             Assert.Equal(1, coverage.GetProperty("truncatedContexts").GetInt32());
             Assert.Equal(1,
                 coverage.GetProperty("truncatedOwnerProjects").GetInt32());
+            Assert.Equal(0,
+                coverage.GetProperty("unrepresentedOwnerProjects").GetInt32());
+            Assert.Equal(1,
+                coverage.GetProperty("partiallyTruncatedOwnerProjects").GetInt32());
         }
         finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void StoredFSharpOwnerCoverageConvergesAcrossColdAndDelta()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-owner-coverage-cold-delta").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "Shared"));
+            File.WriteAllText(Path.Combine(root, "Shared", "Library.fs"),
+                "module Shared.Library\nlet ownerCoverageMarker = 1\n");
+            WriteOwner(0, "net9.0-platform00;net9.0-platform01");
+            for (int index = 1; index < 64; index++)
+                WriteOwner(index, $"net9.0-owner{index:D2}");
+
+            string deltaDbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, deltaDbPath);
+            JsonElement initial = AssertCoverage(deltaDbPath,
+                truncatedOwners: 1, unrepresentedOwners: 0, partiallyTruncatedOwners: 1);
+
+            WriteOwner(64, "net9.0-owner64");
+            using (var store = new IndexStore(deltaDbPath, createNew: false))
+                DeltaRefresher.Refresh(store, root, ["Owner64/Owner64.fsproj"]);
+            JsonElement deltaMixed = AssertCoverage(deltaDbPath,
+                truncatedOwners: 2, unrepresentedOwners: 1, partiallyTruncatedOwners: 1);
+
+            string coldDbPath = Path.Combine(root, ".phoenix", "cold-owner-coverage.db");
+            IndexBuilder.Build(root, coldDbPath);
+            JsonElement coldMixed = AssertCoverage(coldDbPath,
+                truncatedOwners: 2, unrepresentedOwners: 1, partiallyTruncatedOwners: 1);
+            Assert.Equal(deltaMixed.GetRawText(), coldMixed.GetRawText());
+
+            File.Delete(Path.Combine(root, "Owner64", "Owner64.fsproj"));
+            using (var store = new IndexStore(deltaDbPath, createNew: false))
+                DeltaRefresher.Refresh(store, root, ["Owner64/Owner64.fsproj"]);
+            JsonElement afterDelete = AssertCoverage(deltaDbPath,
+                truncatedOwners: 1, unrepresentedOwners: 0, partiallyTruncatedOwners: 1);
+            Assert.Equal(initial.GetRawText(), afterDelete.GetRawText());
+        }
+        finally { Cleanup(root); }
+
+        void WriteOwner(int index, string targetFrameworks)
+        {
+            string owner = $"Owner{index:D2}";
+            string directory = Path.Combine(root, owner);
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, $"{owner}.fsproj"),
+                $"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFrameworks>{targetFrameworks}</TargetFrameworks>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="../Shared/Library.fs" /></ItemGroup>
+                </Project>
+                """);
+        }
+
+        JsonElement AssertCoverage(string dbPath, int truncatedOwners,
+            int unrepresentedOwners, int partiallyTruncatedOwners)
+        {
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            using var semantic = new SemanticService(manager);
+            var tools = new NavigationTools(manager, semantic);
+            JsonElement result = Parse(tools.SearchSymbol("ownerCoverageMarker",
+                match: "exact", pathGlob: "Shared/Library.fs"));
+            Assert.Single(result.GetProperty("symbols").EnumerateArray());
+            Assert.Equal("fsharp_parse_contexts_truncated",
+                result.GetProperty("partialReason").GetString());
+            JsonElement coverage = result.GetProperty("fsharpParseCoverage");
+            int actualTruncated =
+                coverage.GetProperty("truncatedOwnerProjects").GetInt32();
+            int actualUnrepresented =
+                coverage.GetProperty("unrepresentedOwnerProjects").GetInt32();
+            int actualPartiallyTruncated =
+                coverage.GetProperty("partiallyTruncatedOwnerProjects").GetInt32();
+            Assert.Equal(truncatedOwners, actualTruncated);
+            Assert.Equal(unrepresentedOwners, actualUnrepresented);
+            Assert.Equal(partiallyTruncatedOwners, actualPartiallyTruncated);
+            Assert.Equal(actualTruncated,
+                actualUnrepresented + actualPartiallyTruncated);
+            return coverage.Clone();
+        }
     }
 
     [Fact]
@@ -2023,6 +2123,12 @@ public class FSharpTierATests
             Assert.Equal(64, coverage.GetProperty("processedContexts").GetInt32());
             Assert.Equal(truncatedContexts,
                 coverage.GetProperty("truncatedContexts").GetInt32());
+            Assert.Equal(1,
+                coverage.GetProperty("truncatedOwnerProjects").GetInt32());
+            Assert.Equal(0,
+                coverage.GetProperty("unrepresentedOwnerProjects").GetInt32());
+            Assert.Equal(1,
+                coverage.GetProperty("partiallyTruncatedOwnerProjects").GetInt32());
 
             JsonElement omitted = Parse(tools.SearchSymbol("omittedContextMarker",
                 match: "exact", pathGlob: "Core/Library.fs"));

@@ -68,7 +68,7 @@ public class Batch10ModifiersTests
             IndexBuilder.Build(root, dbPath);
 
             using (var store = new IndexStore(dbPath, createNew: false))
-                store.SetMeta("schema_version", "0"); // pretend an older binary built this
+                store.SetMeta("schema_version", "29"); // immediate predecessor lacks owner split
             IndexQueries.ClearPoolsFor(dbPath); // kae: scoped — release this db's parked readers
 
             using var manager = new IndexManager(root, dbPath);
@@ -78,7 +78,7 @@ public class Batch10ModifiersTests
 
             IndexHealth health = manager.Health();
             Assert.Equal("startup_incompatible", health.StartupBuildReason);
-            Assert.Equal("0", health.StartupPriorSchema);
+            Assert.Equal("29", health.StartupPriorSchema);
 
             using var store2 = new IndexStore(dbPath, createNew: false);
             Assert.Equal(IndexBuilder.SchemaVersion, store2.GetMeta("schema_version"));

@@ -107,6 +107,11 @@ ownership, dependencies, or likely tests.
   provenance; it is indexed when anything was substituted, errored, or removed from the context.
   Broader F# semantic operations may return explicit unsupported or partial reasons. `.fsx`
   remains text-only.
+- When `search_symbol.fsharpParseCoverage` is present, `unrepresentedOwnerProjects` means an
+  affected owner retained no syntax parse context; `partiallyTruncatedOwnerProjects` means it
+  retained some but not all. Their sum is `truncatedOwnerProjects`. These are owner incidences
+  summed per affected file, not distinct projects, and both classes retain
+  `partialReason:"fsharp_parse_contexts_truncated"`.
 - Mixed-language results are only as complete as the reported per-language coverage. Treat
   an F# parse or project-option failure as missing F# evidence, not proof that the requested
   C# symbol is absent.
