@@ -52,6 +52,123 @@ public sealed record DocumentationIdResolutionResult(
     DocumentationIdResolutionCoverage Coverage,
     IndexSnapshotIdentity? SnapshotIdentity = null);
 
+/// <summary>Fixed, privacy-safe attribution for a semantic cold-start attempt. Integer
+/// milliseconds follow the public timing convention. Null means a phase was never entered;
+/// zero means it was entered and completed in less than one millisecond. LoadMs is time spent
+/// in the load attempt, including a refused snapshot that enters no downstream phase.</summary>
+public sealed record SemanticColdStartTiming(
+    bool? Cold = null,
+    long? LoadMs = null,
+    long? PreparationMs = null,
+    long? MetadataReferenceWorkMs = null,
+    long? CompilationMs = null,
+    long? ResolutionMs = null);
+
+/// <summary>Explicit per-call carrier shared by the semantic service, MCP envelope, and
+/// semanticOp record. It deliberately has no ambient or process-wide state.</summary>
+public sealed class SemanticColdStartTimingBox
+{
+    private readonly object _sync = new();
+    private readonly List<SemanticWorkspace.LoadStats> _observedLoads = [];
+    private bool? _cold;
+    private long? _loadMs;
+    private double _preparationMs;
+    private double _metadataReferenceWorkMs;
+    private double _compilationMs;
+    private double _resolutionMs;
+    private bool _preparationEntered;
+    private bool _metadataReferenceWorkEntered;
+    private bool _compilationEntered;
+    private bool _resolutionEntered;
+
+    public SemanticColdStartTiming? Timing { get; private set; }
+
+    internal void EnterCompilation()
+    {
+        lock (_sync) _compilationEntered = true;
+    }
+
+    internal void AddCompilationTicks(long ticks)
+    {
+        lock (_sync)
+        {
+            _compilationEntered = true;
+            _compilationMs += TicksToMilliseconds(ticks);
+        }
+    }
+
+    internal void AddCompilationMilliseconds(double milliseconds)
+    {
+        lock (_sync)
+        {
+            _compilationEntered = true;
+            _compilationMs += Math.Max(0, milliseconds);
+        }
+    }
+
+    internal void EnterResolution()
+    {
+        lock (_sync) _resolutionEntered = true;
+    }
+
+    internal void AddResolutionTicks(long ticks)
+    {
+        lock (_sync)
+        {
+            _resolutionEntered = true;
+            _resolutionMs += TicksToMilliseconds(ticks);
+        }
+    }
+
+    internal SemanticColdStartTiming Publish(long? loadMs,
+        SemanticWorkspace.LoadStats? ownerLoad = null,
+        SemanticWorkspace.LoadStats? scanLoad = null)
+    {
+        lock (_sync)
+        {
+            if (loadMs is not null)
+                _loadMs = (_loadMs ?? 0) + Math.Max(0, loadMs.Value);
+            ObserveLoad(ownerLoad, establishesColdState: true);
+            ObserveLoad(scanLoad, establishesColdState: false);
+            Timing = new SemanticColdStartTiming(
+                _cold,
+                _loadMs,
+                _preparationEntered ? WholeMilliseconds(_preparationMs) : null,
+                _metadataReferenceWorkEntered
+                    ? WholeMilliseconds(_metadataReferenceWorkMs)
+                    : null,
+                _compilationEntered ? WholeMilliseconds(_compilationMs) : null,
+                _resolutionEntered ? WholeMilliseconds(_resolutionMs) : null);
+            return Timing;
+        }
+    }
+
+    private void ObserveLoad(SemanticWorkspace.LoadStats? load, bool establishesColdState)
+    {
+        if (load is null || _observedLoads.Any(observed => ReferenceEquals(observed, load)))
+            return;
+        _observedLoads.Add(load);
+        if (establishesColdState && _cold is null && load.LoadedBefore is { } loadedBefore)
+            _cold = loadedBefore == 0;
+        if (load.PreparationEntered)
+        {
+            _preparationEntered = true;
+            _preparationMs += Math.Max(0, load.PreparationMs);
+        }
+        if (load.MetadataReferenceWorkEntered)
+        {
+            _metadataReferenceWorkEntered = true;
+            _metadataReferenceWorkMs += Math.Max(0, load.MetadataResolveMs);
+        }
+    }
+
+    private static double TicksToMilliseconds(long ticks) =>
+        Math.Max(0, ticks) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
+    private static long WholeMilliseconds(double milliseconds) =>
+        (long)Math.Max(0, milliseconds);
+}
+
 public sealed record SemanticLocation(string Path, int Line, string LineText, string Project, bool IsTestProject,
     string? Kind = null);
 
@@ -354,7 +471,8 @@ public sealed partial class SemanticService : IDisposable
         SemanticWorkspace.LoadStats? scanLoad = null,
         long? clusterLoadMs = null, long? queryMs = null,
         object? queryStages = null,
-        SemanticPlanningStats? planning = null) =>
+        SemanticPlanningStats? planning = null,
+        SemanticColdStartTiming? semanticColdStart = null) =>
         EmitOpTelemetryCore(
             correlationId: null,
             tool,
@@ -366,7 +484,16 @@ public sealed partial class SemanticService : IDisposable
             queryMs,
             queryStages,
             planning,
-            clusterLoadProcessWideCpuMs: null);
+            clusterLoadProcessWideCpuMs: null,
+            semanticColdStart);
+
+    /// <summary>Completes the one-record-per-tool-operation contract when a
+    /// documentation-comment-id probe terminates before the selected navigation
+    /// operation can run. Successful unique probes continue into that operation,
+    /// which emits the record instead.</summary>
+    internal void EmitTerminalTelemetry(string tool, string result,
+        string? reason, SemanticColdStartTiming? semanticColdStart) =>
+        EmitOpTelemetry(tool, result, reason, semanticColdStart: semanticColdStart);
 
     private void EmitReferencesTelemetry(string operationId, string result, string? reason,
         SemanticWorkspace.LoadStats? ownerLoad = null,
@@ -374,7 +501,8 @@ public sealed partial class SemanticService : IDisposable
         long? clusterLoadMs = null, long? queryMs = null,
         object? queryStages = null,
         SemanticPlanningStats? planning = null,
-        double? clusterLoadProcessWideCpuMs = null) =>
+        double? clusterLoadProcessWideCpuMs = null,
+        SemanticColdStartTiming? semanticColdStart = null) =>
         EmitOpTelemetryCore(
             operationId,
             "references",
@@ -386,7 +514,8 @@ public sealed partial class SemanticService : IDisposable
             queryMs,
             queryStages,
             planning,
-            clusterLoadProcessWideCpuMs);
+            clusterLoadProcessWideCpuMs,
+            semanticColdStart);
 
     private void EmitOpTelemetryCore(string? correlationId,
         string tool, string result, string? reason,
@@ -395,7 +524,8 @@ public sealed partial class SemanticService : IDisposable
         long? clusterLoadMs, long? queryMs,
         object? queryStages,
         SemanticPlanningStats? planning,
-        double? clusterLoadProcessWideCpuMs)
+        double? clusterLoadProcessWideCpuMs,
+        SemanticColdStartTiming? semanticColdStart)
     {
         _manager.Telemetry.Emit(new
         {
@@ -422,6 +552,7 @@ public sealed partial class SemanticService : IDisposable
             // jj1q: the closure-verified find path reports its own stage split — the field's
             // "break down the 43.7s inside queryMs" ask, answered by owning the stages.
             queryStages,
+            semanticColdStart,
             // epuc.3: planning is intentionally separate from ownerLoad/scanLoad. It runs before
             // EnsureLoadedAsync and was previously folded into clusterLoadMs, making a 5.5s
             // SQLite-backed closure walk look like Roslyn project loading.
@@ -527,8 +658,11 @@ public sealed partial class SemanticService : IDisposable
         string documentationCommentId,
         int timeoutMs,
         CancellationToken cancellationToken = default,
-        bool forceSeedTimeoutForTest = false)
+        bool forceSeedTimeoutForTest = false,
+        SemanticColdStartTimingBox? coldStartTiming = null)
     {
+        var coldStartWall = System.Diagnostics.Stopwatch.StartNew();
+        var loadStats = new SemanticWorkspace.LoadStatsBox();
         using CancellationTokenSource? ownedDeadline = cancellationToken.CanBeCanceled
             ? null
             : new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 60000));
@@ -617,7 +751,7 @@ public sealed partial class SemanticService : IDisposable
             IReadOnlyCollection<string> closure = indexSnapshot.Queries.DependencyClosure(owners, token);
             semanticLoadStarted = true;
             using SemanticSolutionLease lease = await Workspace
-                .EnsureLoadedAsync(closure, token)
+                .EnsureLoadedAsync(closure, token, statsBox: loadStats)
                 .ConfigureAwait(false);
             loadCompleted = true;
             requestedProjects = lease.RequestedProjectIds.Length;
@@ -630,53 +764,70 @@ public sealed partial class SemanticService : IDisposable
 
             var resolutions = new List<DocumentationIdResolution>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (ProjectId projectId in lease.RequestedProjectIds)
+            long resolutionStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            long compilationTicks = 0;
+            coldStartTiming?.EnterResolution();
+            try
             {
-                token.ThrowIfCancellationRequested();
-                Project? project = lease.Solution.GetProject(projectId);
-                if (project is null)
+                foreach (ProjectId projectId in lease.RequestedProjectIds)
                 {
-                    skippedProjects.Add(projectId.Id.ToString());
-                    continue;
-                }
-                scannedProjects++;
-                Compilation? compilation = await project.GetCompilationAsync(token)
-                    .ConfigureAwait(false);
-                if (compilation is null)
-                {
-                    skippedProjects.Add(project.Name);
-                    continue;
-                }
-                foreach (ISymbol symbol in Microsoft.CodeAnalysis.DocumentationCommentId
-                             .GetSymbolsForDeclarationId(documentationCommentId, compilation))
-                {
-                    string? canonicalId = symbol.GetDocumentationCommentId();
-                    if (canonicalId is null) continue;
-                    SemanticDeclaration declaration = Describe(symbol);
-                    if (declaration.Declarations.Count == 0) continue;
-                    Location? navigationLocation = symbol.Locations
-                        .Where(location => location.IsInSource && location.SourceTree is not null)
-                        .OrderBy(location => location.SourceTree!.FilePath,
-                            StringComparer.Ordinal)
-                        .ThenBy(location => location.SourceSpan.Start)
-                        .FirstOrDefault();
-                    if (navigationLocation?.SourceTree is null) continue;
-                    FileLinePositionSpan navigationSpan = navigationLocation.GetLineSpan();
-                    string navigationPath = ToRelPath(navigationLocation.SourceTree.FilePath);
-                    int navigationLine = navigationSpan.StartLinePosition.Line + 1;
-                    int navigationColumn = navigationSpan.StartLinePosition.Character + 1;
-                    string identity = string.Join('\u001e',
-                        declaration.Assembly ?? "",
-                        canonicalId,
-                        navigationPath,
-                        navigationLine,
-                        navigationColumn);
-                    if (seen.Add(identity))
+                    token.ThrowIfCancellationRequested();
+                    Project? project = lease.Solution.GetProject(projectId);
+                    if (project is null)
                     {
+                        skippedProjects.Add(projectId.Id.ToString());
+                        continue;
+                    }
+                    scannedProjects++;
+                    long compilationStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                    coldStartTiming?.EnterCompilation();
+                    Compilation? compilation;
+                    try
+                    {
+                        compilation = await project.GetCompilationAsync(token)
+                            .ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        long elapsed = System.Diagnostics.Stopwatch.GetTimestamp() -
+                                       compilationStarted;
+                        compilationTicks += elapsed;
+                        coldStartTiming?.AddCompilationTicks(elapsed);
+                    }
+                    if (compilation is null)
+                    {
+                        skippedProjects.Add(project.Name);
+                        continue;
+                    }
+                    foreach (ISymbol symbol in Microsoft.CodeAnalysis.DocumentationCommentId
+                                 .GetSymbolsForDeclarationId(documentationCommentId, compilation))
+                    {
+                        string? canonicalId = symbol.GetDocumentationCommentId();
+                        if (canonicalId is null) continue;
+                        SemanticDeclaration declaration = Describe(symbol);
+                        if (declaration.Declarations.Count == 0) continue;
+                        Location? navigationLocation = symbol.Locations
+                            .Where(location => location.IsInSource && location.SourceTree is not null)
+                            .OrderBy(location => location.SourceTree!.FilePath,
+                                StringComparer.Ordinal)
+                            .ThenBy(location => location.SourceSpan.Start)
+                            .FirstOrDefault();
+                        if (navigationLocation?.SourceTree is null) continue;
+                        FileLinePositionSpan navigationSpan = navigationLocation.GetLineSpan();
+                        string navigationPath = ToRelPath(navigationLocation.SourceTree.FilePath);
+                        int navigationLine = navigationSpan.StartLinePosition.Line + 1;
+                        int navigationColumn = navigationSpan.StartLinePosition.Character + 1;
+                        string identity = string.Join('\u001e',
+                            declaration.Assembly ?? "",
+                            canonicalId,
+                            navigationPath,
+                            navigationLine,
+                            navigationColumn);
+                        if (!seen.Add(identity)) continue;
                         string navigationName = symbol is IMethodSymbol
-                            {
-                                MethodKind: MethodKind.Constructor or MethodKind.StaticConstructor,
-                            }
+                        {
+                            MethodKind: MethodKind.Constructor or MethodKind.StaticConstructor,
+                        }
                             ? symbol.ContainingType.Name
                             : symbol.Name;
                         resolutions.Add(new DocumentationIdResolution(
@@ -689,6 +840,11 @@ public sealed partial class SemanticService : IDisposable
                             declaration));
                     }
                 }
+            }
+            finally
+            {
+                long totalTicks = System.Diagnostics.Stopwatch.GetTimestamp() - resolutionStarted;
+                coldStartTiming?.AddResolutionTicks(Math.Max(0, totalTicks - compilationTicks));
             }
             bool completeCompilerSweep = requestedProjects > 0 &&
                                          scannedProjects == requestedProjects &&
@@ -713,6 +869,10 @@ public sealed partial class SemanticService : IDisposable
             return new(null, $"semantic_error:{ex.GetType().Name}", null,
                 Coverage(false));
         }
+        finally
+        {
+            coldStartTiming?.Publish(coldStartWall.ElapsedMilliseconds, loadStats.Stats);
+        }
     }
 
     public async Task<(SemanticDeclaration? Result, string? FailReason,
@@ -720,8 +880,10 @@ public sealed partial class SemanticService : IDisposable
         string path, int line, int? column, string? nameHint, int timeoutMs,
         string? declarationKeyHint = null,
         CancellationToken cancellationToken = default,
-        IndexSnapshotIdentity? expectedIndexSnapshot = null)
+        IndexSnapshotIdentity? expectedIndexSnapshot = null,
+        SemanticColdStartTimingBox? coldStartTiming = null)
     {
+        coldStartTiming ??= new SemanticColdStartTimingBox();
         using CancellationTokenSource cts = cancellationToken.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
             : new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 60000));
@@ -734,19 +896,22 @@ public sealed partial class SemanticService : IDisposable
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
             if (indexSnapshot is null)
             {
-                EmitOpTelemetry("definition", "unresolved", "index_snapshot_unavailable"); // epuc.1
+                EmitOpTelemetry("definition", "unresolved", "index_snapshot_unavailable",
+                    semanticColdStart: coldStartTiming.Publish(swOp.ElapsedMilliseconds)); // epuc.1
                 return (null, "index_snapshot_unavailable", false, null);
             }
             if (expectedIndexSnapshot is not null &&
                 indexSnapshot.Identity != expectedIndexSnapshot)
             {
-                EmitOpTelemetry("definition", "unresolved", "index_snapshot_changed");
+                EmitOpTelemetry("definition", "unresolved", "index_snapshot_changed",
+                    semanticColdStart: coldStartTiming.Publish(swOp.ElapsedMilliseconds));
                 return (null, "index_snapshot_changed", false, null);
             }
             var (ownerLease, symbol, owningProject, coverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                 statsBox: ownerBox,
-                declarationKeyHint: declarationKeyHint).ConfigureAwait(false);
+                declarationKeyHint: declarationKeyHint,
+                coldStartTiming: coldStartTiming).ConfigureAwait(false);
             using var ownerOperation = ownerLease;
             loadCompleted = true;
             loadMs = swOp.ElapsedMilliseconds;
@@ -754,7 +919,9 @@ public sealed partial class SemanticService : IDisposable
             {
                 string reason = SemanticCoverageReasons.FailedProjects(coverage)
                     ?? "symbol_not_resolved";
-                EmitOpTelemetry("definition", "unresolved", reason, ownerBox.Stats); // epuc.1
+                EmitOpTelemetry("definition", "unresolved", reason, ownerBox.Stats,
+                    semanticColdStart: coldStartTiming.Publish(
+                        loadMs, ownerBox.Stats)); // epuc.1
                 return (null, reason, false, null);
             }
             // Review r2: materialize BEFORE the emit — a Describe throw after an "exact"
@@ -766,7 +933,8 @@ public sealed partial class SemanticService : IDisposable
                 projectModelUnproven);
             EmitOpTelemetry("definition", partialReason is not null ? "partial" : "exact",
                 partialReason, ownerBox.Stats,
-                clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs); // epuc.1
+                clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs,
+                semanticColdStart: coldStartTiming.Publish(loadMs, ownerBox.Stats)); // epuc.1
             return (described, null, projectModelUnproven, partialReason);
         }
         catch (OperationCanceledException)
@@ -778,7 +946,10 @@ public sealed partial class SemanticService : IDisposable
             string reason = loadCompleted ? "semantic_timeout" : "cluster_cold_load";
             EmitOpTelemetry("definition", "degraded", reason, ownerBox.Stats,
                 clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
-                queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1
+                queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null,
+                semanticColdStart: coldStartTiming.Publish(
+                    loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
+                    ownerBox.Stats)); // epuc.1
             return (null, reason, false, null);
         }
         catch (Exception ex)
@@ -788,7 +959,10 @@ public sealed partial class SemanticService : IDisposable
             // with the four two-phase ops — the running phase absorbs the wall).
             EmitOpTelemetry("definition", "error", ex.GetType().Name, ownerBox.Stats,
                 clusterLoadMs: loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
-                queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null); // epuc.1 review F3
+                queryMs: loadCompleted ? swOp.ElapsedMilliseconds - loadMs : null,
+                semanticColdStart: coldStartTiming.Publish(
+                    loadCompleted ? loadMs : swOp.ElapsedMilliseconds,
+                    ownerBox.Stats)); // epuc.1 review F3
             return (null, $"semantic_error:{ex.GetType().Name}", false, null);
         }
     }
@@ -800,8 +974,10 @@ public sealed partial class SemanticService : IDisposable
         bool includeGenerated = true, IReadOnlySet<string>? usageKinds = null, bool publicConsumersOnly = false,
         bool includeTests = true, string? declarationKeyHint = null,
         CancellationToken cancellationToken = default,
-        IndexSnapshotIdentity? expectedIndexSnapshot = null)
+        IndexSnapshotIdentity? expectedIndexSnapshot = null,
+        SemanticColdStartTimingBox? coldStartTiming = null)
     {
+        coldStartTiming ??= new SemanticColdStartTimingBox();
         using CancellationTokenSource cts = cancellationToken.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
             : new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
@@ -826,7 +1002,9 @@ public sealed partial class SemanticService : IDisposable
                 EmitReferencesTelemetry(operationId, "unresolved",
                     "index_snapshot_unavailable",
                     clusterLoadMs: swPhase.ElapsedMilliseconds,
-                    clusterLoadProcessWideCpuMs: clusterLoadProcessWideCpuMs); // epuc.1
+                    clusterLoadProcessWideCpuMs: clusterLoadProcessWideCpuMs,
+                    semanticColdStart: coldStartTiming.Publish(
+                        swPhase.ElapsedMilliseconds)); // epuc.1
                 return (null, "index_snapshot_unavailable");
             }
             if (expectedIndexSnapshot is not null &&
@@ -835,7 +1013,9 @@ public sealed partial class SemanticService : IDisposable
                 EmitReferencesTelemetry(operationId, "unresolved", "index_snapshot_changed",
                     clusterLoadMs: swPhase.ElapsedMilliseconds,
                     clusterLoadProcessWideCpuMs: SemanticProcessCpu.ElapsedMilliseconds(
-                        clusterLoadCpuStarted));
+                        clusterLoadCpuStarted),
+                    semanticColdStart: coldStartTiming.Publish(
+                        swPhase.ElapsedMilliseconds));
                 return (null, "index_snapshot_changed");
             }
 
@@ -848,7 +1028,8 @@ public sealed partial class SemanticService : IDisposable
                 ownerResult = await LoadOwnerAndResolveAsync(
                     path, line, column, nameHint, cts.Token, indexSnapshot.Queries,
                     statsBox: ownerBox, deferRetentionEviction: true,
-                    declarationKeyHint: declarationKeyHint).ConfigureAwait(false);
+                    declarationKeyHint: declarationKeyHint,
+                    coldStartTiming: coldStartTiming).ConfigureAwait(false);
             }
             var (ownerLease, symbolA, owningProject, ownerCoverage) = ownerResult;
             using var ownerOperation = ownerLease;
@@ -865,7 +1046,9 @@ public sealed partial class SemanticService : IDisposable
                     ?? "symbol_not_resolved";
                 EmitReferencesTelemetry(operationId, "unresolved", reason, ownerBox.Stats,
                     clusterLoadMs: clusterLoadMs, planning: planning,
-                    clusterLoadProcessWideCpuMs: clusterLoadProcessWideCpuMs); // epuc.1 + epuc.4
+                    clusterLoadProcessWideCpuMs: clusterLoadProcessWideCpuMs,
+                    semanticColdStart: coldStartTiming.Publish(
+                        clusterLoadMs, ownerBox.Stats)); // epuc.1 + epuc.4
                 return (null, reason);
             }
 
@@ -919,7 +1102,8 @@ public sealed partial class SemanticService : IDisposable
                     includeTests: includeTests,
                     planStatsBox: planning.ScanSet,
                     declarationKeyHint: declarationKeyHint,
-                    scanAllDependents: userDefinedConversion).ConfigureAwait(false);
+                    scanAllDependents: userDefinedConversion,
+                    coldStartTiming: coldStartTiming).ConfigureAwait(false);
             }
             var (scanLease, symbol, coverage, skipped, outOfGraph,
                 potentialAccessingProjects) = scanResult;
@@ -938,15 +1122,29 @@ public sealed partial class SemanticService : IDisposable
                 EmitReferencesTelemetry(operationId, "unresolved", reason,
                     ownerBox.Stats, scanBox.Stats, clusterLoadMs: clusterLoadMs,
                     planning: planning,
-                    clusterLoadProcessWideCpuMs: clusterLoadProcessWideCpuMs); // epuc.1 + epuc.4
+                    clusterLoadProcessWideCpuMs: clusterLoadProcessWideCpuMs,
+                    semanticColdStart: coldStartTiming.Publish(
+                        clusterLoadMs, ownerBox.Stats, scanBox.Stats)); // epuc.1 + epuc.4
                 return (null, reason);
             }
 
             // epuc.5: materialize this operation's selected project compilations in dependency-first
             // waves before SymbolFinder. The exact leased Solution is reused below, so Roslyn's
             // CompilationTracker turns this into parallel preparation rather than duplicate work.
-            await Workspace.PrepareCompilationsAsync(scanLease, owningProject,
-                queryStages.CompilationPreparation, cts.Token, operationId).ConfigureAwait(false);
+            try
+            {
+                await Workspace.PrepareCompilationsAsync(scanLease, owningProject,
+                    queryStages.CompilationPreparation, cts.Token, operationId)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                if (queryStages.CompilationPreparation.Stats is { } compilationPreparation)
+                {
+                    coldStartTiming.AddCompilationMilliseconds(
+                        compilationPreparation.TotalMs);
+                }
+            }
 
             ReferenceDocumentScope? documentScope = null;
             if (!sourceConversion)
@@ -972,7 +1170,8 @@ public sealed partial class SemanticService : IDisposable
                         ConversionReferenceSearch conversionSearch =
                             await FindUserDefinedConversionReferencesAsync(
                                 (IMethodSymbol)symbol, solution,
-                                queryStages.DocumentScope, cts.Token).ConfigureAwait(false);
+                                queryStages.DocumentScope, cts.Token,
+                                coldStartTiming).ConfigureAwait(false);
                         foundSites = conversionSearch.Sites;
                         finderDeadlineExhausted = conversionSearch.DeadlineExhausted;
                         queryStages.ReferencedSymbols = 1;
@@ -1272,7 +1471,9 @@ public sealed partial class SemanticService : IDisposable
                 ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs, telemetryQueryMs,
                 queryStages.Shape(telemetryQueryMs), planning,
-                clusterLoadProcessWideCpuMs); // epuc.1 + epuc.4
+                clusterLoadProcessWideCpuMs,
+                semanticColdStart: coldStartTiming.Publish(
+                    clusterLoadMs, ownerBox.Stats, scanBox.Stats)); // epuc.1 + epuc.4
             return (result, null);
         }
         catch (OperationCanceledException)
@@ -1290,7 +1491,10 @@ public sealed partial class SemanticService : IDisposable
                 queryStages: clusterLoadInProgress ? null : queryStages.Shape(
                     swPhase.ElapsedMilliseconds - clusterLoadMs),
                 planning: planning,
-                clusterLoadProcessWideCpuMs: telemetryClusterCpuMs); // epuc.1 + epuc.4
+                clusterLoadProcessWideCpuMs: telemetryClusterCpuMs,
+                semanticColdStart: coldStartTiming.Publish(
+                    clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
+                    ownerBox.Stats, scanBox.Stats)); // epuc.1 + epuc.4
             return (null, reason);
         }
         catch (Exception ex)
@@ -1306,7 +1510,10 @@ public sealed partial class SemanticService : IDisposable
                 queryStages: clusterLoadInProgress ? null : queryStages.Shape(
                     swPhase.ElapsedMilliseconds - clusterLoadMs),
                 planning: planning,
-                clusterLoadProcessWideCpuMs: telemetryClusterCpuMs); // epuc.1 + epuc.4
+                clusterLoadProcessWideCpuMs: telemetryClusterCpuMs,
+                semanticColdStart: coldStartTiming.Publish(
+                    clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
+                    ownerBox.Stats, scanBox.Stats)); // epuc.1 + epuc.4
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
         finally
@@ -1322,8 +1529,10 @@ public sealed partial class SemanticService : IDisposable
         string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs,
         int? arityHint = null,
         CancellationToken cancellationToken = default,
-        IndexSnapshotIdentity? expectedIndexSnapshot = null)
+        IndexSnapshotIdentity? expectedIndexSnapshot = null,
+        SemanticColdStartTimingBox? coldStartTiming = null)
     {
+        coldStartTiming ??= new SemanticColdStartTimingBox();
         using CancellationTokenSource cts = cancellationToken.CanBeCanceled
             ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
             : new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
@@ -1339,20 +1548,25 @@ public sealed partial class SemanticService : IDisposable
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
             if (indexSnapshot is null)
             {
-                EmitOpTelemetry("implementations", "unresolved", "index_snapshot_unavailable"); // epuc.1
+                EmitOpTelemetry("implementations", "unresolved", "index_snapshot_unavailable",
+                    semanticColdStart: coldStartTiming.Publish(
+                        swPhase.ElapsedMilliseconds)); // epuc.1
                 return (null, "index_snapshot_unavailable");
             }
             if (expectedIndexSnapshot is not null &&
                 indexSnapshot.Identity != expectedIndexSnapshot)
             {
-                EmitOpTelemetry("implementations", "unresolved", "index_snapshot_changed");
+                EmitOpTelemetry("implementations", "unresolved", "index_snapshot_changed",
+                    semanticColdStart: coldStartTiming.Publish(
+                        swPhase.ElapsedMilliseconds));
                 return (null, "index_snapshot_changed");
             }
 
             deferredRetentionPending = true;
             var (ownerLease, symbolA, owningProject, ownerCoverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries, arityHint,
-                statsBox: ownerBox, deferRetentionEviction: true)
+                statsBox: ownerBox, deferRetentionEviction: true,
+                coldStartTiming: coldStartTiming)
                 .ConfigureAwait(false);
             using var ownerOperation = ownerLease;
             clusterLoadInProgress = false;
@@ -1361,7 +1575,9 @@ public sealed partial class SemanticService : IDisposable
             {
                 string reason = SemanticCoverageReasons.FailedProjects(ownerCoverage)
                     ?? "symbol_not_resolved";
-                EmitOpTelemetry("implementations", "unresolved", reason, ownerBox.Stats); // epuc.1
+                EmitOpTelemetry("implementations", "unresolved", reason, ownerBox.Stats,
+                    semanticColdStart: coldStartTiming.Publish(
+                        clusterLoadMs, ownerBox.Stats)); // epuc.1
                 return (null, reason);
             }
 
@@ -1422,7 +1638,8 @@ public sealed partial class SemanticService : IDisposable
                 await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
-                statsBox: scanBox, planStatsBox: planning.ScanSet).ConfigureAwait(false);
+                statsBox: scanBox, planStatsBox: planning.ScanSet,
+                coldStartTiming: coldStartTiming).ConfigureAwait(false);
             deferredRetentionPending = false;
             using var scanOperation = scanLease;
             Solution solution = scanLease.Solution;
@@ -1434,7 +1651,9 @@ public sealed partial class SemanticService : IDisposable
                 string reason = SemanticCoverageReasons.FailedProjects(coverage)
                     ?? "symbol_not_resolved_in_scope";
                 EmitOpTelemetry("implementations", "unresolved", reason,
-                    ownerBox.Stats, scanBox.Stats, planning: planning); // epuc.1 + epuc.3
+                    ownerBox.Stats, scanBox.Stats, planning: planning,
+                    semanticColdStart: coldStartTiming.Publish(
+                        clusterLoadMs, ownerBox.Stats, scanBox.Stats)); // epuc.1 + epuc.3
                 return (null, reason);
             }
 
@@ -1459,7 +1678,7 @@ public sealed partial class SemanticService : IDisposable
                             targetType, solution, typeClosure,
                             impl => results.Add(new SemanticImplementation(
                                 Describe(impl), DerivationVia(impl, targetType))),
-                            cts.Token).ConfigureAwait(false);
+                            cts.Token, coldStartTiming).ConfigureAwait(false);
                         queryStages = new
                         {
                             path = "closure_verified",
@@ -1537,7 +1756,9 @@ public sealed partial class SemanticService : IDisposable
                 telemetryReason,
                 ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs, swPhase.ElapsedMilliseconds - clusterLoadMs,
-                queryStages, planning); // epuc.1 + jj1q + epuc.3 stages
+                queryStages, planning,
+                semanticColdStart: coldStartTiming.Publish(
+                    clusterLoadMs, ownerBox.Stats, scanBox.Stats)); // epuc.1 + jj1q + epuc.3 stages
             return (payload, null);
         }
         catch (OperationCanceledException)
@@ -1547,7 +1768,10 @@ public sealed partial class SemanticService : IDisposable
             EmitOpTelemetry("implementations", "degraded", reason, ownerBox.Stats, scanBox.Stats,
                 clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
                 clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs,
-                planning: planning); // epuc.1 + epuc.3
+                planning: planning,
+                semanticColdStart: coldStartTiming.Publish(
+                    clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
+                    ownerBox.Stats, scanBox.Stats)); // epuc.1 + epuc.3
             return (null, reason);
         }
         catch (Exception ex)
@@ -1556,7 +1780,10 @@ public sealed partial class SemanticService : IDisposable
             EmitOpTelemetry("implementations", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
                 clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
                 clusterLoadInProgress ? null : swPhase.ElapsedMilliseconds - clusterLoadMs,
-                planning: planning); // epuc.1 + epuc.3
+                planning: planning,
+                semanticColdStart: coldStartTiming.Publish(
+                    clusterLoadInProgress ? swPhase.ElapsedMilliseconds : clusterLoadMs,
+                    ownerBox.Stats, scanBox.Stats)); // epuc.1 + epuc.3
             return (null, $"semantic_error:{ex.GetType().Name}");
         }
         finally
@@ -1581,7 +1808,8 @@ public sealed partial class SemanticService : IDisposable
         IndexQueries? snapshotQueries = null, int? arityHint = null,
         SemanticWorkspace.LoadStatsBox? statsBox = null,
         bool deferRetentionEviction = false,
-        string? declarationKeyHint = null)
+        string? declarationKeyHint = null,
+        SemanticColdStartTimingBox? coldStartTiming = null)
     {
         string relPath = WorkspacePaths.Normalize(path);
         string owningProject;
@@ -1615,7 +1843,7 @@ public sealed partial class SemanticService : IDisposable
         {
             var symbol = await ResolveInSolutionAsync(
                     lease.Solution, owningProject, relPath, line, column, nameHint, ct, arityHint,
-                    declarationKeyHint)
+                    declarationKeyHint, coldStartTiming)
                 .ConfigureAwait(false);
             return (lease, symbol, owningProject, lease.Coverage);
         }
@@ -1656,73 +1884,97 @@ public sealed partial class SemanticService : IDisposable
     private async Task<ISymbol?> ResolveInSolutionAsync(
         Solution solution, string owningProject, string relPath, int line, int? column,
         string? nameHint, CancellationToken ct, int? arityHint = null,
-        string? declarationKeyHint = null)
+        string? declarationKeyHint = null,
+        SemanticColdStartTimingBox? coldStartTiming = null)
     {
-        var project = solution.Projects.FirstOrDefault(p =>
-            string.Equals(p.Name, owningProject, StringComparison.OrdinalIgnoreCase));
-        if (project is null) return null;
-
-        string fullPath = Path.GetFullPath(Path.Combine(_manager.WorkspaceRoot, relPath.Replace('/', Path.DirectorySeparatorChar)));
-        var docId = solution.GetDocumentIdsWithFilePath(fullPath).FirstOrDefault(d => d.ProjectId == project.Id)
-                    ?? solution.GetDocumentIdsWithFilePath(fullPath).FirstOrDefault();
-        if (docId is null) return null;
-        var document = solution.GetDocument(docId);
-        if (document is null) return null;
-
-        var text = await document.GetTextAsync(ct).ConfigureAwait(false);
-        if (line < 1 || line > text.Lines.Count) return null;
-        var root = await document.GetSyntaxRootAsync(ct).ConfigureAwait(false);
-        var model = await document.GetSemanticModelAsync(ct).ConfigureAwait(false);
-        if (root is null || model is null) return null;
-
-        TextLine targetLine = text.Lines[line - 1];
-        if (nameHint is { Length: > 0 } &&
-            (arityHint is not null || declarationKeyHint is not null))
+        long resolutionStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        long compilationTicks = 0;
+        coldStartTiming?.EnterResolution();
+        try
         {
-            ISymbol? declaration = root.DescendantNodes(targetLine.Span)
-                .Select(node => (Node: node, Symbol: model.GetDeclaredSymbol(node, ct)))
-                .Where(candidate => candidate.Symbol is not null &&
-                    DeclarationMatchesHint(candidate.Node, candidate.Symbol, nameHint,
-                        arityHint, declarationKeyHint))
-                .OrderBy(candidate => candidate.Symbol!.Locations
-                    .Where(location => location.IsInSource)
-                    .Select(location => location.SourceSpan.Start)
-                    .DefaultIfEmpty(int.MaxValue)
-                    .Min())
-                .Select(candidate => candidate.Symbol)
-                .FirstOrDefault();
-            if (declaration is not null) return declaration;
+            var project = solution.Projects.FirstOrDefault(p =>
+                string.Equals(p.Name, owningProject, StringComparison.OrdinalIgnoreCase));
+            if (project is null) return null;
+
+            string fullPath = Path.GetFullPath(Path.Combine(_manager.WorkspaceRoot,
+                relPath.Replace('/', Path.DirectorySeparatorChar)));
+            var docId = solution.GetDocumentIdsWithFilePath(fullPath)
+                            .FirstOrDefault(d => d.ProjectId == project.Id)
+                        ?? solution.GetDocumentIdsWithFilePath(fullPath).FirstOrDefault();
+            if (docId is null) return null;
+            var document = solution.GetDocument(docId);
+            if (document is null) return null;
+
+            var text = await document.GetTextAsync(ct).ConfigureAwait(false);
+            if (line < 1 || line > text.Lines.Count) return null;
+            var root = await document.GetSyntaxRootAsync(ct).ConfigureAwait(false);
+            long compilationStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            coldStartTiming?.EnterCompilation();
+            SemanticModel? model;
+            try
+            {
+                model = await document.GetSemanticModelAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                long elapsed = System.Diagnostics.Stopwatch.GetTimestamp() - compilationStarted;
+                compilationTicks += elapsed;
+                coldStartTiming?.AddCompilationTicks(elapsed);
+            }
+            if (root is null || model is null) return null;
+
+            TextLine targetLine = text.Lines[line - 1];
+            if (nameHint is { Length: > 0 } &&
+                (arityHint is not null || declarationKeyHint is not null))
+            {
+                ISymbol? declaration = root.DescendantNodes(targetLine.Span)
+                    .Select(node => (Node: node, Symbol: model.GetDeclaredSymbol(node, ct)))
+                    .Where(candidate => candidate.Symbol is not null &&
+                        DeclarationMatchesHint(candidate.Node, candidate.Symbol, nameHint,
+                            arityHint, declarationKeyHint))
+                    .OrderBy(candidate => candidate.Symbol!.Locations
+                        .Where(location => location.IsInSource)
+                        .Select(location => location.SourceSpan.Start)
+                        .DefaultIfEmpty(int.MaxValue)
+                        .Min())
+                    .Select(candidate => candidate.Symbol)
+                    .FirstOrDefault();
+                if (declaration is not null) return declaration;
+            }
+
+            int position = ComputePosition(targetLine, column, nameHint);
+
+            var token = root.FindToken(position);
+            for (SyntaxNode? node = token.Parent; node is not null; node = node.Parent)
+            {
+                var declared = model.GetDeclaredSymbol(node, ct);
+                if (declared is not null &&
+                    DeclarationMatchesHint(node, declared, nameHint, arityHint,
+                        declarationKeyHint))
+                {
+                    // With a name hint we require an exact name match: the old `token.ValueText ==
+                    // declared.Name` fallback accepted a sibling declarator on a multi-variable line
+                    // (e.g. resolving "Height" to "HeightRatio"), returning the wrong symbol as 'exact'.
+                    return declared;
+                }
+                if (node is StatementSyntax or MemberDeclarationSyntax)
+                    break;
+            }
+
+            ISymbol? positioned = await SymbolFinder.FindSymbolAtPositionAsync(document, position, ct)
+                .ConfigureAwait(false);
+            return positioned is not null &&
+                   declarationKeyHint is null &&
+                   (nameHint is null || positioned.Name.Equals(nameHint, StringComparison.Ordinal)) &&
+                   (arityHint is null || ArityOf(positioned) == arityHint.Value)
+                ? positioned
+                : null;
         }
-
-        int position = ComputePosition(targetLine, column, nameHint);
-
-        var token = root.FindToken(position);
-        for (SyntaxNode? node = token.Parent; node is not null; node = node.Parent)
+        finally
         {
-            var declared = model.GetDeclaredSymbol(node, ct);
-            if (declared is not null &&
-                DeclarationMatchesHint(node, declared, nameHint, arityHint,
-                    declarationKeyHint))
-            {
-                // With a name hint we require an exact name match: the old `token.ValueText ==
-                // declared.Name` fallback accepted a sibling declarator on a multi-variable line
-                // (e.g. resolving "Height" to "HeightRatio"), returning the wrong symbol as 'exact'.
-                return declared;
-            }
-            if (node is StatementSyntax or MemberDeclarationSyntax)
-            {
-                break;
-            }
+            long totalTicks = System.Diagnostics.Stopwatch.GetTimestamp() - resolutionStarted;
+            coldStartTiming?.AddResolutionTicks(Math.Max(0, totalTicks - compilationTicks));
         }
-
-        ISymbol? positioned = await SymbolFinder.FindSymbolAtPositionAsync(document, position, ct)
-            .ConfigureAwait(false);
-        return positioned is not null &&
-               declarationKeyHint is null &&
-               (nameHint is null || positioned.Name.Equals(nameHint, StringComparison.Ordinal)) &&
-               (arityHint is null || ArityOf(positioned) == arityHint.Value)
-            ? positioned
-            : null;
     }
 
     private static bool DeclarationMatchesHint(SyntaxNode node, ISymbol symbol,
@@ -1788,7 +2040,8 @@ public sealed partial class SemanticService : IDisposable
         FindUserDefinedConversionReferencesAsync(
             IMethodSymbol target, Solution solution,
             ReferenceDocumentScopeStatsBox documentScopeStats,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            SemanticColdStartTimingBox? coldStartTiming = null)
     {
         long scopeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var documents = new List<Document>();
@@ -1828,8 +2081,19 @@ public sealed partial class SemanticService : IDisposable
                 cancellationToken.ThrowIfCancellationRequested();
                 SyntaxNode? root = await document.GetSyntaxRootAsync(cancellationToken)
                     .ConfigureAwait(false);
-                SemanticModel? model = await document.GetSemanticModelAsync(cancellationToken)
-                    .ConfigureAwait(false);
+                long compilationStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                coldStartTiming?.EnterCompilation();
+                SemanticModel? model;
+                try
+                {
+                    model = await document.GetSemanticModelAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    coldStartTiming?.AddCompilationTicks(
+                        System.Diagnostics.Stopwatch.GetTimestamp() - compilationStarted);
+                }
                 if (root is null || model is null) continue;
 
                 foreach (IOperation operationRoot in BoundOperationRoots(root, model,
@@ -2336,7 +2600,8 @@ public sealed partial class SemanticService : IDisposable
         bool includeGenerated = true, bool includeTests = true,
         ScanPlanStatsBox? planStatsBox = null,
         string? declarationKeyHint = null,
-        bool scanAllDependents = false)
+        bool scanAllDependents = false,
+        SemanticColdStartTimingBox? coldStartTiming = null)
     {
         bool capturePlan = planStatsBox is not null;
         long planStarted = capturePlan ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
@@ -2549,7 +2814,7 @@ public sealed partial class SemanticService : IDisposable
             });
             var symbol = await ResolveInSolutionAsync(
                 solution, owningProject, WorkspacePaths.Normalize(path), line, column, nameHint, ct,
-                arityHint, declarationKeyHint).ConfigureAwait(false);
+                arityHint, declarationKeyHint, coldStartTiming).ConfigureAwait(false);
             return (lease, symbol, coverage, skipped, outOfGraph,
                 potentialAccessingProjects);
         }
@@ -2693,7 +2958,8 @@ public sealed partial class SemanticService : IDisposable
     private async Task<ClosureVerificationResult>
         VerifyClosureImplementersAsync(INamedTypeSymbol target, Solution solution,
             IReadOnlyList<SymbolHit> closure, Action<INamedTypeSymbol> onVerified,
-            CancellationToken ct)
+            CancellationToken ct,
+            SemanticColdStartTimingBox? coldStartTiming = null)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         string targetId = target.OriginalDefinition.GetDocumentationCommentId()
@@ -2730,7 +2996,18 @@ public sealed partial class SemanticService : IDisposable
                 var document = solution.GetDocument(docId);
                 if (document is null) continue;
                 var root = await document.GetSyntaxRootAsync(ct).ConfigureAwait(false);
-                var model = await document.GetSemanticModelAsync(ct).ConfigureAwait(false);
+                long compilationStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                coldStartTiming?.EnterCompilation();
+                SemanticModel? model;
+                try
+                {
+                    model = await document.GetSemanticModelAsync(ct).ConfigureAwait(false);
+                }
+                finally
+                {
+                    coldStartTiming?.AddCompilationTicks(
+                        System.Diagnostics.Stopwatch.GetTimestamp() - compilationStarted);
+                }
                 if (root is null || model is null) continue;
                 var declaration = root.DescendantNodes()
                     .OfType<BaseTypeDeclarationSyntax>()

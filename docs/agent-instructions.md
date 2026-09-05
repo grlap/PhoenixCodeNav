@@ -71,6 +71,11 @@ ownership, dependencies, or likely tests.
 - Treat `meta.confidence: exact` as compiler-verified within the stated coverage.
   `indexed` is a strong syntax/index lead that may need source verification. Never hide
   `partial`, `partialReason`, stale status, omitted counts, or truncation from your conclusion.
+- `timing.semanticColdStart` attributes where a cold first semantic call spent time; it is
+  diagnostic and never changes the answer. The fields are attribution, not an additive equation,
+  and `metadataReferenceWorkMs` is summed worker activity rather than wall time. It is present only
+  when the call entered the C# semantic pipeline; F# semantic navigation and calls that end before
+  that pipeline omit it — absence is not a zero.
 - A zero-hit retry template preserves the effective filters and `queryScope`; replay it as emitted
   so the suggested symbol remains visible under the same evidence scope.
 - Recovery has two executable shapes. When `arguments` stands alone, call the named tool with

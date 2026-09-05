@@ -688,6 +688,19 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("larger timeoutMs", coldStartRetry);
         Assert.Contains("documented family maximum", coldStartRetry);
         Assert.Contains("unchanged at that maximum", coldStartRetry);
+        string coldStartTiming = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "semantic-cold-start-phase-timing")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("timing.semanticColdStart", coldStartTiming);
+        Assert.Contains("present only when the call enters the C# semantic pipeline",
+            coldStartTiming);
+        Assert.Contains("F# semantic navigation", coldStartTiming);
+        Assert.Contains("omit the field", coldStartTiming);
+        Assert.Contains("integer-millisecond", coldStartTiming);
+        Assert.Contains("semanticOp", coldStartTiming);
         Assert.Contains("never retries automatically", coldStartRetry);
         Assert.Contains("open_operations_portal",
             json.GetProperty("tools").EnumerateArray().Select(tool => tool.GetString()));
@@ -1159,7 +1172,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                            "semantic-selector-incompatibility-errors"),
                        ("v0.12.50 transient implementations",
                           "implementations-semantic-retry-guidance"),
-                      ("typed cold-start retry contract", "cold-start-retry-contract"),
+                       ("typed cold-start retry contract", "cold-start-retry-contract"),
+                       ("timing.semanticColdStart", "semantic-cold-start-phase-timing"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),
                       ("target-bearing names", "csharp-conversion-operator-indexing"),
                       ("implicitConversion", "csharp-conversion-usage-enumeration"),

@@ -147,7 +147,20 @@ public sealed class FSharpSingleFilePublishTests
                 cancellationToken: mcpTimeout.Token);
             JsonElement capabilities = await WaitForReadyAsync(client, TimeSpan.FromSeconds(60),
                 mcpTimeout.Token);
-            Assert.Equal("0.12.77", capabilities.GetProperty("version").GetString());
+            Assert.Equal("0.12.78", capabilities.GetProperty("version").GetString());
+            JsonElement detailedCapabilities = await CallJsonAsync(client,
+                "server_capabilities", new Dictionary<string, object?>
+                {
+                    ["detail"] = true,
+                }, mcpTimeout.Token);
+            string coldStartTiming = Assert.Single(
+                    detailedCapabilities.GetProperty("features").EnumerateArray(),
+                    feature => feature.GetProperty("id").GetString() ==
+                               "semantic-cold-start-phase-timing")
+                .GetProperty("summary").GetString()!;
+            Assert.Contains("present only when the call enters the C# semantic pipeline",
+                coldStartTiming);
+            Assert.Contains("F# semantic navigation", coldStartTiming);
             JsonElement semantic = await CallJsonAsync(client, "symbol_at",
                 new Dictionary<string, object?>
                 {
@@ -166,6 +179,22 @@ public sealed class FSharpSingleFilePublishTests
                 semantic.TryGetProperty("error", out JsonElement error)
                     ? error.GetString()
                     : null);
+
+            int semanticOpsBeforeDefinition = SemanticOpLineCount(workspace);
+            JsonElement definition = await CallJsonAsync(client, "definition",
+                new Dictionary<string, object?>
+                {
+                    ["path"] = "Canary.fs",
+                    ["line"] = 2,
+                    ["column"] = 5,
+                    ["mode"] = "semantic",
+                    ["timeoutMs"] = 60_000,
+                }, mcpTimeout.Token);
+            Assert.False(definition.TryGetProperty("error", out _), definition.ToString());
+            Assert.False(definition.TryGetProperty("timing", out JsonElement fsharpTiming) &&
+                         fsharpTiming.TryGetProperty("semanticColdStart", out _),
+                definition.ToString());
+            Assert.Equal(semanticOpsBeforeDefinition, SemanticOpLineCount(workspace));
 
             JsonElement started = await CallJsonAsync(
                 client,
@@ -247,6 +276,25 @@ public sealed class FSharpSingleFilePublishTests
             cancellationToken: cancellationToken);
         TextContentBlock text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content));
         return JsonDocument.Parse(text.Text).RootElement.Clone();
+    }
+
+    private static int SemanticOpLineCount(string workspace)
+    {
+        string telemetryDir = Path.Combine(workspace, ".codenav", "telemetry");
+        if (!Directory.Exists(telemetryDir)) return 0;
+        return Directory.EnumerateFiles(telemetryDir, "phoenix-*.jsonl")
+            .SelectMany(path => ReadShared(path)
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            .Count(line => line.Contains("\"e\":\"semanticOp\"",
+                StringComparison.Ordinal));
+    }
+
+    private static string ReadShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     private static string FindRepositoryRoot()

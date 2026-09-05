@@ -18,6 +18,332 @@ namespace CodeNav.Tests;
 public class Batch51TelemetryTests
 {
     [Fact]
+    public void SemanticColdStartContractCoversFallbackTerminalAndExactPaths()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-51-cold-phases").FullName;
+        try
+        {
+            string library = Path.Combine(root, "Library");
+            string consumer = Path.Combine(root, "Consumer");
+            Directory.CreateDirectory(library);
+            Directory.CreateDirectory(consumer);
+            File.WriteAllText(Path.Combine(library, "Library.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(library, "Target.cs"),
+                "namespace ColdPhaseFixture { public class Target { } }");
+            File.WriteAllText(Path.Combine(consumer, "Consumer.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup><ItemGroup><ProjectReference Include=\"../Library/Library.csproj\" /></ItemGroup></Project>");
+            File.WriteAllText(Path.Combine(consumer, "Use.cs"),
+                "namespace ColdPhaseFixture { public class Use : Target { } }");
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            using var semantic = new SemanticService(manager);
+            manager.Start();
+            IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
+                "cold-phase telemetry index did not become fresh");
+            var tools = new CodeNav.Mcp.NavigationTools(manager, semantic);
+
+            void AssertResponseAndTelemetry(string tool, Func<string> invoke,
+                string? expectedTelemetryReason, Action<System.Text.Json.JsonElement> assertResponse,
+                IReadOnlyCollection<string>? requiredTimingFields = null)
+            {
+                int before = SemanticOpLines(root, tool).Count;
+                string raw = invoke();
+                Assert.True(CodeNav.Mcp.Json.Utf8Bytes(raw) <=
+                            CodeNav.Mcp.Json.HardBudgetBytes);
+                using var responseDocument = System.Text.Json.JsonDocument.Parse(raw);
+                var responseRoot = responseDocument.RootElement;
+                assertResponse(responseRoot);
+                var responseCold = responseRoot.GetProperty("timing")
+                    .GetProperty("semanticColdStart");
+                Assert.True(responseCold.GetProperty("loadMs").GetInt64() >= 0);
+                foreach (string field in requiredTimingFields ?? [])
+                    Assert.True(responseCold.TryGetProperty(field, out _), field);
+
+                Assert.True(WaitUntil(() => SemanticOpLines(root, tool).Count > before,
+                        10_000),
+                    $"{tool} semanticOp record did not reach telemetry");
+                List<string> lines = SemanticOpLines(root, tool);
+                Assert.Equal(before + 1, lines.Count);
+                using var telemetryDocument = System.Text.Json.JsonDocument.Parse(lines[^1]);
+                var telemetryRoot = telemetryDocument.RootElement;
+                if (expectedTelemetryReason is not null)
+                    Assert.Equal(expectedTelemetryReason,
+                        telemetryRoot.GetProperty("reason").GetString());
+                var telemetryCold = telemetryRoot.GetProperty("semanticColdStart");
+                Assert.Equal(responseCold.EnumerateObject().Select(property => property.Name),
+                    telemetryCold.EnumerateObject().Select(property => property.Name));
+                foreach (var property in responseCold.EnumerateObject())
+                {
+                    Assert.Equal(property.Value.ToString(),
+                        telemetryCold.GetProperty(property.Name).ToString());
+                }
+            }
+
+            tools.TestOnlySemanticFailureReason = "cluster_cold_load";
+            try
+            {
+                (string Tool, Func<string> Invoke, string Confidence)[] fallbackCases =
+                [
+                    ("definition", () => tools.Definition(name: "Target", mode: "auto",
+                        timeoutMs: 60_000), "indexed"),
+                    ("implementations", () => tools.Implementations(name: "Target",
+                        maxProjects: 0, timeoutMs: 120_000), "heuristic"),
+                    ("references", () => tools.References(name: "Target", mode: "auto",
+                        maxProjects: 0, samplesPerGroup: 0, timeoutMs: 120_000), "indexed"),
+                    ("type_hierarchy", () => tools.TypeHierarchy(name: "Target",
+                        maxProjects: 0, timeoutMs: 120_000), "heuristic"),
+                ];
+                foreach ((string tool, Func<string> invoke, string confidence) in fallbackCases)
+                {
+                    AssertResponseAndTelemetry(tool, invoke, "cluster_cold_load", response =>
+                    {
+                        Assert.False(response.TryGetProperty("error", out _), response.ToString());
+                        string partialReason = response.GetProperty("partialReason").GetString()!;
+                        Assert.StartsWith("cluster_cold_load", partialReason,
+                            StringComparison.Ordinal);
+                        Assert.Equal(confidence,
+                            response.GetProperty("meta").GetProperty("confidence").GetString());
+                    });
+                }
+            }
+            finally
+            {
+                tools.TestOnlySemanticFailureReason = null;
+            }
+
+            var declaration = new SemanticDeclaration(
+                "ColdPhaseFixture.Target", "T:ColdPhaseFixture.Target", "class",
+                null, "ColdPhaseFixture", "Library",
+                [new DeclarationSpan("Library/Target.cs", 1, 1, "Library")]);
+            var match = new DocumentationIdResolution(
+                "Target", "T:ColdPhaseFixture.Target", "Library",
+                "Library/Target.cs", 1, 1, declaration);
+            var completeCoverage = new DocumentationIdResolutionCoverage(
+                1, 1, 1, 1, 1, [], CompilerScanned: true);
+            tools.TestOnlyDocumentationIdSeedTimeout = true;
+            try
+            {
+                (string Reason, string Error, string Confidence,
+                    Func<DocumentationIdResolutionResult, DocumentationIdResolutionResult>
+                        Transform)[] terminalCases =
+                [
+                    ("documentation_id_seed_timeout", "semantic_unavailable", "indexed",
+                        result => result),
+                    ("documentation_id_not_found", "symbol_not_found", "exact", result => result with
+                    {
+                        Matches = [], FailReason = null,
+                        MissReason = "documentation_id_not_found",
+                        Coverage = completeCoverage,
+                    }),
+                    ("documentation_id_ambiguous", "symbol_ambiguous", "exact", result => result with
+                    {
+                        Matches =
+                        [
+                            match,
+                            match with
+                            {
+                                ProjectName = "Shadow",
+                                Declaration = declaration with { Assembly = "Shadow" },
+                            },
+                        ],
+                        FailReason = null, MissReason = null,
+                        Coverage = completeCoverage,
+                    }),
+                    ("documentation_id_coverage_incomplete",
+                        "documentation_id_coverage_incomplete", "indexed", result => result with
+                    {
+                        Matches = [match], FailReason = null, MissReason = null,
+                        Coverage = completeCoverage with
+                        {
+                            CompilerScanned = false,
+                            SkippedProjects = ["Skipped"],
+                        },
+                    }),
+                    ("index_snapshot_unavailable", "semantic_unavailable", "indexed",
+                        result => result with
+                    {
+                        Matches = [match], FailReason = null, MissReason = null,
+                        Coverage = completeCoverage, SnapshotIdentity = null,
+                    }),
+                ];
+                foreach ((string reason, string error, string confidence,
+                             Func<DocumentationIdResolutionResult,
+                                  DocumentationIdResolutionResult> transform)
+                         in terminalCases)
+                {
+                    tools.TestOnlyDocumentationIdResolutionTransform = transform;
+                    AssertResponseAndTelemetry("definition", () => tools.Definition(
+                        documentationCommentId: "T:ColdPhaseFixture.Target",
+                        timeoutMs: 60_000), reason, response =>
+                    {
+                        Assert.Equal(error, response.GetProperty("error").GetString());
+                        Assert.Equal(confidence,
+                            response.GetProperty("meta").GetProperty("confidence").GetString());
+                        switch (reason)
+                        {
+                            case "documentation_id_seed_timeout":
+                            case "index_snapshot_unavailable":
+                                Assert.Equal(reason,
+                                    response.GetProperty("partialReason").GetString());
+                                Assert.False(response.TryGetProperty("reason", out _));
+                                break;
+                            case "documentation_id_not_found":
+                                Assert.Equal(reason, response.GetProperty("reason").GetString());
+                                Assert.False(response.TryGetProperty("partialReason", out _));
+                                break;
+                            case "documentation_id_coverage_incomplete":
+                                Assert.Equal(reason, response.GetProperty("reason").GetString());
+                                Assert.Equal(reason,
+                                    response.GetProperty("partialReason").GetString());
+                                break;
+                            default:
+                                Assert.False(response.TryGetProperty("reason", out _));
+                                Assert.False(response.TryGetProperty("partialReason", out _));
+                                break;
+                        }
+                    });
+                }
+            }
+            finally
+            {
+                tools.TestOnlyDocumentationIdResolutionTransform = null;
+                tools.TestOnlyDocumentationIdSeedTimeout = false;
+            }
+
+            if (!semantic.FrameworkRefsAvailable) return;
+
+            string coldRaw = tools.References(name: "Target", mode: "semantic",
+                maxProjects: 0, samplesPerGroup: 0, timeoutMs: 120000);
+            Assert.True(CodeNav.Mcp.Json.Utf8Bytes(coldRaw) <=
+                        CodeNav.Mcp.Json.HardBudgetBytes);
+            using var coldDocument = System.Text.Json.JsonDocument.Parse(coldRaw);
+            var coldRoot = coldDocument.RootElement;
+            Assert.False(coldRoot.TryGetProperty("error", out _));
+            Assert.Equal(1, coldRoot.GetProperty("totalReferences").GetInt32());
+            Assert.Equal("exact",
+                coldRoot.GetProperty("meta").GetProperty("confidence").GetString());
+            var publicTiming = coldRoot.GetProperty("timing");
+            var publicCold = publicTiming.GetProperty("semanticColdStart");
+            Assert.True(publicCold.GetProperty("cold").GetBoolean());
+            Assert.Equal(publicTiming.GetProperty("clusterLoadMs").GetInt64(),
+                publicCold.GetProperty("loadMs").GetInt64());
+            string[] timingFields =
+            [
+                "cold", "loadMs", "preparationMs", "metadataReferenceWorkMs",
+                "compilationMs", "resolutionMs",
+            ];
+            Assert.Equal(timingFields.OrderBy(value => value),
+                publicCold.EnumerateObject().Select(property => property.Name)
+                    .OrderBy(value => value));
+            foreach (string field in timingFields.Where(field => field.EndsWith("Ms",
+                         StringComparison.Ordinal)))
+            {
+                Assert.True(publicCold.GetProperty(field).TryGetInt64(out long value), field);
+                Assert.True(value >= 0, field);
+            }
+
+            string telemetryDir = Path.Combine(root, ".codenav", "telemetry");
+            Assert.True(WaitUntil(() => Directory.Exists(telemetryDir) &&
+                Directory.EnumerateFiles(telemetryDir, "phoenix-*.jsonl").Any(file =>
+                    ReadShared(file).Split('\n', StringSplitOptions.RemoveEmptyEntries).Any(line =>
+                        IsColdReferencesTelemetryLine(line))), 10_000),
+                "cold references semanticOp record did not reach telemetry");
+            string content = string.Join('\n', Directory
+                .EnumerateFiles(telemetryDir, "phoenix-*.jsonl")
+                .Select(ReadShared));
+            string coldLine = content.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .First(IsColdReferencesTelemetryLine);
+            using var telemetryDocument = System.Text.Json.JsonDocument.Parse(coldLine);
+            var telemetryCold = telemetryDocument.RootElement.GetProperty("semanticColdStart");
+            foreach (string field in timingFields)
+                Assert.Equal(publicCold.GetProperty(field).ToString(),
+                    telemetryCold.GetProperty(field).ToString());
+            Assert.DoesNotContain("Target", coldLine);
+            Assert.DoesNotContain("Use", coldLine);
+            Assert.DoesNotContain("Target.cs", coldLine);
+            Assert.DoesNotContain(root, coldLine, StringComparison.OrdinalIgnoreCase);
+
+            string warmRaw = tools.References(name: "Target", mode: "semantic",
+                maxProjects: 0, samplesPerGroup: 0, timeoutMs: 120000);
+            using var warmDocument = System.Text.Json.JsonDocument.Parse(warmRaw);
+            Assert.Equal(coldRoot.GetProperty("totalReferences").GetInt32(),
+                warmDocument.RootElement.GetProperty("totalReferences").GetInt32());
+            Assert.False(warmDocument.RootElement.GetProperty("timing")
+                .GetProperty("semanticColdStart").GetProperty("cold").GetBoolean());
+
+            (string Tool, Func<string> Invoke)[] exactCases =
+            [
+                ("definition", () => tools.Definition(
+                    name: "Target", mode: "semantic", timeoutMs: 60_000)),
+                ("implementations", () => tools.Implementations(
+                    name: "Target", maxProjects: 0, timeoutMs: 120_000)),
+                ("type_hierarchy", () => tools.TypeHierarchy(
+                    name: "Target", maxProjects: 0, timeoutMs: 120_000)),
+            ];
+            foreach ((string tool, Func<string> invoke) in exactCases)
+            {
+                AssertResponseAndTelemetry(tool, invoke, null, response =>
+                {
+                    Assert.False(response.TryGetProperty("error", out _), response.ToString());
+                    Assert.False(response.TryGetProperty("reason", out _));
+                    Assert.False(response.TryGetProperty("partialReason", out _));
+                    Assert.Equal("exact",
+                        response.GetProperty("meta").GetProperty("confidence").GetString());
+                });
+            }
+
+            tools.TestOnlyDocumentationIdResolutionTransform = result => result with
+            {
+                Matches = [],
+                FailReason = null,
+                MissReason = "documentation_id_not_found",
+            };
+            try
+            {
+                AssertResponseAndTelemetry("definition", () => tools.Definition(
+                        documentationCommentId: "T:ColdPhaseFixture.Target",
+                        timeoutMs: 60_000), "documentation_id_not_found", response =>
+                    {
+                        Assert.Equal("symbol_not_found",
+                            response.GetProperty("error").GetString());
+                        Assert.Equal("documentation_id_not_found",
+                            response.GetProperty("reason").GetString());
+                        Assert.Equal("exact",
+                            response.GetProperty("meta").GetProperty("confidence").GetString());
+                    }, ["compilationMs", "resolutionMs"]);
+            }
+            finally
+            {
+                tools.TestOnlyDocumentationIdResolutionTransform = null;
+            }
+
+            tools.TestOnlySemanticFailureReason = "cluster_cold_load";
+            try
+            {
+                string degradedRaw = tools.References(name: "Target", mode: "semantic",
+                    maxProjects: 0, samplesPerGroup: 0, timeoutMs: 120000);
+                using var degradedDocument = System.Text.Json.JsonDocument.Parse(degradedRaw);
+                var degradedCold = degradedDocument.RootElement.GetProperty("timing")
+                    .GetProperty("semanticColdStart");
+                Assert.True(degradedCold.GetProperty("loadMs").GetInt64() >= 0);
+                Assert.Equal(["loadMs"], degradedCold.EnumerateObject()
+                    .Select(property => property.Name).ToArray());
+            }
+            finally
+            {
+                tools.TestOnlySemanticFailureReason = null;
+            }
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
     public void SemanticOperationEmitsBoundedPrivacySafeTelemetry()
     {
         string root = Directory.CreateTempSubdirectory("codenav-51-telemetry").FullName;
@@ -391,6 +717,53 @@ public class Batch51TelemetryTests
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         using var r = new StreamReader(fs);
         return r.ReadToEnd();
+    }
+
+    private static List<string> SemanticOpLines(string workspaceRoot, string tool)
+    {
+        string telemetryDir = Path.Combine(workspaceRoot, ".codenav", "telemetry");
+        if (!Directory.Exists(telemetryDir)) return [];
+        return Directory.EnumerateFiles(telemetryDir, "phoenix-*.jsonl")
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .SelectMany(path => ReadShared(path)
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            .Where(line => IsSemanticOpLine(line, tool))
+            .ToList();
+    }
+
+    private static bool IsSemanticOpLine(string line, string tool)
+    {
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(line);
+            var root = document.RootElement;
+            return root.TryGetProperty("e", out var eventName) &&
+                   eventName.GetString() == "semanticOp" &&
+                   root.TryGetProperty("tool", out var recordedTool) &&
+                   recordedTool.GetString() == tool;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsColdReferencesTelemetryLine(string line)
+    {
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(line);
+            var root = document.RootElement;
+            return root.TryGetProperty("tool", out var tool) &&
+                   tool.GetString() == "references" &&
+                   root.TryGetProperty("semanticColdStart", out var timing) &&
+                   timing.TryGetProperty("cold", out var cold) &&
+                   cold.ValueKind == System.Text.Json.JsonValueKind.True;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
     }
 
     private static bool WaitUntil(Func<bool> cond, int timeoutMs)

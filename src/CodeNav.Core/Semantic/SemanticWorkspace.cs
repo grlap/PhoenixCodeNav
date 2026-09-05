@@ -143,17 +143,39 @@ public sealed partial class SemanticWorkspace : IDisposable
     /// metadata resolution, and Roslyn workspace mutation. Parallel phase totals may overlap wall
     /// time; phases never entered report 0. The newer plan/preparation/commit fields carry the
     /// wall-clock cold-start path.</summary>
-    public sealed record LoadStats(double GateWaitMs, double FingerprintMs, double TopoMs,
-        double ProjectLoadMs, int? LoadedBefore, int Requested, int Reloaded, int Loaded,
-        int Failed, double ProjectParseMs = 0, double SourceReadMs = 0,
-        double MetadataResolveMs = 0, double WorkspaceMutationMs = 0,
-        double PlanMs = 0, double PreparationMs = 0, int PreparedProjects = 0,
-        int EffectiveProjectConcurrency = 0, long AdmittedBytesHighWater = 0,
-        long RetainedBytes = 0, int ReplanCount = 0, double TotalElapsedMs = 0,
-        double PreparationQueueMs = 0, int CommittedProjects = 0,
-        int? ResidentProjects = null, int EvictedProjects = 0,
-        long EvictedInputBytes = 0, string? EvictionReason = null,
-        long? ManagedHeapBytes = null);
+    public sealed class LoadStats
+    {
+        public required double GateWaitMs { get; init; }
+        public required double FingerprintMs { get; init; }
+        public required double TopoMs { get; init; }
+        public required double ProjectLoadMs { get; init; }
+        public required int? LoadedBefore { get; init; }
+        public required int Requested { get; init; }
+        public required int Reloaded { get; init; }
+        public required int Loaded { get; init; }
+        public required int Failed { get; init; }
+        public required double ProjectParseMs { get; init; }
+        public required double SourceReadMs { get; init; }
+        public required double MetadataResolveMs { get; init; }
+        public required double WorkspaceMutationMs { get; init; }
+        public required double PlanMs { get; init; }
+        public required double PreparationMs { get; init; }
+        public required int PreparedProjects { get; init; }
+        public required int EffectiveProjectConcurrency { get; init; }
+        public required long AdmittedBytesHighWater { get; init; }
+        public required long RetainedBytes { get; init; }
+        public required int ReplanCount { get; init; }
+        public required double TotalElapsedMs { get; init; }
+        public required double PreparationQueueMs { get; init; }
+        public required int CommittedProjects { get; init; }
+        public required int? ResidentProjects { get; init; }
+        public required int EvictedProjects { get; init; }
+        public required long EvictedInputBytes { get; init; }
+        public required string? EvictionReason { get; init; }
+        public required long? ManagedHeapBytes { get; init; }
+        public required bool PreparationEntered { get; init; }
+        public required bool MetadataReferenceWorkEntered { get; init; }
+    }
 
     /// <summary>epuc.1 (review F2): per-CALL stats vehicle. The first cut published stats via
     /// an ambient last-load property — a concurrent caller could emit ANOTHER op's load as its

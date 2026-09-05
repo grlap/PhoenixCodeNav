@@ -144,6 +144,7 @@ public sealed partial class SemanticWorkspace
         public required long ParseTicks { get; init; }
         public required long ReadTicks { get; init; }
         public required long MetadataTicks { get; init; }
+        public required bool MetadataReferenceWorkEntered { get; init; }
         public required long DescriptorRetainedBytes { get; init; }
         public required long QueueTicks { get; init; }
         public string? FailureCause { get; private set; }
@@ -163,6 +164,7 @@ public sealed partial class SemanticWorkspace
                 ParseTicks = 0,
                 ReadTicks = 0,
                 MetadataTicks = 0,
+                MetadataReferenceWorkEntered = false,
                 DescriptorRetainedBytes = 0,
                 QueueTicks = queueTicks,
                 FailureCause = cause,
@@ -652,6 +654,8 @@ public sealed partial class SemanticWorkspace
         long parseTicks = 0;
         long readTicks = 0;
         long metadataTicks = 0;
+        bool preparationEntered = false;
+        bool metadataReferenceWorkEntered = false;
         long queueTicks = 0;
         long activePlanStarted = 0;
         long activePrepareStarted = 0;
@@ -690,25 +694,40 @@ public sealed partial class SemanticWorkspace
             long publishedCommitTicks = commitTicks +
                 (activeCommitStarted == 0 ? 0 : now - activeCommitStarted);
             double projectLoadMs = ToMs(publishedPrepareTicks + publishedCommitTicks);
-            statsBox.Stats = new LoadStats(
-                ToMs(gateWaitTicks), ToMs(fingerprintTicks), ToMs(topoTicks), projectLoadMs,
-                loadedBefore, requested.Count, reloaded, loadedResult, failedResult,
-                ToMs(parseTicks), ToMs(readTicks), ToMs(metadataTicks), ToMs(publishedCommitTicks),
-                PlanMs: ToMs(publishedPlanTicks),
-                PreparationMs: ToMs(publishedPrepareTicks), PreparedProjects: preparedCount,
-                EffectiveProjectConcurrency: Math.Min(preparedCount,
+            statsBox.Stats = new LoadStats
+            {
+                GateWaitMs = ToMs(gateWaitTicks),
+                FingerprintMs = ToMs(fingerprintTicks),
+                TopoMs = ToMs(topoTicks),
+                ProjectLoadMs = projectLoadMs,
+                LoadedBefore = loadedBefore,
+                Requested = requested.Count,
+                Reloaded = reloaded,
+                Loaded = loadedResult,
+                Failed = failedResult,
+                ProjectParseMs = ToMs(parseTicks),
+                SourceReadMs = ToMs(readTicks),
+                MetadataResolveMs = ToMs(metadataTicks),
+                WorkspaceMutationMs = ToMs(publishedCommitTicks),
+                PlanMs = ToMs(publishedPlanTicks),
+                PreparationMs = ToMs(publishedPrepareTicks),
+                PreparedProjects = preparedCount,
+                EffectiveProjectConcurrency = Math.Min(preparedCount,
                     _coldStartRuntime.Concurrency),
-                AdmittedBytesHighWater: _coldStartRuntime.Accounting.HighWaterBytes,
-                RetainedBytes: _coldStartRuntime.Accounting.RetainedBytes,
-                ReplanCount: replanCount,
-                TotalElapsedMs: ToMs(elapsed),
-                PreparationQueueMs: ToMs(queueTicks),
-                CommittedProjects: committedCount,
-                ResidentProjects: retentionEviction?.ResidentProjects,
-                EvictedProjects: retentionEviction?.EvictedProjects ?? 0,
-                EvictedInputBytes: retentionEviction?.EvictedInputBytes ?? 0,
-                EvictionReason: retentionEviction?.Reason,
-                ManagedHeapBytes: retentionEviction?.ManagedHeapBytes);
+                AdmittedBytesHighWater = _coldStartRuntime.Accounting.HighWaterBytes,
+                RetainedBytes = _coldStartRuntime.Accounting.RetainedBytes,
+                ReplanCount = replanCount,
+                TotalElapsedMs = ToMs(elapsed),
+                PreparationQueueMs = ToMs(queueTicks),
+                CommittedProjects = committedCount,
+                ResidentProjects = retentionEviction?.ResidentProjects,
+                EvictedProjects = retentionEviction?.EvictedProjects ?? 0,
+                EvictedInputBytes = retentionEviction?.EvictedInputBytes ?? 0,
+                EvictionReason = retentionEviction?.Reason,
+                ManagedHeapBytes = retentionEviction?.ManagedHeapBytes,
+                PreparationEntered = preparationEntered,
+                MetadataReferenceWorkEntered = metadataReferenceWorkEntered
+            };
         }
 
         try
@@ -948,6 +967,7 @@ public sealed partial class SemanticWorkspace
 
                 long prepareStarted = activePrepareStarted =
                     System.Diagnostics.Stopwatch.GetTimestamp();
+                preparationEntered = true;
                 var prepared = new ConcurrentDictionary<string, PreparedProjectHandle>(
                     StringComparer.OrdinalIgnoreCase);
                 try
@@ -998,6 +1018,8 @@ public sealed partial class SemanticWorkspace
                             parseTicks += completed.Project.ParseTicks;
                             readTicks += completed.Project.ReadTicks;
                             metadataTicks += completed.Project.MetadataTicks;
+                            metadataReferenceWorkEntered |=
+                                completed.Project.MetadataReferenceWorkEntered;
                             queueTicks += completed.Project.QueueTicks;
                         }
                     }
@@ -1627,6 +1649,7 @@ public sealed partial class SemanticWorkspace
                         ParseTicks = parseTicks,
                         ReadTicks = readTicks,
                         MetadataTicks = metadataTicks,
+                        MetadataReferenceWorkEntered = true,
                         DescriptorRetainedBytes = descriptorRetainedBytes,
                         QueueTicks = projectQueueTicks,
                     };

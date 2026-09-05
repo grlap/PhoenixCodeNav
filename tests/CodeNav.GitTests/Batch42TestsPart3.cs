@@ -1565,9 +1565,24 @@ public class Batch42TestsPart3
                        q.Outline(zTarget).Any(symbol => symbol.Name == "LateMove42");
             }, 20_000), "index did not reflect both exact moves");
 
+            (string OldPath, string TypeName)[] expectedFormerTypes =
+            [
+                (aSource, "EarlyMove42"),
+                (zSource, "LateMove42"),
+            ];
             JsonElement pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
                 () => tools.ReviewPack(maxBytes: 24576),
-                j => j.TryGetProperty("movedFiles", out _), "review_pack with movedFiles");
+                response => response.TryGetProperty("movedFiles", out _) &&
+                    response.TryGetProperty("deletedFiles", out JsonElement deleted) &&
+                    deleted.ValueKind == JsonValueKind.Array &&
+                    expectedFormerTypes.All(item => deleted.EnumerateArray().Any(file =>
+                        file.TryGetProperty("path", out JsonElement path) &&
+                        path.GetString() == item.OldPath &&
+                        file.TryGetProperty("formerTypes", out JsonElement formerTypes) &&
+                        formerTypes.ValueKind == JsonValueKind.Array &&
+                        formerTypes.EnumerateArray().Any(type =>
+                            type.GetProperty("name").GetString() == item.TypeName))),
+                "review_pack with both deleted formerTypes");
             Assert.Contains(pack.GetProperty("movedFiles").GetProperty("items")
                 .EnumerateArray(), move =>
                 move.GetProperty("from").GetString() == aSource &&

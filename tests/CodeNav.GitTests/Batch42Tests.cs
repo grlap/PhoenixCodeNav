@@ -1254,6 +1254,10 @@ public class Batch42Tests
             File.WriteAllText(path, "global using System.Text;\n");
             Git(root, "add -A");
             Git(root, "commit -q -m unmapped-sides-fixture");
+            string baseCommit = GitOutput(root, "rev-parse HEAD").Trim();
+            Assert.Equal("global using System.Text;\n", GitInfo.ShowFile(
+                root, baseCommit, "Lib/OneDirective.cs", 512 * 1024,
+                TestGit.ProcessExitTimeoutMilliseconds));
 
             using var m = StartManager(root);
             var tools = new NavigationTools(m, new SemanticService(m));
@@ -1269,7 +1273,15 @@ public class Batch42Tests
 
             var pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
                 () => tools.ReviewPack(maxBytes: 24576),
-                j => j.TryGetProperty("unmappedChanges", out _), "review_pack with unmappedChanges");
+                response => response.TryGetProperty("unmappedChanges", out JsonElement unmapped) &&
+                    unmapped.TryGetProperty("items", out JsonElement candidates) &&
+                    candidates.EnumerateArray().Any(candidate =>
+                        candidate.TryGetProperty("path", out JsonElement candidatePath) &&
+                        candidatePath.GetString() == "Lib/OneDirective.cs" &&
+                        candidate.TryGetProperty("additionalReasons", out JsonElement reasons) &&
+                        reasons.EnumerateArray().Any(reason =>
+                            reason.GetString() == "file_level_old")),
+                "review_pack with a readable base blob and both replacement coordinates");
             var unmapped = pack.GetProperty("unmappedChanges");
             Assert.Equal(1, unmapped.GetProperty("total").GetInt32());
             JsonElement item = Assert.Single(unmapped.GetProperty("items").EnumerateArray());

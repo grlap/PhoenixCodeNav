@@ -217,6 +217,7 @@ public sealed partial class NavigationTools
         // Deadline visibility (field 0.7.0: type_hierarchy was the one exact tool without timing).
         int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
         var swSem = System.Diagnostics.Stopwatch.StartNew();
+        var coldStartTiming = new SemanticColdStartTimingBox();
         var (target, hint) = ResolveSemanticTarget(
             name, null, ["class", "interface", "struct", "record", "enum"], path,
             line, column, arity);
@@ -234,11 +235,16 @@ public sealed partial class NavigationTools
             coverage = null;
             skippedCandidateProjects = null;
             reason = forcedFailure;
+            SemanticColdStartTiming timing = coldStartTiming.Publish(
+                swSem.ElapsedMilliseconds);
+            _semantic.EmitTerminalTelemetry(
+                "type_hierarchy", "degraded", forcedFailure, timing);
         }
         else
         {
             (result, coverage, skippedCandidateProjects, reason) = _semantic
-                .TypeHierarchyAsync(t.Path, t.Line, t.Column, hint, maxProjects, deadlineMs, arity)
+                .TypeHierarchyAsync(t.Path, t.Line, t.Column, hint, maxProjects, deadlineMs,
+                    arity, coldStartTiming)
                 .GetAwaiter().GetResult();
         }
         reason = ExpandReason(reason); // t2b: cold-load token gains inline retry advice
@@ -274,7 +280,12 @@ public sealed partial class NavigationTools
                     retryHint = SemanticRetryHint(reason, "type_hierarchy", deadlineMs,
                         SemanticNavigationDeadlineMaxMs),
                     note = "Semantic resolution unavailable (see partialReason) — these types name it in their base list (confidence heuristic). baseTypes/interfaces are omitted: they need the compiler. Verify with source_context, or retry for exact.",
-                    timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
+                    timing = new
+                    {
+                        deadlineMs,
+                        elapsedMs = swSem.ElapsedMilliseconds,
+                        semanticColdStart = coldStartTiming.Timing,
+                    },
                     truncated = truncated || candidates.Count >= 50,
                     meta = metaH,
                 });
@@ -287,7 +298,12 @@ public sealed partial class NavigationTools
                 retryHint = SemanticRetryHint(reason, "type_hierarchy", deadlineMs,
                     SemanticNavigationDeadlineMaxMs),
                 hint = "Use 'implementations' for its indexed fallback, or search_symbol.",
-                timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
+                timing = new
+                {
+                    deadlineMs,
+                    elapsedMs = swSem.ElapsedMilliseconds,
+                    semanticColdStart = coldStartTiming.Timing,
+                },
                 meta = Meta.From(_manager.Health(), "indexed", "semantic"),
             });
         }
@@ -369,7 +385,12 @@ public sealed partial class NavigationTools
                         // can actually still hit post-edge-recovery, with the remediation inline.
                         note = "Compiler resolution found no derived/implementing types, but these name it in their base list (derivedOrImplementing is heuristic here). Implementer projects were likely not loaded into the semantic cluster (raise maxProjects, or scope with pathGlob), the implementers bind the name to a declaration outside the workspace, or imported project authority can change a friend grant (see partialReason). baseTypes/interfaces are compiler-resolved; verify with source_context.",
                         coverage = coverage is null ? null : CoverageJson(coverage),
-                        timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
+                        timing = new
+                        {
+                            deadlineMs,
+                            elapsedMs = swSem.ElapsedMilliseconds,
+                            semanticColdStart = coldStartTiming.Timing,
+                        },
                         truncated = truncated || heuristic.Count >= 50,
                         meta = meta1,
                     });
@@ -393,7 +414,12 @@ public sealed partial class NavigationTools
                 partialReason = SemanticCoverageReasons.Primary(coverage,
                 candidateProjectsSkipped: candidateBounded,
                 projectModelUnproven: result.ProjectModelUnproven),
-                timing = new { deadlineMs, elapsedMs = swSem.ElapsedMilliseconds },
+                timing = new
+                {
+                    deadlineMs,
+                    elapsedMs = swSem.ElapsedMilliseconds,
+                    semanticColdStart = coldStartTiming.Timing,
+                },
                 truncated,
                 meta = meta1,
             });

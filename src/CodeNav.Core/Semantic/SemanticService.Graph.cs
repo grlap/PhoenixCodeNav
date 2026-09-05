@@ -232,8 +232,10 @@ public sealed partial class SemanticService
     public async Task<(SemanticTypeHierarchy? Result, ClusterCoverage? Coverage,
         List<string>? SkippedCandidateProjects, string? FailReason)> TypeHierarchyAsync(
         string path, int line, int? column, string? nameHint, int maxProjects, int timeoutMs,
-        int? arityHint = null)
+        int? arityHint = null,
+        SemanticColdStartTimingBox? coldStartTiming = null)
     {
+        coldStartTiming ??= new SemanticColdStartTimingBox();
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120000));
         bool clusterLoadInProgress = true;
         var swOp = System.Diagnostics.Stopwatch.StartNew(); // field 48s gap: op wall split
@@ -247,14 +249,17 @@ public sealed partial class SemanticService
             using var indexSnapshot = _manager.TryOpenReviewSnapshot(cts.Token);
             if (indexSnapshot is null)
             {
-                EmitOpTelemetry("type_hierarchy", "unresolved", "index_snapshot_unavailable"); // epuc.1
+                EmitOpTelemetry("type_hierarchy", "unresolved", "index_snapshot_unavailable",
+                    semanticColdStart: coldStartTiming.Publish(
+                        swOp.ElapsedMilliseconds)); // epuc.1
                 return (null, null, null, "index_snapshot_unavailable");
             }
 
             deferredRetentionPending = true;
             var (ownerLease, symbolA, owningProject, ownerCoverage) = await LoadOwnerAndResolveAsync(
                 path, line, column, nameHint, cts.Token, indexSnapshot.Queries, arityHint,
-                statsBox: ownerBox, deferRetentionEviction: true)
+                statsBox: ownerBox, deferRetentionEviction: true,
+                coldStartTiming: coldStartTiming)
                 .ConfigureAwait(false);
             using var ownerOperation = ownerLease;
             clusterLoadInProgress = false;
@@ -263,12 +268,16 @@ public sealed partial class SemanticService
             {
                 string reason = SemanticCoverageReasons.FailedProjects(ownerCoverage)
                     ?? "symbol_not_resolved";
-                EmitOpTelemetry("type_hierarchy", "unresolved", reason, ownerBox.Stats); // epuc.1
+                EmitOpTelemetry("type_hierarchy", "unresolved", reason, ownerBox.Stats,
+                    semanticColdStart: coldStartTiming.Publish(
+                        loadMs, ownerBox.Stats)); // epuc.1
                 return (null, null, null, reason);
             }
             if (symbolA is not INamedTypeSymbol)
             {
-                EmitOpTelemetry("type_hierarchy", "unresolved", "not_a_type", ownerBox.Stats); // epuc.1
+                EmitOpTelemetry("type_hierarchy", "unresolved", "not_a_type", ownerBox.Stats,
+                    semanticColdStart: coldStartTiming.Publish(
+                        loadMs, ownerBox.Stats)); // epuc.1
                 return (null, null, null, "not_a_type");
             }
 
@@ -311,7 +320,8 @@ public sealed partial class SemanticService
                 await LoadScanSetAndResolveAsync(
                 symbolA.Name, owningProject, path, line, column, nameHint, maxProjects,
                 indexSnapshot.Queries, cts.Token, implementerSeeds, arityHint,
-                statsBox: scanBox, planStatsBox: planning.ScanSet).ConfigureAwait(false);
+                statsBox: scanBox, planStatsBox: planning.ScanSet,
+                coldStartTiming: coldStartTiming).ConfigureAwait(false);
             deferredRetentionPending = false;
             using var scanOperation = scanLease;
             Solution solution = scanLease.Solution;
@@ -324,7 +334,9 @@ public sealed partial class SemanticService
                       ?? "symbol_not_resolved_in_scope"
                     : "not_a_type";
                 EmitOpTelemetry("type_hierarchy", "unresolved", why, ownerBox.Stats, scanBox.Stats,
-                    planning: planning); // epuc.1 + epuc.3
+                    planning: planning,
+                    semanticColdStart: coldStartTiming.Publish(
+                        loadMs, ownerBox.Stats, scanBox.Stats)); // epuc.1 + epuc.3
                 return (null, null, null, why);
             }
 
@@ -348,7 +360,7 @@ public sealed partial class SemanticService
                 var verification = await VerifyClosureImplementersAsync(type, solution,
                     typeClosure,
                     impl => down.Add(Describe(impl)),
-                    cts.Token).ConfigureAwait(false);
+                    cts.Token, coldStartTiming).ConfigureAwait(false);
                 queryStages = new
                 {
                     path = "closure_verified",
@@ -401,7 +413,9 @@ public sealed partial class SemanticService
                 telemetryReason,
                 ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs: loadMs, queryMs: swOp.ElapsedMilliseconds - loadMs,
-                queryStages: queryStages, planning: planning); // epuc.1 + jj1q + epuc.3 stages
+                queryStages: queryStages, planning: planning,
+                semanticColdStart: coldStartTiming.Publish(
+                    loadMs, ownerBox.Stats, scanBox.Stats)); // epuc.1 + jj1q + epuc.3 stages
             return (payload, coverage, skipped, null);
         }
         catch (OperationCanceledException)
@@ -411,7 +425,10 @@ public sealed partial class SemanticService
             EmitOpTelemetry("type_hierarchy", "degraded", reason, ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs: clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
                 queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs,
-                planning: planning); // epuc.1 + epuc.3
+                planning: planning,
+                semanticColdStart: coldStartTiming.Publish(
+                    clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
+                    ownerBox.Stats, scanBox.Stats)); // epuc.1 + epuc.3
             return (null, null, null, reason);
         }
         catch (Exception ex)
@@ -420,7 +437,10 @@ public sealed partial class SemanticService
             EmitOpTelemetry("type_hierarchy", "error", ex.GetType().Name, ownerBox.Stats, scanBox.Stats,
                 clusterLoadMs: clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
                 queryMs: clusterLoadInProgress ? null : swOp.ElapsedMilliseconds - loadMs,
-                planning: planning); // epuc.1 + epuc.3 review F3
+                planning: planning,
+                semanticColdStart: coldStartTiming.Publish(
+                    clusterLoadInProgress ? swOp.ElapsedMilliseconds : loadMs,
+                    ownerBox.Stats, scanBox.Stats)); // epuc.1 + epuc.3 review F3
             return (null, null, null, $"semantic_error:{ex.GetType().Name}");
         }
         finally

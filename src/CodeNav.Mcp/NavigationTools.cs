@@ -34,11 +34,14 @@ public sealed partial class NavigationTools
     internal string? TestOnlySemanticFailureReason { get; set; }
     internal bool TestOnlyDocumentationIdSeedTimeout { get; set; }
     internal Func<DocumentationIdResolutionResult, DocumentationIdResolutionResult>?
-        TestOnlyDocumentationIdResolutionTransform { get; set; }
+        TestOnlyDocumentationIdResolutionTransform
+    { get; set; }
     internal Func<SemanticImplementations, SemanticImplementations>?
-        TestOnlyImplementationsResultTransform { get; set; }
+        TestOnlyImplementationsResultTransform
+    { get; set; }
     internal Func<ProjectSelectorResolution, ProjectSelectorResolution>?
-        TestOnlyProjectSelectorResolutionTransform { get; set; }
+        TestOnlyProjectSelectorResolutionTransform
+    { get; set; }
     internal Func<long, long>? TestOnlyReviewBaseBlobElapsedMilliseconds { get; set; }
     internal int? TestOnlySearchSymbolResponseMaxBytes { get; set; }
     internal int? TestOnlyReferencesResponseMaxBytes { get; set; }
@@ -189,6 +192,7 @@ public sealed partial class NavigationTools
                 new { id = "semantic-selector-incompatibility-errors", summary = "definition and references return structured semantic-selector incompatibility errors as bad_request: documentationCommentId rejects indexed mode with incompatible_mode, while references rejects pathGlob/excludePath for documentationCommentId and operator idx handles with incompatible_filter; operator idx handles also reject indexed mode, and genuine semantic unavailability remains semantic_required" },
                 new { id = "semantic-retry-guidance", summary = "definition, references, implementations, callers, callees, and type_hierarchy use the same bounded retry recommendation and hint contract for cluster_cold_load and semantic_timeout" },
                 new { id = "cold-start-retry-contract", summary = "The shared navigation and bounded review_pack non-ready index gates carry an access-mode-aware retryRecommended value and a retryHint naming server_capabilities.index.progress plus index.state for transitional writer/follower states or index.error for terminal writer/unavailable failure; context_pack preserves the same typed cold-start retry contract for cluster_cold_load, whose canceled load should be retried once with a larger timeoutMs when below the documented family maximum or unchanged at that maximum, and Phoenix never retries automatically" },
+                new { id = "semantic-cold-start-phase-timing", summary = "definition, references, implementations, and type_hierarchy expose fixed bounded timing.semanticColdStart attribution for load, preparation, metadata-reference work, compilation, and resolution on exact and degraded semantic paths; the same integer-millisecond snapshot is written to semanticOp telemetry without changing the answer; present only when the call enters the C# semantic pipeline — F# semantic navigation and calls that end before that pipeline omit the field" },
                 new { id = "default-query-scope", summary = "CODENAV_DEFAULT_QUERY_SCOPE configures all or first_party for broad indexed find/search tools; queryScope='all' overrides it, affected responses echo the effective scope, and exact semantic operations remain unscoped" },
                 new { id = "dependency-direction-aliases", summary = "project_graph accepts dependencies as downstream and dependents as upstream while echoing the canonical direction and preserving established names" },
                 new { id = "review-pack-actionable-budget-gaps", summary = "review_pack discloses a separately bounded affected-path sample with total/returned/truncated coverage, stable reason ids, and explicit recovery when evidence is clipped" },
@@ -1693,6 +1697,7 @@ public sealed partial class NavigationTools
         }
         int deadlineMs = Math.Clamp(timeoutMs, 500, DefinitionDeadlineMaxMs);
         var swSem = System.Diagnostics.Stopwatch.StartNew();
+        var coldStartTiming = new SemanticColdStartTimingBox();
         using var semanticDeadline = new CancellationTokenSource(deadlineMs);
         if (!TryParseStringList(kinds, "kinds", out List<string>? parsedKinds,
                 out string? kindsDetail))
@@ -1735,7 +1740,7 @@ public sealed partial class NavigationTools
             }
             var (documentedTarget, documentedError) = ResolveDocumentationTarget(
                 documentationCommentId, "definition", deadlineMs, implementationsOnly: false,
-                DefinitionDeadlineMaxMs, semanticDeadline.Token, swSem);
+                DefinitionDeadlineMaxMs, semanticDeadline.Token, swSem, coldStartTiming);
             if (documentedError is not null) return documentedError;
             requestedDocumentationCommentId = documentedTarget!.CanonicalDocumentationCommentId;
             documentationIdCoverage = documentedTarget.Coverage;
@@ -1825,6 +1830,10 @@ public sealed partial class NavigationTools
             if (TestOnlySemanticFailureReason is { } forcedFailure)
             {
                 failReason = forcedFailure;
+                SemanticColdStartTiming timing = coldStartTiming.Publish(
+                    swSem.ElapsedMilliseconds);
+                _semantic.EmitTerminalTelemetry(
+                    "definition", "degraded", forcedFailure, timing);
             }
             else if (target is { } t)
             {
@@ -1832,7 +1841,7 @@ public sealed partial class NavigationTools
                     .DefinitionAsync(t.Path, t.Line, t.Column, hint,
                         RemainingDeadlineMilliseconds(deadlineMs, swSem),
                         semanticDeclarationKey, semanticDeadline.Token,
-                        documentationIdSnapshotIdentity)
+                        documentationIdSnapshotIdentity, coldStartTiming)
                     .GetAwaiter().GetResult();
                 if (decl is not null)
                 {
@@ -1847,7 +1856,8 @@ public sealed partial class NavigationTools
                             documentationIdCoverage,
                             deadlineMs,
                             swSem,
-                            documentationIdResolutionMs);
+                            documentationIdResolutionMs,
+                            coldStartTiming.Timing);
                     }
                     // Order declarations largest-span-first (partial stubs lose), path as the
                     // deterministic tie-break — so the body's declaration (d0) is always the first
@@ -1885,6 +1895,7 @@ public sealed partial class NavigationTools
                             deadlineMs,
                             elapsedMs = swSem.ElapsedMilliseconds,
                             documentationIdResolutionMs,
+                            semanticColdStart = coldStartTiming.Timing,
                         },
                         meta = Meta.From(_manager.Health(),
                             semanticPartialReason is not null ? "indexed" : "exact", "semantic"),
@@ -1935,6 +1946,7 @@ public sealed partial class NavigationTools
                         deadlineMs,
                         elapsedMs = swSem.ElapsedMilliseconds,
                         documentationIdResolutionMs,
+                        semanticColdStart = coldStartTiming.Timing,
                     },
                     meta = Meta.From(_manager.Health(), "indexed", "semantic"),
                 };
@@ -1983,6 +1995,8 @@ public sealed partial class NavigationTools
             retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
             retryHint = SemanticRetryHint(failReason, "definition", deadlineMs,
                 DefinitionDeadlineMaxMs),
+            timing = SemanticColdStartTimingJson(coldStartTiming, deadlineMs, swSem,
+                documentationIdResolutionMs),
             hint = items.Count == 0
                 ? "No declaration found. Try search_symbol with match='substring', or the name may come from a package/generated source."
                 : null,
@@ -2102,6 +2116,7 @@ public sealed partial class NavigationTools
             return idError;
         int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
         var swSem = System.Diagnostics.Stopwatch.StartNew();
+        var coldStartTiming = new SemanticColdStartTimingBox();
         using var semanticDeadline = new CancellationTokenSource(deadlineMs);
         string? requestedDocumentationCommentId = null;
         DocumentationIdResolutionCoverage? documentationIdCoverage = null;
@@ -2122,7 +2137,7 @@ public sealed partial class NavigationTools
             var (documentedTarget, documentedError) = ResolveDocumentationTarget(
                 documentationCommentId, "implementations", deadlineMs,
                 implementationsOnly: true, SemanticNavigationDeadlineMaxMs,
-                semanticDeadline.Token, swSem);
+                semanticDeadline.Token, swSem, coldStartTiming);
             if (documentedError is not null) return documentedError;
             requestedDocumentationCommentId = documentedTarget!.CanonicalDocumentationCommentId;
             documentationIdCoverage = documentedTarget.Coverage;
@@ -2162,13 +2177,18 @@ public sealed partial class NavigationTools
             {
                 result = null;
                 reason = forcedFailure;
+                SemanticColdStartTiming timing = coldStartTiming.Publish(
+                    swSem.ElapsedMilliseconds);
+                _semantic.EmitTerminalTelemetry(
+                    "implementations", "degraded", forcedFailure, timing);
             }
             else
             {
                 (result, reason) = _semantic
                     .ImplementationsAsync(t.Path, t.Line, t.Column, hint, maxProjects,
                         RemainingDeadlineMilliseconds(deadlineMs, swSem), arity,
-                        semanticDeadline.Token, documentationIdSnapshotIdentity)
+                        semanticDeadline.Token, documentationIdSnapshotIdentity,
+                        coldStartTiming)
                     .GetAwaiter().GetResult();
             }
             if (result is not null && TestOnlyImplementationsResultTransform is not null)
@@ -2185,7 +2205,8 @@ public sealed partial class NavigationTools
                     documentationIdCoverage,
                     deadlineMs,
                     swSem,
-                    documentationIdResolutionMs);
+                    documentationIdResolutionMs,
+                    coldStartTiming.Timing);
             }
             if (result is { Implementations.Count: > 0 })
             {
@@ -2259,6 +2280,7 @@ public sealed partial class NavigationTools
                             documentationIdResolutionMs,
                             clusterLoadMs = result.ClusterLoadMs,
                             queryMs = result.QueryMs,
+                            semanticColdStart = coldStartTiming.Timing,
                         },
                         truncated,
                         hint = concreteCount == 1 && !partial
@@ -2315,6 +2337,7 @@ public sealed partial class NavigationTools
                             documentationIdResolutionMs,
                             clusterLoadMs = result.ClusterLoadMs,
                             queryMs = result.QueryMs,
+                            semanticColdStart = coldStartTiming.Timing,
                         },
                         meta = Meta.From(_manager.Health(), partial ? "indexed" : "exact",
                             "semantic"),
@@ -2349,6 +2372,7 @@ public sealed partial class NavigationTools
                         deadlineMs,
                         elapsedMs = swSem.ElapsedMilliseconds,
                         documentationIdResolutionMs,
+                        semanticColdStart = coldStartTiming.Timing,
                     },
                     meta = Meta.From(_manager.Health(), "indexed", "semantic"),
                 };
@@ -2388,6 +2412,7 @@ public sealed partial class NavigationTools
                     deadlineMs,
                     elapsedMs = swSem.ElapsedMilliseconds,
                     documentationIdResolutionMs,
+                    semanticColdStart = coldStartTiming.Timing,
                 },
                 meta = Meta.From(_manager.Health(), "indexed", "semantic"),
             });
@@ -2423,6 +2448,8 @@ public sealed partial class NavigationTools
                 retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
                 retryHint = SemanticRetryHint(failReason, "implementations", deadlineMs,
                     SemanticNavigationDeadlineMaxMs),
+                timing = SemanticColdStartTimingJson(coldStartTiming, deadlineMs, swSem,
+                    documentationIdResolutionMs),
                 meta = Meta.From(_manager.Health(), "heuristic", "syntax"),
             });
         }
@@ -2475,6 +2502,8 @@ public sealed partial class NavigationTools
                     retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
                     retryHint = SemanticRetryHint(failReason, "implementations", deadlineMs,
                         SemanticNavigationDeadlineMaxMs),
+                    timing = SemanticColdStartTimingJson(coldStartTiming, deadlineMs, swSem,
+                        documentationIdResolutionMs),
                     note = $"Same-named members of the syntactic implementers of {targetSym!.Container} (confidence heuristic — compiler-exact override resolution found none, likely a type-twin identity mismatch)."
                         + (omitted > 0 ? $" {omitted} of {implementerCount} implementer(s) declare no such member and were omitted." : "")
                         + " Verify with source_context.",
@@ -2495,6 +2524,8 @@ public sealed partial class NavigationTools
                 retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
                 retryHint = SemanticRetryHint(failReason, "implementations", deadlineMs,
                     SemanticNavigationDeadlineMaxMs),
+                timing = SemanticColdStartTimingJson(coldStartTiming, deadlineMs, swSem,
+                    documentationIdResolutionMs),
                 note = "No compiler-exact member implementations in the loaded cluster (possibly a type-twin identity mismatch), and no same-named member found in the declaring type's implementers. Run implementations on the declaring interface/type, then read this member in each implementer.",
                 meta,
             });
@@ -2518,6 +2549,8 @@ public sealed partial class NavigationTools
             retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
             retryHint = SemanticRetryHint(failReason, "implementations", deadlineMs,
                 SemanticNavigationDeadlineMaxMs),
+            timing = SemanticColdStartTimingJson(coldStartTiming, deadlineMs, swSem,
+                documentationIdResolutionMs),
             note = items.Count > 0 && failReason is "no_semantic_implementers" or "candidate_cluster_bounded"
                 // Field (lhg): the old "declared in more than one assembly / generated twin" wording
                 // went stale once compiled-awareness + assembly-ref edges landed — say what we now
@@ -2567,6 +2600,7 @@ public sealed partial class NavigationTools
         }
         int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
         var swSem = System.Diagnostics.Stopwatch.StartNew();
+        var coldStartTiming = new SemanticColdStartTimingBox();
         using var semanticDeadline = new CancellationTokenSource(deadlineMs);
         string? requestedDocumentationCommentId = null;
         DocumentationIdResolutionCoverage? documentationIdCoverage = null;
@@ -2628,7 +2662,8 @@ public sealed partial class NavigationTools
             }
             var (documentedTarget, documentedError) = ResolveDocumentationTarget(
                 documentationCommentId, "references", deadlineMs, implementationsOnly: false,
-                SemanticNavigationDeadlineMaxMs, semanticDeadline.Token, swSem);
+                SemanticNavigationDeadlineMaxMs, semanticDeadline.Token, swSem,
+                coldStartTiming);
             if (documentedError is not null) return documentedError;
             requestedDocumentationCommentId = documentedTarget!.CanonicalDocumentationCommentId;
             documentationIdCoverage = documentedTarget.Coverage;
@@ -2703,6 +2738,10 @@ public sealed partial class NavigationTools
             if (TestOnlySemanticFailureReason is { } forcedFailure)
             {
                 failReason = forcedFailure;
+                SemanticColdStartTiming timing = coldStartTiming.Publish(
+                    swSem.ElapsedMilliseconds);
+                _semantic.EmitTerminalTelemetry(
+                    "references", "degraded", forcedFailure, timing);
             }
             else if (target is { } t)
             {
@@ -2712,7 +2751,7 @@ public sealed partial class NavigationTools
                         RemainingDeadlineMilliseconds(deadlineMs, swSem), includeGenerated,
                         kindSet, publicConsumersOnly, includeTests,
                         semanticDeclarationKey, semanticDeadline.Token,
-                        documentationIdSnapshotIdentity)
+                        documentationIdSnapshotIdentity, coldStartTiming)
                     .GetAwaiter().GetResult();
                 if (result is not null)
                 {
@@ -2727,7 +2766,8 @@ public sealed partial class NavigationTools
                             documentationIdCoverage,
                             deadlineMs,
                             swSem,
-                            documentationIdResolutionMs);
+                            documentationIdResolutionMs,
+                            coldStartTiming.Timing);
                     }
                     // includeTests is filtered INSIDE the semantic scan, before counting (wu1) —
                     // so TotalLocations, KindCounts, Groups, and this summary all describe one set.
@@ -2947,6 +2987,7 @@ public sealed partial class NavigationTools
                                     documentationIdResolutionMs,
                                     clusterLoadMs = result.ClusterLoadMs,
                                     queryMs = result.QueryMs,
+                                    semanticColdStart = coldStartTiming.Timing,
                                 },
                                 truncated,
                                 meta = meta0,
@@ -2991,6 +3032,7 @@ public sealed partial class NavigationTools
                         deadlineMs,
                         elapsedMs = swSem.ElapsedMilliseconds,
                         documentationIdResolutionMs,
+                        semanticColdStart = coldStartTiming.Timing,
                     },
                     meta = Meta.From(_manager.Health(), "indexed", "semantic"),
                 };
@@ -3001,7 +3043,10 @@ public sealed partial class NavigationTools
         }
 
         if (resolvedHandleHit is { Kind: "operator" })
-            return OperatorReferencesRequireSemantic(failReason ?? "semantic_unavailable");
+            return OperatorReferencesRequireSemantic(
+                failReason ?? "semantic_unavailable",
+                SemanticColdStartTimingJson(coldStartTiming, deadlineMs, swSem,
+                    documentationIdResolutionMs));
 
         // Indexed fallback (name required — derive from position when missing).
         using var q = _manager.OpenQueries();
@@ -3019,6 +3064,8 @@ public sealed partial class NavigationTools
                 retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
                 retryHint = SemanticRetryHint(failReason, "references", deadlineMs,
                     SemanticNavigationDeadlineMaxMs),
+                timing = SemanticColdStartTimingJson(coldStartTiming, deadlineMs, swSem,
+                    documentationIdResolutionMs),
             });
         }
         var excludes = excludePath is { Length: > 0 } ex ? new[] { ex } : null;
@@ -3057,6 +3104,8 @@ public sealed partial class NavigationTools
             retryRecommended = SemanticRetryRecommended(failReason) ? true : (bool?)null,
             retryHint = SemanticRetryHint(failReason, "references", deadlineMs,
                 SemanticNavigationDeadlineMaxMs),
+            timing = SemanticColdStartTimingJson(coldStartTiming, deadlineMs, swSem,
+                documentationIdResolutionMs),
             summary = candidateFilesCapHit
                 ? $"At least {total} candidate reference lines across {groups.Count} returned project groups ({mix}); the indexed scan covered {candidates.CandidateFilesScanned} of at least {candidates.CandidateFilesAtLeast} matching files."
                 : $"{total} candidate reference lines across {groups.Count} projects ({mix}).",
@@ -3606,16 +3655,18 @@ public sealed partial class NavigationTools
             ? hit.DeclarationKey
             : null;
 
-    private string OperatorReferencesRequireSemantic(string reason) => Json.Serialize(new
-    {
-        error = "semantic_required",
-        operation = "references",
-        kind = "operator",
-        partialReason = reason,
-        detail = "Operator idx handles require compiler-semantic references so the canonical declaration key remains pinned; indexed text candidates cannot distinguish overload identity.",
-        hint = "Retry without pathGlob/excludePath using mode='semantic' or mode='auto'.",
-        meta = Meta.From(_manager.Health(), "indexed", "semantic"),
-    });
+    private string OperatorReferencesRequireSemantic(string reason, object? timing) =>
+        Json.Serialize(new
+        {
+            error = "semantic_required",
+            operation = "references",
+            kind = "operator",
+            partialReason = reason,
+            timing,
+            detail = "Operator idx handles require compiler-semantic references so the canonical declaration key remains pinned; indexed text candidates cannot distinguish overload identity.",
+            hint = "Retry without pathGlob/excludePath using mode='semantic' or mode='auto'.",
+            meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+        });
 
     private string OperatorReferencesBadRequest(
         string field, string reason, string expected, string detail) => Json.Serialize(new
@@ -3969,7 +4020,8 @@ public sealed partial class NavigationTools
         bool implementationsOnly,
         int maxDeadlineMs,
         CancellationToken cancellationToken,
-        System.Diagnostics.Stopwatch deadlineStopwatch)
+        System.Diagnostics.Stopwatch deadlineStopwatch,
+        SemanticColdStartTimingBox coldStartTiming)
     {
         string id = documentationCommentId.Trim();
         if (id.Length < 3 || id[1] != ':' || id[2..].Length == 0 ||
@@ -4060,13 +4112,23 @@ public sealed partial class NavigationTools
         DocumentationIdResolutionResult resolution = _semantic
             .ResolveDocumentationCommentIdAsync(
                 candidateName, id, deadlineMs, cancellationToken,
-                forceSeedTimeoutForTest: TestOnlyDocumentationIdSeedTimeout)
+                forceSeedTimeoutForTest: TestOnlyDocumentationIdSeedTimeout,
+                coldStartTiming: coldStartTiming)
             .GetAwaiter().GetResult();
         if (TestOnlyDocumentationIdResolutionTransform is not null)
             resolution = TestOnlyDocumentationIdResolutionTransform(resolution);
+
+        string TerminalResponse(string response, string result, string? reason)
+        {
+            _semantic.EmitTerminalTelemetry(
+                operation, result, reason, coldStartTiming.Timing);
+            return response;
+        }
+
         if (resolution.FailReason == "documentation_id_seed_timeout")
         {
-            return (null, Json.WithStringBudget(candidateName, Json.HardBudgetBytes,
+            return (null, TerminalResponse(Json.WithStringBudget(
+                candidateName, Json.HardBudgetBytes,
                 (boundedCandidateName, candidateNameTruncated) =>
                     System.Text.Json.Nodes.JsonNode.Parse(DocumentationIdError(id,
                         (boundedId, truncated) => new
@@ -4100,27 +4162,29 @@ public sealed partial class NavigationTools
                                 maxDeadlineMs,
                                 elapsedMs = deadlineStopwatch.ElapsedMilliseconds,
                                 documentationIdResolutionMs = deadlineStopwatch.ElapsedMilliseconds,
+                                semanticColdStart = coldStartTiming.Timing,
                             },
                             meta = Meta.From(_manager.Health(), "indexed", "semantic"),
-                        }))!));
+                        }))!), "degraded", "documentation_id_seed_timeout"));
         }
         if (resolution.Matches is null)
         {
-            return (null, DocumentationIdErrorWithCoverage(id, resolution.Coverage,
+            return (null, TerminalResponse(DocumentationIdErrorWithCoverage(
+                id, resolution.Coverage,
                 (boundedId, truncated, skippedProjects, skippedProjectsTruncated) => new
-            {
-                error = "semantic_unavailable",
-                operation,
-                documentationCommentId = boundedId,
-                documentationCommentIdTruncated = truncated ? true : (bool?)null,
-                documentationCommentIdBytes = truncated ? Json.Utf8Bytes(id) : (int?)null,
-                partialReason = ExpandReason(resolution.FailReason),
-                retryRecommended = SemanticRetryRecommended(resolution.FailReason)
+                {
+                    error = "semantic_unavailable",
+                    operation,
+                    documentationCommentId = boundedId,
+                    documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                    documentationCommentIdBytes = truncated ? Json.Utf8Bytes(id) : (int?)null,
+                    partialReason = ExpandReason(resolution.FailReason),
+                    retryRecommended = SemanticRetryRecommended(resolution.FailReason)
                     ? true
                     : (bool?)null,
-                retryHint = SemanticRetryHint(resolution.FailReason, operation, deadlineMs,
+                    retryHint = SemanticRetryHint(resolution.FailReason, operation, deadlineMs,
                     maxDeadlineMs),
-                retry = truncated
+                    retry = truncated
                     ? null
                     : new
                     {
@@ -4132,34 +4196,55 @@ public sealed partial class NavigationTools
                             lang = "csharp",
                         },
                     },
-                documentationIdCoverage = DocumentationIdCoverageJson(resolution.Coverage,
+                    documentationIdCoverage = DocumentationIdCoverageJson(resolution.Coverage,
                     skippedProjects, skippedProjectsTruncated),
-                timing = new
-                {
-                    deadlineMs,
-                    effectiveDeadlineMs = deadlineMs,
-                    maxDeadlineMs,
-                    elapsedMs = deadlineStopwatch.ElapsedMilliseconds,
-                    documentationIdResolutionMs = deadlineStopwatch.ElapsedMilliseconds,
-                },
-                meta = Meta.From(_manager.Health(), "indexed", "semantic"),
-            }));
+                    timing = new
+                    {
+                        deadlineMs,
+                        effectiveDeadlineMs = deadlineMs,
+                        maxDeadlineMs,
+                        elapsedMs = deadlineStopwatch.ElapsedMilliseconds,
+                        documentationIdResolutionMs = deadlineStopwatch.ElapsedMilliseconds,
+                        semanticColdStart = coldStartTiming.Timing,
+                    },
+                    meta = Meta.From(_manager.Health(), "indexed", "semantic"),
+                }), resolution.FailReason?.StartsWith("semantic_error:",
+                    StringComparison.Ordinal) == true ? "error" : "degraded",
+                resolution.FailReason));
         }
         List<DocumentationIdResolution> matches = resolution.Matches;
         if (matches.Count == 0)
-            return (null, DocumentationIdNotFound(id, operation, candidateName,
-                resolution.MissReason ?? "documentation_id_not_found", resolution.Coverage));
+        {
+            string reason = resolution.MissReason ?? "documentation_id_not_found";
+            return (null, TerminalResponse(DocumentationIdNotFound(
+                id, operation, candidateName, reason, resolution.Coverage,
+                deadlineMs, deadlineStopwatch, coldStartTiming.Timing),
+                "unresolved", reason));
+        }
         if (matches.Count > 1)
-            return (null, DocumentationIdCandidateEvidence(id, operation, matches,
-                resolution.Coverage,
-                coverageIncomplete: !resolution.Coverage.CompilerScanned));
+        {
+            bool coverageIncomplete = !resolution.Coverage.CompilerScanned;
+            string reason = coverageIncomplete
+                ? "documentation_id_coverage_incomplete"
+                : "documentation_id_ambiguous";
+            return (null, TerminalResponse(DocumentationIdCandidateEvidence(
+                id, operation, matches, resolution.Coverage, coverageIncomplete,
+                deadlineMs, deadlineStopwatch, coldStartTiming.Timing),
+                coverageIncomplete ? "partial" : "unresolved", reason));
+        }
         if (!resolution.Coverage.CompilerScanned)
-            return (null, DocumentationIdCandidateEvidence(id, operation, matches,
-                resolution.Coverage, coverageIncomplete: true));
+        {
+            const string reason = "documentation_id_coverage_incomplete";
+            return (null, TerminalResponse(DocumentationIdCandidateEvidence(
+                id, operation, matches, resolution.Coverage, coverageIncomplete: true,
+                deadlineMs, deadlineStopwatch, coldStartTiming.Timing),
+                "partial", reason));
+        }
         DocumentationIdResolution resolved = matches[0];
         if (resolution.SnapshotIdentity is null)
         {
-            return (null, DocumentationIdErrorWithCoverage(id, resolution.Coverage,
+            return (null, TerminalResponse(DocumentationIdErrorWithCoverage(
+                id, resolution.Coverage,
                 (boundedId, truncated, skippedProjects, skippedProjectsTruncated) => new
                 {
                     error = "semantic_unavailable",
@@ -4172,8 +4257,10 @@ public sealed partial class NavigationTools
                     retryHint = $"Retry {operation} once with the same arguments.",
                     documentationIdCoverage = DocumentationIdCoverageJson(resolution.Coverage,
                         skippedProjects, skippedProjectsTruncated),
+                    timing = SemanticColdStartTimingJson(coldStartTiming, deadlineMs,
+                        deadlineStopwatch, deadlineStopwatch.ElapsedMilliseconds),
                     meta = Meta.From(_manager.Health(), "indexed", "semantic"),
-                }));
+                }), "unresolved", "index_snapshot_unavailable"));
         }
         return (new DocumentationTarget(
             resolved.Name,
@@ -4191,7 +4278,10 @@ public sealed partial class NavigationTools
         string operation,
         List<DocumentationIdResolution> matches,
         DocumentationIdResolutionCoverage coverage,
-        bool coverageIncomplete)
+        bool coverageIncomplete,
+        int deadlineMs,
+        System.Diagnostics.Stopwatch deadlineStopwatch,
+        SemanticColdStartTiming? semanticColdStart)
     {
         HashSet<(string Path, int Line, int Column)> sharedPositions = matches
             .GroupBy(match => (match.NavigationPath, match.NavigationLine,
@@ -4268,6 +4358,15 @@ public sealed partial class NavigationTools
                     : null,
                 documentationIdCoverage = DocumentationIdCoverageJson(coverage,
                     skippedProjects, skippedProjectsTruncated),
+                timing = semanticColdStart is null
+                    ? null
+                    : new
+                    {
+                        deadlineMs,
+                        elapsedMs = deadlineStopwatch.ElapsedMilliseconds,
+                        documentationIdResolutionMs = deadlineStopwatch.ElapsedMilliseconds,
+                        semanticColdStart,
+                    },
                 meta = Meta.From(_manager.Health(),
                     coverageIncomplete ? "indexed" : "exact", "semantic"),
             };
@@ -4348,20 +4447,23 @@ public sealed partial class NavigationTools
         string operation,
         string candidateName,
         string reason,
-        DocumentationIdResolutionCoverage coverage) =>
+        DocumentationIdResolutionCoverage coverage,
+        int deadlineMs,
+        System.Diagnostics.Stopwatch deadlineStopwatch,
+        SemanticColdStartTiming? semanticColdStart) =>
         DocumentationIdErrorWithCoverage(id, coverage,
             (boundedId, truncated, skippedProjects, skippedProjectsTruncated) => new
-        {
-            error = "symbol_not_found",
-            operation,
-            documentationCommentId = boundedId,
-            documentationCommentIdTruncated = truncated ? true : (bool?)null,
-            documentationCommentIdBytes = truncated ? Json.Utf8Bytes(id) : (int?)null,
-            reason,
-            detail = coverage.CompilerScanned
+            {
+                error = "symbol_not_found",
+                operation,
+                documentationCommentId = boundedId,
+                documentationCommentIdTruncated = truncated ? true : (bool?)null,
+                documentationCommentIdBytes = truncated ? Json.Utf8Bytes(id) : (int?)null,
+                reason,
+                detail = coverage.CompilerScanned
                 ? "The compiler completed the requested project sweep and found no source declaration with this documentation id."
                 : "The index could not identify a C# compile owner for this documentation id, so absence is not compiler-proven.",
-            retry = truncated
+                retry = truncated
                 ? null
                 : new
                 {
@@ -4373,14 +4475,23 @@ public sealed partial class NavigationTools
                         lang = "csharp",
                     },
                 },
-            partial = coverage.CompilerScanned ? (bool?)null : true,
-            partialReason = coverage.CompilerScanned ? null : reason,
-            documentationIdCoverage = DocumentationIdCoverageJson(coverage,
+                partial = coverage.CompilerScanned ? (bool?)null : true,
+                partialReason = coverage.CompilerScanned ? null : reason,
+                documentationIdCoverage = DocumentationIdCoverageJson(coverage,
                 skippedProjects, skippedProjectsTruncated),
-            meta = Meta.From(_manager.Health(),
+                timing = semanticColdStart is null
+                ? null
+                : new
+                {
+                    deadlineMs,
+                    elapsedMs = deadlineStopwatch.ElapsedMilliseconds,
+                    documentationIdResolutionMs = deadlineStopwatch.ElapsedMilliseconds,
+                    semanticColdStart,
+                },
+                meta = Meta.From(_manager.Health(),
                 coverage.CompilerScanned ? "exact" : "indexed",
                 coverage.CompilerScanned ? "semantic" : "syntax"),
-        });
+            });
 
     private static object DocumentationIdCoverageJson(
         DocumentationIdResolutionCoverage coverage,
@@ -4443,6 +4554,24 @@ public sealed partial class NavigationTools
         System.Diagnostics.Stopwatch stopwatch) =>
         Math.Max(1, deadlineMs - (int)Math.Min(int.MaxValue, stopwatch.ElapsedMilliseconds));
 
+    private static object? SemanticColdStartTimingJson(
+        SemanticColdStartTimingBox timingBox,
+        int deadlineMs,
+        System.Diagnostics.Stopwatch stopwatch,
+        long? documentationIdResolutionMs = null)
+    {
+        SemanticColdStartTiming? timing = timingBox.Timing;
+        return timing is null
+            ? null
+            : new
+            {
+                deadlineMs,
+                elapsedMs = stopwatch.ElapsedMilliseconds,
+                documentationIdResolutionMs,
+                semanticColdStart = timing,
+            };
+    }
+
     private string DocumentationIdIdentityMismatch(
         string callerDocumentationCommentId,
         string expectedCanonicalId,
@@ -4451,7 +4580,8 @@ public sealed partial class NavigationTools
         DocumentationIdResolutionCoverage? coverage,
         int deadlineMs,
         System.Diagnostics.Stopwatch stopwatch,
-        long? documentationIdResolutionMs) =>
+        long? documentationIdResolutionMs,
+        SemanticColdStartTiming? semanticColdStart) =>
         DocumentationIdError(callerDocumentationCommentId, (boundedId, truncated) => new
         {
             error = "semantic_identity_mismatch",
@@ -4472,6 +4602,7 @@ public sealed partial class NavigationTools
                 deadlineMs,
                 elapsedMs = stopwatch.ElapsedMilliseconds,
                 documentationIdResolutionMs,
+                semanticColdStart,
             },
             meta = Meta.From(_manager.Health(), "indexed", "semantic"),
         });
@@ -4512,31 +4643,31 @@ public sealed partial class NavigationTools
                 resolution.ShadowedMatches,
                 (boundedSelector, selectorTruncated, items, truncated,
                     shadowedMatches, shadowedMatchesTruncated) => new
-                {
-                    error = "project_ambiguous",
-                    field,
-                    selector = boundedSelector,
-                    selectorTruncated = selectorTruncated ? true : (bool?)null,
-                    selectorBytes = selectorTruncated ? Json.Utf8Bytes(selector) : (int?)null,
-                    detail = sameLogicalName
+                    {
+                        error = "project_ambiguous",
+                        field,
+                        selector = boundedSelector,
+                        selectorTruncated = selectorTruncated ? true : (bool?)null,
+                        selectorBytes = selectorTruncated ? Json.Utf8Bytes(selector) : (int?)null,
+                        detail = sameLogicalName
                         ? "The selector matches multiple physical project rows with one assembly name. Use an exact project-file path to select the physical row; semantic and graph answers are assembly-name-keyed and can therefore be identical for the listed paths."
                         : "The selector matches multiple physical projects. Use an exact project-file path; Phoenix never picks the first match.",
-                    sameLogicalName = sameLogicalName ? true : (bool?)null,
-                    totalMatches = matches.Count,
-                    matches = items.Select(match => new
-                    {
-                        match.Project.Name,
-                        match.Project.Path,
-                        language = match.Project.Language,
-                        matchedBy = match.MatchedBy,
-                    }),
-                    matchesReturned = items.Count,
-                    truncated,
-                    projectSelectorResolution = ProjectSelectorResolutionJson(
+                        sameLogicalName = sameLogicalName ? true : (bool?)null,
+                        totalMatches = matches.Count,
+                        matches = items.Select(match => new
+                        {
+                            match.Project.Name,
+                            match.Project.Path,
+                            language = match.Project.Language,
+                            matchedBy = match.MatchedBy,
+                        }),
+                        matchesReturned = items.Count,
+                        truncated,
+                        projectSelectorResolution = ProjectSelectorResolutionJson(
                         resolution.ShadowedMatches.Count, shadowedMatches,
                         shadowedMatchesTruncated),
-                    meta = Meta.From(_manager.Health(), "indexed", "text"),
-                }));
+                        meta = Meta.From(_manager.Health(), "indexed", "text"),
+                    }));
         }
         ProjectSuggestionResult suggestions = queries.SuggestProjects(
             selector, DefaultResultLimit);
@@ -4544,45 +4675,45 @@ public sealed partial class NavigationTools
             resolution.ShadowedMatches,
             (boundedSelector, selectorTruncated, items, truncated,
                 shadowedMatches, shadowedMatchesTruncated) => new
-            {
-                error = "project_not_found",
-                field,
-                selector = boundedSelector,
-                selectorTruncated = selectorTruncated ? true : (bool?)null,
-                selectorBytes = selectorTruncated ? Json.Utf8Bytes(selector) : (int?)null,
-                reason = "project_not_found",
-                suggestions = items.Select(match => new
                 {
-                    match.Project.Name,
-                    match.Project.Path,
-                    language = match.Project.Language,
-                    rationale = match.MatchedBy,
-                    recovery = new
+                    error = "project_not_found",
+                    field,
+                    selector = boundedSelector,
+                    selectorTruncated = selectorTruncated ? true : (bool?)null,
+                    selectorBytes = selectorTruncated ? Json.Utf8Bytes(selector) : (int?)null,
+                    reason = "project_not_found",
+                    suggestions = items.Select(match => new
                     {
-                        tool = operation,
-                        replayOriginalRequest = true,
-                        remove = new[] { field },
-                        arguments = new Dictionary<string, object?>
+                        match.Project.Name,
+                        match.Project.Path,
+                        language = match.Project.Language,
+                        rationale = match.MatchedBy,
+                        recovery = new
                         {
-                            [field] = match.Project.Path,
+                            tool = operation,
+                            replayOriginalRequest = true,
+                            remove = new[] { field },
+                            arguments = new Dictionary<string, object?>
+                            {
+                                [field] = match.Project.Path,
+                            },
                         },
-                    },
-                }),
-                suggestionCoverage = new
-                {
-                    suggestions.Probed,
-                    suggestions.ProbeLimit,
-                    suggestions.ProbeTruncated,
-                    returned = items.Count,
-                    truncated = truncated || suggestions.Matches.Count > items.Count
+                    }),
+                    suggestionCoverage = new
+                    {
+                        suggestions.Probed,
+                        suggestions.ProbeLimit,
+                        suggestions.ProbeTruncated,
+                        returned = items.Count,
+                        truncated = truncated || suggestions.Matches.Count > items.Count
                         ? true
                         : (bool?)null,
-                },
-                projectSelectorResolution = ProjectSelectorResolutionJson(
+                    },
+                    projectSelectorResolution = ProjectSelectorResolutionJson(
                     resolution.ShadowedMatches.Count, shadowedMatches,
                     shadowedMatchesTruncated),
-                meta = Meta.From(_manager.Health(), "indexed", "text"),
-            }));
+                    meta = Meta.From(_manager.Health(), "indexed", "text"),
+                }));
     }
 
     private string ProjectSelectorResponse<T>(

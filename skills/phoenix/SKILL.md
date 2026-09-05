@@ -56,6 +56,8 @@ Keep stdout and stderr separate. Every non-interrupted completed command writes 
 
 Always inspect the JSON even when the process exits nonzero. CLI-generated envelopes use `retryable`; relayed tool-domain results preserve `retryRecommended` and `retryHint`. Follow the stated recovery before retrying; never invent an unbounded loop or a name-based fallback.
 
+`timing.semanticColdStart` attributes where a cold first semantic call spent time; it is diagnostic and never changes the answer. Its fields are attribution, not an additive equation, and `metadataReferenceWorkMs` is summed worker activity rather than wall time. It is present only when the call entered the C# semantic pipeline; F# semantic navigation and calls that end before that pipeline omit it — absence is not a zero.
+
 `server_capabilities` is the exception: when the daemon is unavailable it has no top-level `error`; read `meta.indexMode == "unavailable"`, `meta.cause`, `meta.recovery`, and `meta.retryable`. Every other tool returns top-level `error: "phoenix_daemon_unavailable"` with `cause`, `recovery`, and `retryable`.
 
 `symbolId` handles (`idx:NNN`) are valid only against the same index snapshot that returned them; `documentationCommentId` is the stable C# selector across sessions. A zero-hit answer carries suggestions and retry arguments; act on them explicitly, never guess a substitute.

@@ -20,6 +20,10 @@ public sealed class SharedDaemonProcessCollection;
 [Collection("Shared daemon MCP process isolation")]
 public sealed class SharedDaemonTests
 {
+    // Shared with TestGit and ProcessHeavyTestIsolation: this is the approved outer
+    // process-exit ceiling for test orchestration, not a Phoenix product timeout.
+    private const int TestProcessExitTimeoutMilliseconds = 130_000;
+
     [Theory]
     [InlineData(IndexStartupFailureCause.None, "daemon_index_startup_failed")]
     [InlineData(IndexStartupFailureCause.DestinationUnsafe,
@@ -2247,7 +2251,8 @@ public sealed class SharedDaemonTests
             Arguments = arguments,
             EnvironmentVariables = environmentVariables,
         });
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var timeout = new CancellationTokenSource(
+            TimeSpan.FromMilliseconds(TestProcessExitTimeoutMilliseconds));
         return await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
     }
 
@@ -2546,23 +2551,55 @@ public sealed class SharedDaemonTests
 
     private static async Task RetireDaemonForTestAsync(DaemonEndpoint endpoint)
     {
-        await using Stream stream = await DaemonTransport.ConnectAsync(
-            endpoint, TimeSpan.FromSeconds(2), CancellationToken.None);
-        DaemonHandshakeRequest request =
-            DaemonProtocol.CreateRequest(endpoint, "test-retire") with
+        using var deadline = new CancellationTokenSource(
+            TimeSpan.FromMilliseconds(TestProcessExitTimeoutMilliseconds));
+        IOException? lastFailure = null;
+        while (!deadline.IsCancellationRequested)
+        {
+            if (!File.Exists(endpoint.DescriptorPath)) return;
+            try
             {
-                ToolVersion = "99.0.0",
-            };
-        await DaemonProtocol.WriteRequestAsync(
-            stream,
-            DaemonPreambleMode.RetireAndReplace,
-            request,
-            CancellationToken.None);
-        DaemonHandshakeResponse? response = await DaemonProtocol.ReadResponseAsync(
-            stream, CancellationToken.None);
-        Assert.NotNull(response);
-        Assert.True(response.Accepted);
-        Assert.True(response.Retiring);
+                await using Stream stream = await DaemonTransport.ConnectAsync(
+                    endpoint, TimeSpan.FromSeconds(2), deadline.Token);
+                DaemonHandshakeRequest request =
+                    DaemonProtocol.CreateRequest(endpoint, "test-retire") with
+                    {
+                        ToolVersion = "99.0.0",
+                    };
+                await DaemonProtocol.WriteRequestAsync(
+                    stream,
+                    DaemonPreambleMode.RetireAndReplace,
+                    request,
+                    deadline.Token);
+                DaemonHandshakeResponse? response = await DaemonProtocol.ReadResponseAsync(
+                    stream, deadline.Token);
+                Assert.NotNull(response);
+                Assert.True(response.Accepted);
+                Assert.True(response.Retiring);
+                return;
+            }
+            catch (IOException ex)
+            {
+                lastFailure = ex;
+                if (!File.Exists(endpoint.DescriptorPath)) return;
+                try
+                {
+                    await Task.Delay(100, deadline.Token);
+                }
+                catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        throw new TimeoutException(
+            $"Test daemon did not accept retirement within " +
+            $"{TestProcessExitTimeoutMilliseconds} ms.", lastFailure);
     }
 
     private static async Task ServeOlderLegacyDaemonAsync(

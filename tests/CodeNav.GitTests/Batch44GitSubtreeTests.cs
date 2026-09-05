@@ -115,10 +115,13 @@ public sealed class Batch44GitSubtreeTests
 
             int exactBytes = System.Text.Encoding.UTF8.GetByteCount(content);
             Assert.Equal(content,
-                GitInfo.ShowFile(root, head, "Large.cs", gitExe, exactBytes));
+                GitInfo.ShowFile(root, head, "Large.cs", gitExe, exactBytes,
+                    timeoutMs: TestGit.ProcessExitTimeoutMilliseconds));
             Assert.Equal(content,
-                GitInfo.ShowFile(root, head, "Large.cs", gitExe, exactBytes + 1));
-            Assert.Null(GitInfo.ShowFile(root, head, "Large.cs", gitExe, exactBytes - 1));
+                GitInfo.ShowFile(root, head, "Large.cs", gitExe, exactBytes + 1,
+                    timeoutMs: TestGit.ProcessExitTimeoutMilliseconds));
+            Assert.Null(GitInfo.ShowFile(root, head, "Large.cs", gitExe, exactBytes - 1,
+                timeoutMs: TestGit.ProcessExitTimeoutMilliseconds));
             Assert.Null(GitInfo.ShowFile(root, head, "Large.cs", gitExe, 0));
         }
         finally
