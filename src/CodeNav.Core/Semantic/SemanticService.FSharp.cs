@@ -54,7 +54,11 @@ public sealed record FSharpSemanticDiagnostic(
 
 public sealed record FSharpProjectReferenceFailure(
     string Project,
-    List<string> AvailableTargetFrameworks);
+    List<string> AvailableTargetFrameworks,
+    string? ConsumerTargetFramework = null,
+    string? CompatibilityTableRow = null,
+    bool MultiTargetExactMatchOnly = false,
+    string? SelectedTargetFramework = null);
 
 public sealed record FSharpSemanticSymbolInfo(
     string Name,
@@ -199,6 +203,11 @@ public sealed partial class SemanticService
         FSharpSemanticClosureBudget Content,
         ProjectFileParser.FSharpSemanticEvaluationBudget Evaluation);
 
+    private sealed record FSharpProjectReferenceTargetFrameworkSelection(
+        string? TargetFramework,
+        string CompatibilityTableRow,
+        bool MultiTargetExactMatchOnly = false);
+
     private sealed class FSharpSemanticClosureBudgetPolicy
     {
         private readonly int _sourceFilesLimit;
@@ -224,6 +233,229 @@ public sealed partial class SemanticService
                 _referenceBytesLimit),
             new ProjectFileParser.FSharpSemanticEvaluationBudget());
     }
+
+    internal static bool TrySelectFSharpProjectReferenceTargetFramework(
+        string consumerTargetFramework,
+        IReadOnlyList<string> availableTargetFrameworks,
+        out string? selectedTargetFramework,
+        out string compatibilityTableRow,
+        out bool multiTargetExactMatchOnly)
+    {
+        FSharpProjectReferenceTargetFrameworkSelection selection =
+            SelectFSharpProjectReferenceTargetFramework(consumerTargetFramework,
+                availableTargetFrameworks);
+        selectedTargetFramework = selection.TargetFramework;
+        compatibilityTableRow = selection.CompatibilityTableRow;
+        multiTargetExactMatchOnly = selection.MultiTargetExactMatchOnly;
+        return selectedTargetFramework is not null;
+    }
+
+    private static FSharpProjectReferenceTargetFrameworkSelection
+        SelectFSharpProjectReferenceTargetFramework(string consumerTargetFramework,
+            IReadOnlyList<string> availableTargetFrameworks)
+    {
+        string consumer = consumerTargetFramework.Trim();
+        string? exact = availableTargetFrameworks.FirstOrDefault(targetFramework =>
+            targetFramework.Equals(consumer, StringComparison.OrdinalIgnoreCase));
+        if (exact is not null)
+            return new(exact, $"Exact target-framework match '{exact}'.");
+
+        if (availableTargetFrameworks.Count == 0)
+        {
+            return new(null,
+                "The referenced project exposes no evaluated target-framework context.");
+        }
+
+        if (availableTargetFrameworks.Count != 1)
+        {
+            return new(null,
+                "Compatible selection is exact-match-only when the referenced project " +
+                "exposes more than one evaluated target framework.",
+                MultiTargetExactMatchOnly: true);
+        }
+
+        string child = availableTargetFrameworks[0];
+        if (!TryParseNetStandardTargetFramework(child, out int childStandard))
+        {
+            return new(null,
+                $"The Microsoft .NET Standard table has no compatibility row for referenced " +
+                $"target framework '{child}'.");
+        }
+
+        bool compatible = IsNetStandardCompatibleConsumer(consumer, childStandard,
+            out string tableRow);
+        return new(compatible ? child : null, tableRow);
+    }
+
+    private static bool IsNetStandardCompatibleConsumer(string consumerTargetFramework,
+        int standardVersion, out string tableRow)
+    {
+        string consumer = consumerTargetFramework.Trim().ToLowerInvariant();
+        if (consumer.Contains('-') &&
+            !consumer.StartsWith("net", StringComparison.Ordinal))
+        {
+            tableRow = $"Consumer '{consumerTargetFramework}' is not a recognized .NET " +
+                       "implementation TFM in the Microsoft .NET Standard table.";
+            return false;
+        }
+
+        if (TryParseNetStandardTargetFramework(consumer, out int consumerStandard))
+        {
+            bool compatible = consumerStandard >= standardVersion;
+            tableRow = compatible
+                ? $".NET Standard is cumulative: {FormatNetStandard(consumerStandard)} " +
+                  $"includes {FormatNetStandard(standardVersion)}."
+                : $".NET Standard is cumulative: {FormatNetStandard(consumerStandard)} " +
+                  $"does not include the higher {FormatNetStandard(standardVersion)}.";
+            return compatible;
+        }
+
+        if (TryParseNetCoreAppTargetFramework(consumer, out Version? coreVersion))
+        {
+            Version minimum = standardVersion <= 16
+                ? new(1, 0)
+                : standardVersion == 20
+                    ? new(2, 0)
+                    : new(3, 0);
+            bool compatible = coreVersion! >= minimum;
+            tableRow = compatible
+                ? $".NET Core {coreVersion!.Major}.{coreVersion.Minor} implements " +
+                  $"{FormatNetStandard(standardVersion)}."
+                : $".NET Core {coreVersion!.Major}.{coreVersion.Minor} does not implement " +
+                  $"{FormatNetStandard(standardVersion)}; the table starts at " +
+                  $".NET Core {minimum.Major}.{minimum.Minor}.";
+            return compatible;
+        }
+
+        if (TryParseModernNetTargetFramework(consumer, out Version? modernVersion))
+        {
+            tableRow = $".NET {modernVersion!.Major}.{modernVersion.Minor} implements " +
+                       $"{FormatNetStandard(standardVersion)}.";
+            return true;
+        }
+
+        if (TryParseNetFrameworkTargetFramework(consumer, out int frameworkVersion))
+        {
+            int? minimum = standardVersion switch
+            {
+                10 or 11 => 450,
+                12 => 451,
+                13 => 460,
+                14 or 15 or 16 or 20 => 461,
+                _ => null,
+            };
+            if (minimum is null)
+            {
+                tableRow = $".NET Framework does not implement " +
+                           $"{FormatNetStandard(standardVersion)} (N/A in the Microsoft " +
+                           ".NET Standard table).";
+                return false;
+            }
+            bool compatible = frameworkVersion >= minimum.Value;
+            tableRow = compatible
+                ? $".NET Framework {FormatNetFramework(frameworkVersion)} implements " +
+                  $"{FormatNetStandard(standardVersion)}."
+                : $".NET Framework {FormatNetFramework(frameworkVersion)} does not implement " +
+                  $"{FormatNetStandard(standardVersion)}; the table starts at .NET Framework " +
+                  $"{FormatNetFramework(minimum.Value)}.";
+            return compatible;
+        }
+
+        tableRow = $"Consumer '{consumerTargetFramework}' is not a recognized .NET, .NET Core, " +
+                   ".NET Framework, or .NET Standard TFM in the Microsoft .NET Standard table.";
+        return false;
+    }
+
+    private static bool TryParseNetStandardTargetFramework(string targetFramework,
+        out int version)
+    {
+        version = 0;
+        string normalized = targetFramework.Trim().ToLowerInvariant();
+        if (!normalized.StartsWith("netstandard", StringComparison.Ordinal) ||
+            normalized.Contains('-'))
+            return false;
+        version = normalized["netstandard".Length..] switch
+        {
+            "1.0" => 10,
+            "1.1" => 11,
+            "1.2" => 12,
+            "1.3" => 13,
+            "1.4" => 14,
+            "1.5" => 15,
+            "1.6" => 16,
+            "2.0" => 20,
+            "2.1" => 21,
+            _ => 0,
+        };
+        return version != 0;
+    }
+
+    private static bool TryParseNetCoreAppTargetFramework(string targetFramework,
+        out Version? version)
+    {
+        version = null;
+        if (!targetFramework.StartsWith("netcoreapp", StringComparison.Ordinal) ||
+            targetFramework.Contains('-'))
+            return false;
+        return Version.TryParse(targetFramework["netcoreapp".Length..], out version) &&
+               version is { Major: >= 1 };
+    }
+
+    private static bool TryParseModernNetTargetFramework(string targetFramework,
+        out Version? version)
+    {
+        version = null;
+        string baseTargetFramework = targetFramework.Split('-', 2)[0];
+        if (!baseTargetFramework.StartsWith("net", StringComparison.Ordinal) ||
+            baseTargetFramework.StartsWith("netstandard", StringComparison.Ordinal) ||
+            baseTargetFramework.StartsWith("netcoreapp", StringComparison.Ordinal))
+            return false;
+        return Version.TryParse(baseTargetFramework[3..], out version) &&
+               version is { Major: >= 5 };
+    }
+
+    private static bool TryParseNetFrameworkTargetFramework(string targetFramework,
+        out int version)
+    {
+        version = targetFramework switch
+        {
+            "net45" => 450,
+            "net451" => 451,
+            "net452" => 452,
+            "net46" => 460,
+            "net461" => 461,
+            "net462" => 462,
+            "net47" => 470,
+            "net471" => 471,
+            "net472" => 472,
+            "net48" => 480,
+            "net481" => 481,
+            _ => 0,
+        };
+        return version != 0;
+    }
+
+    private static bool IsNetFrameworkTargetFramework(string targetFramework) =>
+        TryParseNetFrameworkTargetFramework(targetFramework.Trim().ToLowerInvariant(), out _);
+
+    private static string FormatNetStandard(int version) =>
+        $"netstandard{version / 10}.{version % 10}";
+
+    private static string FormatNetFramework(int version) => version switch
+    {
+        450 => "4.5",
+        451 => "4.5.1",
+        452 => "4.5.2",
+        460 => "4.6",
+        461 => "4.6.1",
+        462 => "4.6.2",
+        470 => "4.7",
+        471 => "4.7.1",
+        472 => "4.7.2",
+        480 => "4.8",
+        481 => "4.8.1",
+        _ => version.ToString(),
+    };
 
     private sealed record CapturedFSharpSemanticProject(
         SemanticProjectInput[] Projects,
@@ -784,7 +1016,8 @@ public sealed partial class SemanticService
         var nodes = new List<CapturedFSharpSemanticNode>();
         var completed = new Dictionary<string, int>(WorkspacePaths.FileSystemPathComparer);
         var active = new HashSet<string>(WorkspacePaths.FileSystemPathComparer);
-        var assemblyOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var assemblyOwners = new Dictionary<string, (string ProjectPath,
+            string TargetFramework)>(StringComparer.OrdinalIgnoreCase);
         var binaryReferences = new List<FSharpBinaryReferenceSnapshot>();
         var partialReasons = new SortedSet<string>(StringComparer.Ordinal);
         string? referenceSnapshotDirectory = null;
@@ -806,10 +1039,11 @@ public sealed partial class SemanticService
                 ProjectReferenceFailure: projectReferenceFailure);
         }
 
-        int? CaptureNode(ProjectRow owner, string? requiredSource)
+        int? CaptureNode(ProjectRow owner, string nodeTargetFramework,
+            string? requiredSource)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string key = $"{owner.Path}\0{selected.TargetFramework}";
+            string key = $"{owner.Path}\0{nodeTargetFramework}";
             if (completed.TryGetValue(key, out int completedIndex)) return completedIndex;
             if (!active.Add(key))
             {
@@ -836,13 +1070,14 @@ public sealed partial class SemanticService
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(tfm => tfm, StringComparer.OrdinalIgnoreCase)
                     .ToArray();
-                if (!availableTargetFrameworks.Contains(selected.TargetFramework,
+                if (!availableTargetFrameworks.Contains(nodeTargetFramework,
                         StringComparer.OrdinalIgnoreCase))
                 {
                     capturedFailure = Failure(
                         "fsharp_semantic_project_reference_target_framework_unavailable",
                         projectReferenceFailure: new(owner.Path,
-                            availableTargetFrameworks.ToList()));
+                            availableTargetFrameworks.ToList(), nodeTargetFramework,
+                            $"No evaluated context matches '{nodeTargetFramework}'."));
                     return null;
                 }
 
@@ -863,7 +1098,7 @@ public sealed partial class SemanticService
                 FSharpSemanticOptionsSnapshot options =
                     ProjectFileParser.ParseFSharpSemanticOptionsClosureSnapshot(
                         nodeBudgets.Evaluation, owner.Path, projectXml,
-                        owner.Tfms, selected.TargetFramework, importPath =>
+                        owner.Tfms, nodeTargetFramework, importPath =>
                         {
                             FileHit? imported = ResolveIndexedFSharpImport(queries, importPath);
                             string? content = imported is { Language: "config" } &&
@@ -945,7 +1180,7 @@ public sealed partial class SemanticService
                 List<FSharpPackageReferenceSnapshot> packageReferences =
                     options.PackageReferences ?? [];
                 if (!TryResolveFSharpPackageAssets(owner.Path, projectXml,
-                        selected.TargetFramework, packageReferences, evaluatedAuthorityInputs,
+                        nodeTargetFramework, packageReferences, evaluatedAuthorityInputs,
                         cancellationToken, out FSharpPackageAssetsSnapshot? packageAssets,
                         out string? packageError))
                 {
@@ -979,14 +1214,16 @@ public sealed partial class SemanticService
                     return null;
                 }
                 if (assemblyOwners.TryGetValue(options.AssemblyName,
-                        out string? existingAssemblyOwner) &&
-                    !existingAssemblyOwner.Equals(owner.Path,
-                        WorkspacePaths.FileSystemPathComparison))
+                        out (string ProjectPath, string TargetFramework) existingAssemblyOwner) &&
+                    (!existingAssemblyOwner.ProjectPath.Equals(owner.Path,
+                         WorkspacePaths.FileSystemPathComparison) ||
+                     !existingAssemblyOwner.TargetFramework.Equals(nodeTargetFramework,
+                         StringComparison.OrdinalIgnoreCase)))
                 {
                     capturedFailure = Failure("fsharp_project_options_conflict", options.PartialReason);
                     return null;
                 }
-                assemblyOwners[options.AssemblyName] = owner.Path;
+                assemblyOwners[options.AssemblyName] = (owner.Path, nodeTargetFramework);
 
                 var childIndices = new List<int>(options.ProjectReferences.Count);
                 foreach (FSharpProjectReferenceSnapshot projectReference in
@@ -1005,7 +1242,28 @@ public sealed partial class SemanticService
                         capturedFailure = Failure("fsharp_semantic_project_references_unsupported");
                         return null;
                     }
-                    int? childIndex = CaptureNode(child, requiredSource: null);
+                    string[] childTargetFrameworks = child.Tfms.Split(';',
+                            StringSplitOptions.RemoveEmptyEntries |
+                            StringSplitOptions.TrimEntries)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(targetFramework => targetFramework,
+                            StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    FSharpProjectReferenceTargetFrameworkSelection childSelection =
+                        SelectFSharpProjectReferenceTargetFramework(nodeTargetFramework,
+                            childTargetFrameworks);
+                    if (childSelection.TargetFramework is null)
+                    {
+                        capturedFailure = Failure(
+                            "fsharp_semantic_project_reference_target_framework_unavailable",
+                            projectReferenceFailure: new(child.Path,
+                                childTargetFrameworks.ToList(), nodeTargetFramework,
+                                childSelection.CompatibilityTableRow,
+                                childSelection.MultiTargetExactMatchOnly));
+                        return null;
+                    }
+                    int? childIndex = CaptureNode(child, childSelection.TargetFramework,
+                        requiredSource: null);
                     if (childIndex is null) return null;
                     if (!childIndices.Contains(childIndex.Value))
                         childIndices.Add(childIndex.Value);
@@ -1023,12 +1281,14 @@ public sealed partial class SemanticService
                 var referencePaths = new List<string>();
                 var referenceIdentities = new List<string>();
                 IReadOnlyList<string> frameworkReferences =
-                    ReferenceAssemblyLocator.FrameworkReferencePaths(selected.TargetFramework,
+                    ReferenceAssemblyLocator.FrameworkReferencePaths(nodeTargetFramework,
                         out string? frameworkDirectory);
                 if (frameworkDirectory is null || frameworkReferences.Count == 0)
                 {
                     capturedFailure = Failure("fsharp_framework_references_unavailable",
-                        options.PartialReason);
+                        options.PartialReason, new(owner.Path,
+                            availableTargetFrameworks.ToList(),
+                            SelectedTargetFramework: nodeTargetFramework));
                     return null;
                 }
                 var frameworkAssemblyNames = frameworkReferences
@@ -1059,11 +1319,13 @@ public sealed partial class SemanticService
                 if (!hasExplicitFSharpCore)
                 {
                     string? fsharpCore = ReferenceAssemblyLocator.FSharpCoreReferencePath(
-                        selected.TargetFramework, out bool exactTargetAsset);
+                        nodeTargetFramework, out bool exactTargetAsset);
                     if (fsharpCore is null)
                     {
                         capturedFailure = Failure("fsharp_core_reference_unavailable",
-                            options.PartialReason);
+                            options.PartialReason, new(owner.Path,
+                                availableTargetFrameworks.ToList(),
+                                SelectedTargetFramework: nodeTargetFramework));
                         return null;
                     }
                     referencePaths.Add(fsharpCore);
@@ -1151,7 +1413,7 @@ public sealed partial class SemanticService
                     .OrderBy(reference => reference, WorkspacePaths.FileSystemPathComparer)
                     .ToList();
                 string fingerprint = FSharpSemanticFingerprint(owner.Path,
-                    selected.TargetFramework, projectXml, options.CommandLineArgs,
+                    nodeTargetFramework, projectXml, options.CommandLineArgs,
                     fullSourcePaths, sourceTexts, referenceIdentities);
                 string outputPath = Path.Combine(Path.GetTempPath(),
                     "PhoenixCodeNav.FSharp", fingerprint, $"{options.AssemblyName}.dll");
@@ -1160,8 +1422,7 @@ public sealed partial class SemanticService
                     "--simpleresolution",
                     "--noframework",
                     "--target:library",
-                    selected.TargetFramework.Equals("net472",
-                        StringComparison.OrdinalIgnoreCase)
+                    IsNetFrameworkTargetFramework(nodeTargetFramework)
                         ? "--targetprofile:mscorlib"
                         : "--targetprofile:netcore",
                     "--debug:portable",
@@ -1191,7 +1452,8 @@ public sealed partial class SemanticService
 
         try
         {
-            int? rootProjectIndex = CaptureNode(rootOwner, targetPath);
+            int? rootProjectIndex = CaptureNode(rootOwner, selected.TargetFramework,
+                targetPath);
             if (rootProjectIndex is null)
             {
                 failure = capturedFailure;

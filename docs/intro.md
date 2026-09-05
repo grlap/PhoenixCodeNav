@@ -31,7 +31,7 @@ each of which tells you *how much to trust it*:
 | **Indexed text** (FTS5, C# + F# + Markdown + SQL) | where literal text/config/keys appear, ranked | `indexed` |
 | **Syntax (C#)** (Roslyn parse) | file outlines, symbol declarations, spans | `indexed` |
 | **Syntax (F#)** (FCS parse) | compile-owned `.fs` / `.fsi` outlines | `indexed` |
-| **Semantic** (Roslyn for C#; bounded FCS for F#) | exact C# navigation; F# position symbols and definitions through an exact-TFM F# project-reference closure, including restored direct/transitive and centrally managed package compile assets | C# may be `exact`; successful bounded F# results may be `exact` when disclosed partial reasons preserve selected-context authority |
+| **Semantic** (Roslyn for C#; bounded FCS for F#) | exact C# navigation; F# position symbols and definitions through an exact-first project-reference closure with bounded single-target `netstandard` compatibility, including restored direct/transitive and centrally managed package compile assets | C# may be `exact`; successful bounded F# results may be `exact` when disclosed partial reasons preserve selected-context authority |
 
 Plus structural facts (project graph, ownership, dependency paths) and composites
 (`context_pack`, `impact`). Every response is budget-capped, line-addressable, and
@@ -50,8 +50,8 @@ claim target-specific transitive package closure
 for C#.
 F# source text, `.fsproj` compile ownership, and C#↔F# project edges are indexed. Compile-owned
 `.fs` / `.fsi` files support FCS outlines plus position-based `symbol_at`, `definition` through the
-selected root's exact-TFM F# `ProjectReference` closure under the evaluated MSBuild transitivity
-policy, and references counted only in
+selected root's F# `ProjectReference` closure under the evaluated MSBuild transitivity and bounded
+child-TFM policies, and references counted only in
 that physical root project. The semantic path evaluates a
 bounded legacy-project subset (simple properties and conditions, `Choose`, and literal local
 `.props`) without executing MSBuild. It also evaluates the nearest indexed ancestor
@@ -60,13 +60,16 @@ Include/Remove item-list mutations; target/task-driven mutations still fail clos
 SDK/toolchain implicit authority is partial, and custom SDK authority remains unsupported. Restored
 `PackageReference` closure is supported only when Phoenix can verify the selected direct and transitive
 compile assets safely. Active F# project references use literal physical paths and in-memory FCS
-project options at the exact selected TFM; missing projects, cycles, unsupported metadata, non-F#
-targets, same-assembly conflicts, and unavailable exact TFMs fail explicitly without borrowing a
+project options. Exact child TFMs win; if exact is absent, the public Microsoft .NET Standard table
+may select a single-target `netstandard` child. `netstandard2.0`/`netstandard2.1` resolve end to end;
+`netstandard1.x` compile inputs and all multi-target compatibility remain fail-closed. Missing
+projects, cycles, unsupported metadata, non-F# targets, same-assembly conflicts, and unavailable
+TFMs fail explicitly without borrowing a
 last-built DLL. SDK-style closure is transitive by default, while
 `DisableTransitiveProjectReferences=true` and legacy-style projects remain direct-only. Child
 compiler diagnostics are preserved with their source paths and downgrade semantic confidence just
-like root diagnostics. Compatible-TFM selection and broader F# semantic operations still return explicit
-unsupported boundaries rather than misleading empty answers. Indexed search is language-neutral unless the caller supplies a file
+like root diagnostics. Broader F# semantic operations still return explicit unsupported boundaries
+rather than misleading empty answers. Indexed search is language-neutral unless the caller supplies a file
 scope; a mixed C#/F# symbol scope returns the available C# symbols and marks the skipped portion
 partial.
 

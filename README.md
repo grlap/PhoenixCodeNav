@@ -31,7 +31,7 @@ navigation questions in four layers, each labeled with how trustworthy it is:
 | **Indexed text** (SQLite FTS5, C# + F# + Markdown + SQL) | `find_file`, `search_text`, `source_context`, `config_lookup`, `references` (candidates) | `indexed` |
 | **Syntax (C#)** (Roslyn parse, no compile; includes implicit/explicit conversion operators) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
 | **Syntax (F#)** (FCS parse, no type check) | `search_symbol`; `outline` for project-owned `.fs` / `.fsi` | `indexed` |
-| **Semantic** (Roslyn for C#; bounded FCS type checks for F#) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at`, `definition` through an exact-TFM F# project-reference closure, and references counted in the selected project | C# may be `exact`; successful bounded F# results may be `exact` when disclosed partial reasons preserve selected-context authority, while errors and authority loss are `indexed` |
+| **Semantic** (Roslyn for C#; bounded FCS type checks for F#) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at`, `definition` through an exact-first F# project-reference closure with bounded single-target `netstandard` compatibility, and references counted in the selected project | C# may be `exact`; successful bounded F# results may be `exact` when disclosed partial reasons preserve selected-context authority, while errors and authority loss are `indexed` |
 
 Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`project_graph`,
 `projects_containing`, `dependency_path`, `repo_overview`) and composites (`context_pack`,
@@ -59,7 +59,15 @@ parses `.fsproj` compile ownership and references, and preserves C#↔F# project
 `.fs` / `.fsi` files get indexed declaration-name search and syntax-only `outline`s from a pinned
 FSharp.Compiler.Service adapter, plus position-based `symbol_at`, `definition`, and selected-project
 `references` through a bounded FCS type check. The selected physical `.fsproj` + target-framework
-context recursively captures active F# `ProjectReference` inputs at that exact target framework,
+context recursively captures active F# `ProjectReference` inputs. An exact child target framework
+always wins. When exact is absent, only a single-target `netstandard1.0`–`netstandard2.1` child may
+be selected, according to Microsoft's public [.NET Standard implementation
+table](https://learn.microsoft.com/dotnet/standard/net-standard); multi-target children remain
+exact-only. `netstandard2.0` and `netstandard2.1` compile inputs resolve end to end. A selected
+`netstandard1.x` child fails closed because this build does not materialize its granular
+auto-referenced `NETStandard.Library` compile closure, and Phoenix never substitutes the wider
+`netstandard2.0` reference pack. The chosen child TFM controls that child's project evaluation,
+package assets, framework references, `FSharp.Core`, fingerprint, virtual output, and FCS arguments,
 using each literal physical project path as authority and constructing in-memory FCS referenced
 project options without reading or emitting project DLLs. SDK-style projects inherit MSBuild's
 transitive-reference default; `DisableTransitiveProjectReferences=true` and legacy-style projects
@@ -75,8 +83,8 @@ dependent projects are not scanned yet. Active `PackageReference` items—includ
 `PackageVersion` authority from the nearest indexed `Directory.Packages.props`—use the selected
 target in an already-restored `project.assets.json`; reachable transitive compile assets are
 snapshotted without executing restore or MSBuild. Missing, unreadable, cyclic, metadata-unsupported,
-non-F#, or exact-target-unavailable project references fail explicitly; Phoenix never substitutes a
-potentially stale last-built DLL, and compatible `netstandard` selection is intentionally deferred. Stored
+non-F#, or target-unavailable project references fail explicitly; Phoenix never substitutes a
+potentially stale last-built DLL. Stored
 declaration indexing processes at most 64 deterministically
 selected owner/TFM parse contexts per file, reserving one context per valid compile owner while
 capacity remains before filling the budget in global ordinal order. FCS syntax parse failures, context truncation, and
@@ -550,8 +558,10 @@ watcher, and lifecycle test projects under `tests/`.
   refused, while mixed scopes explicitly report skipped scripts. F# `outline` is syntax-only and
   limited to compile-owned `.fs` / `.fsi`.
   F# semantics are position-only (`symbol_at`, `definition`, `references`) from one physical root
-  project and target framework, over a documented MSBuild-evaluation subset and its exact-TFM
-  F# `ProjectReference` closure. SDK-style projects are transitive by default;
+  project and target framework, over a documented MSBuild-evaluation subset and its F#
+  `ProjectReference` closure. Exact child TFMs win; table-compatible single-target
+  `netstandard2.0`/`netstandard2.1` children resolve, while multi-target compatibility and
+  `netstandard1.x` compile inputs fail closed. SDK-style projects are transitive by default;
   `DisableTransitiveProjectReferences=true` and legacy-style projects are direct-only. Definitions can
   resolve into that closure, and child compiler diagnostics are returned with their physical source
   provenance. References exclude

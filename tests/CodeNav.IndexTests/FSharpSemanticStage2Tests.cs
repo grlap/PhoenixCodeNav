@@ -560,6 +560,475 @@ public partial class FSharpSemanticStage2Tests
         }
     }
 
+    [Theory]
+    [InlineData("net45", "netstandard1.0", true)]
+    [InlineData("net44", "netstandard1.0", false)]
+    [InlineData("net45", "netstandard1.1", true)]
+    [InlineData("net451", "netstandard1.2", true)]
+    [InlineData("net45", "netstandard1.2", false)]
+    [InlineData("net46", "netstandard1.3", true)]
+    [InlineData("net452", "netstandard1.3", false)]
+    [InlineData("net461", "netstandard1.4", true)]
+    [InlineData("net46", "netstandard1.4", false)]
+    [InlineData("net461", "netstandard1.5", true)]
+    [InlineData("net46", "netstandard1.5", false)]
+    [InlineData("net461", "netstandard1.6", true)]
+    [InlineData("net46", "netstandard1.6", false)]
+    [InlineData("net461", "netstandard2.0", true)]
+    [InlineData("net46", "netstandard2.0", false)]
+    [InlineData("net472", "netstandard2.1", false)]
+    [InlineData("netcoreapp1.0", "netstandard1.6", true)]
+    [InlineData("netcoreapp1.0", "netstandard2.0", false)]
+    [InlineData("netcoreapp2.0", "netstandard2.0", true)]
+    [InlineData("netcoreapp2.2", "netstandard2.1", false)]
+    [InlineData("netcoreapp3.0", "netstandard2.1", true)]
+    [InlineData("net5.0", "netstandard2.1", true)]
+    [InlineData("net8.0-windows", "netstandard2.0", true)]
+    [InlineData("netstandard2.0", "netstandard1.6", true)]
+    [InlineData("netstandard1.6", "netstandard2.0", false)]
+    public void ProjectReferenceNetStandardCompatibilityUsesOnlyThePublishedTable(
+        string consumerTargetFramework, string childTargetFramework, bool expected)
+    {
+        bool selected = SemanticService.TrySelectFSharpProjectReferenceTargetFramework(
+            consumerTargetFramework, [childTargetFramework], out string? selectedTargetFramework,
+            out string tableRow, out bool multiTargetExactMatchOnly);
+
+        Assert.Equal(expected, selected);
+        Assert.Equal(expected ? childTargetFramework : null, selectedTargetFramework);
+        Assert.False(multiTargetExactMatchOnly);
+        Assert.NotEmpty(tableRow);
+    }
+
+    [Fact]
+    public void ProjectReferenceNetStandardCompatibilityKeepsExactAndEmptyChoicesFailClosed()
+    {
+        Assert.True(SemanticService.TrySelectFSharpProjectReferenceTargetFramework(
+            "net8.0", ["net8.0", "netstandard2.0"], out string? exact,
+            out string exactRule, out bool exactOnly));
+        Assert.Equal("net8.0", exact);
+        Assert.Contains("Exact target-framework match", exactRule);
+        Assert.False(exactOnly);
+
+        Assert.False(SemanticService.TrySelectFSharpProjectReferenceTargetFramework(
+            "net8.0", [], out string? missing, out string missingRule,
+            out bool missingExactOnly));
+        Assert.Null(missing);
+        Assert.Contains("no evaluated target-framework context", missingRule);
+        Assert.False(missingExactOnly);
+    }
+
+    [Fact]
+    public void ProjectReferenceNetStandardCompatibilityResolvesAndExactMatchWins()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-netstandard-compatibility").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net8.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs",
+                "module App\nlet observed = Dependency.value\n");
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProject("netstandard2.0", "Dependency.fs"));
+            WriteProject(root, "Dependency/Dependency.fs",
+                "module Dependency\nlet value = 42\n");
+
+            using (var compatibleFixture = Fixture.Create(root))
+            {
+                string raw = CallSemantic(() => compatibleFixture.Tools.Definition(
+                    path: "App/App.fs", line: 2, column: 28, mode: "semantic",
+                    timeoutMs: 60_000));
+                JsonElement response = Parse(raw);
+                Assert.True(response.GetProperty("found").GetBoolean(), raw);
+                Assert.Equal("exact",
+                    response.GetProperty("meta").GetProperty("confidence").GetString());
+                Assert.Contains(response.GetProperty("declarations").EnumerateArray(),
+                    declaration => declaration.GetProperty("path").GetString() ==
+                                   "Dependency/Dependency.fs");
+                Assert.Equal(1, response.GetProperty(
+                    "declarationsFromProjectReferenceClosureCount").GetInt32());
+                Assert.False(response.TryGetProperty("projectReferenceTypeCheckContexts", out _));
+            }
+
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProject("net8.0;netstandard2.0", "Dependency.fs"));
+            using var exactFixture = Fixture.Create(root);
+            string exactRaw = CallSemantic(() => exactFixture.Tools.Definition(
+                path: "App/App.fs", line: 2, column: 28, mode: "semantic",
+                timeoutMs: 60_000));
+            JsonElement exact = Parse(exactRaw);
+            Assert.True(exact.GetProperty("found").GetBoolean(), exactRaw);
+            Assert.Equal("exact",
+                exact.GetProperty("meta").GetProperty("confidence").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("netstandard2.0", "NETSTANDARD1_0_OR_GREATER", 3)]
+    [InlineData("netstandard2.0", "NETSTANDARD1_6_OR_GREATER", 3)]
+    [InlineData("netstandard2.0", "NETSTANDARD2_0_OR_GREATER", 3)]
+    [InlineData("netstandard2.0", "NETSTANDARD2_1_OR_GREATER", 5)]
+    [InlineData("netstandard2.1", "NETSTANDARD1_0_OR_GREATER", 3)]
+    [InlineData("netstandard2.1", "NETSTANDARD1_6_OR_GREATER", 3)]
+    [InlineData("netstandard2.1", "NETSTANDARD2_0_OR_GREATER", 3)]
+    [InlineData("netstandard2.1", "NETSTANDARD2_1_OR_GREATER", 3)]
+    public void CompatibleChildUsesSdkNetStandardCumulativeDefines(
+        string childTargetFramework, string conditionalDefine, int expectedStartLine)
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-netstandard-defines").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net8.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs",
+                "module App\nlet observed = Dependency.value\n");
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProject(childTargetFramework, "Dependency.fs"));
+            WriteProject(root, "Dependency/Dependency.fs", $$"""
+                module Dependency
+                #if {{conditionalDefine}}
+                let value = 42
+                #else
+                let value = -1
+                #endif
+                """);
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.Definition(
+                path: "App/App.fs", line: 2, column: 28, mode: "semantic",
+                timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.True(response.GetProperty("found").GetBoolean(), raw);
+            Assert.Equal("exact",
+                response.GetProperty("meta").GetProperty("confidence").GetString());
+            JsonElement declaration = Assert.Single(response.GetProperty("declarations")
+                .EnumerateArray());
+            Assert.Equal("Dependency/Dependency.fs",
+                declaration.GetProperty("path").GetString());
+            Assert.Equal(expectedStartLine,
+                declaration.GetProperty("startLine").GetInt32());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void IndexedNetStandardCumulativeDefineSelectsActiveDeclaration()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-indexed-netstandard-defines").FullName;
+        try
+        {
+            WriteProject(root, "Library/Library.fsproj",
+                SdkProject("netstandard2.0", "Library.fs"));
+            WriteProject(root, "Library/Library.fs", """
+                module ConditionalDeclarations
+                #if NETSTANDARD2_0_OR_GREATER
+                type ActiveDeclaration = ActiveDeclaration of int
+                #else
+                type InactiveDeclaration = InactiveDeclaration of int
+                #endif
+                """);
+
+            using var fixture = Fixture.Create(root);
+            JsonElement active = Assert.Single(Parse(fixture.Tools.SearchSymbol(
+                    "ActiveDeclaration", kinds: "union", match: "exact",
+                    pathGlob: "Library/Library.fs"))
+                .GetProperty("symbols").EnumerateArray());
+            Assert.Equal("Library/Library.fs", active.GetProperty("path").GetString());
+            Assert.Equal(3, active.GetProperty("startLine").GetInt32());
+
+            JsonElement inactive = Parse(fixture.Tools.SearchSymbol(
+                "InactiveDeclaration", match: "exact", pathGlob: "Library/Library.fs"));
+            Assert.Empty(inactive.GetProperty("symbols").EnumerateArray());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void CompatibleChildUsesItsOwnTargetFrameworkForPackageAndFSharpCoreAssets()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-netstandard-child-assets").FullName;
+        try
+        {
+            const string packageId = "System.IO.Hashing";
+            const string packageVersion = "10.0.10";
+            const string fsharpCoreVersion = "10.1.204";
+            string packagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES") is
+            { Length: > 0 } configuredPackages
+                ? configuredPackages
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".nuget", "packages");
+            Assert.True(File.Exists(Path.Combine(packagesRoot, packageId.ToLowerInvariant(),
+                packageVersion, "lib", "netstandard2.0", "System.IO.Hashing.dll")));
+            Assert.True(File.Exists(Path.Combine(packagesRoot, "fsharp.core",
+                fsharpCoreVersion, "lib", "netstandard2.0", "FSharp.Core.dll")));
+
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net8.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs", "module App\nlet value = 1\n");
+            WriteProject(root, "Dependency/Dependency.fsproj", $$"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>netstandard2.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Dependency.fs" />
+                    <PackageReference Include="{{packageId}}" Version="{{packageVersion}}" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Dependency/Dependency.fs", """
+                namespace Dependency
+                open System.IO.Hashing
+                module PackageEvidence =
+                    let create () = XxHash64()
+                """);
+            WritePackageAssetsWithAutoReferencedPackage(root,
+                "Dependency/Dependency.fsproj", "netstandard2.0", packageId,
+                packageVersion, packagesRoot,
+                "lib/netstandard2.0/System.IO.Hashing.dll",
+                ("FSharp.Core", fsharpCoreVersion,
+                    "lib/netstandard2.0/FSharp.Core.dll"));
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "App/App.fs", 2, 5, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.True(response.GetProperty("found").GetBoolean(), raw);
+            Assert.Equal("value",
+                response.GetProperty("symbol").GetProperty("name").GetString());
+            Assert.DoesNotContain("package_assets_stale", raw,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("fsharp_core_reference_host_fallback", raw,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void CompatibleClosureFailsClosedWhenOneAssemblyWouldUseTwoTargetFrameworks()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-netstandard-assembly-conflict").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net8.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Left/Left.fsproj" />
+                  <ProjectReference Include="../Right/Right.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs", "module App\nlet value = 1\n");
+            foreach ((string side, string targetFramework) in new[]
+                     {
+                         ("Left", "netstandard2.0"),
+                         ("Right", "netstandard2.1"),
+                     })
+            {
+                WriteProject(root, $"{side}/{side}.fsproj",
+                    SdkProjectWithBody(targetFramework, $"""
+                        <ItemGroup>
+                          <Compile Include="{side}.fs" />
+                          <ProjectReference Include="../Shared/Shared.fsproj" />
+                        </ItemGroup>
+                        """));
+                WriteProject(root, $"{side}/{side}.fs",
+                    $"module {side}\nlet value = Shared.value\n");
+            }
+            WriteProject(root, "Shared/Shared.fsproj",
+                SdkProject("netstandard2.0;netstandard2.1", "Shared.fs"));
+            WriteProject(root, "Shared/Shared.fs", "module Shared\nlet value = 42\n");
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "App/App.fs", 2, 5, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.Equal("fsharp_project_options_conflict",
+                response.GetProperty("error").GetString());
+            Assert.Contains("project/TFM contexts",
+                response.GetProperty("detail").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void PlatformQualifiedNetRootFailsClosedWithoutBasePackSubstitution()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-netstandard-platform").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net8.0-windows", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs",
+                "module App\nlet observed = Dependency.value\n");
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProject("netstandard2.0", "Dependency.fs"));
+            WriteProject(root, "Dependency/Dependency.fs",
+                "module Dependency\nlet value = 42\n");
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.Definition(
+                path: "App/App.fs", line: 2, column: 28, mode: "semantic",
+                timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.Equal("fsharp_framework_references_unavailable",
+                response.GetProperty("error").GetString());
+            string detail = response.GetProperty("detail").GetString()!;
+            Assert.Contains("net8.0-windows", detail);
+            Assert.Contains("failed closed", detail);
+            Assert.Contains("did not substitute the base .NET reference pack", detail);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("netstandard2.0/../../outside-reference-pack")]
+    [InlineData("netstandard2.2")]
+    [InlineData("netstandard2.0-windows")]
+    public void FrameworkReferencePathsRejectNonCanonicalNetStandardTfms(
+        string targetFramework)
+    {
+        IReadOnlyList<string> paths = ReferenceAssemblyLocator.FrameworkReferencePaths(
+            targetFramework, out string? sourceDirectory);
+
+        Assert.Empty(paths);
+        Assert.Null(sourceDirectory);
+    }
+
+    [Fact]
+    public void NetStandardCompatibilityFailuresNameTheConsultedTableRule()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-netstandard-refusal").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net472", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs", "module App\nlet value = 1\n");
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProject("netstandard2.1", "Dependency.fs"));
+            WriteProject(root, "Dependency/Dependency.fs", "module Dependency\nlet value = 1\n");
+
+            using (var frameworkFixture = Fixture.Create(root))
+            {
+                JsonElement response = Parse(CallSemantic(() => frameworkFixture.Tools.SymbolAt(
+                    "App/App.fs", 2, 5, timeoutMs: 60_000)));
+                Assert.Equal("fsharp_semantic_project_reference_target_framework_unavailable",
+                    response.GetProperty("error").GetString());
+                string detail = response.GetProperty("detail").GetString()!;
+                Assert.Contains("net472", detail);
+                Assert.Contains("netstandard2.1", detail);
+                Assert.Contains("N/A", detail);
+                Assert.Contains("Microsoft .NET Standard support table", detail);
+            }
+
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net9.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProject("net8.0;netstandard2.0", "Dependency.fs"));
+            using var multiTargetFixture = Fixture.Create(root);
+            JsonElement multiTarget = Parse(CallSemantic(() =>
+                multiTargetFixture.Tools.SymbolAt("App/App.fs", 2, 5,
+                    timeoutMs: 60_000)));
+            Assert.Equal("fsharp_semantic_project_reference_target_framework_unavailable",
+                multiTarget.GetProperty("error").GetString());
+            string multiTargetDetail = multiTarget.GetProperty("detail").GetString()!;
+            Assert.Contains("net9.0", multiTargetDetail);
+            Assert.Contains("net8.0, netstandard2.0", multiTargetDetail);
+            Assert.Contains("Multi-target referenced projects remain exact-match-only",
+                multiTargetDetail);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void NetStandard1CompatibilitySelectsThenFailsClosedAtCompileMaterialization()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-netstandard1-materialization").FullName;
+        try
+        {
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("netstandard2.0", """
+                <ItemGroup>
+                  <Compile Include="App.fs" />
+                  <ProjectReference Include="../Dependency/Dependency.fsproj" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "App/App.fs", "module App\nlet value = 1\n");
+            WriteProject(root, "Dependency/Dependency.fsproj",
+                SdkProject("netstandard1.6", "Dependency.fs"));
+            WriteProject(root, "Dependency/Dependency.fs",
+                "module Dependency\nlet value = 42\n");
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "App/App.fs", 2, 5, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+            Assert.Equal("fsharp_framework_references_unavailable",
+                response.GetProperty("error").GetString());
+            string detail = response.GetProperty("detail").GetString()!;
+            Assert.Contains("Dependency/Dependency.fsproj", detail);
+            Assert.Contains("netstandard1.6", detail);
+            Assert.Contains("granular autoReferenced NETStandard.Library closure", detail);
+            Assert.Contains("did not substitute the wider netstandard2.0 reference pack", detail);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
     [Fact]
     public void TransitiveProjectReferenceClosureTypeChecksChildAgainstLeafWithoutCountingChildUses()
     {
@@ -911,7 +1380,7 @@ public partial class FSharpSemanticStage2Tests
                 </ItemGroup>
                 """));
             WriteProject(root, "Dependency/Dependency.fsproj",
-                SdkProject("netstandard2.0", "Dependency.fs"));
+                SdkProject("net9.0", "Dependency.fs"));
             WriteProject(root, "Dependency/Dependency.fs", "module Dependency\nlet value = 1\n");
             using (var tfmFixture = Fixture.Create(root))
             {
@@ -921,8 +1390,8 @@ public partial class FSharpSemanticStage2Tests
                     tfm.GetProperty("error").GetString());
                 Assert.Contains("Dependency/Dependency.fsproj",
                     tfm.GetProperty("detail").GetString());
-                Assert.Contains("netstandard2.0", tfm.GetProperty("detail").GetString());
-                Assert.Contains("Compatible netstandard selection is not yet supported",
+                Assert.Contains("net9.0", tfm.GetProperty("detail").GetString());
+                Assert.Contains("no compatibility row",
                     tfm.GetProperty("detail").GetString());
             }
 

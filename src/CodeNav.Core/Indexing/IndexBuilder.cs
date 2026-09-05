@@ -135,8 +135,10 @@ public static class IndexBuilder
     /// fresh unchanged-commit F# fixture exposed different persisted symbol rows and orphan-file
     /// classification under schema v28; cold-build/delta parity now guards recurrence.
     /// v30: stored F# parse coverage distinguishes compile owners with no retained context from
-    /// owners with some but not all contexts retained under the unchanged 64-context budget.</summary>
-    public const string SchemaVersion = "30";
+    /// owners with some but not all contexts retained under the unchanged 64-context budget.
+    /// v31: F# parse contexts include the SDK-compatible cumulative NETSTANDARD*_OR_GREATER
+    /// defines, changing which conditional declarations are persisted for netstandard targets.</summary>
+    public const string SchemaVersion = "31";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }

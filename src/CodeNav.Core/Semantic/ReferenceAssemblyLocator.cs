@@ -169,9 +169,15 @@ public static class ReferenceAssemblyLocator
                 return cached.Paths;
             }
 
-            string? dir = targetFramework.Equals("net472", StringComparison.OrdinalIgnoreCase)
+            string normalizedTargetFramework = targetFramework.Trim().ToLowerInvariant();
+            string? dir = normalizedTargetFramework.Contains('-', StringComparison.Ordinal)
+                ? null
+                : normalizedTargetFramework.Equals("net472",
+                    StringComparison.OrdinalIgnoreCase)
                 ? ProbeStrictNet472Dir()
-                : ProbeNetCoreReferenceDir(targetFramework);
+                : normalizedTargetFramework is "netstandard2.0" or "netstandard2.1"
+                    ? ProbeNetStandardReferenceDir(normalizedTargetFramework)
+                    : ProbeNetCoreReferenceDir(normalizedTargetFramework);
             IReadOnlyList<string> paths = dir is null
                 ? []
                 : EnumerateRefDlls(dir)
@@ -197,9 +203,8 @@ public static class ReferenceAssemblyLocator
         string? productVersion = FileVersionInfo.GetVersionInfo(runtimePath).ProductVersion;
         string packageVersion = (productVersion ?? "")
             .Split(['-', '+'], 2, StringSplitOptions.RemoveEmptyEntries)[0];
-        string targetAsset = targetFramework.Equals("net472", StringComparison.OrdinalIgnoreCase)
-            ? "netstandard2.0"
-            : "netstandard2.1";
+        string baseTargetFramework = targetFramework.Split('-', 2)[0].ToLowerInvariant();
+        string targetAsset = FSharpCoreTargetAsset(baseTargetFramework);
         if (packageVersion.Length > 0)
         {
             string packagesRoot = GlobalPackagesRoot();
@@ -207,7 +212,8 @@ public static class ReferenceAssemblyLocator
                 "lib", targetAsset, "FSharp.Core.dll");
             if (File.Exists(candidate))
             {
-                targetAssetExact = true;
+                targetAssetExact = !baseTargetFramework.StartsWith("netstandard1.",
+                    StringComparison.Ordinal);
                 return candidate;
             }
         }
@@ -250,6 +256,49 @@ public static class ReferenceAssemblyLocator
             }
         }
         return null;
+    }
+
+    private static string? ProbeNetStandardReferenceDir(string targetFramework)
+    {
+        foreach (string root in DotNetRoots())
+        {
+            string pack = Path.Combine(root, "packs", "NETStandard.Library.Ref");
+            if (!Directory.Exists(pack)) continue;
+            string? candidate = Directory.EnumerateDirectories(pack)
+                .Select(path => (Path: path, Version: ParseVersion(Path.GetFileName(path))))
+                .Where(item => item.Version is not null)
+                .OrderByDescending(item => item.Version)
+                .Select(item => Path.Combine(item.Path, "ref", targetFramework))
+                .FirstOrDefault(Directory.Exists);
+            if (candidate is not null) return candidate;
+        }
+
+        if (!targetFramework.Equals("netstandard2.0", StringComparison.OrdinalIgnoreCase))
+            return null;
+        string packageRoot = Path.Combine(GlobalPackagesRoot(), "netstandard.library");
+        if (!Directory.Exists(packageRoot)) return null;
+        return Directory.EnumerateDirectories(packageRoot)
+            .Select(path => (Path: path, Version: ParseVersion(Path.GetFileName(path))))
+            .Where(item => item.Version is not null)
+            .OrderByDescending(item => item.Version)
+            .Select(item => Path.Combine(item.Path, "build", "netstandard2.0", "ref"))
+            .FirstOrDefault(Directory.Exists);
+    }
+
+    private static string FSharpCoreTargetAsset(string baseTargetFramework)
+    {
+        if (baseTargetFramework.StartsWith("netstandard", StringComparison.Ordinal))
+            return baseTargetFramework.Equals("netstandard2.1", StringComparison.Ordinal)
+                ? "netstandard2.1"
+                : "netstandard2.0";
+        if (baseTargetFramework.StartsWith("netcoreapp", StringComparison.Ordinal) &&
+            Version.TryParse(baseTargetFramework["netcoreapp".Length..], out Version? core) &&
+            core.Major < 3)
+            return "netstandard2.0";
+        if (baseTargetFramework.StartsWith("net", StringComparison.Ordinal) &&
+            !baseTargetFramework[3..].Contains('.'))
+            return "netstandard2.0";
+        return "netstandard2.1";
     }
 
     private static string? ProbeStrictNet472Dir()

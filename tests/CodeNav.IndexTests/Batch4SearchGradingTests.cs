@@ -274,7 +274,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("30", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("31", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -379,6 +379,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("fsharp-definition-same-project", ids);
         Assert.Contains("fsharp-references-same-project", ids);
         Assert.Contains("fsharp-semantic-project-reference-closure", ids);
+        Assert.Contains("fsharp-semantic-project-reference-netstandard-compatibility", ids);
         Assert.Contains("fsharp-type-check-context-selection", ids);
         Assert.Contains("fsharp-semantic-confidence-authority", ids);
         Assert.Contains("fsharp-semantic-snapshot", ids);
@@ -463,6 +464,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             idList.Count(id => id == "fsharp-parse-owner-coverage-breakdown"));
         Assert.Equal(1,
             idList.Count(id => id == "fsharp-semantic-project-reference-closure"));
+        Assert.Equal(1, idList.Count(id => id ==
+            "fsharp-semantic-project-reference-netstandard-compatibility"));
         Assert.Equal(1, idList.Count(id => id == "csharp-symbol-free-outline"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-operator-indexing"));
         Assert.Equal(1, idList.Count(id => id == "csharp-conversion-semantic-handles"));
@@ -805,7 +808,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .GetProperty("summary")
             .GetString()!;
         Assert.Contains("v0.12.83", fsharpProjectReferenceClosure);
-        Assert.Contains("exact selected TFM", fsharpProjectReferenceClosure);
+        Assert.Contains("exact selected root TFM", fsharpProjectReferenceClosure);
         Assert.Contains("literal physical project paths", fsharpProjectReferenceClosure);
         Assert.Contains("in-memory referenced-project options", fsharpProjectReferenceClosure);
         Assert.Contains("without emitted or last-built DLLs", fsharpProjectReferenceClosure);
@@ -825,6 +828,22 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("references still count only the selected root",
             fsharpProjectReferenceClosure);
         Assert.Contains("same-assembly", fsharpProjectReferenceClosure);
+        string fsharpNetStandardCompatibility = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-semantic-project-reference-netstandard-compatibility")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.84", fsharpNetStandardCompatibility);
+        Assert.Contains("exact child-TFM matches always win", fsharpNetStandardCompatibility);
+        Assert.Contains("single-target netstandard1.0-2.1", fsharpNetStandardCompatibility);
+        Assert.Contains("netstandard2.0/2.1 compile inputs resolve end to end",
+            fsharpNetStandardCompatibility);
+        Assert.Contains("netstandard1.x", fsharpNetStandardCompatibility);
+        Assert.Contains("fails closed", fsharpNetStandardCompatibility);
+        Assert.Contains("multi-target children remain exact-only",
+            fsharpNetStandardCompatibility);
+        Assert.Contains("chosen child TFM", fsharpNetStandardCompatibility);
         string fsharpBoundary = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -1316,6 +1335,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                            "fsharp-references-same-project"),
                        ("in-memory referenced-project options",
                            "fsharp-semantic-project-reference-closure"),
+                       ("single-target netstandard1.0-2.1",
+                           "fsharp-semantic-project-reference-netstandard-compatibility"),
                        ("unrepresentedOwnerProjects",
                            "fsharp-parse-owner-coverage-breakdown"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),

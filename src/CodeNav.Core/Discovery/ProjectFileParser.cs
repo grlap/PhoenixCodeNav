@@ -1198,6 +1198,24 @@ public static partial class ProjectFileParser
         if (baseTfm.StartsWith("netstandard", StringComparison.Ordinal))
         {
             yield return "NETSTANDARD";
+            int standardVersion = baseTfm switch
+            {
+                "netstandard1.0" => 10,
+                "netstandard1.1" => 11,
+                "netstandard1.2" => 12,
+                "netstandard1.3" => 13,
+                "netstandard1.4" => 14,
+                "netstandard1.5" => 15,
+                "netstandard1.6" => 16,
+                "netstandard2.0" => 20,
+                "netstandard2.1" => 21,
+                _ => 0,
+            };
+            foreach (int compatibleVersion in new[] { 10, 11, 12, 13, 14, 15, 16, 20, 21 })
+            {
+                if (compatibleVersion > standardVersion) break;
+                yield return $"NETSTANDARD{compatibleVersion / 10}_{compatibleVersion % 10}_OR_GREATER";
+            }
         }
         else if (baseTfm.StartsWith("netcoreapp", StringComparison.Ordinal))
         {

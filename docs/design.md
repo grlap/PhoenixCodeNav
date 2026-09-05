@@ -79,7 +79,8 @@ for code identifiers.
 4. **Semantic** — C# uses lazy Roslyn compilations for `definition`, `references`,
    `implementations`, `callers`, `callees`, and `type_hierarchy`. F# uses a bounded FCS
    type check for position-based `symbol_at` and `definition` through the selected root's
-   exact-TFM F# `ProjectReference` closure under the evaluated MSBuild transitivity policy, plus `references` counted within the selected
+   F# `ProjectReference` closure under the evaluated MSBuild transitivity and bounded child-TFM
+   policies, plus `references` counted within the selected
    physical root. F# references enumerate compiler-bound non-definition uses from that root,
    keep the selected-project count exact while bounding only response
    samples, and expose that count as a workspace lower bound because dependent projects are not
@@ -237,8 +238,18 @@ after FCS. Missing, stale, mismatched, changed, non-managed, or path-unsafe pack
 explicit `fsharp_semantic_package_*` causes. Selected-project references use that identical captured
 context and post-check binary reverification boundary; sample text comes only from captured root
 source strings and never from a live filesystem or index reread. Active F# `ProjectReference`
-items are evaluated from the same pinned index snapshot and recursively captured dependency-first at
-the exact selected TFM. Each FCS project receives in-memory referenced-project options plus a matching
+items are evaluated from the same pinned index snapshot and recursively captured dependency-first.
+Exact child-TFM matches always win. Only when exact is absent, a referenced project with exactly one
+evaluated `netstandard1.0`–`netstandard2.1` TFM may be selected according to Microsoft's public
+[.NET Standard implementation table](https://learn.microsoft.com/dotnet/standard/net-standard).
+The .NET Framework 4.6.1 row is treated as compile-applicable to .NET Standard 1.5–2.0, while the
+table's footnote recommending .NET Framework 4.7.2 for runtime compatibility remains explicit.
+Multi-target children are exact-only. `netstandard2.0` and `netstandard2.1` compile inputs resolve
+end to end. A compatible `netstandard1.x` choice is recognized but fails closed because this build
+does not materialize the granular auto-referenced `NETStandard.Library` compile closure; it never
+substitutes the wider `netstandard2.0` reference pack. The chosen child TFM controls its project
+evaluation, package-assets target, framework references, `FSharp.Core`, fingerprint, virtual output,
+and FCS arguments. Each FCS project receives in-memory referenced-project options plus a matching
 virtual `-r:` output identity; SDK-style projects receive the flat transitive compiler reference set
 unless `DisableTransitiveProjectReferences=true`, while legacy-style projects remain direct-only.
 Phoenix neither emits nor reads a project DLL. Every physical node is checked once dependency-first;
@@ -251,8 +262,8 @@ children into parents, applies source, binary, import,
 property, and item-list budgets across the aggregate request, and reverifies every captured binary
 after the root check. Literal physical Include paths remain authoritative for legacy/`.Net` companion
 pairs. Missing or unreadable projects, unsupported metadata, cycles, same-assembly conflicts,
-non-F# targets, and unavailable exact TFMs fail closed with stable causes. Compatible
-`netstandard` selection remains a separate bounded follow-up rather than an implicit guess.
+non-F# targets, unavailable TFMs, and incompatible or ambiguous compatibility choices fail closed
+with stable causes.
 Exact-path opened-handle verification is available on Windows, Linux, and macOS; the macOS
 `proc_pidfdinfo` path added in v0.12.56 applies equally to workspace `HintPath` binaries and restored
 package assets. A platform verification failure remains fail-closed and produces no semantic result.
@@ -269,8 +280,9 @@ project/import property assignment after semantic items fail closed. Workspace-c
 verified after the check; declarations may come from the captured F# project-reference closure while
 reference counts remain selected-root-only. The host's target-compatible
 `FSharp.Core` fallback is always disclosed as partial because it was not selected by evaluated
-project authority. C#-targeted F# project references, compatible-TFM selection, and the remaining
-semantic operations still disclose stable unsupported boundaries. Generic indexed search
+project authority. C#-targeted F# project references, multi-target compatibility, netstandard1.x
+compile-input materialization, and the remaining semantic operations still disclose stable
+unsupported boundaries. Generic indexed search
 is language-neutral for C# and F# `.fs/.fsi`: an `.fsx`-only or other text-only scope is refused,
 while a mixed scope reports `unsupported_language_files_skipped`. This keeps
 cross-language graph holes visible without fabricating semantics for unsupported F# project shapes.
@@ -797,11 +809,12 @@ hash to the declaration's deterministic syntax ordinal among declarations on its
 ordinal is projected with the symbol row from existing indexed order, distinguishing same-file twins
 without follow-up queries and conservatively invalidating every handle when that file changes without
 adding hashing, allocation, or storage to the cold symbol-index path. F# semantic resolution
-captures one selected physical root plus its exact-TFM F# `ProjectReference` closure under the
-evaluated MSBuild transitivity policy behind
+captures one selected physical root plus its F# `ProjectReference` closure under the evaluated
+MSBuild transitivity and bounded child-TFM policies behind
 one single-slot gate. The pinned SQLite snapshot is released before dependency-first FCS checking;
 selected-root reference enumeration shares the closure but never counts dependency-project uses.
-Parallel FCS requests, C# dependencies, and compatible-TFM selection remain outside this design.
+Parallel FCS requests, C# dependencies, multi-target compatibility, and netstandard1.x compile-input
+materialization remain outside this design.
 
 Cold-cluster latency and working set still scale with the selected project budget. Use
 `CodeNav.Bench --db <scratch.db> --rebuild --build-only` as the non-destructive cold-index

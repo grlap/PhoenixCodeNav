@@ -247,10 +247,14 @@ public sealed partial class NavigationTools
                 "An active ProjectReference is missing, unindexed, unreadable, or not an evaluable physical project snapshot.",
             "fsharp_semantic_project_reference_target_framework_unavailable" =>
                 FSharpProjectReferenceTargetFrameworkDetail(result.ProjectReferenceFailure),
+            "fsharp_framework_references_unavailable" =>
+                FSharpFrameworkReferencesUnavailableDetail(result.ProjectReferenceFailure),
+            "fsharp_core_reference_unavailable" =>
+                FSharpCoreReferenceUnavailableDetail(result.ProjectReferenceFailure),
             "fsharp_semantic_project_reference_cycle" =>
                 "The active F# ProjectReference closure contains a cycle; Phoenix stopped instead of constructing recursive FCS options.",
             "fsharp_project_options_conflict" =>
-                "Two distinct physical projects in the F# closure produce the same assembly identity.",
+                "Two distinct physical project/TFM contexts in the F# closure produce the same assembly identity.",
             "fsharp_semantic_reference_changed" =>
                 "A captured binary or package reference changed during FCS checking; the result was discarded.",
             "fsharp_semantic_timeout" =>
@@ -451,7 +455,7 @@ public sealed partial class NavigationTools
             "fsharp_semantic_project_reference_cycle" =>
                 "The active F# ProjectReference closure contains a cycle; Phoenix stopped instead of constructing recursive FCS options.",
             "fsharp_project_options_conflict" =>
-                "Two distinct physical projects in the F# closure produce the same assembly identity.",
+                "Two distinct physical project/TFM contexts in the F# closure produce the same assembly identity.",
             "fsharp_semantic_package_reference_unresolved" =>
                 "An active PackageReference identity could not be resolved by the bounded project evaluator.",
             "fsharp_semantic_package_reference_metadata_unsupported" =>
@@ -533,9 +537,9 @@ public sealed partial class NavigationTools
             "fsharp_semantic_path_outside_workspace" =>
                 "A literal Compile or HintPath item escapes the selected workspace.",
             "fsharp_framework_references_unavailable" =>
-                "Exact target reference assemblies are unavailable for the selected target framework.",
+                FSharpFrameworkReferencesUnavailableDetail(result.ProjectReferenceFailure),
             "fsharp_core_reference_unavailable" =>
-                "A target-compatible FSharp.Core reference is unavailable for the selected target framework.",
+                FSharpCoreReferenceUnavailableDetail(result.ProjectReferenceFailure),
             "fsharp_semantic_assembly_name_unavailable" =>
                 "The selected project does not provide a safe literal assembly identity for FCS.",
             "unsupported_fsharp_file_kind" =>
@@ -668,11 +672,54 @@ public sealed partial class NavigationTools
         FSharpProjectReferenceFailure? failure)
     {
         string project = failure?.Project ?? "the referenced F# project";
+        string consumer = failure?.ConsumerTargetFramework ?? "unknown";
         string available = failure?.AvailableTargetFrameworks.Count > 0
             ? string.Join(", ", failure.AvailableTargetFrameworks)
             : "none";
-        return $"Referenced project '{project}' has no exact target-framework match. " +
-               $"Available TFMs: {available}. Compatible netstandard selection is not yet " +
-               "supported; select projects with the same explicit TFM.";
+        string rule = failure?.CompatibilityTableRow ??
+                      "No Microsoft .NET Standard compatibility row was available.";
+        string selection = failure?.MultiTargetExactMatchOnly == true
+            ? " Multi-target referenced projects remain exact-match-only in v0.12.84."
+            : "";
+        return $"Referenced project '{project}' has no target-framework context for consumer " +
+               $"'{consumer}'. Available child TFMs: {available}.{selection} Table row " +
+               $"consulted: {rule} Source: Microsoft .NET Standard support table, " +
+               "https://learn.microsoft.com/dotnet/standard/net-standard. The table notes " +
+               "that NuGet treats .NET Framework 4.6.1 as applicable to .NET Standard " +
+               "1.5 through 2.0 while recommending .NET Framework 4.7.2 or later for " +
+               "runtime compatibility; Phoenix applies the compile-applicability row.";
     }
+
+    private static string FSharpFrameworkReferencesUnavailableDetail(
+        FSharpProjectReferenceFailure? failure) =>
+        IsUnmaterializedNetStandard1(failure)
+            ? FSharpNetStandard1CompileInputsDetail(failure)
+            : IsPlatformQualifiedTargetFramework(failure)
+                ? $"Exact platform reference assemblies are unavailable for target framework " +
+                  $"'{failure?.SelectedTargetFramework}'. Phoenix failed closed and did not " +
+                  "substitute the base .NET reference pack."
+            : "Exact target reference assemblies are unavailable for the selected target framework.";
+
+    private static string FSharpCoreReferenceUnavailableDetail(
+        FSharpProjectReferenceFailure? failure) =>
+        IsUnmaterializedNetStandard1(failure)
+            ? FSharpNetStandard1CompileInputsDetail(failure)
+            : "A target-compatible FSharp.Core reference is unavailable for the selected target framework.";
+
+    private static bool IsUnmaterializedNetStandard1(
+        FSharpProjectReferenceFailure? failure) =>
+        failure?.SelectedTargetFramework?.StartsWith("netstandard1.",
+            StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsPlatformQualifiedTargetFramework(
+        FSharpProjectReferenceFailure? failure) =>
+        failure?.SelectedTargetFramework?.Contains('-', StringComparison.Ordinal) == true;
+
+    private static string FSharpNetStandard1CompileInputsDetail(
+        FSharpProjectReferenceFailure? failure) =>
+        $"F# project '{failure?.Project ?? "the referenced F# project"}' selected " +
+        $"target framework '{failure?.SelectedTargetFramework ?? "netstandard1.x"}', but " +
+        "this build does not materialize netstandard1.x compile inputs from the granular " +
+        "autoReferenced NETStandard.Library closure in project.assets.json. Phoenix failed " +
+        "closed and did not substitute the wider netstandard2.0 reference pack.";
 }
