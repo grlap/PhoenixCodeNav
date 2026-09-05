@@ -78,13 +78,15 @@ type SemanticCheckResult(
     error: string,
     diagnosticCount: int,
     errorDiagnosticCount: int,
-    diagnostics: SemanticDiagnostic array
+    diagnostics: SemanticDiagnostic array,
+    references: SemanticLocation array
 ) =
     member _.Symbol = symbol
     member _.Error = error
     member _.DiagnosticCount = diagnosticCount
     member _.ErrorDiagnosticCount = errorDiagnosticCount
     member _.Diagnostics = diagnostics
+    member _.References = references
 
 module private Semantic =
     let nullString: string = Unchecked.defaultof<string>
@@ -278,7 +280,7 @@ module private Semantic =
         let all = diagnostics |> Seq.toArray
         let errorCount = all |> Array.sumBy (fun diagnostic ->
             if diagnosticSeverity diagnostic = "error" then 1 else 0)
-        SemanticCheckResult(symbol, error, all.Length, errorCount, boundedDiagnostics all)
+        SemanticCheckResult(symbol, error, all.Length, errorCount, boundedDiagnostics all, Array.empty)
 
     let diagnosticKey (diagnostic: FSharpDiagnostic) =
         let range = diagnostic.Range
@@ -325,8 +327,10 @@ module private Semantic =
         line
         column
         maxLineOnlySourceChars
+        includeReferences
         =
         async {
+            let! cancellationToken = Async.CancellationToken
             if sourceFiles.Length = 0 || sourceFiles.Length <> sourceTexts.Length then
                 return checkResult nullSymbol "fsharp_semantic_snapshot_invalid" Array.empty
             else
@@ -340,7 +344,9 @@ module private Semantic =
                         isEditing = false,
                         isInteractive = false
                     )
-                let! checkedProject = checker.ParseAndCheckProject(options, userOpName = "PhoenixCodeNav.symbol_at")
+                let operationName =
+                    if includeReferences then "PhoenixCodeNav.references" else "PhoenixCodeNav.symbol_at"
+                let! checkedProject = checker.ParseAndCheckProject(options, userOpName = operationName)
                 if checkedProject.HasCriticalErrors then
                     return
                         checkResult nullSymbol "fsharp_semantic_check_failed" checkedProject.Diagnostics
@@ -360,7 +366,7 @@ module private Semantic =
                                 0,
                                 SourceText.ofString sourceTexts[targetIndex],
                                 options,
-                                userOpName = "PhoenixCodeNav.symbol_at"
+                                userOpName = operationName
                             )
                         match answer with
                         | FSharpCheckFileAnswer.Aborted ->
@@ -422,8 +428,43 @@ module private Semantic =
                                         location "use" symbolUse.Range,
                                         declarationLocations symbol
                                     )
+                                let references =
+                                    if includeReferences then
+                                        checkedProject.GetUsesOfSymbol(
+                                            symbol,
+                                            cancellationToken = cancellationToken
+                                        )
+                                        |> Seq.filter (fun symbolUse -> not symbolUse.IsFromDefinition)
+                                        |> Seq.distinctBy (fun symbolUse ->
+                                            let range = symbolUse.Range
+                                            pathIdentityKey range.FileName,
+                                            range.StartLine,
+                                            range.StartColumn,
+                                            range.EndLine,
+                                            range.EndColumn)
+                                        |> Seq.sortBy (fun symbolUse ->
+                                            let range = symbolUse.Range
+                                            pathIdentityKey range.FileName,
+                                            range.StartLine,
+                                            range.StartColumn,
+                                            range.EndLine,
+                                            range.EndColumn)
+                                        |> Seq.map (fun symbolUse -> location "reference" symbolUse.Range)
+                                        |> Seq.toArray
+                                    else
+                                        Array.empty
+                                let all = diagnostics |> Seq.toArray
+                                let errorCount = all |> Array.sumBy (fun diagnostic ->
+                                    if diagnosticSeverity diagnostic = "error" then 1 else 0)
                                 return
-                                    checkResult mapped nullString diagnostics
+                                    SemanticCheckResult(
+                                        mapped,
+                                        nullString,
+                                        all.Length,
+                                        errorCount,
+                                        boundedDiagnostics all,
+                                        references
+                                    )
         }
 
 [<AbstractClass; Sealed>]
@@ -442,5 +483,22 @@ type SemanticResolver private () =
         cancellationToken: CancellationToken
     ) : Task<SemanticCheckResult> =
         Semantic.resolve projectFileName sourceFiles sourceTexts commandLineArgs fingerprint cacheRuntime
-            targetFileName line column maxLineOnlySourceChars
+            targetFileName line column maxLineOnlySourceChars false
+        |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)
+
+    static member ResolveReferencesAsync(
+        projectFileName: string,
+        sourceFiles: string array,
+        sourceTexts: string array,
+        commandLineArgs: string array,
+        fingerprint: string,
+        cacheRuntime: bool,
+        targetFileName: string,
+        line: int,
+        column: int,
+        maxLineOnlySourceChars: int,
+        cancellationToken: CancellationToken
+    ) : Task<SemanticCheckResult> =
+        Semantic.resolve projectFileName sourceFiles sourceTexts commandLineArgs fingerprint cacheRuntime
+            targetFileName line column maxLineOnlySourceChars true
         |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)

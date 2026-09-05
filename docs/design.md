@@ -74,7 +74,11 @@ for code identifiers.
     marks the result partial.
 4. **Semantic** — C# uses lazy Roslyn compilations for `definition`, `references`,
    `implementations`, `callers`, `callees`, and `type_hierarchy`. F# uses a bounded FCS
-   type check for position-based `symbol_at` and same-physical-project `definition`. An F# type-check
+   type check for position-based `symbol_at`, same-physical-project `definition`, and
+   same-physical-project `references`. F# references enumerate compiler-bound non-definition uses
+   from the selected context, keep the selected-project count exact while bounding only response
+   samples, and expose that count as a workspace lower bound because dependent projects are not
+   scanned. An F# type-check
    context is exactly one physical `.fsproj` plus one target framework; ambiguous files require
    explicit selection, and the selection never changes or merges ownership/reference graph facts.
    C# regular and conversion operator handles bridge syntax rows to Roslyn with the uncapped
@@ -221,7 +225,9 @@ root exclusively when it is set; when it is absent, the ordinary user-profile gl
 supported. Resolution is bounded by the existing dependency/reference/byte budgets and request cancellation,
 copied to immutable request-private files, and reverified
 after FCS. Missing, stale, mismatched, changed, non-managed, or path-unsafe package inputs fail with
-explicit `fsharp_semantic_package_*` causes. Project-reference closure remains unsupported.
+explicit `fsharp_semantic_package_*` causes. Same-project references use that identical captured
+context and post-check binary reverification boundary; sample text comes only from captured source
+strings and never from a live filesystem or index reread. Project-reference closure remains unsupported.
 Exact-path opened-handle verification is available on Windows, Linux, and macOS; the macOS
 `proc_pidfdinfo` path added in v0.12.56 applies equally to workspace `HintPath` binaries and restored
 package assets. A platform verification failure remains fail-closed and produces no semantic result.
@@ -276,6 +282,7 @@ from the context. `partial:true` and `partialReason` remain visible independentl
 | `fsharp_core_reference_defaulted` | exact | The selected context used the expected `FSharp.Core` default without host fallback. |
 | `fsharp_binary_references_snapshotted` | exact | Binary inputs were copied and verified as immutable request evidence. |
 | `fsharp_package_references_snapshotted` | exact | Restored package inputs were copied and verified as immutable request evidence. |
+| `fsharp_references_workspace_dependents_not_scanned` | exact | The selected-project result is compiler-exact; this separately discloses that its workspace total is a lower bound. |
 | `fsharp_core_reference_host_fallback` | indexed | A host-selected `FSharp.Core` substituted for project authority. |
 | `fsharp_semantic_diagnostics_present` | indexed | Compiler errors mean the selected context did not close cleanly. |
 
@@ -765,7 +772,7 @@ ordinal is projected with the symbol row from existing indexed order, distinguis
 without follow-up queries and conservatively invalidating every handle when that file changes without
 adding hashing, allocation, or storage to the cold symbol-index path. F# semantic
 resolution currently captures and type-checks one selected physical project behind its own
-single-slot gate; cross-project F# loading or parallel FCS requests require a separate design and
+single-slot gate; same-project reference enumeration shares it, while cross-project F# loading or parallel FCS requests require a separate design and
 must not be implied by this change.
 
 Cold-cluster latency and working set still scale with the selected project budget. Use

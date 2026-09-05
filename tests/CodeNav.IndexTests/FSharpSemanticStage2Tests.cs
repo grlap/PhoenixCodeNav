@@ -9,6 +9,303 @@ namespace CodeNav.Tests;
 public partial class FSharpSemanticStage2Tests
 {
     [Fact]
+    public void ReferencesReturnsOnlyCompilerBoundNonDefinitionUsesFromSelectedProject()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-references").FullName;
+        try
+        {
+            WriteProject(root, "Core/Core.fsproj", SdkProject("net10.0",
+                "Api.fsi", "Api.fs", "Other.fs", "Use.fs"));
+            WriteProject(root, "Core/Api.fsi", """
+                namespace StageTwo
+                module Api =
+                    val increment: int -> int
+                """);
+            WriteProject(root, "Core/Api.fs", """
+                namespace StageTwo
+                module Api =
+                    let increment value = value + 1
+                """);
+            WriteProject(root, "Core/Other.fs", """
+                namespace StageTwo
+                module Other =
+                    let first = Api.increment 1
+                    let second = Api.increment 2
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                namespace StageTwo
+                module Use =
+                    let increment = 100
+                    let shadowed = increment + 1
+                    let result = Api.increment 41
+                    let text = "Api.increment"
+                    // Api.increment 42
+                """);
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.References(
+                path: "Core/Use.fs", line: 5, column: 25, mode: "semantic",
+                samplesPerGroup: 10, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+
+            Assert.False(response.TryGetProperty("error", out _), raw);
+            Assert.True(response.GetProperty("found").GetBoolean());
+            Assert.Equal("increment",
+                response.GetProperty("symbol").GetProperty("name").GetString());
+            Assert.Equal(3, response.GetProperty("totalReferences").GetInt32());
+            Assert.True(response.GetProperty("totalIsLowerBound").GetBoolean());
+            Assert.Equal("project", response.GetProperty("groupBy").GetString());
+            JsonElement group = Assert.Single(response.GetProperty("groups").EnumerateArray());
+            Assert.Equal("Core/Core.fsproj", group.GetProperty("project").GetString());
+            Assert.Equal("net10.0", group.GetProperty("targetFramework").GetString());
+            Assert.Equal(3, group.GetProperty("count").GetInt32());
+            var samples = group.GetProperty("samples").EnumerateArray().ToList();
+            Assert.Equal(3, samples.Count);
+            Assert.Equal(
+                ["Core/Other.fs:3", "Core/Other.fs:4", "Core/Use.fs:5"],
+                samples.Select(sample =>
+                    $"{sample.GetProperty("path").GetString()}:{sample.GetProperty("line").GetInt32()}")
+                    .ToArray());
+            Assert.Equal(
+                [(17, 3, 30), (18, 4, 31), (18, 5, 31)],
+                samples.Select(sample => (
+                    sample.GetProperty("startColumn").GetInt32(),
+                    sample.GetProperty("endLine").GetInt32(),
+                    sample.GetProperty("endColumn").GetInt32())).ToArray());
+            Assert.All(samples, sample => Assert.Contains("Api.increment",
+                sample.GetProperty("text").GetString()));
+            Assert.DoesNotContain(samples, sample =>
+                sample.GetProperty("path").GetString() is "Core/Api.fs" or "Core/Api.fsi");
+            Assert.Equal("selected_physical_project",
+                response.GetProperty("coverage").GetProperty("scope").GetString());
+            Assert.Equal(0, response.GetProperty("coverage")
+                .GetProperty("workspaceDependentsScanned").GetInt32());
+            Assert.False(response.GetProperty("coverage")
+                .GetProperty("workspaceComplete").GetBoolean());
+            Assert.Contains("fsharp_references_workspace_dependents_not_scanned",
+                response.GetProperty("partialReason").GetString());
+            Assert.Equal("exact",
+                response.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.Equal("semantic",
+                response.GetProperty("meta").GetProperty("navigationLayer").GetString());
+            Assert.True(System.Text.Encoding.UTF8.GetByteCount(raw) <= Json.HardBudgetBytes);
+
+            JsonElement testsExcluded = Parse(CallSemantic(() => fixture.Tools.References(
+                path: "Core/Use.fs", line: 5, column: 25, mode: "semantic",
+                includeTests: false, samplesPerGroup: 10, timeoutMs: 60_000)));
+            Assert.Equal(3, testsExcluded.GetProperty("totalReferences").GetInt32());
+            Assert.Equal(3, Assert.Single(testsExcluded.GetProperty("groups")
+                .EnumerateArray()).GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ReferencesUsesPinnedIndexedSourcesInsteadOfChangedDiskContent()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-references-snapshot").FullName;
+        try
+        {
+            WriteProject(root, "Core/Core.fsproj", SdkProject("net10.0", "Api.fs", "Use.fs"));
+            WriteProject(root, "Core/Api.fs", """
+                namespace Snapshot
+                module Api =
+                    let indexedOnly value = value + 1
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                namespace Snapshot
+                module Use =
+                    let first = Api.indexedOnly 1
+                    let second = Api.indexedOnly 2
+                """);
+
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var fixture = Fixture.Start(root, dbPath);
+            fixture.Semantic.FSharpSemanticSnapshotCapturedForTest = () =>
+                WriteProject(root, "Core/Use.fs", """
+                    namespace Snapshot
+                    module Use =
+                        let first = 1
+                        let second = 2
+                    """);
+
+            string raw = CallSemantic(() => fixture.Tools.References(
+                path: "Core/Use.fs", line: 3, column: 25, mode: "semantic",
+                samplesPerGroup: 10, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+
+            Assert.False(response.TryGetProperty("error", out _), raw);
+            Assert.Equal(2, response.GetProperty("totalReferences").GetInt32());
+            JsonElement group = Assert.Single(response.GetProperty("groups").EnumerateArray());
+            var samples = group.GetProperty("samples").EnumerateArray().ToList();
+            Assert.Equal(2, samples.Count);
+            Assert.All(samples, sample => Assert.Contains("Api.indexedOnly",
+                sample.GetProperty("text").GetString()));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void PairedMigrationReferencesRequireExplicitPhysicalContextAndNeverMergeCompanion()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-references-context").FullName;
+        try
+        {
+            WriteProject(root, "Paired/Shared.fs", """
+                module Shared
+                let value = 1
+                """);
+            WriteProject(root, "Paired/LegacyUse.fs", """
+                module LegacyUse
+                let legacy = Shared.value
+                """);
+            WriteProject(root, "Paired/NetUse.fs", """
+                module NetUse
+                let modern = Shared.value
+                """);
+            WriteProject(root, "Paired/Project.fsproj", SdkProject("net8.0",
+                "Shared.fs", "LegacyUse.fs"));
+            WriteProject(root, "Paired/Project.Net.fsproj", SdkProject("net8.0",
+                "Shared.fs", "NetUse.fs"));
+
+            using var fixture = Fixture.Create(root);
+            JsonElement ambiguous = Parse(CallSemantic(() => fixture.Tools.References(
+                path: "Paired/Shared.fs", line: 2, column: 5, mode: "semantic",
+                timeoutMs: 60_000)));
+            Assert.Equal("fsharp_type_check_context_required",
+                ambiguous.GetProperty("error").GetString());
+            Assert.Equal(2, ambiguous.GetProperty("fsharpTypeCheckContextsTotal").GetInt32());
+
+            JsonElement legacy = Parse(CallSemantic(() => fixture.Tools.References(
+                path: "Paired/Shared.fs", line: 2, column: 5, mode: "semantic",
+                projectPath: "Paired/Project.fsproj", targetFramework: "net8.0",
+                samplesPerGroup: 10, timeoutMs: 60_000)));
+            Assert.Equal(1, legacy.GetProperty("totalReferences").GetInt32());
+            JsonElement legacyGroup = Assert.Single(legacy.GetProperty("groups").EnumerateArray());
+            JsonElement legacySample = Assert.Single(legacyGroup.GetProperty("samples")
+                .EnumerateArray());
+            Assert.Equal("Paired/LegacyUse.fs", legacySample.GetProperty("path").GetString());
+
+            JsonElement modern = Parse(CallSemantic(() => fixture.Tools.References(
+                path: "Paired/Shared.fs", line: 2, column: 5, mode: "semantic",
+                projectPath: "Paired/Project.Net.fsproj", targetFramework: "net8.0",
+                samplesPerGroup: 10, timeoutMs: 60_000)));
+            Assert.Equal(1, modern.GetProperty("totalReferences").GetInt32());
+            JsonElement modernGroup = Assert.Single(modern.GetProperty("groups").EnumerateArray());
+            JsonElement modernSample = Assert.Single(modernGroup.GetProperty("samples")
+                .EnumerateArray());
+            Assert.Equal("Paired/NetUse.fs", modernSample.GetProperty("path").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ReferencesHonorPinnedGeneratedAndTestProjectFactsBeforeCounting()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-references-filters").FullName;
+        try
+        {
+            WriteProject(root, "Core.Tests/Core.Tests.fsproj", SdkProject("net10.0",
+                "Api.fs", "Normal.fs", "Generated.g.fs"));
+            WriteProject(root, "Core.Tests/Api.fs", "module Api\nlet value = 1\n");
+            WriteProject(root, "Core.Tests/Normal.fs",
+                "module Normal\nlet normal = Api.value\n");
+            WriteProject(root, "Core.Tests/Generated.g.fs",
+                "module Generated\nlet generated = Api.value\n");
+
+            using var fixture = Fixture.Create(root);
+            using (var queries = fixture.Manager.OpenQueries())
+            {
+                Assert.True(queries.FileByPath("Core.Tests/Generated.g.fs")!.IsGenerated);
+                Assert.True(Assert.Single(queries.ProjectsContaining("Core.Tests/Api.fs")).IsTest);
+            }
+
+            JsonElement generatedExcluded = Parse(CallSemantic(() => fixture.Tools.References(
+                path: "Core.Tests/Api.fs", line: 2, column: 5, mode: "semantic",
+                includeTests: true, includeGenerated: false, samplesPerGroup: 10,
+                timeoutMs: 60_000)));
+            Assert.Equal(1, generatedExcluded.GetProperty("totalReferences").GetInt32());
+            JsonElement excludedGroup = Assert.Single(generatedExcluded.GetProperty("groups")
+                .EnumerateArray());
+            Assert.True(excludedGroup.GetProperty("isTest").GetBoolean());
+            Assert.Equal("Core.Tests/Normal.fs", Assert.Single(excludedGroup
+                .GetProperty("samples").EnumerateArray()).GetProperty("path").GetString());
+
+            JsonElement generatedIncluded = Parse(CallSemantic(() => fixture.Tools.References(
+                path: "Core.Tests/Api.fs", line: 2, column: 5, mode: "semantic",
+                includeTests: true, includeGenerated: true, samplesPerGroup: 10,
+                timeoutMs: 60_000)));
+            Assert.Equal(2, generatedIncluded.GetProperty("totalReferences").GetInt32());
+            Assert.Equal(2, Assert.Single(generatedIncluded.GetProperty("groups")
+                .EnumerateArray()).GetProperty("samples").GetArrayLength());
+
+            JsonElement testsExcluded = Parse(CallSemantic(() => fixture.Tools.References(
+                path: "Core.Tests/Api.fs", line: 2, column: 5, mode: "semantic",
+                includeTests: false, includeGenerated: true, samplesPerGroup: 10,
+                timeoutMs: 60_000)));
+            Assert.Equal(0, testsExcluded.GetProperty("totalReferences").GetInt32());
+            JsonElement emptyGroup = Assert.Single(testsExcluded.GetProperty("groups")
+                .EnumerateArray());
+            Assert.Equal(0, emptyGroup.GetProperty("count").GetInt32());
+            Assert.Empty(emptyGroup.GetProperty("samples").EnumerateArray());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ReferencesTrimOnlySamplesWithoutChangingSelectedProjectCount()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-references-budget").FullName;
+        try
+        {
+            WriteProject(root, "Core/Core.fsproj", SdkProject("net10.0", "Core.fs"));
+            string uses = string.Join('\n', Enumerable.Range(1, 20).Select(index =>
+                $"let use{index:D2} = value + {index} // {new string('x', 320)}"));
+            WriteProject(root, "Core/Core.fs", $"module Core\nlet value = 1\n{uses}\n");
+
+            using var fixture = Fixture.Create(root);
+            fixture.Tools.TestOnlyReferencesResponseMaxBytes = 3_000;
+            string raw = CallSemantic(() => fixture.Tools.References(
+                path: "Core/Core.fs", line: 2, column: 5, mode: "semantic",
+                samplesPerGroup: 10, timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+
+            Assert.False(response.TryGetProperty("error", out _), raw);
+            Assert.Equal(20, response.GetProperty("totalReferences").GetInt32());
+            Assert.Equal(20, Assert.Single(response.GetProperty("groups").EnumerateArray())
+                .GetProperty("count").GetInt32());
+            JsonElement sampleCoverage = response.GetProperty("sampleCoverage");
+            Assert.Equal(10, sampleCoverage.GetProperty("selected").GetInt32());
+            Assert.True(sampleCoverage.GetProperty("returned").GetInt32() < 10);
+            Assert.False(sampleCoverage.GetProperty("complete").GetBoolean());
+            Assert.True(Json.Utf8Bytes(raw) <= 3_000, raw);
+            Assert.True(Json.Utf8Bytes(raw) <= Json.HardBudgetBytes, raw);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
     public void SymbolAtAndDefinitionUseFcsAndReturnSignatureAndImplementation()
     {
         string root = Directory.CreateTempSubdirectory("codenav-fsharp-semantic").FullName;
@@ -232,6 +529,14 @@ public partial class FSharpSemanticStage2Tests
                 response.GetProperty("error").GetString());
             Assert.False(response.TryGetProperty("found", out JsonElement found) &&
                          found.ValueKind == JsonValueKind.True);
+
+            JsonElement references = Parse(CallSemantic(() => fixture.Tools.References(
+                path: "Core/Core.fs", line: 2, column: 5, mode: "semantic",
+                timeoutMs: 60_000)));
+            Assert.Equal("fsharp_semantic_project_references_unsupported",
+                references.GetProperty("error").GetString());
+            Assert.False(references.TryGetProperty("totalReferences", out _));
+            Assert.False(references.TryGetProperty("totalCandidates", out _));
         }
         finally
         {
@@ -851,6 +1156,15 @@ public partial class FSharpSemanticStage2Tests
             Assert.Equal("indexed",
                 response.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.Equal(1, Volatile.Read(ref probes));
+
+            Volatile.Write(ref probes, 0);
+            JsonElement references = Parse(fixture.Tools.References(
+                path: "Core/Use.fs", line: 2, column: 5, mode: "semantic",
+                timeoutMs: 500));
+            Assert.Equal("fsharp_semantic_timeout",
+                references.GetProperty("error").GetString());
+            Assert.False(references.TryGetProperty("totalReferences", out _));
+            Assert.Equal(1, Volatile.Read(ref probes));
         }
         finally
         {
@@ -1382,11 +1696,13 @@ public partial class FSharpSemanticStage2Tests
                 stream.Position = 32;
                 stream.WriteByte((byte)(original ^ 1));
             };
-            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
-                "Core/Use.fs", 4, 19, timeoutMs: 60_000));
+            string raw = CallSemantic(() => fixture.Tools.References(
+                path: "Core/Use.fs", line: 4, column: 19, mode: "semantic",
+                timeoutMs: 60_000));
             JsonElement response = Parse(raw);
             Assert.Equal("fsharp_semantic_reference_changed",
                 response.GetProperty("error").GetString());
+            Assert.False(response.TryGetProperty("totalReferences", out _));
             Assert.Contains("fsharp_package_references_snapshotted",
                 response.GetProperty("partialReason").GetString());
         }
@@ -2025,7 +2341,8 @@ public partial class FSharpSemanticStage2Tests
             "fsharp_semantic_toolchain_implicit_authority",
             "fsharp_core_reference_defaulted",
             "fsharp_binary_references_snapshotted",
-            "fsharp_package_references_snapshotted")));
+            "fsharp_package_references_snapshotted",
+            "fsharp_references_workspace_dependents_not_scanned")));
         Assert.Equal("indexed", NavigationTools.FSharpSemanticConfidence(
             "fsharp_core_reference_host_fallback"));
         Assert.Equal("indexed", NavigationTools.FSharpSemanticConfidence(
@@ -2069,6 +2386,21 @@ public partial class FSharpSemanticStage2Tests
             Assert.DoesNotContain(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 diagnostic.GetProperty("message").GetString(),
                 StringComparison.OrdinalIgnoreCase);
+
+            string referencesRaw = CallSemantic(() => fixture.Tools.References(
+                path: "Core/Core.fs", line: 4, column: 15, mode: "semantic",
+                samplesPerGroup: 10, timeoutMs: 60_000));
+            JsonElement references = Parse(referencesRaw);
+            Assert.Equal(1, references.GetProperty("totalReferences").GetInt32());
+            Assert.Contains("fsharp_semantic_diagnostics_present",
+                references.GetProperty("partialReason").GetString());
+            Assert.Contains("fsharp_references_workspace_dependents_not_scanned",
+                references.GetProperty("partialReason").GetString());
+            Assert.True(references.GetProperty("partial").GetBoolean());
+            Assert.Equal("indexed",
+                references.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.True(references.GetProperty("diagnosticCount").GetInt32() > 0);
+            Assert.DoesNotContain(root, referencesRaw, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -2649,6 +2981,112 @@ public partial class FSharpSemanticStage2Tests
             File.GetLastWriteTimeUtc(absoluteProjectPath),
         }.Max().AddSeconds(1);
         File.SetLastWriteTimeUtc(assetsPath, restoredAt);
+    }
+
+    [Fact]
+    public void ReferencesReuseFSharpSelectorAndFilterFailureContracts()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-references-contract").FullName;
+        try
+        {
+            WriteProject(root, "Core/Core.fsproj", SdkProject("net10.0", "Core.fs"));
+            WriteProject(root, "Core/Core.fs", """
+                module Core
+                let value = 1
+                // no symbol here
+                """);
+            WriteProject(root, "CSharp/Library.cs", """
+                namespace MixedSelectors;
+                public sealed class HandleTarget { }
+                public sealed class Consumer
+                {
+                    private readonly HandleTarget _value = new();
+                }
+                """);
+
+            using var fixture = Fixture.Create(root);
+            JsonElement noSymbol = Parse(CallSemantic(() => fixture.Tools.References(
+                path: "Core/Core.fs", line: 3, column: 4, mode: "semantic",
+                timeoutMs: 60_000)));
+            Assert.Equal("fsharp_symbol_not_resolved", noSymbol.GetProperty("error").GetString());
+            Assert.False(noSymbol.GetProperty("found").GetBoolean());
+            Assert.False(noSymbol.TryGetProperty("totalReferences", out _));
+            Assert.False(noSymbol.TryGetProperty("groups", out _));
+
+            JsonElement indexed = Parse(fixture.Tools.References(
+                path: "Core/Core.fs", line: 2, column: 5, mode: "indexed"));
+            Assert.Equal("fsharp_indexed_symbols_unavailable",
+                indexed.GetProperty("error").GetString());
+
+            JsonElement lineOnly = Parse(fixture.Tools.References(
+                path: "Core/Core.fs", line: 2, mode: "semantic"));
+            Assert.Equal("fsharp_semantic_position_required",
+                lineOnly.GetProperty("error").GetString());
+
+            foreach ((string Field, Func<string> Call) filterCase in
+                     new (string Field, Func<string> Call)[]
+                     {
+                         ("usageKinds", () => fixture.Tools.References(
+                             path: "Core/Core.fs", line: 2, column: 5,
+                             usageKinds: "call")),
+                         ("publicConsumersOnly", () => fixture.Tools.References(
+                             path: "Core/Core.fs", line: 2, column: 5,
+                             publicConsumersOnly: true)),
+                         ("pathGlob", () => fixture.Tools.References(
+                             path: "Core/Core.fs", line: 2, column: 5,
+                             pathGlob: "Core/**")),
+                         ("excludePath", () => fixture.Tools.References(
+                             path: "Core/Core.fs", line: 2, column: 5,
+                             excludePath: "Generated/**")),
+                     })
+            {
+                JsonElement refusal = Parse(filterCase.Call());
+                Assert.Equal("bad_request", refusal.GetProperty("error").GetString());
+                Assert.Equal(filterCase.Field, refusal.GetProperty("field").GetString());
+                Assert.Equal("incompatible_filter", refusal.GetProperty("reason").GetString());
+                Assert.Equal(filterCase.Field == "publicConsumersOnly"
+                        ? "false"
+                        : $"omit {filterCase.Field}",
+                    refusal.GetProperty("expected").GetString());
+                Assert.Equal("indexed",
+                    refusal.GetProperty("meta").GetProperty("confidence").GetString());
+            }
+
+            JsonElement fsharpHit = Assert.Single(Parse(fixture.Tools.SearchSymbol(
+                    "value", kinds: "value", match: "exact", pathGlob: "Core/Core.fs"))
+                .GetProperty("symbols").EnumerateArray());
+            JsonElement handleRefusal = Parse(fixture.Tools.References(
+                symbolId: fsharpHit.GetProperty("symbolId").GetString()));
+            Assert.Equal("fsharp_semantic_position_required",
+                handleRefusal.GetProperty("error").GetString());
+            Assert.Equal("references", handleRefusal.GetProperty("operation").GetString());
+
+            JsonElement documentationIdRefusal = Parse(fixture.Tools.References(
+                path: "Core/Core.fs", line: 2, column: 5,
+                documentationCommentId: "T:Core"));
+            Assert.Equal("bad_request", documentationIdRefusal.GetProperty("error").GetString());
+            Assert.Equal("documentationCommentId",
+                documentationIdRefusal.GetProperty("field").GetString());
+
+            JsonElement csharpHit = Assert.Single(Parse(fixture.Tools.SearchSymbol(
+                    "HandleTarget", kinds: "class", match: "exact"))
+                .GetProperty("symbols").EnumerateArray());
+            string csharpHandle = csharpHit.GetProperty("symbolId").GetString()!;
+            JsonElement handleOnly = Parse(fixture.Tools.References(
+                symbolId: csharpHandle, mode: "indexed"));
+            JsonElement handleWithFSharpPath = Parse(fixture.Tools.References(
+                path: "Core/Core.fs", line: 2, column: 5,
+                symbolId: csharpHandle, mode: "indexed"));
+            Assert.False(handleOnly.TryGetProperty("error", out _));
+            Assert.False(handleWithFSharpPath.TryGetProperty("error", out _));
+            Assert.Equal(handleOnly.GetProperty("totalCandidates").GetInt32(),
+                handleWithFSharpPath.GetProperty("totalCandidates").GetInt32());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
     }
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;

@@ -526,6 +526,7 @@ public class FSharpTierATests
             Assert.Contains("fsharp-indexed-parse-context-budget", featureIds);
             Assert.Contains("fsharp-symbol-at-semantic", featureIds);
             Assert.Contains("fsharp-definition-same-project", featureIds);
+            Assert.Contains("fsharp-references-same-project", featureIds);
             Assert.Contains("fsharp-type-check-context-selection", featureIds);
             Assert.Contains("fsharp-semantic-snapshot", featureIds);
             Assert.Contains("fsharp-semantic-bounded-project-evaluation", featureIds);
@@ -632,10 +633,19 @@ public class FSharpTierATests
                 line: 2, column: 5, mode: "semantic", timeoutMs: 60_000));
             Assert.Contains(fsharpDefinition.GetProperty("declarations").EnumerateArray(), site =>
                 site.GetProperty("path").GetString() == "Core/Library.fs");
+            JsonElement fsharpReferences = Parse(tools.References(path: "Core/Library.fs",
+                line: 2, column: 5, mode: "semantic", timeoutMs: 60_000));
+            Assert.Equal(0, fsharpReferences.GetProperty("totalReferences").GetInt32());
+            Assert.True(fsharpReferences.GetProperty("totalIsLowerBound").GetBoolean());
+            Assert.Contains("fsharp_references_workspace_dependents_not_scanned",
+                fsharpReferences.GetProperty("partialReason").GetString());
+            JsonElement lineOnlyFSharpReferences = Parse(tools.References(
+                path: "Core/Library.fs", line: 2, mode: "semantic"));
+            Assert.Equal("fsharp_semantic_position_required",
+                lineOnlyFSharpReferences.GetProperty("error").GetString());
 
             var gatedOperations = new Dictionary<string, string>
             {
-                ["references"] = tools.References(path: "Core/Library.fs", line: 1),
                 ["implementations"] = tools.Implementations(path: "Core/Library.fs", line: 1),
                 ["callers"] = tools.Callers(path: "Core/Library.fs", line: 1),
                 ["callees"] = tools.Callees(path: "Core/Library.fs", line: 1),
@@ -1578,6 +1588,12 @@ public class FSharpTierATests
             Assert.Contains("idx handle resolution is not available",
                 fsharpHandleDefinition.GetProperty("detail").GetString(),
                 StringComparison.Ordinal);
+            JsonElement fsharpHandleReferences = Parse(tools.References(
+                symbolId: pairHits[0].GetProperty("symbolId").GetString()));
+            Assert.Equal("fsharp_semantic_position_required",
+                fsharpHandleReferences.GetProperty("error").GetString());
+            Assert.Equal("references",
+                fsharpHandleReferences.GetProperty("operation").GetString());
 
             JsonElement functions = Parse(tools.SearchSymbol("transform", kinds: "function",
                 match: "exact", @namespace: "SymbolSearch"));

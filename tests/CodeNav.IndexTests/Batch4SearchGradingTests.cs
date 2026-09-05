@@ -225,6 +225,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.Contains("definition", semantic.GetProperty("fsharpSemanticTools")
             .EnumerateArray().Select(tool => tool.GetString()));
+        Assert.Contains("references", semantic.GetProperty("fsharpSemanticTools")
+            .EnumerateArray().Select(tool => tool.GetString()));
         Assert.DoesNotContain("search_symbol", semantic.GetProperty("fsharpSemanticTools")
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.False(semantic.TryGetProperty("fsharpIndexedTools", out _));
@@ -235,6 +237,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("every error", semantic.GetProperty("note").GetString());
         Assert.Contains("unclassified partial reason is indexed",
             semantic.GetProperty("note").GetString());
+        Assert.Contains("workspace lower bound", semantic.GetProperty("note").GetString());
         Assert.Contains("syntax-indexed", semantic.GetProperty("fsharpSyntaxNote").GetString());
         Assert.Contains("SDK/import limits advisory",
             semantic.GetProperty("fsharpSyntaxNote").GetString());
@@ -357,6 +360,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("fsharp-indexed-parse-context-budget", ids);
         Assert.Contains("fsharp-symbol-at-semantic", ids);
         Assert.Contains("fsharp-definition-same-project", ids);
+        Assert.Contains("fsharp-references-same-project", ids);
         Assert.Contains("fsharp-type-check-context-selection", ids);
         Assert.Contains("fsharp-semantic-confidence-authority", ids);
         Assert.Contains("fsharp-semantic-snapshot", ids);
@@ -741,6 +745,31 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("overlapping pauses", gcPauseAttribution);
         Assert.Contains("below 1 ms", gcPauseAttribution);
         Assert.Contains("omission", gcPauseAttribution);
+        string fsharpReferences = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-references-same-project")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.81", fsharpReferences);
+        Assert.Contains("selected physical .fsproj + TFM", fsharpReferences);
+        Assert.Contains("compiler-bound non-definition uses", fsharpReferences);
+        Assert.Contains("pinned source snapshot", fsharpReferences);
+        Assert.Contains("workspace lower bound", fsharpReferences);
+        Assert.Contains("dependent projects are not scanned", fsharpReferences);
+        Assert.DoesNotContain("exact", fsharpReferences, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("indexed", fsharpReferences, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("heuristic", fsharpReferences, StringComparison.OrdinalIgnoreCase);
+        string fsharpBoundary = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-unsupported-language-boundary")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.DoesNotContain("F# references", fsharpBoundary, StringComparison.Ordinal);
+        Assert.Contains("callers/callees", fsharpBoundary);
+        Assert.Contains("implementations", fsharpBoundary);
+        Assert.Contains("hierarchy", fsharpBoundary);
         Assert.Contains("never retries automatically", coldStartRetry);
         Assert.Contains("open_operations_portal",
             json.GetProperty("tools").EnumerateArray().Select(tool => tool.GetString()));
@@ -1218,6 +1247,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                            "references-gc-pause-attribution"),
                        ("immutable-evidence provenance",
                            "fsharp-semantic-confidence-authority"),
+                       ("compiler-bound non-definition uses",
+                           "fsharp-references-same-project"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),
                       ("target-bearing names", "csharp-conversion-operator-indexing"),
                       ("implicitConversion", "csharp-conversion-usage-enumeration"),

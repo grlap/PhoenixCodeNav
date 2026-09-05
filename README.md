@@ -31,7 +31,7 @@ navigation questions in four layers, each labeled with how trustworthy it is:
 | **Indexed text** (SQLite FTS5, C# + F# + Markdown + SQL) | `find_file`, `search_text`, `source_context`, `config_lookup`, `references` (candidates) | `indexed` |
 | **Syntax (C#)** (Roslyn parse, no compile; includes implicit/explicit conversion operators) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
 | **Syntax (F#)** (FCS parse, no type check) | `search_symbol`; `outline` for project-owned `.fs` / `.fsi` | `indexed` |
-| **Semantic** (Roslyn for C#; bounded FCS type checks for F#) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at` and same-project `definition` | C# may be `exact`; successful bounded F# results may be `exact` when disclosed partial reasons preserve selected-context authority, while errors and authority loss are `indexed` |
+| **Semantic** (Roslyn for C#; bounded FCS type checks for F#) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at`, same-project `definition`, and same-project `references` | C# may be `exact`; successful bounded F# results may be `exact` when disclosed partial reasons preserve selected-context authority, while errors and authority loss are `indexed` |
 
 Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`project_graph`,
 `projects_containing`, `dependency_path`, `repo_overview`) and composites (`context_pack`,
@@ -57,8 +57,11 @@ specific to F#.
 **F# support is real, and deliberately bounded.** Phoenix indexes `.fs`, `.fsi`, and `.fsx` text,
 parses `.fsproj` compile ownership and references, and preserves C#↔F# project edges. Compile-owned
 `.fs` / `.fsi` files get indexed declaration-name search and syntax-only `outline`s from a pinned
-FSharp.Compiler.Service adapter, plus position-based `symbol_at` and same-project `definition`
-through a bounded FCS type check. Active `PackageReference` items—including conditional central
+FSharp.Compiler.Service adapter, plus position-based `symbol_at`, same-project `definition`, and
+same-project `references` through a bounded FCS type check. F# references count compiler-bound
+non-definition uses in exactly one selected physical `.fsproj` + target-framework context and take
+bounded samples only from the pinned source snapshot. Their selected-project count is explicitly a
+workspace lower bound because dependent projects are not scanned yet. Active `PackageReference` items—including conditional central
 `PackageVersion` authority from the nearest indexed `Directory.Packages.props`—use the selected
 target in an already-restored `project.assets.json`; reachable transitive compile assets are
 snapshotted without executing restore or MSBuild, while stale/missing/ambiguous assets and project-reference
@@ -71,7 +74,7 @@ unavailable/unevaluated project-option contexts are retained as index coverage e
 total/processed/truncated parse and project-file-context counts, including
 `truncatedOwnerProjects`, instead of treating missing rows as
 authoritative absence. Ordinary SDK/import limitations remain visible in
-`fsharpProjectOptionCoverage` as advisory evidence without making every search partial. F# references, implementations, callers/callees, and hierarchy stay
+`fsharpProjectOptionCoverage` as advisory evidence without making every search partial. F# implementations, callers/callees, and hierarchy stay
 **unsupported** rather than
 returning an empty or falsely exact answer. Phoenix never executes MSBuild targets or tasks: it
 evaluates a documented subset of project files (simple properties and conditions, `Choose`, literal workspace-local
@@ -529,14 +532,17 @@ watcher, and lifecycle test projects under `tests/`.
   ordinary SDK/import limitations remain advisory structured coverage. `.fsx` stays text-only: script-only scopes are
   refused, while mixed scopes explicitly report skipped scripts. F# `outline` is syntax-only and
   limited to compile-owned `.fs` / `.fsi`.
-  F# semantics are position-only (`symbol_at`, `definition`) within one physical project and target
-  framework, over a documented MSBuild-evaluation subset. Unsupported authority either fails closed
+  F# semantics are position-only (`symbol_at`, `definition`, `references`) within one physical
+  project and target framework, over a documented MSBuild-evaluation subset. References exclude
+  declarations, preserve an exact count within that selected context while bounding only samples,
+  and mark the count as a workspace lower bound because dependent projects are not scanned.
+  Unsupported authority either fails closed
   with a stable cause or continues only through the explicitly partial standard-SDK/toolchain and
   host-selected `FSharp.Core` boundaries described above. Within a successful F# semantic result,
   `exact` means the selected context carries only disclosed assumptions or immutable-evidence
   provenance; `indexed` means something was substituted, errored, or removed from that context.
-  F# references, implementations,
-  callers/callees, and hierarchy are not supported. Unscoped and explicit F# `search_symbol`
+  F# implementations, callers/callees,
+  and hierarchy are not supported. Unscoped and explicit F# `search_symbol`
   scopes query the shared syntax index; results are partial when the scope contains a text-only
   language or when any F# parse context is failed/truncated or any actionable project-option
   context is incomplete.

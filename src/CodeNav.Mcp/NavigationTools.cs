@@ -215,6 +215,7 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-symbol-at-semantic", summary = "v0.12.5 FCS position resolution for one explicit physical .fsproj + TFM type-check context" },
                 new { id = "fsharp-definition-same-project", summary = "v0.12.5 FCS signature/implementation declarations within the selected physical F# project" },
                 new { id = "fsharp-semantic-confidence-authority", summary = "v0.12.80 F# semantic confidence is exact when the selected context carries only disclosed assumptions or immutable-evidence provenance; indexed when anything was substituted, errored, or removed from the context, or a reason is not yet classified; partial reasons remain visible in either case; server_capabilities.semantic.fsharpIndexedTools is renamed fsharpSemanticTools" },
+                new { id = "fsharp-references-same-project", summary = "v0.12.81 references position mode uses one selected physical .fsproj + TFM FCS context to count compiler-bound non-definition uses, returns bounded samples from the pinned source snapshot, and reports the selected-project count as a workspace lower bound because dependent projects are not scanned" },
                 new { id = "fsharp-type-check-context-selection", summary = "v0.12.5 ambiguous owner/TFM sets fail closed and expose bounded selected/available F# type-check contexts" },
                 new { id = "fsharp-semantic-snapshot", summary = "v0.12.5 immutable source/project snapshot from one pinned index epoch plus request-private snapshots of verified workspace HintPath binaries; exact-path opened-handle verification covers Windows and Linux, plus macOS since v0.12.56; bounded deadline, inputs, checker cache, and concurrency" },
                 new { id = "workspace-msbuild-config-indexing", summary = "schema v16 persists arbitrary workspace .props/.targets as config inputs for find_file/config_lookup and pinned bounded project evaluation" },
@@ -281,7 +282,7 @@ public sealed partial class NavigationTools
                 new { id = "refresh-incomplete-freshness", summary = "v0.12.7 exhausted source capture keeps index state stale, preserves the Git baseline, exposes a stable refreshIncompleteReason plus bounded paths, and widens the next request to a recovery sweep" },
                 new { id = "refresh-recovery-self-heal", summary = "v0.12.27 an index left stale by unavailable workspace input autonomously retries complete convergence sweeps with 5/10/30/60-second capped backoff; timer-initiated recovery sweeps make one capture attempt each, re-resolve pending Git baselines, and remain honestly stale until success" },
                 new { id = "oversized-source-coverage", summary = "v0.12.7 oversized regular sources are a distinct persistent outcome with explicit bounded coverage; they are not rapidly retried, cannot publish ready/current/exact evidence, and prevent strict worktree index installation" },
-                new { id = "fsharp-unsupported-language-boundary", summary = "F# references, callers/callees, implementations, hierarchy, and semantic dependency closure remain unsupported; indexed F# symbol-name search is supported" },
+                new { id = "fsharp-unsupported-language-boundary", summary = "F# callers/callees, implementations, hierarchy, and semantic dependency closure remain unsupported; indexed F# symbol-name search plus same-project compiler-bound definition and references are supported" },
                 new { id = "review-fsharp-file-coverage", summary = "review_pack: F# changes in unsupportedLanguageFiles" },
                 new { id = "compiled-awareness", summary = "search_symbol orphaned; repo_overview.orphanedFiles; compiled ownership guides semantic resolution, impact, and context_pack" },
                 new { id = "git-awareness", summary = "v0.12.28 index tracks the workspace's indexed commit and branch; serialized HEAD snapshot acquisition, ordered recovery publication, rebuild-generation retirement, and execution-time diffs make same-commit attachment changes and rapid inverse transitions preserve final rows and attachment state, detached HEAD clears the indexed branch, unavailable recovery snapshots force older queued Git tuples to revalidate with only a resolved generation at or after the latest unavailable sample allowed to publish ready, and full rebuilds reject ordered recovery publications sampled for the replaced database. repo_overview.git reports indexed vs HEAD state and whether commits match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is logged, never silent" },
@@ -386,9 +387,9 @@ public sealed partial class NavigationTools
                 exactTools = new[] { "definition", "references", "implementations" },
                 exactToolsLanguage = "cs",
                 csharpExactTools = new[] { "definition", "references", "implementations" },
-                fsharpSemanticTools = new[] { "symbol_at", "definition" },
+                fsharpSemanticTools = new[] { "symbol_at", "definition", "references" },
                 fsharpSyntaxIndexedTools = new[] { "search_symbol" },
-                note = "C# exact results are scoped to loaded candidate clusters. F# symbol_at and definition are compiler-checked within one proven physical project/TFM: successful results are exact only while disclosed partial reasons preserve selected-context authority; every error, authority loss, or unclassified partial reason is indexed. Restored package compile assets are snapshotted, project closure remains unsupported, and partial fields report bounded authority.",
+                note = "C# exact results are scoped to loaded candidate clusters. F# symbol_at, definition, and references are compiler-checked within one proven physical project/TFM: successful results are exact only while disclosed partial reasons preserve selected-context authority; every error, authority loss, or unclassified partial reason is indexed. References report the selected-project count as a workspace lower bound because dependents are not scanned. Restored package compile assets are snapshotted, project closure remains unsupported, and partial fields report bounded authority.",
                 fsharpSyntaxNote = "F# search_symbol is syntax-indexed across the available owner/TFM parse contexts, including orphaned .fs/.fsi files; it is not compiler-checked, reports actionable incomplete context coverage as partial, and keeps ordinary SDK/import limits advisory.",
             },
             index = new
@@ -2565,25 +2566,27 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "references")]
-    [Description("Where a symbol is used across the workspace, grouped by project with counts and sample lines. mode='auto' tries compiler-exact references (target by stable C# documentationCommentId, position path+line, symbolId, or name) scoped to candidate projects. A documentationCommentId is semantic-only and never falls back to indexed name candidates; other selectors may. Exact references are usage-kind classified (kinds breakdown: call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/implicitConversion/explicitConversion/checkedConversion/other) — filter with usageKinds (e.g. 'call' to skip doc mentions) or publicConsumersOnly for external callers. Pass pathGlob/excludePath to scope ordinary indexed candidates (e.g. excludePath='3rdparty/**'); documentationCommentId and operator idx handles reject either path filter as bad_request with reason incompatible_filter, and operator idx handles reject mode='indexed' with reason incompatible_mode. Genuine operator semantic unavailability remains semantic_required. Call before changing behavior. C# semantic owner sets are assembly-name-keyed; only documentationCommentId requests disclose non-pair collisions through nameKeyedOwnerCollisionGroups.")]
+    [Description("Where a symbol is used, grouped by project with counts and sample lines. C# mode='auto' tries compiler-exact workspace references (target by stable documentationCommentId, position path+line, symbolId, or name) scoped to candidate projects. F# is position-only and returns compiler-bound non-definition uses from one selected physical .fsproj + TFM; its total is a workspace lower bound because dependent projects are not scanned. A C# documentationCommentId is semantic-only and never falls back to indexed name candidates; other C# selectors may. Exact C# references are usage-kind classified (kinds breakdown: call/construction/typeMention/attribute/nameof/xmldoc/usingDirective/baseList/typeof/implicitConversion/explicitConversion/checkedConversion/other) — filter with usageKinds (e.g. 'call' to skip doc mentions) or publicConsumersOnly for external callers. Pass pathGlob/excludePath to scope ordinary indexed C# candidates (e.g. excludePath='3rdparty/**'); documentationCommentId, operator idx handles, and F# positions reject path filters as bad_request with reason incompatible_filter. Genuine operator semantic unavailability remains semantic_required. Call before changing behavior. C# semantic owner sets are assembly-name-keyed; only documentationCommentId requests disclose non-pair collisions through nameKeyedOwnerCollisionGroups.")]
     public string References(
         [Description("Symbol name (whole-identifier). Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of a usage or declaration (position mode — most precise).")] string? path = null,
         [Description("1-based line for position mode.")] int line = 0,
-        [Description("1-based column for position mode (optional).")] int column = 0,
+        [Description("1-based column for position mode (optional for C#; required for F# references).")] int column = 0,
         [Description("'auto' (semantic first), 'semantic', or 'indexed' (fast candidates).")] string mode = "auto",
         [Description("Include usages in test projects (default true).")] bool includeTests = true,
         [Description("Include usages in generated files (default false).")] bool includeGenerated = false,
         [Description("Comma-separated usage-kind filter or JSON-array encoded string — SEMANTIC (exact) path only: call, construction, typeMention, attribute, nameof, xmldoc, usingDirective, baseList, typeof, implicitConversion, explicitConversion, checkedConversion, other. Null or an empty string = all; whitespace-only values, empty CSV items, and empty JSON arrays are bad_request. Counts and groups honor it (e.g. 'call,construction' = real executions only).")] string? usageKinds = null,
         [Description("Only usages OUTSIDE the symbol's own declaring PROJECT (project-scoped, NOT accessibility-scoped — the name is about API blast radius, not access modifiers). The external-consumer view; semantic path only.")] bool publicConsumersOnly = false,
-        [Description("Restrict ordinary indexed candidate paths to this glob. Incompatible with documentationCommentId and operator idx handles; those selectors return bad_request with reason incompatible_filter.")] string? pathGlob = null,
-        [Description("Exclude ordinary indexed candidate paths matching this glob, e.g. '3rdparty/**'. Incompatible with documentationCommentId and operator idx handles; those selectors return bad_request with reason incompatible_filter.")] string? excludePath = null,
+        [Description("Restrict ordinary indexed C# candidate paths to this glob. Incompatible with documentationCommentId, operator idx handles, and F# position mode; those selectors return bad_request with reason incompatible_filter.")] string? pathGlob = null,
+        [Description("Exclude ordinary indexed C# candidate paths matching this glob, e.g. '3rdparty/**'. Incompatible with documentationCommentId, operator idx handles, and F# position mode; those selectors return bad_request with reason incompatible_filter.")] string? excludePath = null,
         [Description("Max candidate files scanned in indexed mode (default 500).")] int maxFiles = 500,
         [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
         [Description("Sample lines per project group (default 3).")] int samplesPerGroup = 3,
         [Description("Semantic deadline in ms (default 15000, max 120000).")] int timeoutMs = 15000,
         [Description("Resolve by a prior result's handle instead of name/position: 'idx:NNN' (from search_symbol / symbol_at / definition). Takes precedence over name and path+line. Note: 'idx:' handles are index-local and change on reindex. Operator handles require mode='auto' or 'semantic' and reject pathGlob/excludePath.")] string? symbolId = null,
-        [Description("Stable C# Roslyn declaration id (T:/M:/P:/F:/E:). Empty means omitted; whitespace-only is bad_request. Mutually exclusive with symbolId, name, path+line, pathGlob, and excludePath; mode must be 'auto' or 'semantic'. A successful response echoes the compiler-canonical id, which is safe to reuse directly; failures echo a bounded form of the caller input.")] string? documentationCommentId = null)
+        [Description("Stable C# Roslyn declaration id (T:/M:/P:/F:/E:). Empty means omitted; whitespace-only is bad_request. Mutually exclusive with symbolId, name, path+line, pathGlob, and excludePath; mode must be 'auto' or 'semantic'. A successful response echoes the compiler-canonical id, which is safe to reuse directly; failures echo a bounded form of the caller input.")] string? documentationCommentId = null,
+        [Description("F# position mode only: workspace-relative physical .fsproj path. Required with targetFramework when the file has more than one type-check context.")] string? projectPath = null,
+        [Description("F# position mode only: exact target framework. Required with projectPath when the file has more than one type-check context.")] string? targetFramework = null)
     {
         if (NotReady() is { } notReady) return notReady;
         if (NormalizeDocumentationCommentId(ref documentationCommentId) is { } idError)
@@ -2685,6 +2688,82 @@ public sealed partial class NavigationTools
             resolvedHandleHit = hit;
             name = hit!.Name; path = hit.FilePath; line = hit.StartLine; column = 0;
             semanticDeclarationKey = OperatorDeclarationKey(hit);
+        }
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            path = NormalizePath(path);
+            FileHit? indexedFile;
+            bool compileOwnedFSharp = false;
+            using (var languageQueries = _manager.OpenQueries())
+            {
+                indexedFile = languageQueries.FileByPath(path);
+                if (indexedFile is { Language: "fs" } &&
+                    !IsFSharpScriptPath(path) &&
+                    (Path.GetExtension(path).Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+                     Path.GetExtension(path).Equals(".fsi", StringComparison.OrdinalIgnoreCase)))
+                {
+                    compileOwnedFSharp = languageQueries.ProjectsContaining(path)
+                        .Any(project => project.Language == "fs");
+                }
+            }
+            if (indexedFile is { Language: "fs" })
+            {
+                if (!compileOwnedFSharp)
+                    return UnsupportedLanguage(path, indexedFile.Language, "references");
+                if (resolvedHandleHit is not null || documentationCommentId is { Length: > 0 })
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_semantic_position_required",
+                        operation = "references",
+                        detail = "F# semantic references require an explicit path + line + column; documentationCommentId and idx handle resolution are not available yet.",
+                    });
+                }
+                if (line <= 0 || column <= 0)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_semantic_position_required",
+                        operation = "references",
+                        detail = "F# semantic references require path + line + column; bare-name and line-only resolution are not available yet.",
+                    });
+                }
+                if (mode == "indexed")
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_indexed_symbols_unavailable",
+                        operation = "references",
+                        detail = "F# references are compiler-semantic only; use mode='auto' or mode='semantic'.",
+                    });
+                }
+                string? incompatibleField = usageKinds is { Length: > 0 }
+                    ? "usageKinds"
+                    : publicConsumersOnly
+                        ? "publicConsumersOnly"
+                        : pathGlob is { Length: > 0 }
+                            ? "pathGlob"
+                            : excludePath is { Length: > 0 }
+                                ? "excludePath"
+                                : null;
+                if (incompatibleField is not null)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "bad_request",
+                        field = incompatibleField,
+                        reason = "incompatible_filter",
+                        expected = incompatibleField == "publicConsumersOnly"
+                            ? "false"
+                            : $"omit {incompatibleField}",
+                        operation = "references",
+                        detail = "Same-project F# references do not support C# usage-kind, public-consumer, or path filters.",
+                        meta = FSharpSemanticMeta(_manager.Health(), "bad_request"),
+                    });
+                }
+                return FSharpReferences(path, line, column, projectPath, targetFramework,
+                    includeTests, includeGenerated, samplesPerGroup, timeoutMs);
+            }
         }
         if (UnsupportedLanguageAtPath(path, "references") is { } unsupportedLanguage)
             return unsupportedLanguage;
@@ -3528,16 +3607,16 @@ public sealed partial class NavigationTools
             path = boundedPath,
             pathTruncated = pathTruncated ? true : (bool?)null,
             language,
-            supportedLanguages = operation is "symbol_at" or "definition" or "search_symbol"
+            supportedLanguages = operation is "symbol_at" or "definition" or "references" or "search_symbol"
                 ? new[] { "cs", "fs" }
                 : new[] { "cs" },
             availableForFile = fsharpSemanticEligible
-                ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol", "outline", "symbol_at", "definition" }
+                ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol", "outline", "symbol_at", "definition", "references" }
                 : fsharpSyntaxIndexed
                 ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol" }
                 : new[] { "find_file", "search_text", "source_context", "projects_containing" },
             detail = fsharpSemanticEligible
-                ? "F# supports text, project-graph navigation, FCS outlines, position-based symbol_at, and same-project definition for compile-owned .fs/.fsi files. Other compiler-semantic operations remain unavailable."
+                ? "F# supports text, project-graph navigation, FCS outlines, position-based symbol_at, same-project definition, and same-project references for compile-owned .fs/.fsi files. Implementations, callers, callees, and hierarchy remain unavailable."
                 : language == "fsx"
                     ? "F# script files are text-only; indexed F# declaration search covers .fs and .fsi project inputs."
                     : language == "fs"
@@ -4440,7 +4519,7 @@ public sealed partial class NavigationTools
             _ =>
             [
                 "name", "path", "line", "column", "symbolId",
-                "documentationCommentId",
+                "documentationCommentId", "projectPath", "targetFramework",
             ],
         };
 

@@ -76,6 +76,27 @@ public sealed record FSharpSemanticResult(
     int? LimitActual = null,
     int? LimitMaximum = null);
 
+public sealed record FSharpReferenceSample(
+    string Path,
+    int Line,
+    int StartColumn,
+    int EndLine,
+    int EndColumn,
+    string LineText);
+
+public sealed record FSharpReferencesResult(
+    FSharpSemanticSymbolInfo? Symbol,
+    int? TotalReferences,
+    List<FSharpReferenceSample> Samples,
+    string? Error,
+    FSharpTypeCheckContext? SelectedContext,
+    List<FSharpTypeCheckContext> AvailableContexts,
+    bool SelectedProjectIsTest = false,
+    string? PartialReason = null,
+    int DiagnosticCount = 0,
+    List<FSharpSemanticDiagnostic>? Diagnostics = null,
+    IndexHealth? Health = null);
+
 public sealed partial class SemanticService
 {
     private sealed record FSharpOwnerOptions(
@@ -110,6 +131,7 @@ public sealed partial class SemanticService
         string ProjectFileName,
         string[] SourceFiles,
         string[] SourceTexts,
+        bool[] SourceGenerated,
         string[] CommandLineArgs,
         string Fingerprint,
         string TargetFileName,
@@ -118,6 +140,7 @@ public sealed partial class SemanticService
         List<FSharpBinaryReferenceSnapshot> BinaryReferences,
         string? ReferenceSnapshotDirectory,
         string? PartialReason,
+        bool SelectedProjectIsTest,
         IndexHealth Health);
 
     /// <summary>
@@ -365,6 +388,170 @@ public sealed partial class SemanticService
         }
     }
 
+    /// <summary>
+    /// Enumerates compiler-bound non-definition uses inside one selected physical F# project and
+    /// target framework. The exact selected-project count is returned independently from the
+    /// bounded samples; workspace dependents are deliberately left to the cross-project stage.
+    /// </summary>
+    public async Task<FSharpReferencesResult> FSharpReferencesAsync(
+        string path,
+        int line,
+        int column,
+        string? projectPath,
+        string? targetFramework,
+        bool includeTests,
+        bool includeGenerated,
+        int samplesPerGroup,
+        int timeoutMs)
+    {
+        if (line < 1 || column < 0)
+            return new(null, null, [], "fsharp_semantic_position_invalid", null, []);
+        using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120_000));
+        CapturedFSharpSemanticProject? captured = null;
+        bool entered = false;
+        try
+        {
+            await _fsharpSemanticGate.WaitAsync(cts.Token).ConfigureAwait(false);
+            entered = true;
+            captured = CaptureFSharpSemanticProject(path, projectPath, targetFramework,
+                cts.Token, out FSharpSemanticResult? failure);
+            if (captured is null) return FSharpReferencesFailure(failure!);
+            FSharpSemanticSnapshotCapturedForTest?.Invoke();
+
+            SemanticCheckResult check = await SemanticResolver.ResolveReferencesAsync(
+                captured.ProjectFileName,
+                captured.SourceFiles,
+                captured.SourceTexts,
+                captured.CommandLineArgs,
+                captured.Fingerprint,
+                captured.BinaryReferences.Count == 0,
+                captured.TargetFileName,
+                line,
+                column,
+                MaxFSharpSemanticLineOnlySourceChars,
+                cts.Token).ConfigureAwait(false);
+            FSharpSemanticCheckCompletedForTest?.Invoke(check.Error);
+
+            var sourcePaths = captured.SourceFiles.ToHashSet(
+                WorkspacePaths.FileSystemPathComparer);
+            List<FSharpSemanticDiagnostic> diagnostics = check.Diagnostics
+                .Select(diagnostic => MapFSharpDiagnostic(diagnostic, sourcePaths))
+                .ToList();
+            string? partialReason = check.ErrorDiagnosticCount > 0
+                ? AppendPartialReason(captured.PartialReason,
+                    "fsharp_semantic_diagnostics_present")
+                : captured.PartialReason;
+
+            if (!VerifyFSharpBinaryReferences(captured.BinaryReferences, cts.Token))
+            {
+                return new(null, null, [], "fsharp_semantic_reference_changed",
+                    captured.SelectedContext, captured.AvailableContexts,
+                    captured.SelectedProjectIsTest, partialReason, check.DiagnosticCount,
+                    diagnostics, captured.Health);
+            }
+
+            if (check.Symbol is null)
+            {
+                return new(null, null, [], check.Error ?? "fsharp_semantic_failed",
+                    captured.SelectedContext, captured.AvailableContexts,
+                    captured.SelectedProjectIsTest, partialReason, check.DiagnosticCount,
+                    diagnostics, captured.Health);
+            }
+
+            FSharpSemanticRange MapRange(CodeNav.FSharp.SemanticLocation location) => new(
+                location.Role,
+                ToRelPath(location.FileName),
+                location.StartLine,
+                location.StartColumn + 1,
+                location.EndLine,
+                location.EndColumn + 1);
+            var declarations = check.Symbol.Declarations
+                .Where(location => sourcePaths.Contains(Path.GetFullPath(location.FileName)))
+                .Select(MapRange)
+                .ToList();
+            var symbol = new FSharpSemanticSymbolInfo(
+                check.Symbol.Name,
+                check.Symbol.FullName,
+                check.Symbol.Kind,
+                check.Symbol.Container,
+                check.Symbol.Namespace,
+                check.Symbol.Assembly,
+                check.Symbol.Accessibility,
+                MapRange(check.Symbol.UseLocation),
+                check.Symbol.Declarations.Length,
+                declarations);
+
+            var sourceIndex = captured.SourceFiles
+                .Select((source, index) => (source, index))
+                .ToDictionary(pair => pair.source, pair => pair.index,
+                    WorkspacePaths.FileSystemPathComparer);
+            var accepted = new List<(CodeNav.FSharp.SemanticLocation Location, int SourceIndex)>();
+            if (includeTests || !captured.SelectedProjectIsTest)
+            {
+                foreach (CodeNav.FSharp.SemanticLocation reference in check.References)
+                {
+                    cts.Token.ThrowIfCancellationRequested();
+                    string fullPath = Path.GetFullPath(reference.FileName);
+                    if (!sourceIndex.TryGetValue(fullPath, out int index)) continue;
+                    if (!includeGenerated && captured.SourceGenerated[index]) continue;
+                    accepted.Add((reference, index));
+                }
+            }
+
+            int sampleLimit = Math.Clamp(samplesPerGroup, 0, 10);
+            var samples = new List<FSharpReferenceSample>(Math.Min(sampleLimit, accepted.Count));
+            foreach ((CodeNav.FSharp.SemanticLocation reference, int index) in
+                     accepted.Take(sampleLimit))
+            {
+                Microsoft.CodeAnalysis.Text.SourceText text =
+                    Microsoft.CodeAnalysis.Text.SourceText.From(captured.SourceTexts[index]);
+                int lineIndex = reference.StartLine - 1;
+                if ((uint)lineIndex >= (uint)text.Lines.Count) continue;
+                samples.Add(new(
+                    ToRelPath(reference.FileName),
+                    reference.StartLine,
+                    reference.StartColumn + 1,
+                    reference.EndLine,
+                    reference.EndColumn + 1,
+                    Truncate(text.Lines[lineIndex].ToString().Trim())));
+            }
+
+            partialReason = AppendPartialReason(partialReason,
+                "fsharp_references_workspace_dependents_not_scanned");
+            return new(symbol, accepted.Count, samples, null,
+                captured.SelectedContext, captured.AvailableContexts,
+                captured.SelectedProjectIsTest, partialReason, check.DiagnosticCount,
+                diagnostics, captured.Health);
+        }
+        catch (OperationCanceledException)
+        {
+            return new(null, null, [], "fsharp_semantic_timeout", captured?.SelectedContext,
+                captured?.AvailableContexts ?? [], captured?.SelectedProjectIsTest ?? false,
+                captured?.PartialReason, Health: captured?.Health);
+        }
+        catch (Exception ex)
+        {
+            _log($"F# references request failed: {ex.GetType().Name}");
+            return new(null, null, [], captured is null
+                    ? "fsharp_semantic_snapshot_failed"
+                    : "fsharp_semantic_failed",
+                captured?.SelectedContext, captured?.AvailableContexts ?? [],
+                captured?.SelectedProjectIsTest ?? false, captured?.PartialReason,
+                Health: captured?.Health);
+        }
+        finally
+        {
+            if (captured is not null) CleanupFSharpReferenceSnapshots(captured);
+            if (entered) _fsharpSemanticGate.Release();
+        }
+    }
+
+    private static FSharpReferencesResult FSharpReferencesFailure(FSharpSemanticResult failure) =>
+        new(null, null, [], failure.Error, failure.SelectedContext,
+            failure.AvailableContexts, PartialReason: failure.PartialReason,
+            DiagnosticCount: failure.DiagnosticCount, Diagnostics: failure.Diagnostics,
+            Health: failure.Health);
+
     private CapturedFSharpSemanticProject? CaptureFSharpSemanticProject(
         string path,
         string? requestedProject,
@@ -510,6 +697,7 @@ public sealed partial class SemanticService
 
         var fullSourcePaths = new List<string>(options.SourceFiles.Count);
         var sourceTexts = new List<string>(options.SourceFiles.Count);
+        var sourceGenerated = new List<bool>(options.SourceFiles.Count);
         int totalSourceBytes = 0;
         foreach (string sourcePath in options.SourceFiles)
         {
@@ -540,6 +728,7 @@ public sealed partial class SemanticService
             }
             fullSourcePaths.Add(fullSourcePath!);
             sourceTexts.Add(text);
+            sourceGenerated.Add(sourceFile.IsGenerated);
         }
 
         List<string> bareReferences = options.BareReferences ?? [];
@@ -744,9 +933,11 @@ public sealed partial class SemanticService
             commandLineArgs.AddRange(fullSourcePaths);
 
             var captured = new CapturedFSharpSemanticProject(projectFileName,
-                fullSourcePaths.ToArray(), sourceTexts.ToArray(), commandLineArgs.ToArray(),
+                fullSourcePaths.ToArray(), sourceTexts.ToArray(), sourceGenerated.ToArray(),
+                commandLineArgs.ToArray(),
                 fingerprint, targetFileName, selected, contexts, binaryReferences,
-                referenceSnapshotDirectory, JoinPartialReasons(partialReasons), snapshot.Health);
+                referenceSnapshotDirectory, JoinPartialReasons(partialReasons), owner.IsTest,
+                snapshot.Health);
             referenceSnapshotOwnershipTransferred = true;
             return captured;
         }

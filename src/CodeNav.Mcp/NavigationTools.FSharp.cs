@@ -174,13 +174,14 @@ public sealed partial class NavigationTools
         {
             switch (reason)
             {
-                // These disclose how complete inputs were obtained; they neither remove
-                // authority nor substitute a target-incompatible input.
+                // These disclose input provenance or result scope; they neither remove
+                // selected-context authority nor substitute a target-incompatible input.
                 case "fsharp_semantic_sdk_implicit_authority":
                 case "fsharp_semantic_toolchain_implicit_authority":
                 case "fsharp_core_reference_defaulted":
                 case "fsharp_binary_references_snapshotted":
                 case "fsharp_package_references_snapshotted":
+                case "fsharp_references_workspace_dependents_not_scanned":
                     continue;
                 // Closed by design: known authority loss and every future unclassified cause
                 // remain conservative until deliberately admitted above.
@@ -190,6 +191,206 @@ public sealed partial class NavigationTools
         }
 
         return "exact";
+    }
+
+    private string FSharpReferences(string path, int line, int column,
+        string? projectPath, string? targetFramework, bool includeTests,
+        bool includeGenerated, int samplesPerGroup, int timeoutMs)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
+        FSharpReferencesResult result = _semantic.FSharpReferencesAsync(
+                path, line, column, projectPath, targetFramework, includeTests,
+                includeGenerated, Math.Clamp(samplesPerGroup, 0, 10), deadlineMs)
+            .GetAwaiter().GetResult();
+        return ShapeFSharpReferencesResult(path, line, column, result, deadlineMs,
+            stopwatch.ElapsedMilliseconds);
+    }
+
+    private string ShapeFSharpReferencesResult(string path, int line, int column,
+        FSharpReferencesResult result, int deadlineMs, long elapsedMs)
+    {
+        var selected = result.SelectedContext is null
+            ? null
+            : new
+            {
+                project = result.SelectedContext.Project,
+                targetFramework = result.SelectedContext.TargetFramework,
+            };
+        var allContexts = result.AvailableContexts.Select(context => (object)new
+        {
+            project = context.Project,
+            targetFramework = context.TargetFramework,
+        }).ToList();
+        int contextTotal = allContexts.Count;
+        var diagnostics = result.Diagnostics ?? [];
+        bool diagnosticLimitTruncated = result.DiagnosticCount > diagnostics.Count;
+        bool succeeded = result.Error is null && result.Symbol is not null &&
+                         result.TotalReferences is not null;
+        string? detail = result.Error switch
+        {
+            "fsharp_semantic_position_invalid" =>
+                "F# semantic positions require line >= 1 and column >= 0 (0 means line-only).",
+            "fsharp_type_check_context_required" =>
+                "Select one physical F# project and target framework using projectPath + targetFramework.",
+            "fsharp_type_check_context_not_found" =>
+                "The requested projectPath + targetFramework is not an owning type-check context for this file.",
+            "fsharp_semantic_column_required" =>
+                "More than one F# symbol occurs on this line; provide a 1-based column.",
+            "fsharp_semantic_line_only_source_limit" =>
+                "Line-only F# lookup is disabled for this source size; provide a 1-based column.",
+            "fsharp_semantic_project_references_unsupported" =>
+                "This F# type-check context requires project-reference closure that is not available yet.",
+            "fsharp_semantic_reference_changed" =>
+                "A captured binary or package reference changed during FCS checking; the result was discarded.",
+            "fsharp_semantic_timeout" =>
+                "FCS did not complete within the bounded deadline; retry with a larger timeoutMs.",
+            "fsharp_symbol_not_resolved" =>
+                "FCS found no symbol at this exact source position.",
+            null => null,
+            _ => "FCS could not produce trustworthy same-project reference evidence for this project snapshot.",
+        };
+        var meta = FSharpSemanticMeta(result.Health, result.Error, result.PartialReason);
+        object? symbol = result.Symbol is null ? null : new
+        {
+            name = result.Symbol.Name,
+            fullName = result.Symbol.FullName,
+            kind = result.Symbol.Kind,
+            container = result.Symbol.Container,
+            @namespace = result.Symbol.Namespace,
+            assembly = result.Symbol.Assembly,
+            accessibility = result.Symbol.Accessibility,
+            use = new
+            {
+                path = result.Symbol.Use.Path,
+                startLine = result.Symbol.Use.StartLine,
+                startColumn = result.Symbol.Use.StartColumn,
+                endLine = result.Symbol.Use.EndLine,
+                endColumn = result.Symbol.Use.EndColumn,
+            },
+        };
+
+        string shaped = Json.WithAuxiliaryListsBudget(result.Samples, allContexts, diagnostics,
+            (shownSamples, samplesTruncated, shownContexts, contextsTruncated,
+                shownDiagnostics, diagnosticsTruncated) => new
+                {
+                    error = result.Error,
+                    operation = "references",
+                    path,
+                    line,
+                    column = column > 0 ? column : (int?)null,
+                    found = result.Error == "fsharp_symbol_not_resolved"
+                    ? false
+                    : succeeded
+                        ? true
+                        : (bool?)null,
+                    symbol,
+                    summary = succeeded
+                    ? $"Exactly {result.TotalReferences} compiler-bound non-definition references in the selected physical F# project; the workspace total is a lower bound because dependent projects were not scanned."
+                    : null,
+                    totalReferences = succeeded ? result.TotalReferences : null,
+                    totalIsLowerBound = succeeded ? true : (bool?)null,
+                    groupBy = succeeded ? "project" : null,
+                    groups = succeeded && result.SelectedContext is not null
+                    ? new[]
+                    {
+                        new
+                        {
+                            project = result.SelectedContext.Project,
+                            targetFramework = result.SelectedContext.TargetFramework,
+                            isTest = result.SelectedProjectIsTest,
+                            count = result.TotalReferences!.Value,
+                            samples = shownSamples.Select(sample => new
+                            {
+                                path = sample.Path,
+                                line = sample.Line,
+                                startColumn = sample.StartColumn,
+                                endLine = sample.EndLine,
+                                endColumn = sample.EndColumn,
+                                text = sample.LineText,
+                            }),
+                        },
+                    }
+                    : null,
+                    sampleCoverage = succeeded && samplesTruncated
+                    ? new
+                    {
+                        selected = result.Samples.Count,
+                        returned = shownSamples.Count,
+                        complete = false,
+                    }
+                    : null,
+                    coverage = succeeded
+                    ? new
+                    {
+                        scope = "selected_physical_project",
+                        workspaceDependentsScanned = 0,
+                        workspaceComplete = false,
+                    }
+                    : null,
+                    partial = succeeded || result.PartialReason is not null ? true : (bool?)null,
+                    partialReason = result.PartialReason,
+                    detail,
+                    selectedFSharpTypeCheckContext = selected,
+                    availableFSharpTypeCheckContexts = shownContexts,
+                    fsharpTypeCheckContextsTotal = contextTotal,
+                    fsharpTypeCheckContextsReturned = shownContexts.Count,
+                    fsharpTypeCheckContextsTruncated = contextsTruncated ? true : (bool?)null,
+                    diagnosticCount = result.DiagnosticCount > 0
+                    ? result.DiagnosticCount
+                    : (int?)null,
+                    diagnostics = shownDiagnostics.Count > 0
+                    ? shownDiagnostics.Select(diagnostic => new
+                    {
+                        severity = diagnostic.Severity,
+                        code = diagnostic.Code,
+                        message = diagnostic.Message,
+                        path = diagnostic.Path,
+                        startLine = diagnostic.StartLine,
+                        startColumn = diagnostic.StartColumn,
+                        endLine = diagnostic.EndLine,
+                        endColumn = diagnostic.EndColumn,
+                    })
+                    : null,
+                    diagnosticsTruncated = diagnosticLimitTruncated || diagnosticsTruncated
+                    ? true
+                    : (bool?)null,
+                    timing = new
+                    {
+                        deadlineMs,
+                        elapsedMs,
+                    },
+                    meta,
+                }, maxBytes: TestOnlyReferencesResponseMaxBytes,
+            auxiliarySampleItems: MaxFSharpTypeCheckContexts);
+        if (Json.Utf8Bytes(shaped) <= Json.HardBudgetBytes) return shaped;
+
+        return Json.WithStringBudget(path, 4096, (boundedPath, pathTruncated) => new
+        {
+            error = "fsharp_semantic_response_too_large",
+            operation = "references",
+            path = boundedPath,
+            pathTruncated = pathTruncated ? true : (bool?)null,
+            line,
+            column = column > 0 ? column : (int?)null,
+            detail = "The FCS reference identity exceeds the 64 KiB response budget; use a narrower source position.",
+            timing = new
+            {
+                deadlineMs,
+                elapsedMs,
+            },
+            meta = FSharpSemanticMeta(result.Health, "fsharp_semantic_response_too_large",
+                result.PartialReason),
+        });
+    }
+
+    private Meta FSharpSemanticMeta(IndexHealth? health, string? error = null,
+        string? partialReason = null)
+    {
+        string confidence = error is null
+            ? FSharpSemanticConfidence(partialReason)
+            : "indexed";
+        return Meta.From(health ?? _manager.Health(), confidence, "semantic");
     }
 
     private string ShapeFSharpSemanticResult(string operation, string path, int line, int column,
@@ -328,10 +529,7 @@ public sealed partial class NavigationTools
             null => null,
             _ => "FCS could not produce a trustworthy semantic result for this project snapshot.",
         };
-        string confidence = result.Error is null
-            ? FSharpSemanticConfidence(result.PartialReason)
-            : "indexed";
-        var meta = Meta.From(result.Health ?? _manager.Health(), confidence, "semantic");
+        var meta = FSharpSemanticMeta(result.Health, result.Error, result.PartialReason);
 
         object? symbol = result.Symbol is null ? null : new
         {
