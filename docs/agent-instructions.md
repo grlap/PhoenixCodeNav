@@ -101,8 +101,8 @@ ownership, dependencies, or likely tests.
 - C# supports compiler-exact semantic navigation when its project model closes.
 - F# `.fs` and `.fsi` files support indexed declarations, outlines, position-based
   `symbol_at`, definitions through the selected root's F# `ProjectReference` closure under the
-  evaluated MSBuild transitivity and bounded child-TFM policies, and references counted only in that selected
-  physical root project. Literal physical
+  evaluated MSBuild transitivity and bounded child-TFM policies, and references counted across the
+  selected root, a distinct declaring project, and proven workspace dependents. Literal physical
   project paths are authoritative; non-F# targets, cycles, unsupported metadata, missing projects,
   and unavailable target frameworks fail closed without borrowing a last-built DLL. Exact child
   TFMs win; if exact is absent, only a single-target `netstandard` child is table-selectable.
@@ -111,8 +111,11 @@ ownership, dependencies, or likely tests.
   SDK-style projects are transitive by default; `DisableTransitiveProjectReferences=true` and
   legacy-style projects are direct-only. Child compiler diagnostics retain their physical source
   paths and downgrade confidence through `fsharp_semantic_diagnostics_present` like root errors.
-  Reference counts are exact for the selected root context but remain
-  workspace lower bounds because dependent projects are not scanned. F# semantic confidence is
+  Reference discovery augments indexed structural edges with bounded evaluation of every indexed
+  F# project/TFM from the same pinned snapshot; coverage reports evaluated and unevaluated potential
+  consumers. Physical sites are deduplicated across contexts. Unevaluated, excluded, failed, or
+  deadline-pending scope makes the total a workspace lower bound without discarding completely
+  scanned groups, while test-project and generated-file filters remain explicit. F# semantic confidence is
   exact when the selected context carries only disclosed assumptions or immutable-evidence
   provenance; it is indexed when anything was substituted, errored, or removed from the context.
   Broader F# semantic operations may return explicit unsupported or partial reasons. `.fsx`

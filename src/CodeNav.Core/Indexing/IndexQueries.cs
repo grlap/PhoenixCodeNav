@@ -142,9 +142,9 @@ public sealed record ProjectRow(long Id, string Path, string Name, string Style,
 public sealed record GraphEdge(string FromProject, string ToProject,
     string Kind = "project"); // 'project' | 'assembly' — edge provenance (bxw, schema v10)
 
-/// <summary>A direct physical project edge used only by the C# semantic workspace. Unlike the
-/// public logical-name graph, this retains both project paths and languages so an edge to an F#
-/// row cannot be silently substituted with a same-named C# project.</summary>
+/// <summary>A direct physical project edge used by semantic workspace traversal. Unlike the
+/// public logical-name graph, this retains both project paths and languages so a same-named
+/// project cannot silently substitute for the indexed endpoint.</summary>
 public sealed record SemanticProjectEdge(
     long FromId, string FromPath, string FromProject, string FromLanguage,
     long ToId, string ToPath, string ToProject, string ToLanguage,
@@ -1653,6 +1653,10 @@ public sealed partial class IndexQueries : IDisposable
         "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects ORDER BY path, name",
         ReadProject);
 
+    public List<ProjectRow> AllProjects(CancellationToken cancellationToken) => QueryCancellable(
+        "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects ORDER BY path, name",
+        ReadProject, cancellationToken);
+
     public List<ProjectRow> AllProjects(int limit) => Query(
         "SELECT id, path, name, style, tfms, is_test, load_status, lang FROM projects " +
         "ORDER BY path, name LIMIT $lim",
@@ -1895,6 +1899,26 @@ public sealed partial class IndexQueries : IDisposable
         }
         return result;
     }
+
+    /// <summary>Physical incoming semantic edges used by F# workspace-reference discovery.
+    /// Unlike the C# name-union query above, every endpoint keeps its indexed project path and
+    /// language so the caller can distinguish source ProjectReference authority from recovered
+    /// assembly/HintPath coupling without guessing a target framework.</summary>
+    public List<SemanticProjectEdge> FSharpWorkspaceReferenceEdges(
+        CancellationToken cancellationToken = default) => QueryCancellable(
+        """
+        SELECT pf.id, pf.path, pf.name, pf.lang,
+               pt.id, pt.path, pt.name, pt.lang, r.kind
+        FROM project_refs r
+        JOIN projects pf ON pf.id = r.from_id
+        JOIN projects pt ON pt.id = r.to_id
+        ORDER BY pt.path, pf.path, r.kind
+        """,
+        reader => new SemanticProjectEdge(
+            reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
+            reader.GetString(3), reader.GetInt64(4), reader.GetString(5),
+            reader.GetString(6), reader.GetString(7), reader.GetString(8)),
+        cancellationToken);
 
     /// <summary>Supported C# physical reachability for a whole semantic load. Logical-name graph
     /// closure is insufficient here: a C# consumer may point at an F# row whose assembly name

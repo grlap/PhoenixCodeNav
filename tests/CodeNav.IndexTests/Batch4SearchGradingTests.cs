@@ -233,7 +233,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("search_symbol", semantic.GetProperty("fsharpSyntaxIndexedTools")
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.Contains("compiler-checked", semantic.GetProperty("note").GetString());
-        Assert.Contains("successful results are exact only", semantic.GetProperty("note").GetString());
+        Assert.Contains("Successful results are exact only", semantic.GetProperty("note").GetString());
         Assert.Contains("every error", semantic.GetProperty("note").GetString());
         Assert.Contains("unclassified partial reason is indexed",
             semantic.GetProperty("note").GetString());
@@ -378,6 +378,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("fsharp-symbol-at-semantic", ids);
         Assert.Contains("fsharp-definition-same-project", ids);
         Assert.Contains("fsharp-references-same-project", ids);
+        Assert.Contains("fsharp-references-workspace-dependents", ids);
         Assert.Contains("fsharp-semantic-project-reference-closure", ids);
         Assert.Contains("fsharp-semantic-project-reference-netstandard-compatibility", ids);
         Assert.Contains("fsharp-type-check-context-selection", ids);
@@ -809,11 +810,25 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("selected physical .fsproj + TFM", fsharpReferences);
         Assert.Contains("compiler-bound non-definition uses", fsharpReferences);
         Assert.Contains("pinned source snapshot", fsharpReferences);
-        Assert.Contains("workspace lower bound", fsharpReferences);
-        Assert.Contains("dependent projects are not scanned", fsharpReferences);
         Assert.DoesNotContain("exact", fsharpReferences, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("indexed", fsharpReferences, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("heuristic", fsharpReferences, StringComparison.OrdinalIgnoreCase);
+        string fsharpWorkspaceReferences = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-references-workspace-dependents")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.86", fsharpWorkspaceReferences);
+        Assert.Contains("proven F# source dependents/TFMs",
+            fsharpWorkspaceReferences);
+        Assert.Contains("bounded evaluated ProjectReference authority",
+            fsharpWorkspaceReferences);
+        Assert.Contains("distinct declaring project once", fsharpWorkspaceReferences);
+        Assert.Contains("deduplicates physical sites across TFMs", fsharpWorkspaceReferences);
+        Assert.Contains("incomplete lower-bound coverage",
+            fsharpWorkspaceReferences);
+        Assert.Contains("test/generated filters", fsharpWorkspaceReferences);
         string fsharpProjectReferenceClosure = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -838,7 +853,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             fsharpProjectReferenceClosure);
         Assert.Contains("declarationsOutsideSelectedProjectCount retains its not-returned meaning",
             fsharpProjectReferenceClosure);
-        Assert.Contains("references still count only the selected root",
+        Assert.Contains("since v0.12.86 references can additionally scan workspace dependents",
             fsharpProjectReferenceClosure);
         Assert.Contains("same-assembly", fsharpProjectReferenceClosure);
         string fsharpNetStandardCompatibility = Assert.Single(
@@ -1346,6 +1361,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                            "fsharp-semantic-confidence-authority"),
                        ("compiler-bound non-definition uses",
                            "fsharp-references-same-project"),
+                       ("deduplicates physical sites across TFMs",
+                           "fsharp-references-workspace-dependents"),
                        ("in-memory referenced-project options",
                            "fsharp-semantic-project-reference-closure"),
                        ("single-target netstandard1.0-2.1",

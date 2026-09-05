@@ -80,11 +80,11 @@ for code identifiers.
    `implementations`, `callers`, `callees`, and `type_hierarchy`. F# uses a bounded FCS
    type check for position-based `symbol_at` and `definition` through the selected root's
    F# `ProjectReference` closure under the evaluated MSBuild transitivity and bounded child-TFM
-   policies, plus `references` counted within the selected
-   physical root. F# references enumerate compiler-bound non-definition uses from that root,
-   keep the selected-project count exact while bounding only response
-   samples, and expose that count as a workspace lower bound because dependent projects are not
-   scanned. An F# type-check
+   policies, plus `references` counted across the selected physical root and every proven
+   source-`ProjectReference` F# workspace dependent. Each applicable dependent TFM is checked,
+   physical sites are deduplicated across TFMs, and only response samples are bounded. Binary,
+   unsupported, failed, or deadline-pending dependents are attributed explicitly and make the
+   returned total a workspace lower bound. An F# type-check
    context is exactly one physical `.fsproj` plus one target framework; ambiguous files require
    explicit selection, and the selection never changes or merges ownership/reference graph facts.
    C# regular and conversion operator handles bridge syntax rows to Roslyn with the uncapped
@@ -278,7 +278,13 @@ partial, including unobservable build authority above the workspace root; custom
 declarations, Directory.Build mutations outside the bounded reference projection, and ordinary
 project/import property assignment after semantic items fail closed. Workspace-contained managed `HintPath` snapshots have their original identity
 verified after the check; declarations may come from the captured F# project-reference closure while
-reference counts remain selected-root-only. The host's target-compatible
+reference counts scan proven F# workspace dependents from the same pinned index snapshot. Because
+the persisted structural graph intentionally keeps raw, non-expanding project-file facts, reference
+discovery augments it with the bounded F# evaluator for every indexed F# project/TFM and reports
+`potentialConsumers`, `potentialConsumersEvaluated`, and `potentialConsumersUnevaluated`. Any
+unevaluated potential consumer makes the workspace total an attributed lower bound while preserving
+the exact counts of completed groups. A distinct declaring project is counted once, and test-project
+or generated-file filters remain explicit in group status and summary prose. The host's target-compatible
 `FSharp.Core` fallback is always disclosed as partial because it was not selected by evaluated
 project authority. C#-targeted F# project references, multi-target compatibility, netstandard1.x
 compile-input materialization, and the remaining semantic operations still disclose stable
@@ -321,6 +327,12 @@ from the context. `partial:true` and `partialReason` remain visible independentl
 | `fsharp_binary_references_snapshotted` | exact | Binary inputs were copied and verified as immutable request evidence. |
 | `fsharp_package_references_snapshotted` | exact | Restored package inputs were copied and verified as immutable request evidence. |
 | `fsharp_references_workspace_dependents_not_scanned` | exact | The selected-project result is compiler-exact; this separately discloses that its workspace total is a lower bound. |
+| `fsharp_references_workspace_deadline` | exact | Completely scanned project groups remain compiler-exact, while unvisited dependents make the workspace total a lower bound. |
+| `fsharp_references_dependent_failed` | exact | A dependent context failed independently; successful groups remain compiler-exact and the failed group is attributed. |
+| `fsharp_references_dependent_discovery_incomplete` | exact | At least one potential F# consumer could not be evaluated from the pinned snapshot; completed groups remain compiler-exact while the workspace total is a lower bound. |
+| `fsharp_references_declaring_project_failed` | exact | The selected consumer was checked, but its distinct declaring-project context could not be counted; completed groups remain compiler-exact and the total is a lower bound. |
+| `fsharp_references_unsupported_boundary` | exact | A non-F# project-reference path was excluded explicitly from dependent scanning. |
+| `fsharp_references_binary_dependents_not_scanned` | exact | An assembly/HintPath-coupled consumer was identified but cannot be proven from source ProjectReference authority. |
 | `fsharp_core_reference_host_fallback` | indexed | A host-selected `FSharp.Core` substituted for project authority. |
 | `fsharp_semantic_diagnostics_present` | indexed | Compiler errors mean the selected context did not close cleanly. |
 

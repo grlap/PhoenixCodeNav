@@ -51,8 +51,8 @@ for C#.
 F# source text, `.fsproj` compile ownership, and C#↔F# project edges are indexed. Compile-owned
 `.fs` / `.fsi` files support FCS outlines plus position-based `symbol_at`, `definition` through the
 selected root's F# `ProjectReference` closure under the evaluated MSBuild transitivity and bounded
-child-TFM policies, and references counted only in
-that physical root project. The semantic path evaluates a
+child-TFM policies, and references counted across that physical root, a distinct declaring project,
+and every proven F# workspace dependent. The semantic path evaluates a
 bounded legacy-project subset (simple properties and conditions, `Choose`, and literal local
 `.props`) without executing MSBuild. It also evaluates the nearest indexed ancestor
 `Directory.Build.props`/`.targets` around the project for bounded, metadata-free Reference
@@ -68,10 +68,13 @@ TFMs fail explicitly without borrowing a
 last-built DLL. SDK-style closure is transitive by default, while
 `DisableTransitiveProjectReferences=true` and legacy-style projects remain direct-only. Child
 compiler diagnostics are preserved with their source paths and downgrade semantic confidence just
-like root diagnostics. Broader F# semantic operations still return explicit unsupported boundaries
-rather than misleading empty answers. Indexed search is language-neutral unless the caller supplies a file
-scope; a mixed C#/F# symbol scope returns the available C# symbols and marks the skipped portion
-partial.
+like root diagnostics. References augment indexed structural edges with bounded evaluation of every
+indexed F# project/TFM from the pinned snapshot, deduplicate physical sites across contexts, and
+report evaluated/unevaluated potential consumers plus excluded, failed, filtered, or pending scope
+when the workspace total is a lower bound. Broader F# semantic operations still return
+explicit unsupported boundaries rather than misleading empty answers. Indexed search is
+language-neutral unless the caller supplies a file scope; a mixed C#/F# symbol scope returns the
+available C# symbols and marks the skipped portion partial.
 
 The design rule is: **return the smallest precise context that lets the agent take the
 next step** — and never present a guess as a fact.

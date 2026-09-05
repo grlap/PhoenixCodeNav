@@ -349,6 +349,64 @@ internal static class Json
         return json;
     }
 
+    /// <summary>Four-list variant used when a response must preserve aggregate counts while
+    /// independently trimming diagnostics, contexts, samples, and finally project groups.</summary>
+    public static string WithAuxiliaryListsBudget<T, TAux, TSecondary, TTertiary>(
+        List<T> items,
+        List<TAux> auxiliary,
+        List<TSecondary> secondary,
+        List<TTertiary> tertiary,
+        Func<List<T>, bool, List<TAux>, bool, List<TSecondary>, bool,
+            List<TTertiary>, bool, object> build,
+        int? maxBytes = null)
+    {
+        int cap = Math.Min(maxBytes ?? HardBudgetBytes, HardBudgetBytes);
+        var work = new List<T>(items);
+        var auxiliaryWork = new List<TAux>(auxiliary);
+        var secondaryWork = new List<TSecondary>(secondary);
+        var tertiaryWork = new List<TTertiary>(tertiary);
+        bool truncated = false;
+        bool auxiliaryTruncated = false;
+        bool secondaryTruncated = false;
+        bool tertiaryTruncated = false;
+        string json = Serialize(build(work, truncated, auxiliaryWork, auxiliaryTruncated,
+            secondaryWork, secondaryTruncated, tertiaryWork, tertiaryTruncated));
+
+        while (Utf8Bytes(json) > cap && tertiaryWork.Count > 0)
+        {
+            int keep = tertiaryWork.Count / 2;
+            tertiaryWork.RemoveRange(keep, tertiaryWork.Count - keep);
+            tertiaryTruncated = true;
+            json = Serialize(build(work, truncated, auxiliaryWork, auxiliaryTruncated,
+                secondaryWork, secondaryTruncated, tertiaryWork, tertiaryTruncated));
+        }
+        while (Utf8Bytes(json) > cap && secondaryWork.Count > 0)
+        {
+            int keep = secondaryWork.Count / 2;
+            secondaryWork.RemoveRange(keep, secondaryWork.Count - keep);
+            secondaryTruncated = true;
+            json = Serialize(build(work, truncated, auxiliaryWork, auxiliaryTruncated,
+                secondaryWork, secondaryTruncated, tertiaryWork, tertiaryTruncated));
+        }
+        while (Utf8Bytes(json) > cap && auxiliaryWork.Count > 0)
+        {
+            int keep = auxiliaryWork.Count / 2;
+            auxiliaryWork.RemoveRange(keep, auxiliaryWork.Count - keep);
+            auxiliaryTruncated = true;
+            json = Serialize(build(work, truncated, auxiliaryWork, auxiliaryTruncated,
+                secondaryWork, secondaryTruncated, tertiaryWork, tertiaryTruncated));
+        }
+        while (Utf8Bytes(json) > cap && work.Count > 0)
+        {
+            int keep = work.Count / 2;
+            work.RemoveRange(keep, work.Count - keep);
+            truncated = true;
+            json = Serialize(build(work, truncated, auxiliaryWork, auxiliaryTruncated,
+                secondaryWork, secondaryTruncated, tertiaryWork, tertiaryTruncated));
+        }
+        return json;
+    }
+
     /// <summary>
     /// Preserves a complete compiler declaration identity when that single indivisible value is
     /// intrinsically larger than Phoenix's ordinary 64 KiB response target. List budget helpers

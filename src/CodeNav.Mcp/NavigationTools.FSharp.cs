@@ -182,6 +182,12 @@ public sealed partial class NavigationTools
                 case "fsharp_binary_references_snapshotted":
                 case "fsharp_package_references_snapshotted":
                 case "fsharp_references_workspace_dependents_not_scanned":
+                case "fsharp_references_workspace_deadline":
+                case "fsharp_references_dependent_failed":
+                case "fsharp_references_dependent_discovery_incomplete":
+                case "fsharp_references_declaring_project_failed":
+                case "fsharp_references_unsupported_boundary":
+                case "fsharp_references_binary_dependents_not_scanned":
                     continue;
                 // Closed by design: known authority loss and every future unclassified cause
                 // remain conservative until deliberately admitted above.
@@ -203,12 +209,13 @@ public sealed partial class NavigationTools
                 path, line, column, projectPath, targetFramework, includeTests,
                 includeGenerated, Math.Clamp(samplesPerGroup, 0, 10), deadlineMs)
             .GetAwaiter().GetResult();
-        return ShapeFSharpReferencesResult(path, line, column, result, deadlineMs,
-            stopwatch.ElapsedMilliseconds);
+        return ShapeFSharpReferencesResult(path, line, column, result, includeTests,
+            includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds);
     }
 
     private string ShapeFSharpReferencesResult(string path, int line, int column,
-        FSharpReferencesResult result, int deadlineMs, long elapsedMs)
+        FSharpReferencesResult result, bool includeTests, bool includeGenerated,
+        int deadlineMs, long elapsedMs)
     {
         var selected = result.SelectedContext is null
             ? null
@@ -227,6 +234,19 @@ public sealed partial class NavigationTools
         bool diagnosticLimitTruncated = result.DiagnosticCount > diagnostics.Count;
         bool succeeded = result.Error is null && result.Symbol is not null &&
                          result.TotalReferences is not null;
+        List<FSharpReferenceGroup> referenceGroups = result.Groups ??
+            (succeeded && result.SelectedContext is not null
+                ? [new(result.SelectedContext.Project,
+                    [result.SelectedContext.TargetFramework], result.SelectedProjectIsTest,
+                    result.TotalReferences!.Value, result.Samples)]
+                : []);
+        List<(int GroupIndex, FSharpReferenceSample Sample)> budgetedSamples = referenceGroups
+            .SelectMany((group, groupIndex) => group.Samples.Select(sample =>
+                (groupIndex, sample))).ToList();
+        List<(int GroupIndex, FSharpReferenceGroup Group)> budgetedGroups = referenceGroups
+            .Select((group, groupIndex) => (groupIndex, group)).ToList();
+        bool workspaceComplete = result.Coverage?.WorkspaceComplete == true;
+        bool totalIsLowerBound = succeeded && !workspaceComplete;
         string? detail = result.Error switch
         {
             "fsharp_semantic_position_invalid" =>
@@ -264,6 +284,15 @@ public sealed partial class NavigationTools
             null => null,
             _ => "FCS could not produce trustworthy same-project reference evidence for this project snapshot.",
         };
+        if (detail is null && succeeded &&
+            result.PartialReason?.Split(';', StringSplitOptions.TrimEntries)
+                .Contains("fsharp_references_workspace_dependents_not_scanned",
+                    StringComparer.Ordinal) == true)
+        {
+            detail = "The selected-project count is compiler-exact, but workspace dependents " +
+                     "were not scanned because the symbol has no authoritative declaration " +
+                     "inside workspace F# source.";
+        }
         var meta = FSharpSemanticMeta(result.Health, result.Error, result.PartialReason);
         object? symbol = result.Symbol is null ? null : new
         {
@@ -284,9 +313,19 @@ public sealed partial class NavigationTools
             },
         };
 
-        string shaped = Json.WithAuxiliaryListsBudget(result.Samples, allContexts, diagnostics,
-            (shownSamples, samplesTruncated, shownContexts, contextsTruncated,
-                shownDiagnostics, diagnosticsTruncated) => new
+        string shaped = Json.WithAuxiliaryListsBudget(budgetedGroups, budgetedSamples,
+            allContexts, diagnostics,
+            (shownGroups, groupsTruncated, shownSamples, samplesTruncated,
+                shownContexts, contextsTruncated, shownDiagnostics, diagnosticsTruncated) =>
+            {
+                HashSet<int> shownGroupIndices = shownGroups
+                    .Select(entry => entry.GroupIndex).ToHashSet();
+                List<(int GroupIndex, FSharpReferenceSample Sample)> visibleSamples =
+                    shownSamples.Where(entry => shownGroupIndices.Contains(entry.GroupIndex))
+                        .ToList();
+                bool visibleSamplesTruncated = samplesTruncated ||
+                                               visibleSamples.Count < budgetedSamples.Count;
+                return new
                 {
                     error = result.Error,
                     operation = "references",
@@ -300,50 +339,128 @@ public sealed partial class NavigationTools
                         : (bool?)null,
                     symbol,
                     summary = succeeded
-                    ? $"Exactly {result.TotalReferences} compiler-bound non-definition references in the selected physical F# project; the workspace total is a lower bound because dependent projects were not scanned."
+                    ? workspaceComplete
+                        ? $"Exactly {result.TotalReferences} compiler-bound non-definition references across every completely scanned F# project/TFM context in the proven workspace scope." +
+                          (!includeTests ? " Test projects were excluded before counting." : "") +
+                          (!includeGenerated ? " Generated files were excluded before counting." : "")
+                        : $"At least {result.TotalReferences} compiler-bound non-definition references across successfully scanned F# project/TFM contexts; workspace coverage is partial."
                     : null,
                     totalReferences = succeeded ? result.TotalReferences : null,
-                    totalIsLowerBound = succeeded ? true : (bool?)null,
+                    totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
                     groupBy = succeeded ? "project" : null,
-                    groups = succeeded && result.SelectedContext is not null
-                    ? new[]
+                    groups = succeeded
+                    ? shownGroups.Select(entry => new
                     {
-                        new
+                        project = entry.Group.Project,
+                        targetFramework = entry.Group.TargetFrameworksScanned.Count == 1
+                                ? entry.Group.TargetFrameworksScanned[0]
+                                : null,
+                        targetFrameworksScanned = entry.Group.TargetFrameworksScanned,
+                        isTest = entry.Group.IsTest,
+                        status = entry.Group.Status,
+                        reason = entry.Group.Reason,
+                        count = entry.Group.Count,
+                        samples = visibleSamples.Where(sample =>
+                                sample.GroupIndex == entry.GroupIndex)
+                                .Select(sample => sample.Sample).Select(sample => new
+                                {
+                                    path = sample.Path,
+                                    line = sample.Line,
+                                    startColumn = sample.StartColumn,
+                                    endLine = sample.EndLine,
+                                    endColumn = sample.EndColumn,
+                                    text = sample.LineText,
+                                }),
+                    })
+                    : null,
+                    groupCoverage = succeeded && groupsTruncated
+                    ? new
+                    {
+                        selected = budgetedGroups.Count,
+                        returned = shownGroups.Count,
+                        complete = false,
+                        reasons = new[]
                         {
-                            project = result.SelectedContext.Project,
-                            targetFramework = result.SelectedContext.TargetFramework,
-                            isTest = result.SelectedProjectIsTest,
-                            count = result.TotalReferences!.Value,
-                            samples = shownSamples.Select(sample => new
+                            new
                             {
-                                path = sample.Path,
-                                line = sample.Line,
-                                startColumn = sample.StartColumn,
-                                endLine = sample.EndLine,
-                                endColumn = sample.EndColumn,
-                                text = sample.LineText,
-                            }),
+                                noteId = NoteIds.FSharpReferenceGroupsByteBudget,
+                                omitted = budgetedGroups.Count - shownGroups.Count,
+                            },
                         },
                     }
                     : null,
-                    sampleCoverage = succeeded && samplesTruncated
+                    sampleCoverage = succeeded && visibleSamplesTruncated
                     ? new
                     {
-                        selected = result.Samples.Count,
-                        returned = shownSamples.Count,
+                        selected = budgetedSamples.Count,
+                        returned = visibleSamples.Count,
                         complete = false,
+                        reasons = new[]
+                        {
+                            new
+                            {
+                                noteId = NoteIds.ReferencesSamplesByteBudget,
+                                omitted = budgetedSamples.Count - visibleSamples.Count,
+                            },
+                        },
                     }
                     : null,
                     coverage = succeeded
                     ? new
                     {
-                        scope = "selected_physical_project",
-                        workspaceDependentsScanned = 0,
-                        workspaceComplete = false,
+                        scope = "selected_physical_project_declaring_project_and_workspace_dependents",
+                        dependentsTotal = result.Coverage?.DependentsTotal,
+                        dependentsScanned = result.Coverage?.DependentsScanned ?? 0,
+                        workspaceDependentsScanned = result.Coverage?.DependentsScanned ?? 0,
+                        dependentsExcluded = result.Coverage?.DependentsExcluded ?? 0,
+                        dependentsFailed = result.Coverage?.DependentsFailed ?? 0,
+                        dependentsPending = result.Coverage?.DependentsPending,
+                        potentialConsumers = result.Coverage?.PotentialConsumers ?? 0,
+                        potentialConsumersEvaluated =
+                            result.Coverage?.PotentialConsumersEvaluated ?? 0,
+                        potentialConsumersUnevaluated =
+                            result.Coverage?.PotentialConsumersUnevaluated ?? 0,
+                        discoveryFailedByReason = result.Coverage?.DiscoveryFailed?
+                            .GroupBy(entry => entry.Reason, StringComparer.Ordinal)
+                            .OrderBy(group => group.Key, StringComparer.Ordinal)
+                            .ToDictionary(group => group.Key, group => group.Count()),
+                        discoveryFailed = result.Coverage?.DiscoveryFailed?.Select(entry => new
+                        {
+                            project = entry.Project,
+                            reason = entry.Reason,
+                        }),
+                        declaringProject = result.Coverage?.DeclaringProject,
+                        declaringProjectStatus = result.Coverage?.DeclaringProjectStatus,
+                        declaringProjectReason = result.Coverage?.DeclaringProjectReason,
+                        workspaceComplete,
+                        excludedByReason = result.Coverage?.Excluded
+                            .GroupBy(entry => entry.Reason, StringComparer.Ordinal)
+                            .OrderBy(group => group.Key, StringComparer.Ordinal)
+                            .ToDictionary(group => group.Key, group => group.Count()),
+                        failedByReason = result.Coverage?.Failed
+                            .GroupBy(entry => entry.Reason, StringComparer.Ordinal)
+                            .OrderBy(group => group.Key, StringComparer.Ordinal)
+                            .ToDictionary(group => group.Key, group => group.Count()),
                     }
                     : null,
-                    partial = succeeded || result.PartialReason is not null ? true : (bool?)null,
+                    partial = result.PartialReason is not null || totalIsLowerBound
+                        ? true
+                        : (bool?)null,
                     partialReason = result.PartialReason,
+                    retryRecommended = result.PartialReason?.Split(';',
+                        StringSplitOptions.TrimEntries).Contains(
+                            "fsharp_references_workspace_deadline",
+                            StringComparer.Ordinal) == true
+                        ? true
+                        : (bool?)null,
+                    retryHint = result.PartialReason?.Split(';',
+                        StringSplitOptions.TrimEntries).Contains(
+                            "fsharp_references_workspace_deadline",
+                            StringComparer.Ordinal) == true
+                        ? deadlineMs < SemanticNavigationDeadlineMaxMs
+                            ? $"Retry references once with a larger timeoutMs (this request used {deadlineMs} ms; the maximum is {SemanticNavigationDeadlineMaxMs} ms)."
+                            : "Retry references once with the same arguments; prepared F# inputs may make the next scan complete."
+                        : null,
                     detail,
                     selectedFSharpTypeCheckContext = selected,
                     availableFSharpTypeCheckContexts = shownContexts,
@@ -375,8 +492,8 @@ public sealed partial class NavigationTools
                         elapsedMs,
                     },
                     meta,
-                }, maxBytes: TestOnlyReferencesResponseMaxBytes,
-            auxiliarySampleItems: MaxFSharpTypeCheckContexts);
+                };
+            }, maxBytes: TestOnlyReferencesResponseMaxBytes);
         if (Json.Utf8Bytes(shaped) <= Json.HardBudgetBytes) return shaped;
 
         return Json.WithStringBudget(path, 4096, (boundedPath, pathTruncated) => new

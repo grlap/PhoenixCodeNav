@@ -527,6 +527,7 @@ public class FSharpTierATests
             Assert.Contains("fsharp-symbol-at-semantic", featureIds);
             Assert.Contains("fsharp-definition-same-project", featureIds);
             Assert.Contains("fsharp-references-same-project", featureIds);
+            Assert.Contains("fsharp-references-workspace-dependents", featureIds);
             Assert.Contains("fsharp-type-check-context-selection", featureIds);
             Assert.Contains("fsharp-semantic-snapshot", featureIds);
             Assert.Contains("fsharp-semantic-bounded-project-evaluation", featureIds);
@@ -637,8 +638,12 @@ public class FSharpTierATests
                 line: 2, column: 5, mode: "semantic", timeoutMs: 60_000));
             Assert.Equal(0, fsharpReferences.GetProperty("totalReferences").GetInt32());
             Assert.True(fsharpReferences.GetProperty("totalIsLowerBound").GetBoolean());
-            Assert.Contains("fsharp_references_workspace_dependents_not_scanned",
+            Assert.Contains("fsharp_references_unsupported_boundary",
                 fsharpReferences.GetProperty("partialReason").GetString());
+            Assert.Equal(2, fsharpReferences.GetProperty("coverage")
+                .GetProperty("dependentsTotal").GetInt32());
+            Assert.Equal(2, fsharpReferences.GetProperty("coverage")
+                .GetProperty("dependentsExcluded").GetInt32());
             JsonElement lineOnlyFSharpReferences = Parse(tools.References(
                 path: "Core/Library.fs", line: 2, mode: "semantic"));
             Assert.Equal("fsharp_semantic_position_required",

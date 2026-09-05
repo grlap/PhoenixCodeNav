@@ -335,6 +335,7 @@ module private Semantic =
     let resolve
         (projects: SemanticProjectInput array)
         rootProjectIndex
+        lookupProjectIndex
         fingerprint
         cacheRuntime
         targetFileName
@@ -346,7 +347,8 @@ module private Semantic =
         async {
             let! cancellationToken = Async.CancellationToken
             if projects.Length = 0 || rootProjectIndex < 0 ||
-               rootProjectIndex >= projects.Length ||
+               rootProjectIndex >= projects.Length || lookupProjectIndex < 0 ||
+               lookupProjectIndex >= projects.Length ||
                projects |> Array.exists (fun project ->
                    project.SourceFiles.Length = 0 ||
                    project.SourceFiles.Length <> project.SourceTexts.Length) ||
@@ -355,7 +357,7 @@ module private Semantic =
                        child < 0 || child >= index)) |> Array.exists id then
                 return checkResult nullSymbol "fsharp_semantic_snapshot_invalid" Array.empty
             else
-                let rootProject = projects[rootProjectIndex]
+                let lookupProject = projects[lookupProjectIndex]
                 let sourceFiles = projects |> Array.collect (fun project -> project.SourceFiles)
                 let sourceTexts = projects |> Array.collect (fun project -> project.SourceTexts)
                 let runtime = runtime fingerprint sourceFiles sourceTexts cacheRuntime
@@ -380,7 +382,6 @@ module private Semantic =
                             ))
                     optionsByIndex[index] <-
                         { baseOptions with ReferencedProjects = referencedProjects }
-                let options = optionsByIndex[rootProjectIndex]
                 let operationName =
                     if includeReferences then "PhoenixCodeNav.references" else "PhoenixCodeNav.symbol_at"
                 let checkedProjects = Array.zeroCreate projects.Length
@@ -402,7 +403,7 @@ module private Semantic =
                         checkResult nullSymbol "fsharp_semantic_check_failed" allProjectDiagnostics
                 else
                     let targetIndex =
-                        rootProject.SourceFiles
+                        lookupProject.SourceFiles
                         |> Array.tryFindIndex (fun fileName ->
                             pathComparer.Equals(fileName, targetFileName))
                     match targetIndex with
@@ -414,8 +415,8 @@ module private Semantic =
                             checker.ParseAndCheckFileInProject(
                                 targetFileName,
                                 0,
-                                SourceText.ofString rootProject.SourceTexts[targetIndex],
-                                options,
+                                SourceText.ofString lookupProject.SourceTexts[targetIndex],
+                                optionsByIndex[lookupProjectIndex],
                                 userOpName = operationName
                             )
                         match answer with
@@ -429,7 +430,7 @@ module private Semantic =
                                 checkResult nullSymbol "fsharp_semantic_check_incomplete" diagnostics
                         | FSharpCheckFileAnswer.Succeeded checkedFile ->
                             let diagnostics = mergeDiagnostics allProjectDiagnostics checkedFile.Diagnostics
-                            let sourceText = SourceText.ofString rootProject.SourceTexts[targetIndex]
+                            let sourceText = SourceText.ofString lookupProject.SourceTexts[targetIndex]
                             let candidates =
                                 if column > 0 && line >= 1 && line <= sourceText.GetLineCount() then
                                     let lineText = sourceText.GetLineString(line - 1)
@@ -444,7 +445,7 @@ module private Semantic =
                                             | Some symbolUse -> [| symbolUse |]
                                             | None -> Array.empty
                                         | None -> Array.empty
-                                elif column <= 0 && rootProject.SourceTexts[targetIndex].Length <= maxLineOnlySourceChars then
+                                elif column <= 0 && lookupProject.SourceTexts[targetIndex].Length <= maxLineOnlySourceChars then
                                     checkedFile.GetAllUsesOfAllSymbolsInFile()
                                     |> Seq.filter (fun symbolUse -> containsPosition line column symbolUse.Range)
                                     |> Seq.sortBy rangeScore
@@ -454,7 +455,7 @@ module private Semantic =
                                     Array.empty
                             if candidates.Length = 0 then
                                 let error =
-                                    if column <= 0 && rootProject.SourceTexts[targetIndex].Length > maxLineOnlySourceChars then
+                                    if column <= 0 && lookupProject.SourceTexts[targetIndex].Length > maxLineOnlySourceChars then
                                         "fsharp_semantic_line_only_source_limit"
                                     else
                                         "fsharp_symbol_not_resolved"
@@ -530,7 +531,7 @@ type SemanticResolver private () =
         maxLineOnlySourceChars: int,
         cancellationToken: CancellationToken
     ) : Task<SemanticCheckResult> =
-        Semantic.resolve projects rootProjectIndex fingerprint cacheRuntime
+        Semantic.resolve projects rootProjectIndex rootProjectIndex fingerprint cacheRuntime
             targetFileName line column maxLineOnlySourceChars false
         |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)
 
@@ -545,6 +546,22 @@ type SemanticResolver private () =
         maxLineOnlySourceChars: int,
         cancellationToken: CancellationToken
     ) : Task<SemanticCheckResult> =
-        Semantic.resolve projects rootProjectIndex fingerprint cacheRuntime
+        Semantic.resolve projects rootProjectIndex rootProjectIndex fingerprint cacheRuntime
+            targetFileName line column maxLineOnlySourceChars true
+        |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)
+
+    static member ResolveReferencesForProjectAsync(
+        projects: SemanticProjectInput array,
+        rootProjectIndex: int,
+        lookupProjectIndex: int,
+        fingerprint: string,
+        cacheRuntime: bool,
+        targetFileName: string,
+        line: int,
+        column: int,
+        maxLineOnlySourceChars: int,
+        cancellationToken: CancellationToken
+    ) : Task<SemanticCheckResult> =
+        Semantic.resolve projects rootProjectIndex lookupProjectIndex fingerprint cacheRuntime
             targetFileName line column maxLineOnlySourceChars true
         |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)

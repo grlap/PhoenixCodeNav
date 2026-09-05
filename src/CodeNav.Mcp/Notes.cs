@@ -57,6 +57,8 @@ internal static class NoteIds
         "references.samples_deadline"; // bounded sample text was omitted after its post-count evidence deadline expired
     public const string ReferencesSamplesByteBudget =
         "references.samples_byte_budget"; // bounded sample evidence was omitted by the final response byte budget
+    public const string FSharpReferenceGroupsByteBudget =
+        "fsharp.reference_groups_byte_budget"; // project-group metadata was omitted by the final response byte budget
     public const string SemanticDeclarationSitesBudget =
         "semantic.declaration_sites_budget"; // optional declaration sites omitted by count/byte budget
     public const string DocumentationIdPositionShared =
