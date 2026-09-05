@@ -108,7 +108,7 @@ the remaining dominant wall:
 
 ```json
 "queryStages":{"path":"symbol_finder",
-  "compilationPreparation":{"totalMs":2410.7,"processWideCpuMs":5980.2,"queueMs":386.2,
+  "compilationPreparation":{"totalMs":2410.7,"processWideCpuMs":5980.2,"gcPauseMs":17,"queueMs":386.2,
     "busySumMs":8234.5,"maxProjectBusyMs":712.1,
     "waveMaxSumMs":1924.6,"criticalPathMs":1540.3,
     "requestedProjects":41,"graphProjects":41,"cacheHits":1,"preparedProjects":40,
@@ -153,6 +153,7 @@ load ran).
 | `queryStages.compilationPreparation` | `references` only: dependency-first eager preparation on the same pinned `Solution` later passed to SymbolFinder; omitted if the operation never reached preparation |
 | `queryStages.compilationPreparation.totalMs/queueMs` | preparation wall and summed project time queued for the shared process-wide project lanes; summed queue time may exceed wall time |
 | `queryStages.compilationPreparation.processWideCpuMs` | process-wide CPU between the exact preparation entry/exit brackets, including GC/runtime/concurrent work. Compare with `totalMs` and `busySumMs`; do not interpret it as a duration or as CPU owned exclusively by the query |
+| `queryStages.compilationPreparation.gcPauseMs` | whole-millisecond process-wide GC pause time between the same preparation entry/exit samples. Concurrent operations can attribute the same overlapping pauses, so this is diagnostic attribution rather than pause time owned exclusively by the query. `0` means a measured interval below 1 ms; omission means the process counter was unavailable |
 | `queryStages.compilationPreparation.busySumMs/maxProjectBusyMs` | sum of slot-held compilation-call wall across projects, and its single-project maximum. `busySumMs / totalMs` is the observed work parallelism; cache hits and lane wait are excluded |
 | `queryStages.compilationPreparation.waveMaxSumMs/criticalPathMs` | measured scheduling floors over the same project busy times: the sum of the slowest project in each current barrier wave, and the longest weighted dependency path. A lane-aware ready-queue floor is `max(criticalPathMs, busySumMs / laneLimit)`; subtract it from `waveMaxSumMs` to estimate recoverable barrier wall. When `unfinishedProjects > 0`, all four busy-work scalars are lower bounds because unmeasured projects contribute zero |
 | `queryStages.compilationPreparation.requestedProjects/graphProjects` | successfully loaded projects requested by this operation, narrowed to the owner and its graph dependents when available, then closed over actual Roslyn project dependencies; unrelated warm resident projects are excluded |
@@ -251,6 +252,12 @@ host, waits for `refresh_sweep_pending` to clear, and runs one semantic operatio
 resolution, including intervening planning; `compilationPreparation.processWideCpuMs` covers its
 later preparation phase only, so the two brackets do not overlap. A missing CPU field means the
 process counter was unavailable; `0.0` means a measured near-zero interval.
+Since v0.12.79, `compilationPreparation.gcPauseMs` samples the process-wide cumulative GC-pause
+counter at the same preparation entry and exit. The emitted non-negative delta is floored to
+whole milliseconds: `0` means a measured interval below 1 ms, while omission means the process
+counter was unavailable. Concurrent semantic operations can report the same overlapping pauses,
+so compare it with `compilationPreparation.totalMs` as diagnostic attribution, never as GC time
+owned exclusively by one query.
 `PhoenixCodeNav-Semantic` EventSource emits `PhaseStart`/`PhaseStop` markers for `ownerLoad`,
 `scanLoad`, `compilationPreparation`, `documentScope`, and `findReferences`. Each marker carries
 the same privacy-safe operation id published as `semanticOp.corr`, so EventPipe samples can be

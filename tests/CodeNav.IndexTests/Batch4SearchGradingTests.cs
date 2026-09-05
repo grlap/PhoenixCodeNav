@@ -384,6 +384,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("references-buffered-document-scope-scan", ids);
         Assert.Contains("semantic-byte-governed-retention", ids);
         Assert.Contains("references-process-cpu-attribution", ids);
+        Assert.Contains("references-gc-pause-attribution", ids);
         Assert.Contains("index-raw-ordinal-symbol-batching", ids);
         Assert.Contains("index-raw-ordinal-file-batching", ids);
         Assert.Contains("index-deferred-secondary-index-build", ids);
@@ -701,6 +702,18 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("omit the field", coldStartTiming);
         Assert.Contains("integer-millisecond", coldStartTiming);
         Assert.Contains("semanticOp", coldStartTiming);
+        string gcPauseAttribution = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "references-gc-pause-attribution")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.79", gcPauseAttribution);
+        Assert.Contains("queryStages.compilationPreparation.gcPauseMs", gcPauseAttribution);
+        Assert.Contains("whole-millisecond process-wide GC pause time", gcPauseAttribution);
+        Assert.Contains("overlapping pauses", gcPauseAttribution);
+        Assert.Contains("below 1 ms", gcPauseAttribution);
+        Assert.Contains("omission", gcPauseAttribution);
         Assert.Contains("never retries automatically", coldStartRetry);
         Assert.Contains("open_operations_portal",
             json.GetProperty("tools").EnumerateArray().Select(tool => tool.GetString()));
@@ -1174,6 +1187,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                           "implementations-semantic-retry-guidance"),
                        ("typed cold-start retry contract", "cold-start-retry-contract"),
                        ("timing.semanticColdStart", "semantic-cold-start-phase-timing"),
+                       ("queryStages.compilationPreparation.gcPauseMs",
+                           "references-gc-pause-attribution"),
                       ("declaration-free C# files", "csharp-symbol-free-outline"),
                       ("target-bearing names", "csharp-conversion-operator-indexing"),
                       ("implicitConversion", "csharp-conversion-usage-enumeration"),

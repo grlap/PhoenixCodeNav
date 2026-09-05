@@ -7,11 +7,13 @@ public sealed partial class SemanticWorkspace
 {
     /// <summary>Per-operation, privacy-safe attribution for eager compilation preparation.
     /// Summed queue time may exceed wall time because projects in one dependency wave wait in
-    /// parallel. Unfinished projects are selected graph projects that did not reach a terminal
-    /// outcome before cancellation.</summary>
+    /// parallel. Process-wide CPU and GC-pause deltas attribute all process activity observed
+    /// inside this operation's bracket and are not exclusive to the operation. Unfinished projects
+    /// are selected graph projects that did not reach a terminal outcome before cancellation.</summary>
     internal sealed record CompilationPreparationStats(
         double TotalMs,
         double? ProcessWideCpuMs,
+        long? GcPauseMs,
         double QueueMs,
         double BusySumMs,
         double MaxProjectBusyMs,
@@ -58,6 +60,7 @@ public sealed partial class SemanticWorkspace
         ArgumentNullException.ThrowIfNull(statsBox);
 
         TimeSpan? processCpuStarted = SemanticProcessCpu.Snapshot();
+        TimeSpan? gcPauseStarted = GcPauseSnapshot();
         long started = System.Diagnostics.Stopwatch.GetTimestamp();
         using SemanticPhaseEventSource.PhaseScope phase =
             SemanticPhaseEventSource.Log.Measure("compilationPreparation", operationId);
@@ -243,6 +246,7 @@ public sealed partial class SemanticWorkspace
             statsBox.Stats = new CompilationPreparationStats(
                 TotalMs: System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds,
                 ProcessWideCpuMs: SemanticProcessCpu.ElapsedMilliseconds(processCpuStarted),
+                GcPauseMs: GcPauseElapsedMilliseconds(gcPauseStarted),
                 QueueMs: ToMs(Interlocked.Read(ref queueTicks)),
                 BusySumMs: ToMs(work.BusySumTicks),
                 MaxProjectBusyMs: ToMs(work.MaxProjectBusyTicks),
@@ -260,6 +264,26 @@ public sealed partial class SemanticWorkspace
                 ProcessorCount: Environment.ProcessorCount,
                 EffectiveConcurrency: Volatile.Read(ref effectiveConcurrency));
         }
+    }
+
+    // GC.GetTotalPauseDuration is process-wide. Sampling its cumulative counter at the same
+    // entry/finally boundary as the other preparation stats yields attribution, not ownership.
+    private static TimeSpan? GcPauseSnapshot()
+    {
+        try
+        {
+            return GC.GetTotalPauseDuration();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static long? GcPauseElapsedMilliseconds(TimeSpan? started)
+    {
+        if (started is not { } start || GcPauseSnapshot() is not { } finished) return null;
+        return (long)Math.Max(0, (finished - start).TotalMilliseconds);
     }
 
     internal static CompilationWorkAttribution ComputeCompilationWorkAttribution(

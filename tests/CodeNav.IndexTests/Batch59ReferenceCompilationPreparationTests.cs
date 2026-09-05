@@ -387,6 +387,7 @@ public sealed class Batch59ReferenceCompilationPreparationTests
             Assert.Equal(1, cancelledStats.Stats?.UnfinishedProjects);
             Assert.Equal(1, cancelledStats.Stats?.EffectiveConcurrency);
             Assert.True(cancelledStats.Stats!.ProcessWideCpuMs is >= 0);
+            Assert.True(cancelledStats.Stats.GcPauseMs is >= 0);
             Assert.Equal(Environment.ProcessorCount, cancelledStats.Stats.ProcessorCount);
             Assert.True(cancelledStats.Stats!.BusySumMs >=
                 cancelledStats.Stats.MaxProjectBusyMs);

@@ -408,6 +408,7 @@ public sealed partial class SemanticService : IDisposable
                     processWideCpuMs = compilationPreparation.ProcessWideCpuMs is { } processCpuMs
                         ? Math.Round(processCpuMs, 1)
                         : (double?)null,
+                    gcPauseMs = compilationPreparation.GcPauseMs,
                     queueMs = Math.Round(compilationPreparation.QueueMs, 1),
                     busySumMs = Math.Round(compilationPreparation.BusySumMs, 1),
                     maxProjectBusyMs = Math.Round(compilationPreparation.MaxProjectBusyMs, 1),

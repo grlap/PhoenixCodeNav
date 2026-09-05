@@ -551,7 +551,8 @@ public class Batch51TelemetryTests
             CompilationPreparation =
             {
                 Stats = new CodeNav.Core.Semantic.SemanticWorkspace.CompilationPreparationStats(
-                    TotalMs: 20, ProcessWideCpuMs: 7, QueueMs: 3, BusySumMs: 30,
+                    TotalMs: 20, ProcessWideCpuMs: 7, GcPauseMs: 2,
+                    QueueMs: 3, BusySumMs: 30,
                     MaxProjectBusyMs: 8,
                     WaveMaxSumMs: 15, CriticalPathMs: 12,
                     RequestedProjects: 2, GraphProjects: 4,
@@ -592,6 +593,7 @@ public class Batch51TelemetryTests
         var preparation = root.GetProperty("compilationPreparation");
         Assert.Equal(20, preparation.GetProperty("totalMs").GetDouble());
         Assert.Equal(7, preparation.GetProperty("processWideCpuMs").GetDouble());
+        Assert.Equal(2, preparation.GetProperty("gcPauseMs").GetInt64());
         Assert.Equal(3, preparation.GetProperty("queueMs").GetDouble());
         Assert.Equal(30, preparation.GetProperty("busySumMs").GetDouble());
         Assert.Equal(8, preparation.GetProperty("maxProjectBusyMs").GetDouble());
@@ -630,12 +632,18 @@ public class Batch51TelemetryTests
         Assert.False(root.TryGetProperty("arguments", out _));
 
         stats.CompilationPreparation.Stats =
-            stats.CompilationPreparation.Stats with { ProcessWideCpuMs = null };
+            stats.CompilationPreparation.Stats with
+            {
+                ProcessWideCpuMs = null,
+                GcPauseMs = null,
+            };
         using var unavailableDocument = System.Text.Json.JsonDocument.Parse(
-            System.Text.Json.JsonSerializer.Serialize(stats.Shape(queryMs: 200)));
-        Assert.Equal(System.Text.Json.JsonValueKind.Null, unavailableDocument.RootElement
-            .GetProperty("compilationPreparation")
-            .GetProperty("processWideCpuMs").ValueKind);
+            System.Text.Json.JsonSerializer.Serialize(stats.Shape(queryMs: 200),
+                CodeNav.Core.Telemetry.TelemetryBounds.JsonOpts));
+        var unavailablePreparation = unavailableDocument.RootElement
+            .GetProperty("compilationPreparation");
+        Assert.False(unavailablePreparation.TryGetProperty("processWideCpuMs", out _));
+        Assert.False(unavailablePreparation.TryGetProperty("gcPauseMs", out _));
     }
 
     [Fact]
