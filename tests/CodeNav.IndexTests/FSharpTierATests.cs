@@ -1388,8 +1388,12 @@ public class FSharpTierATests
             null, 1, "/workspace", "/workspace/index.db");
 
         JsonElement script = Parse(NavigationTools.UnsupportedLanguageForTest(
-            health, "Scratch.fsx", "fs", "definition"));
+            health, "Script.fsx", "fs", "outline"));
         Assert.Equal("fsx", script.GetProperty("language").GetString());
+        Assert.Equal(new[] { "cs", "fs" }, script.GetProperty("supportedLanguages")
+            .EnumerateArray().Select(item => item.GetString()));
+        Assert.Equal(new[] { "find_file", "search_text", "source_context", "projects_containing" },
+            script.GetProperty("availableForFile").EnumerateArray().Select(item => item.GetString()));
 
         JsonElement orphan = Parse(NavigationTools.UnsupportedLanguageForTest(
             health, "Loose.fs", "fs", "outline"));
@@ -1398,10 +1402,30 @@ public class FSharpTierATests
 
         JsonElement compileOwned = Parse(NavigationTools.UnsupportedLanguageForTest(
             health, "Owned.fs", "fs", "callers", compileOwnedFSharp: true));
-        Assert.Contains("implementations", compileOwned.GetProperty("availableForFile")
-            .EnumerateArray().Select(tool => tool.GetString()));
+        string?[] availableForFile = compileOwned.GetProperty("availableForFile")
+            .EnumerateArray().Select(tool => tool.GetString()).ToArray();
+        Assert.Contains("implementations", availableForFile);
+        Assert.Contains("callers", availableForFile);
+        Assert.Contains("callees", availableForFile);
+        Assert.Equal(new[] { "cs", "fs" }, compileOwned.GetProperty("supportedLanguages")
+            .EnumerateArray().Select(item => item.GetString()));
+        string compileOwnedDetail = compileOwned.GetProperty("detail").GetString()!;
         Assert.DoesNotContain("implementations remain unavailable",
-            compileOwned.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
+            compileOwnedDetail, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("callers, callees",
+            compileOwnedDetail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("callers across proven F# workspace dependents",
+            compileOwnedDetail, StringComparison.Ordinal);
+        Assert.Contains("body-local callees through the source ProjectReference closure",
+            compileOwnedDetail, StringComparison.Ordinal);
+        Assert.Contains(
+            "compatibility fallback from multi-target children and netstandard1.x compile inputs fail closed",
+            compileOwnedDetail, StringComparison.Ordinal);
+
+        JsonElement compileOwnedCallees = Parse(NavigationTools.UnsupportedLanguageForTest(
+            health, "Owned.fs", "fs", "callees", compileOwnedFSharp: true));
+        Assert.Equal(new[] { "cs", "fs" }, compileOwnedCallees
+            .GetProperty("supportedLanguages").EnumerateArray().Select(item => item.GetString()));
     }
 
     [Fact]

@@ -855,9 +855,12 @@ adding hashing, allocation, or storage to the cold symbol-index path. F# semanti
 captures one selected physical root plus its F# `ProjectReference` closure under the evaluated
 MSBuild transitivity and bounded child-TFM policies behind
 one single-slot gate. The pinned SQLite snapshot is released before dependency-first FCS checking;
-selected-root reference enumeration shares the closure but never counts dependency-project uses.
-Parallel FCS requests, C# dependencies, multi-target compatibility, and netstandard1.x compile-input
-materialization remain outside this design.
+selected-root definition and callee resolution share the source closure, while references,
+implementations, and callers can additionally scan proven F# workspace dependents with explicit
+lower-bound coverage when discovery or evaluation is incomplete. Parallel FCS requests and semantic
+navigation through C#-targeted `ProjectReference` edges remain outside this design. Exact child-TFM
+selection is supported; compatibility fallback from multi-target children and netstandard1.x
+compile-input materialization fail closed.
 
 Cold-cluster latency and working set still scale with the selected project budget. Use
 `CodeNav.Bench --db <scratch.db> --rebuild --build-only` as the non-destructive cold-index

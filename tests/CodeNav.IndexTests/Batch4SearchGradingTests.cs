@@ -931,8 +931,23 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .GetProperty("summary")
             .GetString()!;
         Assert.DoesNotContain("F# references", fsharpBoundary, StringComparison.Ordinal);
-        Assert.Contains("callers/callees", fsharpBoundary);
-        Assert.Contains("implementations", fsharpBoundary);
+        Assert.Contains("F# search, definition closure, implementations, callers/callees",
+            fsharpBoundary);
+        Assert.Contains("explicit multi-target project/TFM selection", fsharpBoundary);
+        Assert.Contains("exact child-TFM matching", fsharpBoundary);
+        Assert.Contains("compatibility fallback from multi-target children", fsharpBoundary);
+        string[] fsharpBoundaryParts = fsharpBoundary.Split(';');
+        Assert.Equal(2, fsharpBoundaryParts.Length);
+        string unsupportedFSharpBoundary = fsharpBoundaryParts[0];
+        string supportedFSharpBoundary = fsharpBoundaryParts[1];
+        Assert.Contains("compatibility fallback from multi-target children",
+            unsupportedFSharpBoundary);
+        Assert.DoesNotContain("explicit multi-target project/TFM selection",
+            unsupportedFSharpBoundary);
+        Assert.DoesNotContain("exact child-TFM matching", unsupportedFSharpBoundary);
+        Assert.Contains("explicit multi-target project/TFM selection", supportedFSharpBoundary);
+        Assert.Contains("exact child-TFM matching", supportedFSharpBoundary);
+        Assert.DoesNotContain("compatibility fallback", supportedFSharpBoundary);
         Assert.Contains("hierarchy", fsharpBoundary);
         Assert.Contains("never retries automatically", coldStartRetry);
         Assert.Contains("open_operations_portal",

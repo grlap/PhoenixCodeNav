@@ -287,7 +287,7 @@ public sealed partial class NavigationTools
                 new { id = "refresh-incomplete-freshness", summary = "v0.12.7 exhausted source capture keeps index state stale, preserves the Git baseline, exposes a stable refreshIncompleteReason plus bounded paths, and widens the next request to a recovery sweep" },
                 new { id = "refresh-recovery-self-heal", summary = "v0.12.27 an index left stale by unavailable workspace input autonomously retries complete convergence sweeps with 5/10/30/60-second capped backoff; timer-initiated recovery sweeps make one capture attempt each, re-resolve pending Git baselines, and remain honestly stale until success" },
                 new { id = "oversized-source-coverage", summary = "v0.12.7 oversized regular sources are a distinct persistent outcome with explicit bounded coverage; they are not rapidly retried, cannot publish ready/current/exact evidence, and prevent strict worktree index installation" },
-                new { id = "fsharp-unsupported-language-boundary", summary = "F# hierarchy, C#-targeted ProjectReference semantics, multi-target selection, and netstandard1.x compile inputs remain unsupported; F# search, definition closure, implementations, callers/callees, and single-target netstandard2.0/2.1 semantics are supported" },
+                new { id = "fsharp-unsupported-language-boundary", summary = "F# hierarchy, C#-targeted ProjectReference semantics, compatibility fallback from multi-target children, and netstandard1.x compile inputs remain unsupported; F# search, definition closure, implementations, callers/callees, explicit multi-target project/TFM selection, exact child-TFM matching, and single-target netstandard2.0/2.1 semantics are supported" },
                 new { id = "fsharp-workspace-coverage-tokens", summary = "v0.12.88 uses nine operation-neutral fsharp_workspace_* partial-reason tokens, with prior names retired without aliases" },
                 new { id = "fsharp-implementations-workspace", summary = "v0.12.87 resolves compile-owned F# type and dispatch-slot positions with FCS, including typed object expressions; scans proven workspace contexts with concrete before abstract ordering and honest lower-bound coverage" },
                 new { id = "fsharp-callers-workspace", summary = "v0.12.88 compile-owned F# callable positions cover proven workspace dependents with global physical-site deduplication and honest lower-bound coverage" },
@@ -401,7 +401,7 @@ public sealed partial class NavigationTools
                     "symbol_at", "definition", "references", "implementations", "callers", "callees",
                 },
                 fsharpSyntaxIndexedTools = new[] { "search_symbol" },
-                note = "C# exact results cover loaded clusters. F# symbol_at/definition are compiler-checked in the selected project/TFM and ProjectReference closure. References, implementations, and callers add proven source dependents; callees is body-local. potentialConsumersUnevaluated and group statuses disclose a workspace lower bound and filters. TraitCall stays unresolved. Successful results are exact only while disclosed partial reasons preserve authority; every error, authority loss, or unclassified partial reason is indexed. F# netstandard2.0/2.1 single-target inputs are supported; multi-target and netstandard1.x inputs fail closed. F# assets are snapshotted; C# never borrows last-built dependency DLLs.",
+                note = "C# exact results cover loaded clusters. F# symbol_at/definition are compiler-checked in the selected project/TFM and ProjectReference closure. References, implementations, and callers add proven source dependents; callees is body-local. potentialConsumersUnevaluated and group statuses disclose a workspace lower bound and filters. TraitCall stays unresolved. Successful results are exact only while disclosed partial reasons preserve authority; every error, authority loss, or unclassified partial reason is indexed. F# explicit multi-target project/TFM selection, exact child-TFM matching, and netstandard2.0/2.1 single-target inputs are supported; compatibility fallback from multi-target children and netstandard1.x compile inputs fail closed. F# assets are snapshotted; C# never borrows last-built dependency DLLs.",
                 fsharpSyntaxNote = "F# search_symbol is syntax-indexed across the available owner/TFM parse contexts, including orphaned .fs/.fsi files; it is not compiler-checked, reports actionable incomplete context coverage as partial, and keeps ordinary SDK/import limits advisory.",
             },
             index = new
@@ -3721,16 +3721,16 @@ public sealed partial class NavigationTools
             path = boundedPath,
             pathTruncated = pathTruncated ? true : (bool?)null,
             language,
-            supportedLanguages = operation is "symbol_at" or "definition" or "references" or "implementations" or "search_symbol"
+            supportedLanguages = operation is "symbol_at" or "definition" or "references" or "implementations" or "callers" or "callees" or "outline" or "search_symbol"
                 ? new[] { "cs", "fs" }
                 : new[] { "cs" },
             availableForFile = fsharpSemanticEligible
-                ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol", "outline", "symbol_at", "definition", "references", "implementations" }
+                ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol", "outline", "symbol_at", "definition", "references", "implementations", "callers", "callees" }
                 : fsharpSyntaxIndexed
                 ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol" }
                 : new[] { "find_file", "search_text", "source_context", "projects_containing" },
             detail = fsharpSemanticEligible
-                ? "F# supports text, project-graph navigation, FCS outlines, position-based symbol_at, definition through its F# ProjectReference closure under the evaluated MSBuild transitivity policy, and compiler-bound references plus implementations across proven F# workspace dependents for compile-owned .fs/.fsi files. Exact child TFMs win; table-compatible single-target netstandard2.0/2.1 children resolve, while multi-target compatibility and netstandard1.x compile inputs fail closed. C# ProjectReference targets, callers, callees, and hierarchy remain unavailable."
+                ? "F# supports text, project-graph navigation, FCS outlines, position-based symbol_at, definition through its F# ProjectReference closure under the evaluated MSBuild transitivity policy, compiler-bound references, implementations, and callers across proven F# workspace dependents, and body-local callees through the source ProjectReference closure for compile-owned .fs/.fsi files. Exact child TFMs win; table-compatible single-target netstandard2.0/2.1 children resolve, while compatibility fallback from multi-target children and netstandard1.x compile inputs fail closed. F# hierarchy and semantic navigation through C# ProjectReference targets remain unavailable."
                 : language == "fsx"
                     ? "F# script files are text-only; indexed F# declaration search covers .fs and .fsi project inputs."
                     : language == "fs"
