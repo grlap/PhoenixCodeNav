@@ -648,14 +648,14 @@ public sealed class Batch60ReferenceDocumentScopeTests
             compilationOptions: new CSharpCompilationOptions(
                 OutputKind.DynamicallyLinkedLibrary)));
 
-    #pragma warning disable RS1042
+#pragma warning disable RS1042
     private sealed class GeneratedReferenceGenerator : IIncrementalGenerator
     {
         public void Initialize(IncrementalGeneratorInitializationContext context)
             => context.RegisterPostInitializationOutput(static output => output.AddSource(
                 "GeneratedUse.g.cs", "class GeneratedUse { ITarget value; }"));
     }
-    #pragma warning restore RS1042
+#pragma warning restore RS1042
 
     private sealed class InMemoryGeneratorReference(IIncrementalGenerator generator)
         : AnalyzerReference

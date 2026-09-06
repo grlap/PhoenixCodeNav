@@ -530,6 +530,8 @@ public class FSharpTierATests
             Assert.Contains("fsharp-references-workspace-dependents", featureIds);
             Assert.Contains("fsharp-workspace-coverage-tokens", featureIds);
             Assert.Contains("fsharp-implementations-workspace", featureIds);
+            Assert.Contains("fsharp-callers-workspace", featureIds);
+            Assert.Contains("fsharp-callees-body", featureIds);
             Assert.Contains("fsharp-type-check-context-selection", featureIds);
             Assert.Contains("fsharp-semantic-snapshot", featureIds);
             Assert.Contains("fsharp-semantic-bounded-project-evaluation", featureIds);
@@ -675,19 +677,31 @@ public class FSharpTierATests
             Assert.Equal("incompatible_filter",
                 incompatibleCSharpImplementation.GetProperty("reason").GetString());
 
-            var gatedOperations = new Dictionary<string, string>
-            {
-                ["callers"] = tools.Callers(path: "Core/Library.fs", line: 1),
-                ["callees"] = tools.Callees(path: "Core/Library.fs", line: 1),
-                ["type_hierarchy"] = tools.TypeHierarchy(path: "Core/Library.fs", line: 1),
-            };
-            foreach ((string operation, string response) in gatedOperations)
-            {
-                JsonElement gated = Parse(response);
-                Assert.Equal("unsupported_language", gated.GetProperty("error").GetString());
-                Assert.Equal(operation, gated.GetProperty("operation").GetString());
-                Assert.Equal("fs", gated.GetProperty("language").GetString());
-            }
+            JsonElement lineOnlyFSharpCallers = Parse(tools.Callers(
+                path: "Core/Library.fs", line: 1));
+            Assert.Equal("fsharp_semantic_position_required",
+                lineOnlyFSharpCallers.GetProperty("error").GetString());
+            JsonElement lineOnlyFSharpCallees = Parse(tools.Callees(
+                path: "Core/Library.fs", line: 1));
+            Assert.Equal("fsharp_semantic_position_required",
+                lineOnlyFSharpCallees.GetProperty("error").GetString());
+            JsonElement incompatibleFSharpCallers = Parse(tools.Callers(
+                name: "fsharpTierAMarker", path: "Core/Library.fs",
+                line: 2, column: 5));
+            Assert.Equal("incompatible_filter",
+                incompatibleFSharpCallers.GetProperty("reason").GetString());
+            JsonElement incompatibleCSharpCallees = Parse(tools.Callees(
+                path: "Wrapper/Wrapper.cs", line: 1, column: 55,
+                includeGenerated: true));
+            Assert.Equal("incompatible_filter",
+                incompatibleCSharpCallees.GetProperty("reason").GetString());
+            JsonElement gatedHierarchy = Parse(tools.TypeHierarchy(
+                path: "Core/Library.fs", line: 1));
+            Assert.Equal("unsupported_language",
+                gatedHierarchy.GetProperty("error").GetString());
+            Assert.Equal("type_hierarchy",
+                gatedHierarchy.GetProperty("operation").GetString());
+            Assert.Equal("fs", gatedHierarchy.GetProperty("language").GetString());
 
             if (semantic.FrameworkRefsAvailable)
             {

@@ -16,16 +16,93 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- call graph
 
     [McpServerTool(Name = "callers")]
-    [Description("Who calls a method/property (compiler-exact, direct callers with call sites), scoped to candidate projects. Target by position (path+line) or name.")]
+    [Description("Who calls a method/property (compiler-exact, direct callers with call sites), scoped to candidate projects. C# accepts name or position. F# is compiler-semantic and position-only for compile-owned .fs/.fsi; it scans the selected closure, distinct declaring project, and proven workspace dependents, with explicit coverage and filters.")]
     public string Callers(
         [Description("Method/property name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration or a usage.")] string? path = null,
         [Description("1-based line.")] int line = 0,
         [Description("1-based column (optional).")] int column = 0,
         [Description("Candidate-project budget; 0 (default) loads all matching projects, while a positive value opts into a bound.")] int maxProjects = SemanticService.DefaultCandidateProjectBudget,
-        [Description("Deadline in ms (default 15000).")] int timeoutMs = 15000)
+        [Description("Deadline in ms (default 15000).")] int timeoutMs = 15000,
+        [Description("F# position mode only: workspace-relative physical .fsproj path; pair with targetFramework when selection is ambiguous.")] string? projectPath = null,
+        [Description("F# position mode only: exact target framework; pair with projectPath when selection is ambiguous.")] string? targetFramework = null,
+        [Description("F# position mode only: include callers in test projects (default true).")] bool includeTests = true,
+        [Description("F# position mode only: include callers in generated files (default false).")] bool includeGenerated = false)
     {
         if (NotReady() is { } notReady) return notReady;
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            path = NormalizePath(path);
+            FileHit? indexedFile;
+            bool compileOwnedFSharp = false;
+            using (var languageQueries = _manager.OpenQueries())
+            {
+                indexedFile = languageQueries.FileByPath(path);
+                if (indexedFile is { Language: "fs" } && !IsFSharpScriptPath(path) &&
+                    (Path.GetExtension(path).Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+                     Path.GetExtension(path).Equals(".fsi", StringComparison.OrdinalIgnoreCase)))
+                {
+                    compileOwnedFSharp = languageQueries.ProjectsContaining(path)
+                        .Any(project => project.Language == "fs");
+                }
+            }
+            if (indexedFile is { Language: "fs" })
+            {
+                if (!compileOwnedFSharp)
+                    return UnsupportedLanguage(path, indexedFile.Language, "callers");
+                if (line <= 0 || column <= 0)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_semantic_position_required",
+                        operation = "callers",
+                        detail = "F# callers requires an explicit path + line + column; bare-name and line-only resolution are unavailable.",
+                    });
+                }
+                string? incompatibleField = name is { Length: > 0 }
+                    ? "name"
+                    : maxProjects > 0 ? "maxProjects" : null;
+                if (incompatibleField is not null)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "bad_request",
+                        field = incompatibleField,
+                        reason = "incompatible_filter",
+                        expected = incompatibleField == "maxProjects" ? "0" : "omit name",
+                        operation = "callers",
+                        detail = "F# callers is position-only and does not apply C# selectors or a candidate-project cap.",
+                        meta = FSharpSemanticMeta(_manager.Health(), "bad_request"),
+                    });
+                }
+                return FSharpCallers(path, line, column, projectPath, targetFramework,
+                    includeTests, includeGenerated, timeoutMs);
+            }
+        }
+        string? incompatibleCSharpField = projectPath is { Length: > 0 }
+            ? "projectPath"
+            : targetFramework is { Length: > 0 }
+                ? "targetFramework"
+                : !includeTests
+                    ? "includeTests"
+                    : includeGenerated ? "includeGenerated" : null;
+        if (incompatibleCSharpField is not null)
+        {
+            return Json.Serialize(new
+            {
+                error = "bad_request",
+                field = incompatibleCSharpField,
+                reason = "incompatible_filter",
+                expected = incompatibleCSharpField == "includeTests"
+                    ? "true"
+                    : incompatibleCSharpField == "includeGenerated"
+                        ? "false"
+                        : $"omit {incompatibleCSharpField}",
+                operation = "callers",
+                detail = "projectPath, targetFramework, includeTests, and includeGenerated are F# position-mode arguments and are not ignored for C# requests.",
+                meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+            });
+        }
         if (UnsupportedLanguageAtPath(path, "callers") is { } unsupportedLanguage)
             return unsupportedLanguage;
         if (name is null && (path is null || line <= 0))
@@ -109,15 +186,89 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "callees")]
-    [Description("What a method calls (compiler-resolved invocations and constructions inside its body). Target by position (path+line) or name.")]
+    [Description("What a method calls (compiler-resolved invocations and constructions inside its body). C# accepts name or position. F# is compiler-semantic and position-only for compile-owned .fs/.fsi; it scans only the innermost selected body while resolving targets through that project's source-ProjectReference closure.")]
     public string Callees(
         [Description("Method name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration.")] string? path = null,
         [Description("1-based line.")] int line = 0,
         [Description("1-based column (optional).")] int column = 0,
-        [Description("Deadline in ms (default 10000).")] int timeoutMs = 10000)
+        [Description("Deadline in ms (default 10000).")] int timeoutMs = 10000,
+        [Description("F# position mode only: workspace-relative physical .fsproj path; pair with targetFramework when selection is ambiguous.")] string? projectPath = null,
+        [Description("F# position mode only: exact target framework; pair with projectPath when selection is ambiguous.")] string? targetFramework = null,
+        [Description("F# position mode only: include a selected test-project body (default true).")] bool includeTests = true,
+        [Description("F# position mode only: include calls from generated source (default false).")] bool includeGenerated = false)
     {
         if (NotReady() is { } notReady) return notReady;
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            path = NormalizePath(path);
+            FileHit? indexedFile;
+            bool compileOwnedFSharp = false;
+            using (var languageQueries = _manager.OpenQueries())
+            {
+                indexedFile = languageQueries.FileByPath(path);
+                if (indexedFile is { Language: "fs" } && !IsFSharpScriptPath(path) &&
+                    (Path.GetExtension(path).Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+                     Path.GetExtension(path).Equals(".fsi", StringComparison.OrdinalIgnoreCase)))
+                {
+                    compileOwnedFSharp = languageQueries.ProjectsContaining(path)
+                        .Any(project => project.Language == "fs");
+                }
+            }
+            if (indexedFile is { Language: "fs" })
+            {
+                if (!compileOwnedFSharp)
+                    return UnsupportedLanguage(path, indexedFile.Language, "callees");
+                if (line <= 0 || column <= 0)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_semantic_position_required",
+                        operation = "callees",
+                        detail = "F# callees requires an explicit path + line + column; bare-name and line-only resolution are unavailable.",
+                    });
+                }
+                if (name is { Length: > 0 })
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "bad_request",
+                        field = "name",
+                        reason = "incompatible_filter",
+                        expected = "omit name",
+                        operation = "callees",
+                        detail = "F# callees is position-only and does not apply C# selectors.",
+                        meta = FSharpSemanticMeta(_manager.Health(), "bad_request"),
+                    });
+                }
+                return FSharpCallees(path, line, column, projectPath, targetFramework,
+                    includeTests, includeGenerated, timeoutMs);
+            }
+        }
+        string? incompatibleCSharpField = projectPath is { Length: > 0 }
+            ? "projectPath"
+            : targetFramework is { Length: > 0 }
+                ? "targetFramework"
+                : !includeTests
+                    ? "includeTests"
+                    : includeGenerated ? "includeGenerated" : null;
+        if (incompatibleCSharpField is not null)
+        {
+            return Json.Serialize(new
+            {
+                error = "bad_request",
+                field = incompatibleCSharpField,
+                reason = "incompatible_filter",
+                expected = incompatibleCSharpField == "includeTests"
+                    ? "true"
+                    : incompatibleCSharpField == "includeGenerated"
+                        ? "false"
+                        : $"omit {incompatibleCSharpField}",
+                operation = "callees",
+                detail = "projectPath, targetFramework, includeTests, and includeGenerated are F# position-mode arguments and are not ignored for C# requests.",
+                meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+            });
+        }
         if (UnsupportedLanguageAtPath(path, "callees") is { } unsupportedLanguage)
             return unsupportedLanguage;
         if (name is null && (path is null || line <= 0))

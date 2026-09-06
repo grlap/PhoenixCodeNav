@@ -187,6 +187,7 @@ public sealed partial class NavigationTools
                 case "fsharp_workspace_dependent_discovery_incomplete":
                 case "fsharp_workspace_declaring_project_failed":
                 case "fsharp_workspace_quotation_bodies_excluded":
+                case "fsharp_workspace_trait_calls_unresolved":
                 case "fsharp_workspace_unsupported_boundary":
                 case "fsharp_workspace_binary_dependents_not_scanned":
                     continue;
@@ -212,6 +213,419 @@ public sealed partial class NavigationTools
             .GetAwaiter().GetResult();
         return ShapeFSharpReferencesResult(path, line, column, result, includeTests,
             includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds);
+    }
+
+    private string FSharpCallers(string path, int line, int column,
+        string? projectPath, string? targetFramework, bool includeTests,
+        bool includeGenerated, int timeoutMs)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
+        FSharpCallersResult result = _semantic.FSharpCallersAsync(
+                path, line, column, projectPath, targetFramework, includeTests,
+                includeGenerated, deadlineMs)
+            .GetAwaiter().GetResult();
+        return ShapeFSharpCallersResult(path, line, column, result, includeTests,
+            includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds);
+    }
+
+    private string FSharpCallees(string path, int line, int column,
+        string? projectPath, string? targetFramework, bool includeTests,
+        bool includeGenerated, int timeoutMs)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
+        FSharpCalleesResult result = _semantic.FSharpCalleesAsync(
+                path, line, column, projectPath, targetFramework, includeTests,
+                includeGenerated, deadlineMs)
+            .GetAwaiter().GetResult();
+        return ShapeFSharpCalleesResult(path, line, column, result, includeTests,
+            includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds);
+    }
+
+    private static object? FSharpCallSymbolJson(FSharpSemanticSymbolInfo? symbol) =>
+        symbol is null ? null : new
+        {
+            name = symbol.Name,
+            fullName = symbol.FullName,
+            kind = symbol.Kind,
+            container = symbol.Container,
+            @namespace = symbol.Namespace,
+            assembly = symbol.Assembly,
+            accessibility = symbol.Accessibility,
+            path = symbol.Use.Path,
+            line = symbol.Use.StartLine,
+            column = symbol.Use.StartColumn,
+            use = new
+            {
+                path = symbol.Use.Path,
+                startLine = symbol.Use.StartLine,
+                startColumn = symbol.Use.StartColumn,
+                endLine = symbol.Use.EndLine,
+                endColumn = symbol.Use.EndColumn,
+            },
+            declarationsTotal = symbol.DeclarationCount,
+            declarationsReturned = symbol.Declarations.Count,
+            declarations = symbol.Declarations.Select(declaration => new
+            {
+                role = declaration.Role,
+                path = declaration.Path,
+                startLine = declaration.StartLine,
+                startColumn = declaration.StartColumn,
+                endLine = declaration.EndLine,
+                endColumn = declaration.EndColumn,
+            }).ToList(),
+            declarationsOutsideSelectedProjectCount =
+                symbol.DeclarationsOutsideSelectedProjectCount,
+            declarationsFromProjectReferenceClosureCount =
+                symbol.DeclarationsFromProjectReferenceClosureCount,
+        };
+
+    private string ShapeFSharpCallersResult(string path, int line, int column,
+        FSharpCallersResult result, bool includeTests, bool includeGenerated,
+        int deadlineMs, long elapsedMs)
+    {
+        var selected = result.SelectedContext is null
+            ? null
+            : new
+            {
+                project = result.SelectedContext.Project,
+                targetFramework = result.SelectedContext.TargetFramework,
+            };
+        var contexts = result.AvailableContexts.Take(MaxFSharpTypeCheckContexts)
+            .Select(context => (object)new
+            {
+                project = context.Project,
+                targetFramework = context.TargetFramework,
+            }).ToList();
+        int contextTotal = result.AvailableContexts.Count;
+        bool contextLimitTruncated = contexts.Count < contextTotal;
+        List<FSharpCallGraphGroup> groups = result.Groups ?? [];
+        List<FSharpSemanticDiagnostic> diagnostics = result.Diagnostics ?? [];
+        List<(string Kind, FSharpDependentCoverageEntry Entry)> coverageDetails = [];
+        if (result.Coverage is not null)
+        {
+            coverageDetails.AddRange(result.Coverage.Excluded.Select(entry =>
+                ("excluded", entry)));
+            coverageDetails.AddRange(result.Coverage.Failed.Select(entry =>
+                ("failed", entry)));
+            coverageDetails.AddRange((result.Coverage.DiscoveryFailed ?? []).Select(entry =>
+                ("discoveryFailed", entry)));
+        }
+        bool succeeded = result.Error is null && result.Symbol is not null &&
+                         result.TotalCallers is not null &&
+                         result.TotalCallSites is not null;
+        bool workspaceComplete = result.Coverage?.WorkspaceComplete == true;
+        bool totalIsLowerBound = succeeded && !workspaceComplete;
+        string? detail = result.Error switch
+        {
+            "fsharp_semantic_position_invalid" =>
+                "F# callers requires line >= 1 and a 1-based column.",
+            "fsharp_type_check_context_required" =>
+                "Select one physical F# project and target framework using projectPath + targetFramework.",
+            "fsharp_type_check_context_not_found" =>
+                "The requested projectPath + targetFramework is not an owning type-check context for this file.",
+            "fsharp_symbol_not_resolved" =>
+                "FCS found no callable symbol at this exact source position.",
+            "unsupported_symbol_kind" =>
+                "F# callers supports functions, methods, property accessors, constructors, union cases, active patterns, and resolved operators.",
+            "fsharp_semantic_reference_changed" =>
+                "A captured binary or package reference changed during FCS checking; that result was discarded.",
+            "fsharp_semantic_timeout" =>
+                "FCS did not establish root call evidence within the bounded deadline; retry with a larger timeoutMs.",
+            null => null,
+            _ => "FCS could not produce trustworthy caller evidence for this project snapshot.",
+        };
+        string? summary = !succeeded
+            ? null
+            : workspaceComplete
+                ? $"Exactly {result.TotalCallers} compiler-bound direct callers at {result.TotalCallSites} call sites across the selected F# project, distinct declaring project, and every proven workspace dependent."
+                : $"At least {result.TotalCallers} compiler-bound direct callers at {result.TotalCallSites} call sites were proven in completed F# groups; inspect coverage before treating this as the workspace total.";
+        if (summary is not null && !includeTests)
+            summary += " Test projects were excluded before counting.";
+        if (summary is not null && !includeGenerated)
+            summary += " Generated files were excluded before counting.";
+        if (summary is not null && (result.DispatchSlots?.Count ?? 0) > 0)
+            summary += " Dynamic-dispatch call sites resolve to the abstract slot; run callers at that declaration.";
+        var meta = FSharpSemanticMeta(result.Health, result.Error, result.PartialReason);
+
+        string shaped = Json.WithAuxiliaryListsBudget(result.Callers, groups,
+            coverageDetails, contexts, diagnostics,
+            (items, itemsTruncated, groupItems, groupsTruncated, detailItems,
+                detailsTruncated, contextItems, contextsByteTruncated,
+                diagnosticItems, diagnosticsByteTruncated) => new
+                {
+                    operation = "callers",
+                    path,
+                    line,
+                    column,
+                    symbol = FSharpCallSymbolJson(result.Symbol),
+                    totalCallers = result.TotalCallers,
+                    totalCallSites = result.TotalCallSites,
+                    totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
+                    callers = items.Select(caller => new
+                    {
+                        caller = FSharpCallSymbolJson(caller.Caller),
+                        callSites = caller.CallSites.Select(site => new
+                        {
+                            path = site.Path,
+                            line = site.Line,
+                            text = site.LineText,
+                            startColumn = site.StartColumn,
+                            endLine = site.EndLine,
+                            endColumn = site.EndColumn,
+                            callKind = site.CallKind,
+                            project = site.Project,
+                            targetFrameworksScanned = site.TargetFrameworksScanned,
+                        }).ToList(),
+                    }).ToList(),
+                    totalCallersReturned = items.Count,
+                    truncated = itemsTruncated ? true : (bool?)null,
+                    truncationNoteId = itemsTruncated
+                    ? NoteIds.FSharpCallerItemsByteBudget
+                    : null,
+                    groups = groupItems.Select(group => new
+                    {
+                        project = group.Project,
+                        targetFrameworksScanned = group.TargetFrameworksScanned,
+                        isTest = group.IsTest,
+                        callSites = group.Count,
+                        status = group.Status,
+                        reason = group.Reason,
+                    }).ToList(),
+                    groupCoverage = new
+                    {
+                        total = groups.Count,
+                        returned = groupItems.Count,
+                        truncated = groupsTruncated ? true : (bool?)null,
+                        noteId = groupsTruncated
+                        ? NoteIds.FSharpCallerGroupsByteBudget
+                        : null,
+                    },
+                    coverage = result.Coverage is null ? null : new
+                    {
+                        scope = "selected_physical_project_declaring_project_and_workspace_dependents",
+                        dependentsTotal = result.Coverage.DependentsTotal,
+                        dependentsScanned = result.Coverage.DependentsScanned,
+                        dependentsExcluded = result.Coverage.DependentsExcluded,
+                        dependentsFailed = result.Coverage.DependentsFailed,
+                        dependentsPending = result.Coverage.DependentsPending,
+                        workspaceComplete = result.Coverage.WorkspaceComplete,
+                        potentialConsumers = result.Coverage.PotentialConsumers,
+                        potentialConsumersEvaluated =
+                        result.Coverage.PotentialConsumersEvaluated,
+                        potentialConsumersUnevaluated =
+                        result.Coverage.PotentialConsumersUnevaluated,
+                        declaringProject = result.Coverage.DeclaringProject,
+                        declaringProjectStatus = result.Coverage.DeclaringProjectStatus,
+                        declaringProjectReason = result.Coverage.DeclaringProjectReason,
+                        details = detailItems.Select(item => new
+                        {
+                            kind = item.Kind,
+                            project = item.Entry.Project,
+                            reason = item.Entry.Reason,
+                        }).ToList(),
+                        detailTotal = coverageDetails.Count,
+                        detailReturned = detailItems.Count,
+                        detailTruncated = detailsTruncated ? true : (bool?)null,
+                        detailNoteId = detailsTruncated
+                        ? NoteIds.FSharpWorkspaceCoverageByteBudget
+                        : null,
+                    },
+                    dispatchSlots = result.DispatchSlots is { Count: > 0 }
+                    ? result.DispatchSlots
+                    : null,
+                    dispatchDetail = result.DispatchSlots is { Count: > 0 }
+                    ? "dynamic-dispatch call sites resolve to the abstract slot; run callers at that declaration"
+                    : null,
+                    quotationBodiesExcluded = result.QuotationBodiesExcluded
+                    ? true
+                    : (bool?)null,
+                    traitCallsUnresolved = result.TraitCallsUnresolved ? true : (bool?)null,
+                    includeTests,
+                    includeGenerated,
+                    selectedTypeCheckContext = selected,
+                    availableFSharpTypeCheckContexts = contextItems,
+                    availableFSharpTypeCheckContextsTotal = contextTotal,
+                    availableFSharpTypeCheckContextsReturned = contextItems.Count,
+                    fsharpTypeCheckContextsTruncated =
+                    contextLimitTruncated || contextsByteTruncated ? true : (bool?)null,
+                    diagnosticCount = result.DiagnosticCount,
+                    diagnostics = diagnosticItems,
+                    diagnosticsTruncated = result.DiagnosticCount > diagnosticItems.Count ||
+                                           diagnosticsByteTruncated ? true : (bool?)null,
+                    summary,
+                    error = result.Error,
+                    detail,
+                    partial = result.PartialReason is not null ? true : (bool?)null,
+                    partialReason = result.PartialReason,
+                    retryRecommended = result.Error is "fsharp_semantic_timeout" ||
+                                   result.PartialReason?.Contains(
+                                       "fsharp_workspace_deadline",
+                                       StringComparison.Ordinal) == true
+                    ? true
+                    : (bool?)null,
+                    retryHint = result.Error is "fsharp_semantic_timeout" ||
+                            result.PartialReason?.Contains(
+                                "fsharp_workspace_deadline",
+                                StringComparison.Ordinal) == true
+                    ? $"Retry callers with timeoutMs greater than {deadlineMs} (maximum {SemanticNavigationDeadlineMaxMs})."
+                    : null,
+                    timing = new { semanticMs = elapsedMs, deadlineMs },
+                    meta,
+                }, maxBytes: TestOnlyReferencesResponseMaxBytes);
+        return Json.WithCompleteSemanticIdentity(shaped);
+    }
+
+    private string ShapeFSharpCalleesResult(string path, int line, int column,
+        FSharpCalleesResult result, bool includeTests, bool includeGenerated,
+        int deadlineMs, long elapsedMs)
+    {
+        var selected = result.SelectedContext is null
+            ? null
+            : new
+            {
+                project = result.SelectedContext.Project,
+                targetFramework = result.SelectedContext.TargetFramework,
+            };
+        var contexts = result.AvailableContexts.Take(MaxFSharpTypeCheckContexts)
+            .Select(context => (object)new
+            {
+                project = context.Project,
+                targetFramework = context.TargetFramework,
+            }).ToList();
+        int contextTotal = result.AvailableContexts.Count;
+        bool contextLimitTruncated = contexts.Count < contextTotal;
+        List<FSharpCallGraphGroup> groups = result.Groups ?? [];
+        List<FSharpSemanticDiagnostic> diagnostics = result.Diagnostics ?? [];
+        bool succeeded = result.Error is null && result.Symbol is not null &&
+                         result.TotalCallees is not null &&
+                         result.TotalCallSites is not null;
+        bool complete = result.Coverage?.Complete == true;
+        bool totalIsLowerBound = succeeded && !complete;
+        string? detail = result.Error switch
+        {
+            "fsharp_semantic_position_invalid" =>
+                "F# callees requires line >= 1 and a 1-based column.",
+            "fsharp_type_check_context_required" =>
+                "Select one physical F# project and target framework using projectPath + targetFramework.",
+            "fsharp_type_check_context_not_found" =>
+                "The requested projectPath + targetFramework is not an owning type-check context for this file.",
+            "fsharp_callee_body_not_found" =>
+                "The source position is not inside a compiler-checked F# function, member, constructor, object-expression override, or module initializer body.",
+            "fsharp_semantic_reference_changed" =>
+                "A captured binary or package reference changed during FCS checking; the result was discarded.",
+            "fsharp_semantic_timeout" =>
+                "FCS did not establish body-local call evidence within the bounded deadline; retry with a larger timeoutMs.",
+            null => null,
+            _ => "FCS could not produce trustworthy callee evidence for this project snapshot.",
+        };
+        string? summary = !succeeded
+            ? null
+            : complete
+                ? $"Exactly {result.TotalCallees} compiler-bound callees at {result.TotalCallSites} call sites in the selected F# body."
+                : $"At least {result.TotalCallees} compiler-bound callees at {result.TotalCallSites} call sites were proven in the selected F# body; inspect coverage before treating this as complete.";
+        if (summary is not null && !includeTests)
+            summary += " Test-project bodies were excluded before counting.";
+        if (summary is not null && !includeGenerated)
+            summary += " Generated call sites were excluded before counting.";
+        var meta = FSharpSemanticMeta(result.Health, result.Error, result.PartialReason);
+
+        string shaped = Json.WithAuxiliaryListsBudget(result.Callees, groups,
+            contexts, diagnostics,
+            (items, itemsTruncated, groupItems, groupsTruncated, contextItems,
+                contextsByteTruncated, diagnosticItems, diagnosticsByteTruncated) => new
+                {
+                    operation = "callees",
+                    path,
+                    line,
+                    column,
+                    symbol = FSharpCallSymbolJson(result.Symbol),
+                    totalCallees = result.TotalCallees,
+                    totalCallSites = result.TotalCallSites,
+                    totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
+                    callees = items.Select(callee => new
+                    {
+                        callee = FSharpCallSymbolJson(callee.Callee),
+                        callLines = callee.CallSites.Select(site => site.Line)
+                            .Distinct().OrderBy(value => value).ToList(),
+                        callSites = callee.CallSites.Select(site => new
+                        {
+                            path = site.Path,
+                            line = site.Line,
+                            text = site.LineText,
+                            startColumn = site.StartColumn,
+                            endLine = site.EndLine,
+                            endColumn = site.EndColumn,
+                            callKind = site.CallKind,
+                            project = site.Project,
+                            targetFrameworksScanned = site.TargetFrameworksScanned,
+                        }).ToList(),
+                    }).ToList(),
+                    totalCalleesReturned = items.Count,
+                    truncated = itemsTruncated ? true : (bool?)null,
+                    truncationNoteId = itemsTruncated
+                    ? NoteIds.FSharpCalleeItemsByteBudget
+                    : null,
+                    groups = groupItems.Select(group => new
+                    {
+                        project = group.Project,
+                        targetFrameworksScanned = group.TargetFrameworksScanned,
+                        isTest = group.IsTest,
+                        callSites = group.Count,
+                        status = group.Status,
+                        reason = group.Reason,
+                    }).ToList(),
+                    groupCoverage = new
+                    {
+                        total = groups.Count,
+                        returned = groupItems.Count,
+                        truncated = groupsTruncated ? true : (bool?)null,
+                        noteId = groupsTruncated
+                        ? NoteIds.FSharpCalleeGroupsByteBudget
+                        : null,
+                    },
+                    coverage = result.Coverage is null ? null : new
+                    {
+                        scope = "selected_fsharp_body_with_project_reference_closure_targets",
+                        complete = result.Coverage.Complete,
+                        quotationBodiesExcluded =
+                        result.Coverage.QuotationBodiesExcluded,
+                        traitCallsUnresolved = result.Coverage.TraitCallsUnresolved,
+                    },
+                    includeTests,
+                    includeGenerated,
+                    selectedTypeCheckContext = selected,
+                    availableFSharpTypeCheckContexts = contextItems,
+                    availableFSharpTypeCheckContextsTotal = contextTotal,
+                    availableFSharpTypeCheckContextsReturned = contextItems.Count,
+                    fsharpTypeCheckContextsTruncated =
+                    contextLimitTruncated || contextsByteTruncated ? true : (bool?)null,
+                    diagnosticCount = result.DiagnosticCount,
+                    diagnostics = diagnosticItems,
+                    diagnosticsTruncated = result.DiagnosticCount > diagnosticItems.Count ||
+                                       diagnosticsByteTruncated ? true : (bool?)null,
+                    summary,
+                    error = result.Error,
+                    detail,
+                    partial = result.PartialReason is not null ? true : (bool?)null,
+                    partialReason = result.PartialReason,
+                    retryRecommended = result.Error is "fsharp_semantic_timeout" ||
+                                   result.PartialReason?.Contains(
+                                       "fsharp_workspace_deadline",
+                                       StringComparison.Ordinal) == true
+                    ? true
+                    : (bool?)null,
+                    retryHint = result.Error is "fsharp_semantic_timeout" ||
+                            result.PartialReason?.Contains(
+                                "fsharp_workspace_deadline",
+                                StringComparison.Ordinal) == true
+                    ? $"Retry callees with timeoutMs greater than {deadlineMs} (maximum {SemanticNavigationDeadlineMaxMs})."
+                    : null,
+                    timing = new { semanticMs = elapsedMs, deadlineMs },
+                    meta,
+                }, maxBytes: TestOnlyReferencesResponseMaxBytes);
+        return Json.WithCompleteSemanticIdentity(shaped);
     }
 
     private string FSharpImplementations(string path, int line, int column,

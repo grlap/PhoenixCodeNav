@@ -51,9 +51,12 @@ for C#.
 F# source text, `.fsproj` compile ownership, and C#↔F# project edges are indexed. Compile-owned
 `.fs` / `.fsi` files support FCS outlines plus position-based `symbol_at`, `definition` through the
 selected root's F# `ProjectReference` closure under the evaluated MSBuild transitivity and bounded
-child-TFM policies, and compiler-bound references plus position-only implementations across that
+child-TFM policies, and compiler-bound references, callers, plus position-only implementations across that
 physical root, its checked closure, distinct declaring projects, and every proven F# workspace
-dependent. Implementations match type definitions and exact abstract signatures through FCS,
+dependent. F# callers classify compiler-bound direct, partial, pipeline, computation-expression,
+first-class, construction, union-case, active-pattern, operator, and indirect sites. F# callees
+selects the innermost checked body and resolves targets through only its ProjectReference closure;
+it does not scan workspace dependents or treat bare function values as invocations. Implementations match type definitions and exact abstract signatures through FCS,
 include named entities and typed object expressions, rank concrete results before abstract
 scaffolding, and disclose quotation exclusions through
 `fsharp_workspace_quotation_bodies_excluded` plus incomplete workspace coverage. The semantic path evaluates a
@@ -76,8 +79,8 @@ like root diagnostics. References augment indexed structural edges with bounded 
 indexed F# project/TFM from the pinned snapshot, deduplicate physical sites across contexts, and
 report evaluated/unevaluated potential consumers plus excluded, failed, filtered, or pending scope
 when the workspace total is a lower bound. The same scope, deduplication, filters, and
-operation-neutral `fsharp_workspace_*` coverage reasons apply to implementations. Callers,
-callees, and hierarchy still return
+operation-neutral `fsharp_workspace_*` coverage reasons apply to callers and implementations;
+unresolved FCS trait calls have their own disclosed cause. Hierarchy still returns
 explicit unsupported boundaries rather than misleading empty answers. Indexed search is
 language-neutral unless the caller supplies a file scope; a mixed C#/F# symbol scope returns the
 available C# symbols and marks the skipped portion partial.

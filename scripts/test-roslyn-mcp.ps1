@@ -1718,6 +1718,16 @@ try {
         Assert-Equal 1 @($fsharpCapabilities.features | Where-Object {
             [string]$_.id -eq "fsharp-implementations-workspace"
         }).Count "FSharp implementations feature id is missing or duplicated"
+        Assert-Equal 1 @($fsharpCapabilities.features | Where-Object {
+            [string]$_.id -eq "fsharp-callers-workspace"
+        }).Count "FSharp callers feature id is missing or duplicated"
+        Assert-Equal 1 @($fsharpCapabilities.features | Where-Object {
+            [string]$_.id -eq "fsharp-callees-body"
+        }).Count "FSharp callees feature id is missing or duplicated"
+        Assert-True (@($fsharpCapabilities.semantic.fsharpSemanticTools) -contains "callers") `
+            "FSharp callers is missing from language-specific semantic discovery"
+        Assert-True (@($fsharpCapabilities.semantic.fsharpSemanticTools) -contains "callees") `
+            "FSharp callees is missing from language-specific semantic discovery"
     }
 
     Test-IntegrationCase "official FSharp repository counts" {

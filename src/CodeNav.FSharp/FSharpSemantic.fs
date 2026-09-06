@@ -40,7 +40,8 @@ type SemanticSymbol(
     assemblyName: string,
     accessibility: string,
     useLocation: SemanticLocation,
-    declarations: SemanticLocation array
+    declarations: SemanticLocation array,
+    identity: string
 ) =
     member _.Name = name
     member _.FullName = fullName
@@ -51,6 +52,7 @@ type SemanticSymbol(
     member _.Accessibility = accessibility
     member _.UseLocation = useLocation
     member _.Declarations = declarations
+    member _.Identity = identity
 
 [<Sealed>]
 type SemanticDiagnostic(
@@ -125,6 +127,44 @@ type SemanticImplementationsCheckResult(
     member _.QuotationBodiesExcluded = quotationBodiesExcluded
 
 [<Sealed>]
+type SemanticCall(
+    caller: SemanticSymbol,
+    callee: SemanticSymbol,
+    site: SemanticLocation,
+    callKind: string,
+    projectIndex: int
+) =
+    member _.Caller = caller
+    member _.Callee = callee
+    member _.Site = site
+    member _.CallKind = callKind
+    member _.ProjectIndex = projectIndex
+
+[<Sealed>]
+type SemanticCallGraphCheckResult(
+    symbol: SemanticSymbol,
+    calls: SemanticCall array,
+    error: string,
+    diagnosticCount: int,
+    errorDiagnosticCount: int,
+    diagnostics: SemanticDiagnostic array,
+    dispatchSlots: string array,
+    quotationBodiesExcluded: bool,
+    traitCallsUnresolved: bool,
+    deadlineExhausted: bool
+) =
+    member _.Symbol = symbol
+    member _.Calls = calls
+    member _.Error = error
+    member _.DiagnosticCount = diagnosticCount
+    member _.ErrorDiagnosticCount = errorDiagnosticCount
+    member _.Diagnostics = diagnostics
+    member _.DispatchSlots = dispatchSlots
+    member _.QuotationBodiesExcluded = quotationBodiesExcluded
+    member _.TraitCallsUnresolved = traitCallsUnresolved
+    member _.DeadlineExhausted = deadlineExhausted
+
+[<Sealed>]
 type SemanticProjectInput(
     projectFileName: string,
     sourceFiles: string array,
@@ -145,9 +185,9 @@ module private Semantic =
     let nullSymbol: SemanticSymbol = Unchecked.defaultof<SemanticSymbol>
     let maxCachedProjects = 4
     let cacheGate = obj()
-    let implementationCacheGate = obj()
+    let assemblyContentsCacheGate = obj()
     let mutable accessClock = 0L
-    let mutable implementationAccessClock = 0L
+    let mutable assemblyContentsAccessClock = 0L
     let pathComparer =
         if OperatingSystem.IsWindows() then StringComparer.OrdinalIgnoreCase else StringComparer.Ordinal
 
@@ -155,6 +195,15 @@ module private Semantic =
         {
             Checker: FSharpChecker
             mutable LastAccess: int64
+        }
+
+    type CheckedAssemblyContents =
+        {
+            Checker: FSharpChecker
+            OptionsByIndex: FSharpProjectOptions array
+            Projects: FSharpCheckProjectResults array
+            Diagnostics: FSharpDiagnostic array
+            HasCriticalErrors: bool
         }
 
     let runtimes = Dictionary<string, Runtime>(StringComparer.Ordinal)
@@ -168,6 +217,11 @@ module private Semantic =
     let pathIdentityKey fileName =
         let key = sourceKey fileName
         if OperatingSystem.IsWindows() then key.ToUpperInvariant() else key
+
+    let expressionRangeKey (value: range) =
+        pathIdentityKey value.FileName + "\u0000" +
+        string value.StartLine + "\u0000" + string value.StartColumn + "\u0000" +
+        string value.EndLine + "\u0000" + string value.EndColumn
 
     let createRuntime keepAssemblyContents (sourceFiles: string array) (sourceTexts: string array) =
         let sources = Dictionary<string, ISourceText>(pathComparer)
@@ -193,7 +247,7 @@ module private Semantic =
             LastAccess = 0L
         }
 
-    let implementationRuntimes = Dictionary<string, Runtime>(StringComparer.Ordinal)
+    let assemblyContentsRuntimes = Dictionary<string, Runtime>(StringComparer.Ordinal)
 
     let runtime fingerprint sourceFiles sourceTexts cacheRuntime =
         if not cacheRuntime then
@@ -216,26 +270,95 @@ module private Semantic =
                     runtimes[fingerprint] <- created
                     created)
 
-    let implementationRuntime fingerprint sourceFiles sourceTexts cacheRuntime =
+    let assemblyContentsRuntime fingerprint sourceFiles sourceTexts cacheRuntime =
         if not cacheRuntime then
             createRuntime true sourceFiles sourceTexts
         else
-            lock implementationCacheGate (fun () ->
-                implementationAccessClock <- implementationAccessClock + 1L
-                match implementationRuntimes.TryGetValue(fingerprint) with
+            lock assemblyContentsCacheGate (fun () ->
+                assemblyContentsAccessClock <- assemblyContentsAccessClock + 1L
+                match assemblyContentsRuntimes.TryGetValue(fingerprint) with
                 | true, existing ->
-                    existing.LastAccess <- implementationAccessClock
+                    existing.LastAccess <- assemblyContentsAccessClock
                     existing
                 | _ ->
                     let created = createRuntime true sourceFiles sourceTexts
-                    created.LastAccess <- implementationAccessClock
-                    if implementationRuntimes.Count >= maxCachedProjects then
+                    created.LastAccess <- assemblyContentsAccessClock
+                    if assemblyContentsRuntimes.Count >= maxCachedProjects then
                         let oldest =
-                            implementationRuntimes
+                            assemblyContentsRuntimes
                             |> Seq.minBy (fun pair -> pair.Value.LastAccess)
-                        implementationRuntimes.Remove(oldest.Key) |> ignore
-                    implementationRuntimes[fingerprint] <- created
+                        assemblyContentsRuntimes.Remove(oldest.Key) |> ignore
+                    assemblyContentsRuntimes[fingerprint] <- created
                     created)
+
+    let checkAssemblyContents
+        (projects: SemanticProjectInput array)
+        fingerprint
+        cacheRuntime
+        operationName
+        (cancellationToken: CancellationToken) =
+        async {
+            let sourceFiles = projects |> Array.collect (fun project -> project.SourceFiles)
+            let sourceTexts = projects |> Array.collect (fun project -> project.SourceTexts)
+            let runtime = assemblyContentsRuntime fingerprint sourceFiles sourceTexts cacheRuntime
+            let checker = runtime.Checker
+            let optionsByIndex = Array.zeroCreate<FSharpProjectOptions> projects.Length
+            for index in 0 .. projects.Length - 1 do
+                cancellationToken.ThrowIfCancellationRequested()
+                let project = projects[index]
+                let baseOptions =
+                    checker.GetProjectOptionsFromCommandLineArgs(
+                        project.ProjectFileName,
+                        project.CommandLineArgs,
+                        loadedTimeStamp = DateTime.UnixEpoch,
+                        isEditing = false,
+                        isInteractive = false
+                    )
+                let referencedProjects =
+                    project.ReferencedProjectIndices
+                    |> Array.map (fun child ->
+                        FSharpReferencedProject.FSharpReference(
+                            projects[child].OutputFile,
+                            optionsByIndex[child]
+                        ))
+                optionsByIndex[index] <-
+                    { baseOptions with ReferencedProjects = referencedProjects }
+
+            let checkedProjects = Array.zeroCreate<FSharpCheckProjectResults> projects.Length
+            let projectDiagnostics = ResizeArray<FSharpDiagnostic>()
+            let mutable hasCriticalErrors = false
+            for index in 0 .. projects.Length - 1 do
+                cancellationToken.ThrowIfCancellationRequested()
+                let! checkedProject =
+                    checker.ParseAndCheckProject(
+                        optionsByIndex[index],
+                        userOpName = operationName
+                    )
+                checkedProjects[index] <- checkedProject
+                projectDiagnostics.AddRange(checkedProject.Diagnostics)
+                hasCriticalErrors <- hasCriticalErrors || checkedProject.HasCriticalErrors
+            let allProjectDiagnostics =
+                projectDiagnostics
+                |> Seq.distinctBy (fun diagnostic ->
+                    let range = diagnostic.Range
+                    diagnostic.Severity.ToString(),
+                    diagnostic.ErrorNumber,
+                    diagnostic.Message,
+                    pathIdentityKey range.FileName,
+                    range.StartLine,
+                    range.StartColumn,
+                    range.EndLine,
+                    range.EndColumn)
+                |> Seq.toArray
+            return
+                {
+                    Checker = checker
+                    OptionsByIndex = optionsByIndex
+                    Projects = checkedProjects
+                    Diagnostics = allProjectDiagnostics
+                    HasCriticalErrors = hasCriticalErrors
+                }
+        }
 
     let safeString getter =
         try
@@ -409,6 +532,40 @@ module private Semantic =
             quotationsExcluded
         )
 
+    let callGraphResult symbol calls error diagnostics dispatchSlots quotationsExcluded traitCallsUnresolved deadlineExhausted =
+        let all = diagnostics |> Seq.toArray
+        let errorCount = all |> Array.sumBy (fun diagnostic ->
+            if diagnosticSeverity diagnostic = "error" then 1 else 0)
+        SemanticCallGraphCheckResult(
+            symbol,
+            calls,
+            error,
+            all.Length,
+            errorCount,
+            boundedDiagnostics all,
+            dispatchSlots,
+            quotationsExcluded,
+            traitCallsUnresolved,
+            deadlineExhausted
+        )
+
+    let symbolIdentity (symbol: FSharpSymbol) =
+        let fullName = safeString (fun () -> symbol.FullName)
+        let assemblyName = safeString (fun () -> symbol.Assembly.SimpleName)
+        let signature =
+            match symbol with
+            | :? FSharpMemberOrFunctionOrValue as value ->
+                safeString (fun () ->
+                    value.CompiledName + "\u0000" +
+                    value.FullType.Format(FSharpDisplayContext.Empty))
+            | _ -> safeString (fun () -> symbol.ToString())
+        String.concat "\u0000" [
+            if isNull assemblyName then "" else assemblyName
+            kind symbol
+            if isNull fullName then "" else fullName
+            if isNull signature then "" else signature
+        ]
+
     let mappedSymbol (useRange: range) (symbol: FSharpSymbol) =
         SemanticSymbol(
             safeString (fun () -> symbol.DisplayName),
@@ -419,7 +576,8 @@ module private Semantic =
             safeString (fun () -> symbol.Assembly.SimpleName),
             accessibility symbol,
             location "use" useRange,
-            declarationLocations symbol
+            declarationLocations symbol,
+            symbolIdentity symbol
         )
 
     let sameEntity (left: FSharpEntity) (right: FSharpEntity) =
@@ -670,6 +828,93 @@ module private Semantic =
             safeString (fun () -> memberValue.FullName))
         |> Seq.toArray
 
+    let propertyAccessorAtPosition
+        (contents: FSharpAssemblyContents)
+        targetFileName
+        line
+        column
+        (propertyValue: FSharpMemberOrFunctionOrValue) =
+        let variants = memberVariants propertyValue
+        let candidates = ResizeArray<FSharpMemberOrFunctionOrValue * range>()
+        let addCandidate (expression: FSharpExpr)
+            (calledMember: FSharpMemberOrFunctionOrValue) =
+            if pathComparer.Equals(expression.Range.FileName, targetFileName) &&
+               containsPosition line column expression.Range &&
+               variants |> Array.exists (fun variant ->
+                   try
+                       (variant :> FSharpSymbol).IsEffectivelySameAs(
+                           calledMember :> FSharpSymbol)
+                   with _ -> false) then
+                candidates.Add(calledMember, expression.Range)
+        let rec visitExpression (expression: FSharpExpr) =
+            match expression with
+            | FSharpExprPatterns.Quote _ -> ()
+            | FSharpExprPatterns.Call(_, calledMember, _, _, _)
+            | FSharpExprPatterns.CallWithWitnesses(_, calledMember, _, _, _, _) ->
+                addCandidate expression calledMember
+                expression.ImmediateSubExpressions |> Seq.iter visitExpression
+            | _ -> expression.ImmediateSubExpressions |> Seq.iter visitExpression
+        let rec visitDeclaration declaration =
+            match declaration with
+            | FSharpImplementationFileDeclaration.Entity(_, declarations) ->
+                declarations |> Seq.iter visitDeclaration
+            | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue(_, _, body)
+            | FSharpImplementationFileDeclaration.InitAction body ->
+                visitExpression body
+        for implementationFile in contents.ImplementationFiles do
+            implementationFile.Declarations |> Seq.iter visitDeclaration
+        candidates
+        |> Seq.sortBy (fun (_, expressionRange) ->
+            expressionRange.EndLine - expressionRange.StartLine,
+            expressionRange.EndColumn - expressionRange.StartColumn,
+            expressionRange.StartLine,
+            expressionRange.StartColumn)
+        |> Seq.tryHead
+        |> Option.map fst
+
+    let constructorAtPosition
+        (contents: FSharpAssemblyContents)
+        targetFileName
+        line
+        column
+        (targetEntity: FSharpEntity) =
+        let candidates = ResizeArray<FSharpMemberOrFunctionOrValue * range>()
+        let rec visitExpression (expression: FSharpExpr) =
+            match expression with
+            | FSharpExprPatterns.Quote _ -> ()
+            | FSharpExprPatterns.NewObject(constructorValue, _, _) ->
+                let matches =
+                    match constructorValue.DeclaringEntity with
+                    | Some declaringEntity ->
+                        try
+                            (declaringEntity :> FSharpSymbol).IsEffectivelySameAs(
+                                targetEntity :> FSharpSymbol)
+                        with _ -> false
+                    | None -> false
+                if matches &&
+                   pathComparer.Equals(expression.Range.FileName, targetFileName) &&
+                   containsPosition line column expression.Range then
+                    candidates.Add(constructorValue, expression.Range)
+                expression.ImmediateSubExpressions |> Seq.iter visitExpression
+            | _ -> expression.ImmediateSubExpressions |> Seq.iter visitExpression
+        let rec visitDeclaration declaration =
+            match declaration with
+            | FSharpImplementationFileDeclaration.Entity(_, declarations) ->
+                declarations |> Seq.iter visitDeclaration
+            | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue(_, _, body)
+            | FSharpImplementationFileDeclaration.InitAction body ->
+                visitExpression body
+        for implementationFile in contents.ImplementationFiles do
+            implementationFile.Declarations |> Seq.iter visitDeclaration
+        candidates
+        |> Seq.sortBy (fun (_, expressionRange) ->
+            expressionRange.EndLine - expressionRange.StartLine,
+            expressionRange.EndColumn - expressionRange.StartColumn,
+            expressionRange.StartLine,
+            expressionRange.StartColumn)
+        |> Seq.tryHead
+        |> Option.map fst
+
     let findMemberForSignature (signature: FSharpAbstractSignature) =
         try
             match typeDefinition signature.DeclaringType with
@@ -703,7 +948,9 @@ module private Semantic =
             assemblyName,
             nullString,
             declaration,
-            [| declaration |]
+            [| declaration |],
+            assemblyName + "\u0000objectExpression\u0000" +
+            expressionRangeKey expressionRange
         )
 
     let resolveImplementations
@@ -733,50 +980,14 @@ module private Semantic =
                         "fsharp_semantic_snapshot_invalid" Array.empty Array.empty false
             else
                 let lookupProject = projects[lookupProjectIndex]
-                let sourceFiles = projects |> Array.collect (fun project -> project.SourceFiles)
-                let sourceTexts = projects |> Array.collect (fun project -> project.SourceTexts)
-                let runtime = implementationRuntime fingerprint sourceFiles sourceTexts cacheRuntime
-                let checker = runtime.Checker
-                let optionsByIndex = Array.zeroCreate<FSharpProjectOptions> projects.Length
-                for index in 0 .. projects.Length - 1 do
-                    cancellationToken.ThrowIfCancellationRequested()
-                    let project = projects[index]
-                    let baseOptions =
-                        checker.GetProjectOptionsFromCommandLineArgs(
-                            project.ProjectFileName,
-                            project.CommandLineArgs,
-                            loadedTimeStamp = DateTime.UnixEpoch,
-                            isEditing = false,
-                            isInteractive = false
-                        )
-                    let referencedProjects =
-                        project.ReferencedProjectIndices
-                        |> Array.map (fun child ->
-                            FSharpReferencedProject.FSharpReference(
-                                projects[child].OutputFile,
-                                optionsByIndex[child]
-                            ))
-                    optionsByIndex[index] <-
-                        { baseOptions with ReferencedProjects = referencedProjects }
-
-                let checkedProjects = Array.zeroCreate<FSharpCheckProjectResults> projects.Length
-                let projectDiagnostics = ResizeArray<FSharpDiagnostic>()
-                let mutable hasCriticalErrors = false
-                for index in 0 .. projects.Length - 1 do
-                    cancellationToken.ThrowIfCancellationRequested()
-                    let! checkedProject =
-                        checker.ParseAndCheckProject(
-                            optionsByIndex[index],
-                            userOpName = "PhoenixCodeNav.implementations"
-                        )
-                    checkedProjects[index] <- checkedProject
-                    projectDiagnostics.AddRange(checkedProject.Diagnostics)
-                    hasCriticalErrors <- hasCriticalErrors || checkedProject.HasCriticalErrors
-                let allProjectDiagnostics =
-                    projectDiagnostics
-                    |> Seq.distinctBy diagnosticKey
-                    |> Seq.toArray
-                if hasCriticalErrors then
+                let! closure =
+                    checkAssemblyContents projects fingerprint cacheRuntime
+                        "PhoenixCodeNav.implementations" cancellationToken
+                let checker = closure.Checker
+                let optionsByIndex = closure.OptionsByIndex
+                let checkedProjects = closure.Projects
+                let allProjectDiagnostics = closure.Diagnostics
+                if closure.HasCriticalErrors then
                     return
                         implementationResult nullSymbol Array.empty Array.empty
                             "fsharp_semantic_check_failed" allProjectDiagnostics Array.empty false
@@ -1017,6 +1228,921 @@ module private Semantic =
                                                 diagnostics resolvedFromOverride quotationsExcluded
         }
 
+    let sameSymbol (left: FSharpSymbol) (right: FSharpSymbol) =
+        try left.IsEffectivelySameAs(right)
+        with _ -> false
+
+    let rangeContainsRange (outerRange: range) (innerRange: range) =
+        pathComparer.Equals(outerRange.FileName, innerRange.FileName) &&
+        (innerRange.StartLine > outerRange.StartLine ||
+         innerRange.StartLine = outerRange.StartLine &&
+         innerRange.StartColumn >= outerRange.StartColumn) &&
+        (innerRange.EndLine < outerRange.EndLine ||
+         innerRange.EndLine = outerRange.EndLine &&
+         innerRange.EndColumn <= outerRange.EndColumn)
+
+    let sameRange (left: range) (right: range) =
+        pathComparer.Equals(left.FileName, right.FileName) &&
+        left.StartLine = right.StartLine &&
+        left.StartColumn = right.StartColumn &&
+        left.EndLine = right.EndLine &&
+        left.EndColumn = right.EndColumn
+
+    let memberIsOperator (value: FSharpMemberOrFunctionOrValue) =
+        try value.CompiledName.StartsWith("op_", StringComparison.Ordinal)
+        with _ -> false
+
+    let pipeFunctionArgument (value: FSharpMemberOrFunctionOrValue)
+        (arguments: FSharpExpr array) =
+        let fullName = safeString (fun () -> value.FullName)
+        match fullName with
+        | "Microsoft.FSharp.Core.Operators.(|>)"
+        | "Microsoft.FSharp.Core.Operators.(||>)"
+        | "Microsoft.FSharp.Core.Operators.(|||>)" when arguments.Length > 0 ->
+            Some arguments[arguments.Length - 1]
+        | "Microsoft.FSharp.Core.Operators.(<|)"
+        | "Microsoft.FSharp.Core.Operators.(<||)"
+        | "Microsoft.FSharp.Core.Operators.(<|||)" when arguments.Length > 0 ->
+            Some arguments[0]
+        | _ -> None
+
+    let isPipeMember (value: FSharpMemberOrFunctionOrValue) =
+        pipeFunctionArgument value [| Unchecked.defaultof<FSharpExpr> |]
+        |> Option.isSome
+
+    let useMatchesMember (symbolUse: FSharpSymbolUse)
+        (memberValue: FSharpMemberOrFunctionOrValue) =
+        try
+            match symbolUse.Symbol with
+            | :? FSharpMemberOrFunctionOrValue as usedMember ->
+                sameSymbol (usedMember :> FSharpSymbol) (memberValue :> FSharpSymbol) ||
+                (usedMember.IsProperty &&
+                 ((usedMember.HasGetterMethod &&
+                   sameSymbol (usedMember.GetterMethod :> FSharpSymbol)
+                       (memberValue :> FSharpSymbol)) ||
+                  (usedMember.HasSetterMethod &&
+                   sameSymbol (usedMember.SetterMethod :> FSharpSymbol)
+                       (memberValue :> FSharpSymbol))))
+            | _ -> false
+        with _ -> false
+
+    let tryUseForMember (uses: FSharpSymbolUse array)
+        (memberValue: FSharpMemberOrFunctionOrValue) (expressionRange: range) =
+        uses
+        |> Array.filter (fun symbolUse ->
+            not symbolUse.IsFromDefinition &&
+            rangeContainsRange expressionRange symbolUse.Range &&
+            useMatchesMember symbolUse memberValue)
+        |> Array.sortBy (fun symbolUse ->
+            symbolUse.Range.StartLine,
+            symbolUse.Range.StartColumn,
+            symbolUse.Range.EndLine - symbolUse.Range.StartLine,
+            symbolUse.Range.EndColumn - symbolUse.Range.StartColumn)
+        |> Array.tryHead
+
+    let useMatchesConstructor (symbolUse: FSharpSymbolUse)
+        (memberValue: FSharpMemberOrFunctionOrValue) =
+        try
+            useMatchesMember symbolUse memberValue ||
+            (match symbolUse.Symbol, memberValue.DeclaringEntity with
+             | (:? FSharpEntity as usedEntity), Some declaringEntity ->
+                 sameSymbol (usedEntity :> FSharpSymbol) (declaringEntity :> FSharpSymbol)
+             | _ -> false)
+        with _ -> false
+
+    let tryUseForConstructor (uses: FSharpSymbolUse array)
+        (memberValue: FSharpMemberOrFunctionOrValue) (expressionRange: range) =
+        uses
+        |> Array.filter (fun symbolUse ->
+            not symbolUse.IsFromDefinition &&
+            rangeContainsRange expressionRange symbolUse.Range &&
+            useMatchesConstructor symbolUse memberValue)
+        |> Array.sortBy (fun symbolUse ->
+            symbolUse.Range.StartLine,
+            symbolUse.Range.StartColumn,
+            symbolUse.Range.EndLine - symbolUse.Range.StartLine,
+            symbolUse.Range.EndColumn - symbolUse.Range.StartColumn)
+        |> Array.tryHead
+
+    let tryActivePatternUse (uses: FSharpSymbolUse array) (expressionRange: range) =
+        uses
+        |> Array.filter (fun symbolUse ->
+            not symbolUse.IsFromDefinition && symbolUse.IsFromPattern &&
+            symbolUse.Symbol :? FSharpActivePatternCase &&
+            rangeContainsRange expressionRange symbolUse.Range)
+        |> Array.sortBy (fun symbolUse ->
+            symbolUse.Range.StartLine,
+            symbolUse.Range.StartColumn,
+            symbolUse.Range.EndLine - symbolUse.Range.StartLine,
+            symbolUse.Range.EndColumn - symbolUse.Range.StartColumn)
+        |> Array.tryHead
+
+    let targetMemberSupported (value: FSharpMemberOrFunctionOrValue) =
+        try
+            value.IsFunction || value.IsMethod || value.IsConstructor ||
+            value.IsProperty || value.IsActivePattern || memberIsOperator value
+        with _ -> false
+
+    let moduleInitializerSymbol projectIndex (projects: SemanticProjectInput array)
+        (expressionRange: range) =
+        let assemblyName = Path.GetFileNameWithoutExtension(projects[projectIndex].OutputFile)
+        let declaration = location "declaration" expressionRange
+        SemanticSymbol(
+            "<module initialization>",
+            assemblyName + ".<module initialization>",
+            "moduleInitializer",
+            nullString,
+            nullString,
+            assemblyName,
+            nullString,
+            declaration,
+            [| declaration |],
+            assemblyName + "\u0000moduleInitializer\u0000" +
+            expressionRangeKey expressionRange
+        )
+
+    let initializerSymbol projectIndex (projects: SemanticProjectInput array)
+        (owner: FSharpEntity option) (expressionRange: range) =
+        match owner with
+        | Some entity when not entity.IsFSharpModule && not entity.IsNamespace ->
+            let constructor =
+                try
+                    entity.MembersFunctionsAndValues
+                    |> Seq.tryFind (fun value -> value.IsConstructor)
+                with _ -> None
+            match constructor with
+            | Some value -> mappedSymbol value.DeclarationLocation (value :> FSharpSymbol)
+            | None -> moduleInitializerSymbol projectIndex projects expressionRange
+        | _ -> moduleInitializerSymbol projectIndex projects expressionRange
+
+    let objectOverrideSymbol assemblyName (value: FSharpObjectExprOverride) =
+        let declaration = location "implementation" value.Body.Range
+        let fullName = slotDisplay value.Signature
+        SemanticSymbol(
+            value.Signature.Name,
+            fullName,
+            "objectExpressionOverride",
+            nullString,
+            nullString,
+            assemblyName,
+            nullString,
+            declaration,
+            [| declaration |],
+            assemblyName + "\u0000objectExpressionOverride\u0000" + fullName +
+            "\u0000" + expressionRangeKey value.Body.Range
+        )
+
+    let collectPipeOperandRanges (body: FSharpExpr) =
+        let ranges = HashSet<string>(StringComparer.Ordinal)
+        let rec visit (expression: FSharpExpr) =
+            match expression with
+            | FSharpExprPatterns.Quote _ -> ()
+            | FSharpExprPatterns.Call(_, memberValue, _, _, arguments) ->
+                let argumentArray = arguments |> Seq.toArray
+                match pipeFunctionArgument memberValue argumentArray with
+                | Some functionArgument ->
+                    ranges.Add(expressionRangeKey functionArgument.Range) |> ignore
+                | None -> ()
+                expression.ImmediateSubExpressions |> Seq.iter visit
+            | FSharpExprPatterns.CallWithWitnesses(
+                _, memberValue, _, _, _, arguments) ->
+                let argumentArray = arguments |> Seq.toArray
+                match pipeFunctionArgument memberValue argumentArray with
+                | Some functionArgument ->
+                    ranges.Add(expressionRangeKey functionArgument.Range) |> ignore
+                | None -> ()
+                expression.ImmediateSubExpressions |> Seq.iter visit
+            | _ -> expression.ImmediateSubExpressions |> Seq.iter visit
+        visit body
+        ranges
+
+    let classifyMemberCall
+        (memberValue: FSharpMemberOrFunctionOrValue)
+        (expressionRange: range)
+        (symbolUse: FSharpSymbolUse)
+        (ancestors: FSharpExpr list)
+        (pipelineOperands: HashSet<string>) =
+        if symbolUse.IsFromComputationExpression then "computationExpression"
+        elif not (targetMemberSupported memberValue) then "computationExpression"
+        elif memberValue.IsActivePattern || symbolUse.Symbol :? FSharpActivePatternCase then
+            "activePattern"
+        elif memberIsOperator memberValue then "operator"
+        else
+            let insideEtaLambda =
+                ancestors
+                |> List.tryHead
+                |> Option.exists (fun ancestor ->
+                    match ancestor with
+                    | FSharpExprPatterns.Lambda _ -> true
+                    | _ -> false)
+            let insidePipeline =
+                ancestors
+                |> List.exists (fun ancestor ->
+                    pipelineOperands.Contains(expressionRangeKey ancestor.Range))
+            if insidePipeline then "pipelineApplication"
+            elif insideEtaLambda && sameRange expressionRange symbolUse.Range then
+                "firstClassReference"
+            elif insideEtaLambda then "partialApplication"
+            else "directApplication"
+
+    let resolveCallers
+        (projects: SemanticProjectInput array)
+        rootProjectIndex
+        lookupProjectIndex
+        fingerprint
+        cacheRuntime
+        targetFileName
+        line
+        column
+        (traversalBoundary: Action<string>) =
+        async {
+            let! cancellationToken = Async.CancellationToken
+            if projects.Length = 0 || rootProjectIndex < 0 ||
+               rootProjectIndex >= projects.Length || lookupProjectIndex < 0 ||
+               lookupProjectIndex >= projects.Length || column <= 0 ||
+               projects |> Array.exists (fun project ->
+                   project.SourceFiles.Length = 0 ||
+                   project.SourceFiles.Length <> project.SourceTexts.Length) ||
+               projects |> Array.mapi (fun index project ->
+                   project.ReferencedProjectIndices |> Array.exists (fun child ->
+                       child < 0 || child >= index)) |> Array.exists id then
+                return callGraphResult nullSymbol Array.empty
+                    "fsharp_semantic_snapshot_invalid" Array.empty Array.empty false false false
+            else
+                let lookupProject = projects[lookupProjectIndex]
+                let! closure =
+                    checkAssemblyContents projects fingerprint cacheRuntime
+                        "PhoenixCodeNav.callers" cancellationToken
+                if closure.HasCriticalErrors then
+                    return callGraphResult nullSymbol Array.empty
+                        "fsharp_semantic_check_failed" closure.Diagnostics Array.empty false false false
+                else
+                    let targetIndex =
+                        lookupProject.SourceFiles
+                        |> Array.tryFindIndex (fun fileName ->
+                            pathComparer.Equals(fileName, targetFileName))
+                    match targetIndex with
+                    | None ->
+                        return callGraphResult nullSymbol Array.empty
+                            "fsharp_semantic_target_not_in_project" closure.Diagnostics
+                            Array.empty false false false
+                    | Some targetIndex ->
+                        let! _, answer =
+                            closure.Checker.ParseAndCheckFileInProject(
+                                targetFileName,
+                                0,
+                                SourceText.ofString lookupProject.SourceTexts[targetIndex],
+                                closure.OptionsByIndex[lookupProjectIndex],
+                                userOpName = "PhoenixCodeNav.callers"
+                            )
+                        match answer with
+                        | FSharpCheckFileAnswer.Aborted ->
+                            return callGraphResult nullSymbol Array.empty
+                                "fsharp_semantic_check_aborted" closure.Diagnostics
+                                Array.empty false false false
+                        | FSharpCheckFileAnswer.Succeeded checkedFile when
+                            not checkedFile.HasFullTypeCheckInfo ->
+                            return callGraphResult nullSymbol Array.empty
+                                "fsharp_semantic_check_incomplete"
+                                (mergeDiagnostics closure.Diagnostics checkedFile.Diagnostics)
+                                Array.empty false false false
+                        | FSharpCheckFileAnswer.Succeeded checkedFile ->
+                            let diagnostics =
+                                mergeDiagnostics closure.Diagnostics checkedFile.Diagnostics
+                            let sourceText = SourceText.ofString lookupProject.SourceTexts[targetIndex]
+                            if line < 1 || line > sourceText.GetLineCount() then
+                                return callGraphResult nullSymbol Array.empty
+                                    "fsharp_semantic_position_invalid" diagnostics
+                                    Array.empty false false false
+                            else
+                                let lineText = sourceText.GetLineString(line - 1)
+                                let cursor = column - 1
+                                let symbolUse =
+                                    if cursor < 0 || cursor > lineText.Length then None
+                                    else
+                                        let identifierUse =
+                                            match QuickParse.GetCompleteIdentifierIsland true lineText cursor with
+                                            | Some(identifier, endColumn, _) ->
+                                                checkedFile.GetSymbolUseAtLocation(
+                                                    line, endColumn, lineText,
+                                                    identifier.Split('.') |> Array.toList)
+                                            | None -> None
+                                        match identifierUse with
+                                        | Some _ -> identifierUse
+                                        | None ->
+                                            checkedFile.GetAllUsesOfAllSymbolsInFile()
+                                            |> Seq.filter (fun useValue ->
+                                                containsPosition line column useValue.Range)
+                                            |> Seq.sortBy rangeScore
+                                            |> Seq.tryHead
+                                match symbolUse with
+                                | None ->
+                                    return callGraphResult nullSymbol Array.empty
+                                        "fsharp_symbol_not_resolved" diagnostics
+                                        Array.empty false false false
+                                | Some symbolUse ->
+                                    let requestedBeforeAccessor =
+                                        match symbolUse.Symbol with
+                                        | :? FSharpMemberOrFunctionOrValue as memberValue when
+                                            not memberValue.IsOverrideOrExplicitInterfaceImplementation ->
+                                            match overrideMemberAtPosition
+                                                closure.Projects[lookupProjectIndex].AssemblySignature
+                                                targetFileName line column with
+                                            | Some overrideMember -> overrideMember :> FSharpSymbol
+                                            | None -> symbolUse.Symbol
+                                        | _ -> symbolUse.Symbol
+                                    let requested =
+                                        match requestedBeforeAccessor with
+                                        | :? FSharpEntity as entity when
+                                            not entity.IsNamespace && not entity.IsFSharpModule ->
+                                            match constructorAtPosition
+                                                closure.Projects[lookupProjectIndex].AssemblyContents
+                                                targetFileName line column entity with
+                                            | Some constructorValue ->
+                                                constructorValue :> FSharpSymbol
+                                            | None -> requestedBeforeAccessor
+                                        | :? FSharpMemberOrFunctionOrValue as memberValue when
+                                            memberValue.IsProperty ->
+                                            match propertyAccessorAtPosition
+                                                closure.Projects[lookupProjectIndex].AssemblyContents
+                                                targetFileName line column memberValue with
+                                            | Some accessor -> accessor :> FSharpSymbol
+                                            | None -> requestedBeforeAccessor
+                                        | _ -> requestedBeforeAccessor
+                                    let requestedMember =
+                                        match requested with
+                                        | :? FSharpMemberOrFunctionOrValue as value when
+                                            targetMemberSupported value -> Some value
+                                        | _ -> None
+                                    let requestedUnionCase =
+                                        match requested with
+                                        | :? FSharpUnionCase as value -> Some value
+                                        | _ -> None
+                                    let requestedActivePatternCase =
+                                        match requested with
+                                        | :? FSharpActivePatternCase as value -> Some value
+                                        | _ -> None
+                                    if requestedMember.IsNone && requestedUnionCase.IsNone &&
+                                       requestedActivePatternCase.IsNone then
+                                        return callGraphResult
+                                            (mappedSymbol symbolUse.Range requested)
+                                            Array.empty "unsupported_symbol_kind" diagnostics
+                                            Array.empty false false false
+                                    else
+                                        let mappedTarget = mappedSymbol symbolUse.Range requested
+                                        let dispatchSlots =
+                                            match requestedMember with
+                                            | Some value when
+                                                value.IsOverrideOrExplicitInterfaceImplementation ->
+                                                value.ImplementedAbstractSignatures
+                                                |> Seq.map slotDisplay
+                                                |> Seq.distinct
+                                                |> Seq.toArray
+                                            | _ -> Array.empty
+                                        let targetMembers =
+                                            requestedMember
+                                            |> Option.map memberVariants
+                                            |> Option.defaultValue Array.empty
+                                        let requestedIsOverride =
+                                            requestedMember
+                                            |> Option.exists (fun value ->
+                                                value.IsOverrideOrExplicitInterfaceImplementation)
+                                        let calledMemberMatches (calledMember: FSharpMemberOrFunctionOrValue) =
+                                            targetMembers
+                                            |> Array.exists (fun target ->
+                                                try
+                                                    (sameSymbol (target :> FSharpSymbol)
+                                                         (calledMember :> FSharpSymbol) ||
+                                                     (target.IsConstructor &&
+                                                      calledMember.IsConstructor &&
+                                                      sameRange target.DeclarationLocation
+                                                          calledMember.DeclarationLocation)) &&
+                                                    (not requestedIsOverride ||
+                                                     sameRange target.DeclarationLocation
+                                                         calledMember.DeclarationLocation)
+                                                with _ -> false)
+                                        let calls = ResizeArray<SemanticCall>()
+                                        let usedSites = HashSet<string>(StringComparer.Ordinal)
+                                        let mutable quotationsExcluded = false
+                                        let mutable traitCallsUnresolved = false
+                                        let mutable deadlineExhausted = false
+
+                                        try
+                                            for projectIndex in 0 .. closure.Projects.Length - 1 do
+                                                cancellationToken.ThrowIfCancellationRequested()
+                                                if not (isNull traversalBoundary) then
+                                                    traversalBoundary.Invoke(
+                                                        projects[projectIndex].ProjectFileName)
+                                                cancellationToken.ThrowIfCancellationRequested()
+                                                let targetUses =
+                                                    match requestedMember with
+                                                    | Some value when value.IsConstructor ->
+                                                        closure.Projects[projectIndex]
+                                                            .GetAllUsesOfAllSymbols(
+                                                                cancellationToken = cancellationToken)
+                                                        |> Array.filter (fun useValue ->
+                                                            useMatchesConstructor useValue value)
+                                                    | Some value when
+                                                        value.CompiledName.StartsWith(
+                                                            "get_", StringComparison.Ordinal) ||
+                                                        value.CompiledName.StartsWith(
+                                                            "set_", StringComparison.Ordinal) ->
+                                                        closure.Projects[projectIndex]
+                                                            .GetAllUsesOfAllSymbols(
+                                                                cancellationToken = cancellationToken)
+                                                        |> Array.filter (fun useValue ->
+                                                            useMatchesMember useValue value)
+                                                    | _ ->
+                                                        closure.Projects[projectIndex].GetUsesOfSymbol(
+                                                            requested,
+                                                            cancellationToken = cancellationToken)
+                                                    |> Array.filter (fun useValue ->
+                                                        not useValue.IsFromDefinition &&
+                                                        not useValue.IsFromType &&
+                                                        not useValue.IsFromAttribute &&
+                                                        not useValue.IsFromOpenStatement)
+                                                let tryTakeUse (expressionRange: range) predicate =
+                                                    targetUses
+                                                    |> Array.filter (fun useValue ->
+                                                        predicate useValue &&
+                                                        rangeContainsRange expressionRange useValue.Range &&
+                                                        not (usedSites.Contains(
+                                                            expressionRangeKey useValue.Range)))
+                                                    |> Array.sortBy (fun useValue ->
+                                                        useValue.Range.StartLine,
+                                                        useValue.Range.StartColumn,
+                                                        useValue.Range.EndLine,
+                                                        useValue.Range.EndColumn)
+                                                    |> Array.tryHead
+
+                                                let addCallAt caller callKind (callRange: range) =
+                                                    let key = expressionRangeKey callRange
+                                                    if usedSites.Add(key) then
+                                                        calls.Add(SemanticCall(
+                                                            caller,
+                                                            mappedTarget,
+                                                            location "call" callRange,
+                                                            callKind,
+                                                            projectIndex))
+
+                                                let addCall caller callKind (useValue: FSharpSymbolUse) =
+                                                    addCallAt caller callKind useValue.Range
+
+                                                let assemblyName =
+                                                    Path.GetFileNameWithoutExtension(
+                                                        projects[projectIndex].OutputFile)
+
+                                                let rec visitExpression caller ancestors
+                                                    (pipelineOperands: HashSet<string>)
+                                                    (expression: FSharpExpr) =
+                                                    cancellationToken.ThrowIfCancellationRequested()
+                                                    let visitChildren () =
+                                                        expression.ImmediateSubExpressions
+                                                        |> Seq.iter (visitExpression caller
+                                                            (expression :: ancestors) pipelineOperands)
+                                                    match expression with
+                                                    | FSharpExprPatterns.Quote _ ->
+                                                        quotationsExcluded <- true
+                                                    | FSharpExprPatterns.TraitCall _ ->
+                                                        traitCallsUnresolved <- true
+                                                        visitChildren ()
+                                                    | FSharpExprPatterns.Let(
+                                                        (boundValue, boundExpression, _), continuation) ->
+                                                        let boundCaller =
+                                                            if targetMemberSupported boundValue then
+                                                                mappedSymbol boundValue.DeclarationLocation
+                                                                    (boundValue :> FSharpSymbol)
+                                                            else caller
+                                                        visitExpression boundCaller
+                                                            (expression :: ancestors) pipelineOperands
+                                                            boundExpression
+                                                        visitExpression caller (expression :: ancestors)
+                                                            pipelineOperands continuation
+                                                    | FSharpExprPatterns.LetRec(bindings, continuation) ->
+                                                        for boundValue, boundExpression, _ in bindings do
+                                                            let boundCaller =
+                                                                if targetMemberSupported boundValue then
+                                                                    mappedSymbol boundValue.DeclarationLocation
+                                                                        (boundValue :> FSharpSymbol)
+                                                                else caller
+                                                            visitExpression boundCaller
+                                                                (expression :: ancestors) pipelineOperands
+                                                                boundExpression
+                                                        visitExpression caller (expression :: ancestors)
+                                                            pipelineOperands continuation
+                                                    | FSharpExprPatterns.ObjectExpr(
+                                                        _, baseCall, overrides, interfaceImplementations) ->
+                                                        visitExpression caller (expression :: ancestors)
+                                                            pipelineOperands baseCall
+                                                        for overrideValue in overrides do
+                                                            visitExpression
+                                                                (objectOverrideSymbol assemblyName overrideValue)
+                                                                (expression :: ancestors) pipelineOperands
+                                                                overrideValue.Body
+                                                        for _, interfaceOverrides in interfaceImplementations do
+                                                            for overrideValue in interfaceOverrides do
+                                                                visitExpression
+                                                                    (objectOverrideSymbol assemblyName overrideValue)
+                                                                    (expression :: ancestors) pipelineOperands
+                                                                    overrideValue.Body
+                                                    | FSharpExprPatterns.Call(
+                                                        _, calledMember, _, _, _) ->
+                                                        let matches = calledMemberMatches calledMember
+                                                        let activeMatch =
+                                                            requestedActivePatternCase.IsSome &&
+                                                            calledMember.IsActivePattern
+                                                        if matches || activeMatch then
+                                                            match tryTakeUse expression.Range (fun useValue ->
+                                                                if activeMatch then
+                                                                    useValue.Symbol :? FSharpActivePatternCase
+                                                                else true) with
+                                                            | Some useValue ->
+                                                                addCall caller
+                                                                    (classifyMemberCall calledMember
+                                                                        expression.Range useValue ancestors
+                                                                        pipelineOperands)
+                                                                    useValue
+                                                            | None -> ()
+                                                        visitChildren ()
+                                                    | FSharpExprPatterns.CallWithWitnesses(
+                                                        _, calledMember, _, _, _, _) ->
+                                                        let matches = calledMemberMatches calledMember
+                                                        if matches then
+                                                            match tryTakeUse expression.Range (fun _ -> true) with
+                                                            | Some useValue ->
+                                                                addCall caller
+                                                                    (classifyMemberCall calledMember
+                                                                        expression.Range useValue ancestors
+                                                                        pipelineOperands)
+                                                                    useValue
+                                                            | None -> ()
+                                                        visitChildren ()
+                                                    | FSharpExprPatterns.NewObject(calledMember, _, _) ->
+                                                        let matches = calledMemberMatches calledMember
+                                                        if matches then
+                                                            match tryTakeUse expression.Range (fun _ -> true) with
+                                                            | Some useValue ->
+                                                                addCall caller "construction" useValue
+                                                            | None ->
+                                                                addCallAt caller "construction" expression.Range
+                                                        visitChildren ()
+                                                    | FSharpExprPatterns.NewUnionCase(_, unionCase, _) ->
+                                                        let matches = requestedUnionCase |> Option.exists (fun target ->
+                                                            sameSymbol (target :> FSharpSymbol)
+                                                                (unionCase :> FSharpSymbol))
+                                                        if matches then
+                                                            match tryTakeUse expression.Range (fun useValue ->
+                                                                not useValue.IsFromPattern) with
+                                                            | Some useValue ->
+                                                                addCall caller "unionCaseConstruction" useValue
+                                                            | None -> ()
+                                                        visitChildren ()
+                                                    | FSharpExprPatterns.Application(
+                                                        functionValue, _, _) ->
+                                                        match functionValue, requestedMember with
+                                                        | FSharpExprPatterns.Value calledValue,
+                                                          Some _ when calledMemberMatches calledValue ->
+                                                            match tryTakeUse functionValue.Range
+                                                                (fun _ -> true) with
+                                                            | Some useValue ->
+                                                                addCall caller "indirectApplication"
+                                                                    useValue
+                                                            | None -> ()
+                                                        | _ -> ()
+                                                        visitChildren ()
+                                                    | FSharpExprPatterns.Value calledValue when
+                                                        requestedMember.IsSome &&
+                                                        calledMemberMatches calledValue ->
+                                                        match tryTakeUse expression.Range
+                                                            (fun _ -> true) with
+                                                        | Some useValue ->
+                                                            let insidePipeline =
+                                                                pipelineOperands.Contains(
+                                                                    expressionRangeKey expression.Range) ||
+                                                                (ancestors |> List.exists (fun ancestor ->
+                                                                    pipelineOperands.Contains(
+                                                                        expressionRangeKey ancestor.Range)))
+                                                            let callKind =
+                                                                if insidePipeline then
+                                                                    "pipelineApplication"
+                                                                else "firstClassReference"
+                                                            addCall caller callKind useValue
+                                                        | None -> ()
+                                                        visitChildren ()
+                                                    | _ -> visitChildren ()
+
+                                                let rec visitDeclaration ownerEntity declaration =
+                                                    cancellationToken.ThrowIfCancellationRequested()
+                                                    match declaration with
+                                                    | FSharpImplementationFileDeclaration.Entity(
+                                                        entity, declarations) ->
+                                                        declarations
+                                                        |> Seq.iter (visitDeclaration (Some entity))
+                                                    | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue(
+                                                        memberValue, _, body) ->
+                                                        let caller =
+                                                            mappedSymbol memberValue.DeclarationLocation
+                                                                (memberValue :> FSharpSymbol)
+                                                        let pipelineOperands = collectPipeOperandRanges body
+                                                        visitExpression caller [] pipelineOperands body
+                                                    | FSharpImplementationFileDeclaration.InitAction body ->
+                                                        let caller =
+                                                            initializerSymbol projectIndex projects ownerEntity
+                                                                body.Range
+                                                        let pipelineOperands = collectPipeOperandRanges body
+                                                        visitExpression caller [] pipelineOperands body
+
+                                                for implementationFile in
+                                                    closure.Projects[projectIndex].AssemblyContents.ImplementationFiles do
+                                                    implementationFile.Declarations
+                                                    |> Seq.iter (visitDeclaration None)
+                                        with :? OperationCanceledException ->
+                                            deadlineExhausted <- true
+
+                                        let ordered =
+                                            calls
+                                            |> Seq.sortBy (fun call ->
+                                                pathIdentityKey call.Site.FileName,
+                                                call.Site.StartLine,
+                                                call.Site.StartColumn,
+                                                call.CallKind,
+                                                call.Caller.FullName)
+                                            |> Seq.toArray
+                                        return callGraphResult mappedTarget ordered nullString diagnostics
+                                            dispatchSlots quotationsExcluded traitCallsUnresolved
+                                            deadlineExhausted
+        }
+
+    let resolveCallees
+        (projects: SemanticProjectInput array)
+        rootProjectIndex
+        lookupProjectIndex
+        fingerprint
+        cacheRuntime
+        targetFileName
+        line
+        column
+        (traversalBoundary: Action<string>) =
+        async {
+            let! cancellationToken = Async.CancellationToken
+            if projects.Length = 0 || rootProjectIndex < 0 ||
+               rootProjectIndex >= projects.Length || lookupProjectIndex < 0 ||
+               lookupProjectIndex >= projects.Length || column <= 0 ||
+               projects |> Array.exists (fun project ->
+                   project.SourceFiles.Length = 0 ||
+                   project.SourceFiles.Length <> project.SourceTexts.Length) ||
+               projects |> Array.mapi (fun index project ->
+                   project.ReferencedProjectIndices |> Array.exists (fun child ->
+                       child < 0 || child >= index)) |> Array.exists id then
+                return callGraphResult nullSymbol Array.empty
+                    "fsharp_semantic_snapshot_invalid" Array.empty Array.empty false false false
+            else
+                let! closure =
+                    checkAssemblyContents projects fingerprint cacheRuntime
+                        "PhoenixCodeNav.callees" cancellationToken
+                if closure.HasCriticalErrors then
+                    return callGraphResult nullSymbol Array.empty
+                        "fsharp_semantic_check_failed" closure.Diagnostics Array.empty false false false
+                else
+                    let checkedProject = closure.Projects[lookupProjectIndex]
+                    let candidates = ResizeArray<SemanticSymbol * FSharpExpr * int>()
+                    let assemblyName =
+                        Path.GetFileNameWithoutExtension(
+                            projects[lookupProjectIndex].OutputFile)
+                    let rec expressionContainsPosition (expression: FSharpExpr) =
+                        containsPosition line column expression.Range ||
+                        (match expression with
+                         | FSharpExprPatterns.Quote _ -> false
+                         | _ ->
+                             expression.ImmediateSubExpressions
+                             |> Seq.exists expressionContainsPosition)
+                    let addCandidate depth symbol (body: FSharpExpr) declarationRange =
+                        if pathComparer.Equals(body.Range.FileName, targetFileName) &&
+                           (expressionContainsPosition body ||
+                            containsPosition line column declarationRange) then
+                            candidates.Add(symbol, body, depth)
+                    let rec findNestedBodies depth (expression: FSharpExpr) =
+                        cancellationToken.ThrowIfCancellationRequested()
+                        match expression with
+                        | FSharpExprPatterns.Quote _ -> ()
+                        | FSharpExprPatterns.Let(
+                            (boundValue, boundExpression, _), continuation) ->
+                            if targetMemberSupported boundValue then
+                                addCandidate (depth + 1)
+                                    (mappedSymbol boundValue.DeclarationLocation
+                                        (boundValue :> FSharpSymbol))
+                                    boundExpression boundValue.DeclarationLocation
+                            findNestedBodies (depth + 1) boundExpression
+                            findNestedBodies depth continuation
+                        | FSharpExprPatterns.LetRec(bindings, continuation) ->
+                            for boundValue, boundExpression, _ in bindings do
+                                if targetMemberSupported boundValue then
+                                    addCandidate (depth + 1)
+                                        (mappedSymbol boundValue.DeclarationLocation
+                                            (boundValue :> FSharpSymbol))
+                                        boundExpression boundValue.DeclarationLocation
+                                findNestedBodies (depth + 1) boundExpression
+                            findNestedBodies depth continuation
+                        | FSharpExprPatterns.ObjectExpr(
+                            _, baseCall, overrides, interfaceImplementations) ->
+                            findNestedBodies depth baseCall
+                            for overrideValue in overrides do
+                                addCandidate (depth + 1)
+                                    (objectOverrideSymbol assemblyName overrideValue)
+                                    overrideValue.Body overrideValue.Body.Range
+                                findNestedBodies (depth + 1) overrideValue.Body
+                            for _, interfaceOverrides in interfaceImplementations do
+                                for overrideValue in interfaceOverrides do
+                                    addCandidate (depth + 1)
+                                        (objectOverrideSymbol assemblyName overrideValue)
+                                        overrideValue.Body overrideValue.Body.Range
+                                    findNestedBodies (depth + 1) overrideValue.Body
+                        | _ ->
+                            expression.ImmediateSubExpressions
+                            |> Seq.iter (findNestedBodies depth)
+                    let rec findDeclaration ownerEntity declaration =
+                        cancellationToken.ThrowIfCancellationRequested()
+                        match declaration with
+                        | FSharpImplementationFileDeclaration.Entity(entity, declarations) ->
+                            declarations |> Seq.iter (findDeclaration (Some entity))
+                        | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue(
+                            memberValue, _, body) ->
+                            addCandidate 0
+                                (mappedSymbol memberValue.DeclarationLocation
+                                    (memberValue :> FSharpSymbol))
+                                body memberValue.DeclarationLocation
+                            findNestedBodies 0 body
+                        | FSharpImplementationFileDeclaration.InitAction body ->
+                            addCandidate 0
+                                (initializerSymbol lookupProjectIndex projects ownerEntity body.Range)
+                                body body.Range
+                            findNestedBodies 0 body
+                    for implementationFile in checkedProject.AssemblyContents.ImplementationFiles do
+                        implementationFile.Declarations |> Seq.iter (findDeclaration None)
+                    let selected =
+                        candidates
+                        |> Seq.sortBy (fun (_, body, depth) ->
+                            -depth,
+                            body.Range.EndLine - body.Range.StartLine,
+                            body.Range.EndColumn - body.Range.StartColumn,
+                            body.Range.StartLine,
+                            body.Range.StartColumn)
+                        |> Seq.tryHead
+                    match selected with
+                    | None ->
+                        return callGraphResult nullSymbol Array.empty
+                            "fsharp_callee_body_not_found" closure.Diagnostics
+                            Array.empty false false false
+                    | Some(caller, body, _) ->
+                        let calls = ResizeArray<SemanticCall>()
+                        let usedSites = HashSet<string>(StringComparer.Ordinal)
+                        let mutable quotationsExcluded = false
+                        let mutable traitCallsUnresolved = false
+                        let mutable deadlineExhausted = false
+                        try
+                            if not (isNull traversalBoundary) then
+                                traversalBoundary.Invoke(
+                                    projects[lookupProjectIndex].ProjectFileName)
+                            cancellationToken.ThrowIfCancellationRequested()
+                            let uses =
+                                checkedProject.GetAllUsesOfAllSymbols(
+                                    cancellationToken = cancellationToken)
+                                |> Array.filter (fun useValue ->
+                                    not useValue.IsFromDefinition &&
+                                    pathComparer.Equals(useValue.Range.FileName, targetFileName))
+                            let pipelineOperands = collectPipeOperandRanges body
+                            let addCallAt callee callKind (callRange: range) =
+                                let key = expressionRangeKey callRange + "\u0000" + callKind
+                                if usedSites.Add(key) then
+                                    calls.Add(SemanticCall(
+                                        caller,
+                                        mappedSymbol callRange callee,
+                                        location "call" callRange,
+                                        callKind,
+                                        lookupProjectIndex))
+
+                            let addCall callee callKind (symbolUse: FSharpSymbolUse) =
+                                addCallAt callee callKind symbolUse.Range
+                            let rec visit ancestors (expression: FSharpExpr) =
+                                cancellationToken.ThrowIfCancellationRequested()
+                                let visitChildren () =
+                                    expression.ImmediateSubExpressions
+                                    |> Seq.iter (visit (expression :: ancestors))
+                                match expression with
+                                | FSharpExprPatterns.Quote _ -> quotationsExcluded <- true
+                                | FSharpExprPatterns.TraitCall _ ->
+                                    traitCallsUnresolved <- true
+                                    visitChildren ()
+                                | FSharpExprPatterns.Let(
+                                    (boundValue, boundExpression, _), continuation) ->
+                                    if not (targetMemberSupported boundValue) then
+                                        visit (expression :: ancestors) boundExpression
+                                    visit (expression :: ancestors) continuation
+                                | FSharpExprPatterns.LetRec(bindings, continuation) ->
+                                    for boundValue, boundExpression, _ in bindings do
+                                        if not (targetMemberSupported boundValue) then
+                                            visit (expression :: ancestors) boundExpression
+                                    visit (expression :: ancestors) continuation
+                                | FSharpExprPatterns.ObjectExpr(
+                                    _, baseCall, _, _) ->
+                                    visit (expression :: ancestors) baseCall
+                                | FSharpExprPatterns.Call(_, memberValue, _, _, _) ->
+                                    if not (isPipeMember memberValue) then
+                                        let matchedUse =
+                                            match tryUseForMember uses memberValue expression.Range with
+                                            | Some useValue -> Some useValue
+                                            | None when memberValue.IsActivePattern ->
+                                                tryActivePatternUse uses expression.Range
+                                            | None -> None
+                                        match matchedUse with
+                                        | Some useValue ->
+                                            let callKind =
+                                                classifyMemberCall memberValue expression.Range
+                                                    useValue ancestors pipelineOperands
+                                            if callKind <> "firstClassReference" then
+                                                addCall useValue.Symbol callKind useValue
+                                        | None -> ()
+                                    visitChildren ()
+                                | FSharpExprPatterns.CallWithWitnesses(
+                                    _, memberValue, _, _, _, _) ->
+                                    if not (isPipeMember memberValue) then
+                                        match tryUseForMember uses memberValue expression.Range with
+                                        | Some useValue ->
+                                            let callKind =
+                                                classifyMemberCall memberValue expression.Range
+                                                    useValue ancestors pipelineOperands
+                                            if callKind <> "firstClassReference" then
+                                                addCall useValue.Symbol callKind useValue
+                                        | None -> ()
+                                    visitChildren ()
+                                | FSharpExprPatterns.NewObject(memberValue, _, _) ->
+                                    match tryUseForConstructor uses memberValue expression.Range with
+                                    | Some useValue ->
+                                        addCall (memberValue :> FSharpSymbol) "construction" useValue
+                                    | None ->
+                                        addCallAt (memberValue :> FSharpSymbol) "construction"
+                                            expression.Range
+                                    visitChildren ()
+                                | FSharpExprPatterns.NewUnionCase(_, unionCase, _) ->
+                                    let matchedUse =
+                                        uses
+                                        |> Array.filter (fun useValue ->
+                                            not useValue.IsFromPattern &&
+                                            rangeContainsRange expression.Range useValue.Range &&
+                                            sameSymbol useValue.Symbol (unionCase :> FSharpSymbol))
+                                        |> Array.tryHead
+                                    match matchedUse with
+                                    | Some useValue ->
+                                        addCall useValue.Symbol "unionCaseConstruction" useValue
+                                    | None -> ()
+                                    visitChildren ()
+                                | FSharpExprPatterns.Application(functionValue, _, _) ->
+                                    match functionValue with
+                                    | FSharpExprPatterns.Value value ->
+                                        let matchedUse =
+                                            uses
+                                            |> Array.filter (fun useValue ->
+                                                rangeContainsRange functionValue.Range useValue.Range &&
+                                                sameSymbol useValue.Symbol (value :> FSharpSymbol))
+                                            |> Array.tryHead
+                                        match matchedUse with
+                                        | Some useValue ->
+                                            addCall useValue.Symbol "indirectApplication" useValue
+                                        | None -> ()
+                                    | _ -> ()
+                                    visitChildren ()
+                                | FSharpExprPatterns.Value value when
+                                    pipelineOperands.Contains(
+                                        expressionRangeKey expression.Range) ->
+                                    let matchedUse =
+                                        uses
+                                        |> Array.filter (fun useValue ->
+                                            not useValue.IsFromDefinition &&
+                                            rangeContainsRange expression.Range useValue.Range &&
+                                            sameSymbol useValue.Symbol (value :> FSharpSymbol))
+                                        |> Array.tryHead
+                                    match matchedUse with
+                                    | Some useValue ->
+                                        addCall useValue.Symbol "pipelineApplication" useValue
+                                    | None -> ()
+                                    visitChildren ()
+                                | _ -> visitChildren ()
+                            visit [] body
+                        with :? OperationCanceledException ->
+                            deadlineExhausted <- true
+                        let ordered =
+                            calls
+                            |> Seq.sortBy (fun call ->
+                                pathIdentityKey call.Site.FileName,
+                                call.Site.StartLine,
+                                call.Site.StartColumn,
+                                call.CallKind,
+                                call.Callee.FullName)
+                            |> Seq.toArray
+                        return callGraphResult caller ordered nullString closure.Diagnostics
+                            Array.empty quotationsExcluded traitCallsUnresolved deadlineExhausted
+        }
+
     let resolve
         (projects: SemanticProjectInput array)
         rootProjectIndex
@@ -1162,7 +2288,8 @@ module private Semantic =
                                         safeString (fun () -> symbol.Assembly.SimpleName),
                                         accessibility symbol,
                                         location "use" symbolUse.Range,
-                                        declarationLocations symbol
+                                        declarationLocations symbol,
+                                        symbolIdentity symbol
                                     )
                                 let references =
                                     if includeReferences then
@@ -1265,4 +2392,36 @@ type SemanticResolver private () =
     ) : Task<SemanticImplementationsCheckResult> =
         Semantic.resolveImplementations projects rootProjectIndex lookupProjectIndex
             fingerprint cacheRuntime targetFileName line column implementationTraversalBoundary
+        |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)
+
+    static member ResolveCallersAsync(
+        projects: SemanticProjectInput array,
+        rootProjectIndex: int,
+        lookupProjectIndex: int,
+        fingerprint: string,
+        cacheRuntime: bool,
+        targetFileName: string,
+        line: int,
+        column: int,
+        traversalBoundary: Action<string>,
+        cancellationToken: CancellationToken
+    ) : Task<SemanticCallGraphCheckResult> =
+        Semantic.resolveCallers projects rootProjectIndex lookupProjectIndex
+            fingerprint cacheRuntime targetFileName line column traversalBoundary
+        |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)
+
+    static member ResolveCalleesAsync(
+        projects: SemanticProjectInput array,
+        rootProjectIndex: int,
+        lookupProjectIndex: int,
+        fingerprint: string,
+        cacheRuntime: bool,
+        targetFileName: string,
+        line: int,
+        column: int,
+        traversalBoundary: Action<string>,
+        cancellationToken: CancellationToken
+    ) : Task<SemanticCallGraphCheckResult> =
+        Semantic.resolveCallees projects rootProjectIndex lookupProjectIndex
+            fingerprint cacheRuntime targetFileName line column traversalBoundary
         |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)

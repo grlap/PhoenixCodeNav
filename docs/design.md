@@ -80,9 +80,15 @@ for code identifiers.
    `implementations`, `callers`, `callees`, and `type_hierarchy`. F# uses a bounded FCS
    type check for position-based `symbol_at` and `definition` through the selected root's
    F# `ProjectReference` closure under the evaluated MSBuild transitivity and bounded child-TFM
-   policies, plus `references` and position-only `implementations` across the selected physical
+   policies, plus `references`, `callers`, and position-only `implementations` across the selected physical
    root, its checked closure, distinct declaring projects, and every proven source-`ProjectReference`
-   F# workspace dependent. References return compiler-bound non-definition uses. Implementations
+   F# workspace dependent. References return compiler-bound non-definition uses. Callers return
+   typed direct, partial, pipeline, computation-expression, first-class, construction, union-case,
+   active-pattern, operator, and indirect sites; override positions stay bound to their concrete
+   implementation and disclose abstract dispatch slots for a separate query. `callees` is body-local:
+   it selects the innermost checked function, member, constructor, object-expression override, or
+   module initializer and uses only that root's ProjectReference closure for target identities.
+   Implementations
    use FCS entity identity, exact implemented abstract signatures, and typed AssemblyContents to
    return named interface implementers, derived types, exact overrides, and object expressions;
    positions on overrides retarget to their abstract slots with disclosure. Each applicable
@@ -297,12 +303,20 @@ before abstract scaffolding, and `likelyImplementation` appears only for one con
 complete, untruncated coverage and exact semantic confidence. Group counts use first-discovery
 attribution under request-wide physical-site deduplication; each returned item's `project` remains
 its exact compiler owner. Typed expression traversal visits every FCS child form but excludes
-quotation bodies with `fsharp_workspace_quotation_bodies_excluded`. A separate
+quotation bodies with `fsharp_workspace_quotation_bodies_excluded`. Callers reuse the same pinned
+workspace discovery, filters, per-context binary reverification, and global site deduplication;
+callees never performs a workspace-dependent scan. Bare function values are caller evidence but not
+callee invocations, partial applications and pipeline operands are calls, and no interprocedural
+function-value flow is inferred. FCS `TraitCall` nodes do not expose one unique compiler target and
+therefore emit `fsharp_workspace_trait_calls_unresolved` with incomplete coverage. The closed
+`callKind` vocabulary is `directApplication`, `partialApplication`, `pipelineApplication`,
+`computationExpression`, `firstClassReference`, `construction`, `unionCaseConstruction`,
+`activePattern`, `operator`, and `indirectApplication`. A separate
 `keepAssemblyContents=true` checker cache prevents these scans from evicting the cache used by
 `symbol_at`, `definition`, and `references`. The host's target-compatible
 `FSharp.Core` fallback is always disclosed as partial because it was not selected by evaluated
 project authority. C#-targeted F# project references, multi-target compatibility, netstandard1.x
-compile-input materialization, and callers/callees/hierarchy still disclose stable
+compile-input materialization, and hierarchy still disclose stable
 unsupported boundaries. Generic indexed search
 is language-neutral for C# and F# `.fs/.fsi`: an `.fsx`-only or other text-only scope is refused,
 while a mixed scope reports `unsupported_language_files_skipped`. This keeps
@@ -341,12 +355,13 @@ from the context. `partial:true` and `partialReason` remain visible independentl
 | `fsharp_core_reference_defaulted` | exact | The selected context used the expected `FSharp.Core` default without host fallback. |
 | `fsharp_binary_references_snapshotted` | exact | Binary inputs were copied and verified as immutable request evidence. |
 | `fsharp_package_references_snapshotted` | exact | Restored package inputs were copied and verified as immutable request evidence. |
-| `fsharp_workspace_dependents_not_scanned` | exact | The selected-context result is compiler-exact; this operation-neutral references/implementations token separately discloses that its workspace total is a lower bound. |
+| `fsharp_workspace_dependents_not_scanned` | exact | The selected-context result is compiler-exact; this operation-neutral references/implementations/callers token separately discloses that its workspace total is a lower bound. |
 | `fsharp_workspace_deadline` | exact | Completely scanned project groups remain compiler-exact, while unvisited dependents make the workspace total a lower bound. |
 | `fsharp_workspace_dependent_failed` | exact | A dependent context failed independently; successful groups remain compiler-exact and the failed group is attributed. |
 | `fsharp_workspace_dependent_discovery_incomplete` | exact | At least one potential F# consumer could not be evaluated from the pinned snapshot; completed groups remain compiler-exact while the workspace total is a lower bound. |
 | `fsharp_workspace_declaring_project_failed` | exact | The selected consumer was checked, but its distinct declaring-project context could not be counted; completed groups remain compiler-exact and the total is a lower bound. |
-| `fsharp_workspace_quotation_bodies_excluded` | exact | Quotation bodies were not traversed for implementations; completed contexts remain compiler-exact and the total is a lower bound. |
+| `fsharp_workspace_quotation_bodies_excluded` | exact | Quotation bodies were not traversed for implementations or call graphs; completed contexts remain compiler-exact and the total is a lower bound. |
+| `fsharp_workspace_trait_calls_unresolved` | exact | FCS exposed a statically resolved trait call without one unique target identity; completed call sites remain compiler-exact while callers/callees coverage is incomplete. |
 | `fsharp_workspace_unsupported_boundary` | exact | A non-F# project-reference path was excluded from dependent scanning. |
 | `fsharp_workspace_binary_dependents_not_scanned` | exact | An assembly/HintPath-coupled consumer was identified but cannot be proven from source ProjectReference authority. |
 | `fsharp_core_reference_host_fallback` | indexed | A host-selected `FSharp.Core` substituted for project authority. |

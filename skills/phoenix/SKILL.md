@@ -105,11 +105,16 @@ A transport-successful response can still contain a structured domain error. Ins
   consumers. Physical sites are deduplicated across contexts. Unevaluated, excluded, failed, or
   deadline-pending scope makes the total a workspace lower bound without discarding completely
   scanned groups, while test-project and generated-file filters remain explicit. Quotation bodies
-  are excluded from implementation traversal and disclosed through the operation-neutral
-  `fsharp_workspace_quotation_bodies_excluded` reason. F# semantic confidence is
+  are excluded from implementation/call traversal and disclosed through the operation-neutral
+  `fsharp_workspace_quotation_bodies_excluded` reason. F# callers uses that same proven workspace
+  scope and returns typed direct, partial, pipeline, computation-expression, first-class,
+  construction, union-case, active-pattern, operator, and indirect call sites. F# callees selects
+  only the innermost checked body and resolves targets through the selected ProjectReference
+  closure, without a dependent scan; bare function values are excluded. Uniquely unresolved FCS
+  trait calls use `fsharp_workspace_trait_calls_unresolved`. F# semantic confidence is
   exact when the selected context carries only disclosed assumptions or immutable-evidence
   provenance; it is indexed when anything was substituted, errored, or removed from the context.
-  F# callers, callees, and hierarchy may return explicit unsupported reasons. `.fsx`
+  F# hierarchy may return an explicit unsupported reason. `.fsx`
   remains text-only.
 - When `search_symbol.fsharpParseCoverage` is present, `unrepresentedOwnerProjects` means an
   affected owner retained no syntax parse context; `partiallyTruncatedOwnerProjects` means it

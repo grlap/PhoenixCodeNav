@@ -907,18 +907,18 @@ internal static class PhoenixCli
             bool toolTruncated,
             string boundedDetail,
             bool detailTruncated) => new
-        {
-            error = "phoenix_cli_internal_error",
-            tool = boundedTool,
-            reason = failure.GetType().Name,
-            detail = boundedDetail,
-            retryable = false,
-            truncated = toolTruncated || detailTruncated ? true : (bool?)null,
-            truncatedField = toolTruncated
+            {
+                error = "phoenix_cli_internal_error",
+                tool = boundedTool,
+                reason = failure.GetType().Name,
+                detail = boundedDetail,
+                retryable = false,
+                truncated = toolTruncated || detailTruncated ? true : (bool?)null,
+                truncatedField = toolTruncated
                 ? "tool"
                 : detailTruncated ? "detail" : null,
-            meta = DiscoveryMeta(),
-        };
+                meta = DiscoveryMeta(),
+            };
 
         string toolBudgetJson = Json.WithStringBudget(
             toolName,

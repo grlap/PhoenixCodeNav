@@ -229,6 +229,10 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.Contains("implementations", semantic.GetProperty("fsharpSemanticTools")
             .EnumerateArray().Select(tool => tool.GetString()));
+        Assert.Contains("callers", semantic.GetProperty("fsharpSemanticTools")
+            .EnumerateArray().Select(tool => tool.GetString()));
+        Assert.Contains("callees", semantic.GetProperty("fsharpSemanticTools")
+            .EnumerateArray().Select(tool => tool.GetString()));
         Assert.DoesNotContain("search_symbol", semantic.GetProperty("fsharpSemanticTools")
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.False(semantic.TryGetProperty("fsharpIndexedTools", out _));
@@ -837,8 +841,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                     == "fsharp-workspace-coverage-tokens")
             .GetProperty("summary")
             .GetString()!;
-        Assert.Contains("v0.12.87", fsharpWorkspaceTokens);
-        Assert.Contains("eight operation-neutral", fsharpWorkspaceTokens);
+        Assert.Contains("v0.12.88", fsharpWorkspaceTokens);
+        Assert.Contains("nine operation-neutral", fsharpWorkspaceTokens);
         Assert.Contains("fsharp_workspace_*", fsharpWorkspaceTokens);
         Assert.Contains("retired without aliases", fsharpWorkspaceTokens);
         string fsharpImplementations = Assert.Single(
@@ -853,6 +857,27 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("typed object expressions", fsharpImplementations);
         Assert.Contains("concrete before abstract", fsharpImplementations);
         Assert.Contains("lower-bound coverage", fsharpImplementations);
+        string fsharpCallers = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-callers-workspace")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.88", fsharpCallers);
+        Assert.Contains("compile-owned F# callable positions", fsharpCallers);
+        Assert.Contains("proven workspace dependents", fsharpCallers);
+        Assert.Contains("global physical-site deduplication", fsharpCallers);
+        Assert.Contains("lower-bound coverage", fsharpCallers);
+        string fsharpCallees = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-callees-body")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.88", fsharpCallees);
+        Assert.Contains("innermost compile-owned F#", fsharpCallees);
+        Assert.Contains("body only", fsharpCallees);
+        Assert.Contains("without a workspace-dependent scan", fsharpCallees);
         string fsharpProjectReferenceClosure = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

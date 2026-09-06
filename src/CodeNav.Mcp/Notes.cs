@@ -63,6 +63,14 @@ internal static class NoteIds
         "fsharp.implementation_items_byte_budget";
     public const string FSharpImplementationGroupsByteBudget =
         "fsharp.implementation_groups_byte_budget";
+    public const string FSharpCallerItemsByteBudget =
+        "fsharp.caller_items_byte_budget";
+    public const string FSharpCallerGroupsByteBudget =
+        "fsharp.caller_groups_byte_budget";
+    public const string FSharpCalleeItemsByteBudget =
+        "fsharp.callee_items_byte_budget";
+    public const string FSharpCalleeGroupsByteBudget =
+        "fsharp.callee_groups_byte_budget";
     public const string FSharpWorkspaceCoverageByteBudget =
         "fsharp.workspace_coverage_byte_budget";
     public const string SemanticDeclarationSitesBudget =

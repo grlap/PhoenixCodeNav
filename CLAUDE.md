@@ -125,10 +125,23 @@ failures is not a finished turn.
 
 ## Build & Test
 
+Run the complete check-in gate through the deterministic summary wrapper. It keeps a green run
+compact while preserving warnings, failures, skipped-test reasons, and the TRX locations needed
+for diagnosis:
+
 ```bash
-dotnet build          # must be 0 warnings
-dotnet test           # full suite; every test must pass
+pwsh -NoProfile -File ./scripts/gate-summary.ps1
+```
+
+The wrapper runs these raw commands; keep them available for focused diagnosis:
+
+```bash
+dotnet restore PhoenixCodeNav.sln --nologo -v:q
+dotnet format PhoenixCodeNav.sln --verify-no-changes --no-restore --verbosity diagnostic
+dotnet build PhoenixCodeNav.sln -c Release --nologo --no-restore -v:m  # must be 0 warnings
+dotnet test PhoenixCodeNav.sln -c Release --no-build --no-restore --nologo -v:q  # full suite; every test must pass
 pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1  # external Roslyn/F# MCP gate
+node ./website/verify.mjs                            # public website contract gate
 ```
 
 ## Architecture Overview
