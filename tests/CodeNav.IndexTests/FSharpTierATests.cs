@@ -528,6 +528,8 @@ public class FSharpTierATests
             Assert.Contains("fsharp-definition-same-project", featureIds);
             Assert.Contains("fsharp-references-same-project", featureIds);
             Assert.Contains("fsharp-references-workspace-dependents", featureIds);
+            Assert.Contains("fsharp-workspace-coverage-tokens", featureIds);
+            Assert.Contains("fsharp-implementations-workspace", featureIds);
             Assert.Contains("fsharp-type-check-context-selection", featureIds);
             Assert.Contains("fsharp-semantic-snapshot", featureIds);
             Assert.Contains("fsharp-semantic-bounded-project-evaluation", featureIds);
@@ -638,7 +640,7 @@ public class FSharpTierATests
                 line: 2, column: 5, mode: "semantic", timeoutMs: 60_000));
             Assert.Equal(0, fsharpReferences.GetProperty("totalReferences").GetInt32());
             Assert.True(fsharpReferences.GetProperty("totalIsLowerBound").GetBoolean());
-            Assert.Contains("fsharp_references_unsupported_boundary",
+            Assert.Contains("fsharp_workspace_unsupported_boundary",
                 fsharpReferences.GetProperty("partialReason").GetString());
             Assert.Equal(2, fsharpReferences.GetProperty("coverage")
                 .GetProperty("dependentsTotal").GetInt32());
@@ -648,10 +650,33 @@ public class FSharpTierATests
                 path: "Core/Library.fs", line: 2, mode: "semantic"));
             Assert.Equal("fsharp_semantic_position_required",
                 lineOnlyFSharpReferences.GetProperty("error").GetString());
+            JsonElement lineOnlyFSharpImplementations = Parse(tools.Implementations(
+                path: "Core/Library.fs", line: 2));
+            Assert.Equal("fsharp_semantic_position_required",
+                lineOnlyFSharpImplementations.GetProperty("error").GetString());
+            JsonElement unsupportedFSharpImplementation = Parse(tools.Implementations(
+                path: "Core/Library.fs", line: 2, column: 5, timeoutMs: 60_000));
+            Assert.Equal("unsupported_symbol_kind",
+                unsupportedFSharpImplementation.GetProperty("error").GetString());
+            JsonElement incompatibleFSharpImplementation = Parse(tools.Implementations(
+                name: "fsharpTierAMarker", path: "Core/Library.fs", line: 2, column: 5));
+            Assert.Equal("bad_request",
+                incompatibleFSharpImplementation.GetProperty("error").GetString());
+            Assert.Equal("name",
+                incompatibleFSharpImplementation.GetProperty("field").GetString());
+            Assert.Equal("incompatible_filter",
+                incompatibleFSharpImplementation.GetProperty("reason").GetString());
+            JsonElement incompatibleCSharpImplementation = Parse(tools.Implementations(
+                path: "Wrapper/Wrapper.cs", line: 1, column: 55, includeTests: false));
+            Assert.Equal("bad_request",
+                incompatibleCSharpImplementation.GetProperty("error").GetString());
+            Assert.Equal("includeTests",
+                incompatibleCSharpImplementation.GetProperty("field").GetString());
+            Assert.Equal("incompatible_filter",
+                incompatibleCSharpImplementation.GetProperty("reason").GetString());
 
             var gatedOperations = new Dictionary<string, string>
             {
-                ["implementations"] = tools.Implementations(path: "Core/Library.fs", line: 1),
                 ["callers"] = tools.Callers(path: "Core/Library.fs", line: 1),
                 ["callees"] = tools.Callees(path: "Core/Library.fs", line: 1),
                 ["type_hierarchy"] = tools.TypeHierarchy(path: "Core/Library.fs", line: 1),
@@ -1356,6 +1381,13 @@ public class FSharpTierATests
             health, "Loose.fs", "fs", "outline"));
         Assert.Contains("search_symbol", orphan.GetProperty("availableForFile")
             .EnumerateArray().Select(tool => tool.GetString()));
+
+        JsonElement compileOwned = Parse(NavigationTools.UnsupportedLanguageForTest(
+            health, "Owned.fs", "fs", "callers", compileOwnedFSharp: true));
+        Assert.Contains("implementations", compileOwned.GetProperty("availableForFile")
+            .EnumerateArray().Select(tool => tool.GetString()));
+        Assert.DoesNotContain("implementations remain unavailable",
+            compileOwned.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -227,6 +227,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.Contains("references", semantic.GetProperty("fsharpSemanticTools")
             .EnumerateArray().Select(tool => tool.GetString()));
+        Assert.Contains("implementations", semantic.GetProperty("fsharpSemanticTools")
+            .EnumerateArray().Select(tool => tool.GetString()));
         Assert.DoesNotContain("search_symbol", semantic.GetProperty("fsharpSemanticTools")
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.False(semantic.TryGetProperty("fsharpIndexedTools", out _));
@@ -825,10 +827,32 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         Assert.Contains("bounded evaluated ProjectReference authority",
             fsharpWorkspaceReferences);
         Assert.Contains("distinct declaring project once", fsharpWorkspaceReferences);
-        Assert.Contains("deduplicates physical sites across TFMs", fsharpWorkspaceReferences);
+        Assert.Contains("deduplicates physical sites across contexts", fsharpWorkspaceReferences);
         Assert.Contains("incomplete lower-bound coverage",
             fsharpWorkspaceReferences);
         Assert.Contains("test/generated filters", fsharpWorkspaceReferences);
+        string fsharpWorkspaceTokens = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-workspace-coverage-tokens")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.87", fsharpWorkspaceTokens);
+        Assert.Contains("eight operation-neutral", fsharpWorkspaceTokens);
+        Assert.Contains("fsharp_workspace_*", fsharpWorkspaceTokens);
+        Assert.Contains("retired without aliases", fsharpWorkspaceTokens);
+        string fsharpImplementations = Assert.Single(
+                json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString()
+                    == "fsharp-implementations-workspace")
+            .GetProperty("summary")
+            .GetString()!;
+        Assert.Contains("v0.12.87", fsharpImplementations);
+        Assert.Contains("compile-owned F# type and dispatch-slot positions",
+            fsharpImplementations);
+        Assert.Contains("typed object expressions", fsharpImplementations);
+        Assert.Contains("concrete before abstract", fsharpImplementations);
+        Assert.Contains("lower-bound coverage", fsharpImplementations);
         string fsharpProjectReferenceClosure = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -863,14 +887,17 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
             .GetProperty("summary")
             .GetString()!;
         Assert.Contains("v0.12.84", fsharpNetStandardCompatibility);
-        Assert.Contains("exact child-TFM matches always win", fsharpNetStandardCompatibility);
+        Assert.Contains("exact child-TFM wins", fsharpNetStandardCompatibility);
         Assert.Contains("single-target netstandard1.0-2.1", fsharpNetStandardCompatibility);
-        Assert.Contains("netstandard2.0/2.1 compile inputs resolve end to end",
+        Assert.Contains("netstandard2.0/2.1 works end to end",
             fsharpNetStandardCompatibility);
         Assert.Contains("netstandard1.x", fsharpNetStandardCompatibility);
         Assert.Contains("fails closed", fsharpNetStandardCompatibility);
-        Assert.Contains("multi-target children remain exact-only",
+        Assert.Contains("multi-target remains exact-only",
             fsharpNetStandardCompatibility);
+        Assert.Contains("inputs are never materialized or replaced with netstandard2.0",
+            fsharpNetStandardCompatibility);
+        Assert.Contains(".NET Framework 4.6.1", fsharpNetStandardCompatibility);
         Assert.Contains("chosen child TFM", fsharpNetStandardCompatibility);
         string fsharpBoundary = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
@@ -1361,7 +1388,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
                            "fsharp-semantic-confidence-authority"),
                        ("compiler-bound non-definition uses",
                            "fsharp-references-same-project"),
-                       ("deduplicates physical sites across TFMs",
+                      ("deduplicates physical sites across contexts",
                            "fsharp-references-workspace-dependents"),
                        ("in-memory referenced-project options",
                            "fsharp-semantic-project-reference-closure"),

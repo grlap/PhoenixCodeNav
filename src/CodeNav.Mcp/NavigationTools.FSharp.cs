@@ -181,13 +181,14 @@ public sealed partial class NavigationTools
                 case "fsharp_core_reference_defaulted":
                 case "fsharp_binary_references_snapshotted":
                 case "fsharp_package_references_snapshotted":
-                case "fsharp_references_workspace_dependents_not_scanned":
-                case "fsharp_references_workspace_deadline":
-                case "fsharp_references_dependent_failed":
-                case "fsharp_references_dependent_discovery_incomplete":
-                case "fsharp_references_declaring_project_failed":
-                case "fsharp_references_unsupported_boundary":
-                case "fsharp_references_binary_dependents_not_scanned":
+                case "fsharp_workspace_dependents_not_scanned":
+                case "fsharp_workspace_deadline":
+                case "fsharp_workspace_dependent_failed":
+                case "fsharp_workspace_dependent_discovery_incomplete":
+                case "fsharp_workspace_declaring_project_failed":
+                case "fsharp_workspace_quotation_bodies_excluded":
+                case "fsharp_workspace_unsupported_boundary":
+                case "fsharp_workspace_binary_dependents_not_scanned":
                     continue;
                 // Closed by design: known authority loss and every future unclassified cause
                 // remain conservative until deliberately admitted above.
@@ -211,6 +212,307 @@ public sealed partial class NavigationTools
             .GetAwaiter().GetResult();
         return ShapeFSharpReferencesResult(path, line, column, result, includeTests,
             includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds);
+    }
+
+    private string FSharpImplementations(string path, int line, int column,
+        string? projectPath, string? targetFramework, bool includeTests,
+        bool includeGenerated, int timeoutMs)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
+        FSharpImplementationsResult result = _semantic.FSharpImplementationsAsync(
+                path, line, column, projectPath, targetFramework, includeTests,
+                includeGenerated, deadlineMs)
+            .GetAwaiter().GetResult();
+        return ShapeFSharpImplementationsResult(path, line, column, result,
+            includeTests, includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds);
+    }
+
+    private string ShapeFSharpImplementationsResult(string path, int line, int column,
+        FSharpImplementationsResult result, bool includeTests, bool includeGenerated,
+        int deadlineMs, long elapsedMs)
+    {
+        var selected = result.SelectedContext is null
+            ? null
+            : new
+            {
+                project = result.SelectedContext.Project,
+                targetFramework = result.SelectedContext.TargetFramework,
+            };
+        var allContexts = result.AvailableContexts.Select(context => (object)new
+        {
+            project = context.Project,
+            targetFramework = context.TargetFramework,
+        }).ToList();
+        int contextTotal = allContexts.Count;
+        var contexts = allContexts.Take(MaxFSharpTypeCheckContexts).ToList();
+        bool contextsLimitTruncated = contexts.Count < contextTotal;
+        List<FSharpImplementationGroup> groups = result.Groups ?? [];
+        List<FSharpSemanticDiagnostic> diagnostics = result.Diagnostics ?? [];
+        bool diagnosticsLimitTruncated = result.DiagnosticCount > diagnostics.Count;
+        List<(string Kind, FSharpDependentCoverageEntry Entry)> coverageDetails = [];
+        if (result.Coverage is not null)
+        {
+            coverageDetails.AddRange(result.Coverage.Excluded.Select(entry =>
+                ("excluded", entry)));
+            coverageDetails.AddRange(result.Coverage.Failed.Select(entry =>
+                ("failed", entry)));
+            coverageDetails.AddRange((result.Coverage.DiscoveryFailed ?? []).Select(entry =>
+                ("discoveryFailed", entry)));
+        }
+
+        bool succeeded = result.Error is null && result.Symbol is not null &&
+                         result.TotalImplementations is not null;
+        bool workspaceComplete = result.Coverage?.WorkspaceComplete == true;
+        bool totalIsLowerBound = succeeded && !workspaceComplete;
+        int concreteCount = result.Implementations.Count(item => !item.IsAbstract);
+        string? detail = result.Error switch
+        {
+            "fsharp_semantic_position_invalid" =>
+                "F# implementations requires line >= 1 and a 1-based column.",
+            "fsharp_type_check_context_required" =>
+                "Select one physical F# project and target framework using projectPath + targetFramework.",
+            "fsharp_type_check_context_not_found" =>
+                "The requested projectPath + targetFramework is not an owning type-check context for this file.",
+            "fsharp_symbol_not_resolved" =>
+                "FCS found no symbol at this exact source position.",
+            "unsupported_symbol_kind" =>
+                "F# implementations supports type definitions, interface/abstract/virtual dispatch slots, and positions on overrides or explicit interface implementations. Ordinary values, functions, fields, constructors, union cases, and non-dispatch members are not retargeted.",
+            "fsharp_implementations_slot_unresolved" =>
+                "The override names an abstract slot, but FCS did not expose a unique source declaration for that slot. Point implementations at the interface or abstract member declaration.",
+            "fsharp_semantic_reference_changed" =>
+                "A captured binary or package reference changed during FCS checking; the result was discarded.",
+            "fsharp_semantic_timeout" =>
+                "FCS did not complete within the bounded deadline; retry with a larger timeoutMs.",
+            null => null,
+            _ => "FCS could not produce trustworthy implementation evidence for this project snapshot.",
+        };
+        var meta = FSharpSemanticMeta(result.Health, result.Error, result.PartialReason);
+
+        object? SymbolJson(FSharpSemanticSymbolInfo? symbol) => symbol is null ? null : new
+        {
+            name = symbol.Name,
+            fullName = symbol.FullName,
+            kind = symbol.Kind,
+            container = symbol.Container,
+            @namespace = symbol.Namespace,
+            assembly = symbol.Assembly,
+            accessibility = symbol.Accessibility,
+            path = symbol.Use.Path,
+            line = symbol.Use.StartLine,
+            column = symbol.Use.StartColumn,
+            use = new
+            {
+                path = symbol.Use.Path,
+                startLine = symbol.Use.StartLine,
+                startColumn = symbol.Use.StartColumn,
+                endLine = symbol.Use.EndLine,
+                endColumn = symbol.Use.EndColumn,
+            },
+            declarationsTotal = symbol.DeclarationCount,
+            declarations = symbol.Declarations.Select(declaration => new
+            {
+                role = declaration.Role,
+                path = declaration.Path,
+                startLine = declaration.StartLine,
+                startColumn = declaration.StartColumn,
+                endLine = declaration.EndLine,
+                endColumn = declaration.EndColumn,
+            }),
+        };
+
+        string shaped = Json.WithAuxiliaryListsBudget(
+            result.Implementations,
+            groups,
+            coverageDetails,
+            diagnostics,
+            (shownItems, itemsTruncated, shownGroups, groupsTruncated,
+                shownCoverage, coverageTruncated, shownDiagnostics,
+                diagnosticsTruncated) =>
+            {
+                FSharpImplementationInfo? soleConcrete = concreteCount == 1
+                    ? result.Implementations.Single(item => !item.IsAbstract)
+                    : null;
+                string? likely = succeeded && workspaceComplete && !itemsTruncated &&
+                    FSharpSemanticConfidence(result.PartialReason) == "exact"
+                    ? soleConcrete?.Symbol.FullName ?? soleConcrete?.Symbol.Name
+                    : null;
+                var shownExcluded = shownCoverage
+                    .Where(entry => entry.Kind == "excluded").ToList();
+                var shownFailed = shownCoverage
+                    .Where(entry => entry.Kind == "failed").ToList();
+                var shownDiscovery = shownCoverage
+                    .Where(entry => entry.Kind == "discoveryFailed").ToList();
+                return new
+                {
+                    error = result.Error,
+                    operation = "implementations",
+                    path,
+                    line,
+                    column,
+                    found = result.Error == "fsharp_symbol_not_resolved"
+                        ? false
+                        : succeeded ? true : (bool?)null,
+                    symbol = SymbolJson(result.Symbol),
+                    resolvedFromOverride = result.ResolvedFromOverride is { Count: > 0 }
+                        ? result.ResolvedFromOverride
+                        : null,
+                    summary = succeeded
+                        ? workspaceComplete
+                            ? $"Exactly {result.TotalImplementations} compiler-bound implementations across every completely scanned F# project/TFM context in the proven workspace scope." +
+                              (!includeTests ? " Test projects were excluded before counting." : "") +
+                              (!includeGenerated ? " Generated files were excluded before counting." : "")
+                            : $"At least {result.TotalImplementations} compiler-bound implementations across successfully scanned F# project/TFM contexts; workspace coverage is partial."
+                        : null,
+                    implementations = succeeded
+                        ? shownItems.Select(item => new
+                        {
+                            symbol = SymbolJson(item.Symbol),
+                            implementationKind = item.ImplementationKind,
+                            isAbstract = item.IsAbstract ? true : (bool?)null,
+                            rank = item.IsAbstract ? "abstract" : "concrete",
+                            via = item.Via,
+                            project = item.Project,
+                            targetFramework = item.TargetFrameworksScanned.Count == 1
+                                ? item.TargetFrameworksScanned[0]
+                                : null,
+                            targetFrameworksScanned = item.TargetFrameworksScanned,
+                        })
+                        : null,
+                    totalImplementations = succeeded ? result.TotalImplementations : null,
+                    totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
+                    concreteCount = succeeded ? concreteCount : (int?)null,
+                    likelyImplementation = likely,
+                    coverage = succeeded ? new
+                    {
+                        scope = "selected_physical_project_closure_declaring_projects_and_workspace_dependents",
+                        dependentsTotal = result.Coverage?.DependentsTotal,
+                        dependentsScanned = result.Coverage?.DependentsScanned ?? 0,
+                        dependentsExcluded = result.Coverage?.DependentsExcluded ?? 0,
+                        dependentsFailed = result.Coverage?.DependentsFailed ?? 0,
+                        dependentsPending = result.Coverage?.DependentsPending,
+                        potentialConsumers = result.Coverage?.PotentialConsumers ?? 0,
+                        potentialConsumersEvaluated =
+                            result.Coverage?.PotentialConsumersEvaluated ?? 0,
+                        potentialConsumersUnevaluated =
+                            result.Coverage?.PotentialConsumersUnevaluated ?? 0,
+                        declaringProject = result.Coverage?.DeclaringProject,
+                        declaringProjects = result.Coverage?.DeclaringProjects,
+                        declaringProjectStatus = result.Coverage?.DeclaringProjectStatus,
+                        declaringProjectReason = result.Coverage?.DeclaringProjectReason,
+                        workspaceComplete,
+                        quotationBodiesExcluded = result.QuotationBodiesExcluded
+                            ? true
+                            : (bool?)null,
+                        excludedByReason = result.Coverage?.Excluded
+                            .GroupBy(entry => entry.Reason, StringComparer.Ordinal)
+                            .OrderBy(group => group.Key, StringComparer.Ordinal)
+                            .ToDictionary(group => group.Key, group => group.Count()),
+                        failedByReason = result.Coverage?.Failed
+                            .GroupBy(entry => entry.Reason, StringComparer.Ordinal)
+                            .OrderBy(group => group.Key, StringComparer.Ordinal)
+                            .ToDictionary(group => group.Key, group => group.Count()),
+                        discoveryFailedByReason = result.Coverage?.DiscoveryFailed?
+                            .GroupBy(entry => entry.Reason, StringComparer.Ordinal)
+                            .OrderBy(group => group.Key, StringComparer.Ordinal)
+                            .ToDictionary(group => group.Key, group => group.Count()),
+                        excluded = shownExcluded.Select(entry => new
+                        {
+                            project = entry.Entry.Project,
+                            reason = entry.Entry.Reason,
+                        }),
+                        failed = shownFailed.Select(entry => new
+                        {
+                            project = entry.Entry.Project,
+                            reason = entry.Entry.Reason,
+                        }),
+                        discoveryFailed = shownDiscovery.Select(entry => new
+                        {
+                            project = entry.Entry.Project,
+                            reason = entry.Entry.Reason,
+                        }),
+                        detailSelected = coverageDetails.Count,
+                        detailReturned = shownCoverage.Count,
+                        detailTruncated = coverageTruncated ? true : (bool?)null,
+                        detailNoteId = coverageTruncated
+                            ? NoteIds.FSharpWorkspaceCoverageByteBudget
+                            : null,
+                    } : null,
+                    groups = succeeded ? shownGroups.Select(group => new
+                    {
+                        project = group.Project,
+                        targetFramework = group.TargetFrameworksScanned.Count == 1
+                            ? group.TargetFrameworksScanned[0]
+                            : null,
+                        targetFrameworksScanned = group.TargetFrameworksScanned,
+                        isTest = group.IsTest,
+                        count = group.Count,
+                        status = group.Status,
+                        reason = group.Reason,
+                    }) : null,
+                    groupCoverage = succeeded && groupsTruncated ? new
+                    {
+                        selected = groups.Count,
+                        returned = shownGroups.Count,
+                        complete = false,
+                        noteId = NoteIds.FSharpImplementationGroupsByteBudget,
+                    } : null,
+                    partial = result.PartialReason is not null || totalIsLowerBound
+                        ? true
+                        : (bool?)null,
+                    partialReason = result.PartialReason,
+                    retryRecommended = result.PartialReason?.Split(';',
+                        StringSplitOptions.TrimEntries).Contains(
+                            "fsharp_workspace_deadline", StringComparer.Ordinal) == true
+                        ? true
+                        : (bool?)null,
+                    retryHint = result.PartialReason?.Split(';',
+                        StringSplitOptions.TrimEntries).Contains(
+                            "fsharp_workspace_deadline", StringComparer.Ordinal) == true
+                        ? deadlineMs < SemanticNavigationDeadlineMaxMs
+                            ? $"Retry implementations once with a larger timeoutMs (this request used {deadlineMs} ms; the maximum is {SemanticNavigationDeadlineMaxMs} ms)."
+                            : "Retry implementations once with the same arguments; prepared F# inputs may make the next scan complete."
+                        : null,
+                    detail,
+                    selectedFSharpTypeCheckContext = selected,
+                    availableFSharpTypeCheckContexts = contexts,
+                    fsharpTypeCheckContextsTotal = contextTotal,
+                    fsharpTypeCheckContextsReturned = contexts.Count,
+                    fsharpTypeCheckContextsTruncated = contextsLimitTruncated
+                        ? true
+                        : (bool?)null,
+                    diagnosticCount = result.DiagnosticCount > 0
+                        ? result.DiagnosticCount
+                        : (int?)null,
+                    diagnostics = shownDiagnostics.Count > 0
+                        ? shownDiagnostics.Select(diagnostic => new
+                        {
+                            severity = diagnostic.Severity,
+                            code = diagnostic.Code,
+                            message = diagnostic.Message,
+                            path = diagnostic.Path,
+                            startLine = diagnostic.StartLine,
+                            startColumn = diagnostic.StartColumn,
+                            endLine = diagnostic.EndLine,
+                            endColumn = diagnostic.EndColumn,
+                        })
+                        : null,
+                    diagnosticsTruncated = diagnosticsLimitTruncated ||
+                                           diagnosticsTruncated
+                        ? true
+                        : (bool?)null,
+                    timing = new { deadlineMs, elapsedMs },
+                    truncated = itemsTruncated ? true : (bool?)null,
+                    truncationNoteId = itemsTruncated
+                        ? NoteIds.FSharpImplementationItemsByteBudget
+                        : null,
+                    hint = likely is not null
+                        ? "One concrete implementation — likely the runtime target. Ranked concrete-first; isAbstract/rank mark non-instantiable scaffolding."
+                        : null,
+                    meta,
+                };
+            }, maxBytes: TestOnlyReferencesResponseMaxBytes);
+        return Json.WithCompleteSemanticIdentity(shaped);
     }
 
     private string ShapeFSharpReferencesResult(string path, int line, int column,
@@ -286,7 +588,7 @@ public sealed partial class NavigationTools
         };
         if (detail is null && succeeded &&
             result.PartialReason?.Split(';', StringSplitOptions.TrimEntries)
-                .Contains("fsharp_references_workspace_dependents_not_scanned",
+                .Contains("fsharp_workspace_dependents_not_scanned",
                     StringComparer.Ordinal) == true)
         {
             detail = "The selected-project count is compiler-exact, but workspace dependents " +
@@ -449,13 +751,13 @@ public sealed partial class NavigationTools
                     partialReason = result.PartialReason,
                     retryRecommended = result.PartialReason?.Split(';',
                         StringSplitOptions.TrimEntries).Contains(
-                            "fsharp_references_workspace_deadline",
+                            "fsharp_workspace_deadline",
                             StringComparer.Ordinal) == true
                         ? true
                         : (bool?)null,
                     retryHint = result.PartialReason?.Split(';',
                         StringSplitOptions.TrimEntries).Contains(
-                            "fsharp_references_workspace_deadline",
+                            "fsharp_workspace_deadline",
                             StringComparer.Ordinal) == true
                         ? deadlineMs < SemanticNavigationDeadlineMaxMs
                             ? $"Retry references once with a larger timeoutMs (this request used {deadlineMs} ms; the maximum is {SemanticNavigationDeadlineMaxMs} ms)."

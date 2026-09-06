@@ -217,9 +217,9 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-definition-same-project", summary = "v0.12.5 FCS signature/implementation declarations for the selected physical F# project; since v0.12.83 position resolution can return declarations from its F# ProjectReference closure under the evaluated MSBuild transitivity and bounded child-TFM policies" },
                 new { id = "fsharp-semantic-confidence-authority", summary = "v0.12.80 F# semantic confidence is exact when the selected context carries only disclosed assumptions or immutable-evidence provenance; indexed when anything was substituted, errored, or removed from the context, or a reason is not yet classified; partial reasons remain visible in either case; server_capabilities.semantic.fsharpIndexedTools is renamed fsharpSemanticTools" },
                 new { id = "fsharp-references-same-project", summary = "v0.12.81 references position mode counts compiler-bound non-definition uses in one selected physical .fsproj + TFM and returns bounded samples from the pinned source snapshot for that root; since v0.12.83 FCS binds the root through its F# ProjectReference closure under the evaluated MSBuild transitivity and bounded child-TFM policies without counting dependency-project uses" },
-                new { id = "fsharp-references-workspace-dependents", summary = "v0.12.86 references scans proven F# source dependents/TFMs from one pinned snapshot, augments indexed edges with bounded evaluated ProjectReference authority, counts a distinct declaring project once, deduplicates physical sites across TFMs, attributes incomplete lower-bound coverage, and discloses test/generated filters" },
-                new { id = "fsharp-semantic-project-reference-closure", summary = "v0.12.83 symbol_at/definition type-check the active F# ProjectReference closure from one snapshot at the exact selected root TFM and authorized child TFMs; literal physical project paths select legacy/.Net companions; dependency-first in-memory referenced-project options work without emitted or last-built DLLs under the flat transitive SDK default, DisableTransitiveProjectReferences=true, and legacy-style projects remain direct-only; child compiler errors retain their source paths and cause fsharp_semantic_diagnostics_present; results expose declarationsFromProjectReferenceClosureCount while declarationsOutsideSelectedProjectCount retains its not-returned meaning; since v0.12.86 references can additionally scan workspace dependents; missing, non-F#, cyclic, metadata-unsupported, same-assembly, or unavailable-TFM closure fails closed" },
-                new { id = "fsharp-semantic-project-reference-netstandard-compatibility", summary = "v0.12.84 exact child-TFM matches always win; only when exact is absent, a single-target netstandard1.0-2.1 F# child may be selected according to Microsoft's public .NET Standard implementation table, including the documented .NET Framework 4.6.1 compile-applicability row; multi-target children remain exact-only. netstandard2.0/2.1 compile inputs resolve end to end and the chosen child TFM governs its evaluation, package assets, framework references, FSharp.Core, fingerprint, virtual output, and FCS arguments. netstandard1.x table selection is recognized but compile inputs are not materialized in this build, so it fails closed without substituting netstandard2.0 references" },
+                new { id = "fsharp-references-workspace-dependents", summary = "v0.12.86 scans proven F# source dependents/TFMs using bounded evaluated ProjectReference authority; counts a distinct declaring project once, deduplicates physical sites across contexts, and reports incomplete lower-bound coverage plus test/generated filters" },
+                new { id = "fsharp-semantic-project-reference-closure", summary = "v0.12.83 uses the exact selected root TFM and literal physical project paths with dependency-first in-memory referenced-project options, without emitted or last-built DLLs; flat transitive SDK default, DisableTransitiveProjectReferences=true, and legacy-style projects remain direct-only; child compiler errors retain their source paths as fsharp_semantic_diagnostics_present; exposes declarationsFromProjectReferenceClosureCount while declarationsOutsideSelectedProjectCount retains its not-returned meaning; since v0.12.86 references can additionally scan workspace dependents; missing/non-F#/cyclic/metadata-unsupported/same-assembly/unavailable-TFM closure fails closed" },
+                new { id = "fsharp-semantic-project-reference-netstandard-compatibility", summary = "v0.12.84 exact child-TFM wins; single-target netstandard1.0-2.1 follows Microsoft's table, including .NET Framework 4.6.1; multi-target remains exact-only. netstandard1.x fails closed: inputs are never materialized or replaced with netstandard2.0. netstandard2.0/2.1 works end to end under the chosen child TFM" },
                 new { id = "fsharp-type-check-context-selection", summary = "v0.12.5 ambiguous owner/TFM sets fail closed and expose bounded selected/available F# type-check contexts" },
                 new { id = "fsharp-semantic-snapshot", summary = "v0.12.5 immutable source/project snapshot from one pinned index epoch plus request-private snapshots of verified workspace HintPath binaries; since v0.12.83 the pinned source/project snapshot includes the F# ProjectReference closure under the evaluated MSBuild transitivity and bounded child-TFM policies; exact-path opened-handle verification covers Windows and Linux, plus macOS since v0.12.56; bounded deadline, inputs, checker cache, and concurrency" },
                 new { id = "workspace-msbuild-config-indexing", summary = "schema v16 persists arbitrary workspace .props/.targets as config inputs for find_file/config_lookup and pinned bounded project evaluation" },
@@ -287,7 +287,9 @@ public sealed partial class NavigationTools
                 new { id = "refresh-incomplete-freshness", summary = "v0.12.7 exhausted source capture keeps index state stale, preserves the Git baseline, exposes a stable refreshIncompleteReason plus bounded paths, and widens the next request to a recovery sweep" },
                 new { id = "refresh-recovery-self-heal", summary = "v0.12.27 an index left stale by unavailable workspace input autonomously retries complete convergence sweeps with 5/10/30/60-second capped backoff; timer-initiated recovery sweeps make one capture attempt each, re-resolve pending Git baselines, and remain honestly stale until success" },
                 new { id = "oversized-source-coverage", summary = "v0.12.7 oversized regular sources are a distinct persistent outcome with explicit bounded coverage; they are not rapidly retried, cannot publish ready/current/exact evidence, and prevent strict worktree index installation" },
-                new { id = "fsharp-unsupported-language-boundary", summary = "F# callers/callees, implementations, hierarchy, C#-targeted ProjectReference semantics, multi-target compatible selection, and netstandard1.x compile-input materialization remain unsupported; indexed F# symbol-name search, F# ProjectReference definition closure with exact or table-authorized single-target netstandard2.0/2.1 children, and compiler-bound references across proven F# workspace dependents are supported" },
+                new { id = "fsharp-unsupported-language-boundary", summary = "F# callers/callees, hierarchy, C#-targeted ProjectReference semantics, multi-target compatible selection, and netstandard1.x compile-input materialization remain unsupported; indexed F# symbol-name search, F# ProjectReference definition closure with exact or table-authorized single-target netstandard2.0/2.1 children, compiler-bound references, and position-based implementations across proven F# workspace dependents are supported" },
+                new { id = "fsharp-workspace-coverage-tokens", summary = "v0.12.87 uses eight operation-neutral fsharp_workspace_* coverage tokens; prior names are retired without aliases" },
+                new { id = "fsharp-implementations-workspace", summary = "v0.12.87 resolves compile-owned F# type and dispatch-slot positions with FCS, including typed object expressions; scans proven workspace contexts with concrete before abstract ordering and honest lower-bound coverage" },
                 new { id = "review-fsharp-file-coverage", summary = "review_pack: F# changes in unsupportedLanguageFiles" },
                 new { id = "compiled-awareness", summary = "search_symbol orphaned; repo_overview.orphanedFiles; compiled ownership guides semantic resolution, impact, and context_pack" },
                 new { id = "git-awareness", summary = "v0.12.28 index tracks the workspace's indexed commit and branch; serialized HEAD snapshot acquisition, ordered recovery publication, rebuild-generation retirement, and execution-time diffs make same-commit attachment changes and rapid inverse transitions preserve final rows and attachment state, detached HEAD clears the indexed branch, unavailable recovery snapshots force older queued Git tuples to revalidate with only a resolved generation at or after the latest unavailable sample allowed to publish ready, and full rebuilds reject ordered recovery publications sampled for the replaced database. repo_overview.git reports indexed vs HEAD state and whether commits match. Robust to git shipped as a .cmd/.bat wrapper (spawned via cmd, hex-gated args) and to commit-less repos (reflog watch attaches when .git/logs is born); an unresolved git is logged, never silent" },
@@ -392,9 +394,12 @@ public sealed partial class NavigationTools
                 exactTools = new[] { "definition", "references", "implementations" },
                 exactToolsLanguage = "cs",
                 csharpExactTools = new[] { "definition", "references", "implementations" },
-                fsharpSemanticTools = new[] { "symbol_at", "definition", "references" },
+                fsharpSemanticTools = new[]
+                {
+                    "symbol_at", "definition", "references", "implementations",
+                },
                 fsharpSyntaxIndexedTools = new[] { "search_symbol" },
-                note = "C# exact results are scoped to loaded candidate clusters. F# symbol_at/definition are compiler-checked in one proven root project/TFM and its ProjectReference closure; exact child TFMs win, while v0.12.84 admits table-authorized single-target netstandard children and materializes 2.0/2.1. Multi-target compatibility and netstandard1.x inputs fail closed. SDK projects are transitive by default; DisableTransitiveProjectReferences=true and legacy projects are direct-only. Child errors retain source provenance and downgrade confidence. References count the root plus proven F# source dependents at applicable TFMs, deduplicating physical sites; excluded, failed, and pending dependents yield workspace lower bound coverage. Successful results are exact only while disclosed partial reasons preserve selected-context authority; every error, authority loss, or unclassified partial reason is indexed. Restored package assets are snapshotted; C# dependencies never borrow last-built DLLs; partial fields report bounded authority.",
+                note = "C# exact results are scoped to loaded candidate clusters. F# symbol_at/definition are compiler-checked in one proven root project/TFM and its ProjectReference closure; exact child TFMs win, while v0.12.84 admits table-authorized single-target netstandard children and materializes 2.0/2.1. Multi-target compatibility and netstandard1.x inputs fail closed. SDK projects are transitive by default; DisableTransitiveProjectReferences=true and legacy projects are direct-only. Child errors retain source provenance and downgrade confidence. References and position-only implementations scan the selected root/closure, distinct declaring projects, and proven F# source dependents at applicable TFMs with global physical-site deduplication. potentialConsumersUnevaluated plus excluded, failed, and pending groups disclose workspace lower bound coverage; test/generated filters are explicit before counting. Successful results are exact only while disclosed partial reasons preserve selected-context authority; every error, authority loss, or unclassified partial reason is indexed. Restored package assets are snapshotted; C# dependencies never borrow last-built DLLs; partial fields report bounded authority.",
                 fsharpSyntaxNote = "F# search_symbol is syntax-indexed across the available owner/TFM parse contexts, including orphaned .fs/.fsi files; it is not compiler-checked, reports actionable incomplete context coverage as partial, and keeps ordinary SDK/import limits advisory.",
             },
             index = new
@@ -2118,7 +2123,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "implementations")]
-    [Description("Implementations of an interface (or interface member), derived classes, and overrides — RANKED concrete-first (instantiable leaves before abstract scaffolding), each with its derivation path (via). Stable C# documentationCommentId, generic arity, and symbolId selectors are supported; a bare name spanning multiple arities returns symbol_ambiguous. A documentationCommentId is semantic-only and never uses the heuristic fallback. Constructor, field, and operator documentation ids return unsupported_symbol_kind instead of retargeting. A single concrete implementation is flagged as likelyImplementation (the probable runtime target). Other selectors are compiler-exact within the loaded cluster and may fall back to arity-aware base-list syntax matching (confidence 'heuristic', unranked). A transient cold-load or semantic timeout fallback exposes retryRecommended and retryHint without changing the requested deadline. For an interface MEMBER, the syntactic fallback (when compiler-exact override resolution finds none) reports implementerCount and omittedImplementers (silent when none omitted); the exact path reports coverage instead. C# semantic owner sets are assembly-name-keyed; only documentationCommentId requests disclose non-pair collisions through nameKeyedOwnerCollisionGroups.")]
+    [Description("Implementations of an interface/type or dispatch member, ranked concrete-first with derivation path via. C# accepts stable documentationCommentId, generic arity, symbolId, name, or position and may use the documented heuristic fallback. A C# documentationCommentId is semantic-only and never falls back to a name lookup. C# semantic owner sets are assembly-name-keyed; only documentationCommentId requests disclose non-pair collisions through nameKeyedOwnerCollisionGroups. F# is compiler-semantic and position-only for compile-owned .fs/.fsi: it scans the selected ProjectReference closure, distinct declaring projects, and proven workspace dependents across applicable TFMs, returning named implementers, derived types, exact overrides, and typed object expressions with implementationKind and honest lower-bound coverage. F# rejects name/arity/symbolId/documentationCommentId/positive maxProjects; projectPath, targetFramework, includeTests, and includeGenerated are F#-only. A single concrete implementation is likelyImplementation only for a complete, untruncated result with exact semantic confidence.")]
     public string Implementations(
         [Description("Interface/type/member name. Optional when path+line given.")] string? name = null,
         [Description("Workspace-relative path of the declaration or a usage (position mode).")] string? path = null,
@@ -2128,11 +2133,102 @@ public sealed partial class NavigationTools
         [Description("Semantic deadline in ms (default 15000, max 120000).")] int timeoutMs = 15000,
         [Description("Optional generic type-parameter count. Use 0 for a non-generic declaration, 1 for Foo<T>, etc. A bare name with multiple available arities is refused.")] int? arity = null,
         [Description("Resolve by a search_symbol candidate's current idx: handle. Takes precedence over name, path+line, and arity. Operator handles return unsupported_symbol_kind.")] string? symbolId = null,
-        [Description("Stable C# Roslyn declaration id (T:/M:/P:/E:; constructors, fields, and operators are unsupported here). Empty means omitted; whitespace-only is bad_request. Mutually exclusive with other selectors. A successful response echoes the compiler-canonical id, which is safe to reuse directly; failures echo a bounded form of the caller input.")] string? documentationCommentId = null)
+        [Description("Stable C# Roslyn declaration id (T:/M:/P:/E:; constructors, fields, and operators are unsupported here). Empty means omitted; whitespace-only is bad_request. Mutually exclusive with other selectors. A successful response echoes the compiler-canonical id, which is safe to reuse directly; failures echo a bounded form of the caller input.")] string? documentationCommentId = null,
+        [Description("F# position mode only: workspace-relative physical .fsproj path. Required with targetFramework when the file has more than one type-check context.")] string? projectPath = null,
+        [Description("F# position mode only: exact target framework. Required with projectPath when the file has more than one type-check context.")] string? targetFramework = null,
+        [Description("F# position mode only: include implementations in test projects (default true).")] bool includeTests = true,
+        [Description("F# position mode only: include implementations in generated files (default false).")] bool includeGenerated = false)
     {
         if (NotReady() is { } notReady) return notReady;
         if (NormalizeDocumentationCommentId(ref documentationCommentId) is { } idError)
             return idError;
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            path = NormalizePath(path);
+            FileHit? indexedFile;
+            bool compileOwnedFSharp = false;
+            using (var languageQueries = _manager.OpenQueries())
+            {
+                indexedFile = languageQueries.FileByPath(path);
+                if (indexedFile is { Language: "fs" } &&
+                    !IsFSharpScriptPath(path) &&
+                    (Path.GetExtension(path).Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+                     Path.GetExtension(path).Equals(".fsi", StringComparison.OrdinalIgnoreCase)))
+                {
+                    compileOwnedFSharp = languageQueries.ProjectsContaining(path)
+                        .Any(project => project.Language == "fs");
+                }
+            }
+            if (indexedFile is { Language: "fs" })
+            {
+                if (!compileOwnedFSharp)
+                    return UnsupportedLanguage(path, indexedFile.Language,
+                        "implementations");
+                if (line <= 0 || column <= 0)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "fsharp_semantic_position_required",
+                        operation = "implementations",
+                        detail = "F# implementations requires an explicit path + line + column; bare-name and line-only resolution are unavailable.",
+                    });
+                }
+                string? incompatibleField = name is { Length: > 0 }
+                    ? "name"
+                    : arity is not null
+                        ? "arity"
+                        : symbolId is { Length: > 0 }
+                            ? "symbolId"
+                            : documentationCommentId is { Length: > 0 }
+                                ? "documentationCommentId"
+                                : maxProjects > 0
+                                    ? "maxProjects"
+                                    : null;
+                if (incompatibleField is not null)
+                {
+                    return Json.Serialize(new
+                    {
+                        error = "bad_request",
+                        field = incompatibleField,
+                        reason = "incompatible_filter",
+                        expected = incompatibleField == "maxProjects"
+                            ? "0"
+                            : $"omit {incompatibleField}",
+                        operation = "implementations",
+                        detail = "F# implementations is position-only and does not apply C# selectors or a candidate-project cap.",
+                        meta = FSharpSemanticMeta(_manager.Health(), "bad_request"),
+                    });
+                }
+                return FSharpImplementations(path, line, column, projectPath,
+                    targetFramework, includeTests, includeGenerated, timeoutMs);
+            }
+        }
+        string? incompatibleCSharpField = projectPath is { Length: > 0 }
+            ? "projectPath"
+            : targetFramework is { Length: > 0 }
+                ? "targetFramework"
+                : !includeTests
+                    ? "includeTests"
+                    : includeGenerated
+                        ? "includeGenerated"
+                        : null;
+        if (incompatibleCSharpField is not null)
+        {
+            return Json.Serialize(new
+            {
+                error = "bad_request",
+                field = incompatibleCSharpField,
+                reason = "incompatible_filter",
+                expected = incompatibleCSharpField == "includeTests"
+                    ? "true"
+                    : incompatibleCSharpField == "includeGenerated"
+                        ? "false"
+                        : $"omit {incompatibleCSharpField}",
+                operation = "implementations",
+                detail = "projectPath, targetFramework, includeTests, and includeGenerated are F# position-mode arguments and are not ignored for C# requests.",
+                meta = Meta.From(_manager.Health(), "indexed", "syntax"),
+            });
+        }
         int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
         var swSem = System.Diagnostics.Stopwatch.StartNew();
         var coldStartTiming = new SemanticColdStartTimingBox();
@@ -3623,16 +3719,16 @@ public sealed partial class NavigationTools
             path = boundedPath,
             pathTruncated = pathTruncated ? true : (bool?)null,
             language,
-            supportedLanguages = operation is "symbol_at" or "definition" or "references" or "search_symbol"
+            supportedLanguages = operation is "symbol_at" or "definition" or "references" or "implementations" or "search_symbol"
                 ? new[] { "cs", "fs" }
                 : new[] { "cs" },
             availableForFile = fsharpSemanticEligible
-                ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol", "outline", "symbol_at", "definition", "references" }
+                ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol", "outline", "symbol_at", "definition", "references", "implementations" }
                 : fsharpSyntaxIndexed
                 ? new[] { "find_file", "search_text", "source_context", "projects_containing", "search_symbol" }
                 : new[] { "find_file", "search_text", "source_context", "projects_containing" },
             detail = fsharpSemanticEligible
-                ? "F# supports text, project-graph navigation, FCS outlines, position-based symbol_at, definition through its F# ProjectReference closure under the evaluated MSBuild transitivity policy, and compiler-bound references across proven F# workspace dependents for compile-owned .fs/.fsi files. Exact child TFMs win; table-compatible single-target netstandard2.0/2.1 children resolve, while multi-target compatibility and netstandard1.x compile inputs fail closed. C# ProjectReference targets, implementations, callers, callees, and hierarchy remain unavailable."
+                ? "F# supports text, project-graph navigation, FCS outlines, position-based symbol_at, definition through its F# ProjectReference closure under the evaluated MSBuild transitivity policy, and compiler-bound references plus implementations across proven F# workspace dependents for compile-owned .fs/.fsi files. Exact child TFMs win; table-compatible single-target netstandard2.0/2.1 children resolve, while multi-target compatibility and netstandard1.x compile inputs fail closed. C# ProjectReference targets, callers, callees, and hierarchy remain unavailable."
                 : language == "fsx"
                     ? "F# script files are text-only; indexed F# declaration search covers .fs and .fsi project inputs."
                     : language == "fs"

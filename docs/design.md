@@ -80,11 +80,15 @@ for code identifiers.
    `implementations`, `callers`, `callees`, and `type_hierarchy`. F# uses a bounded FCS
    type check for position-based `symbol_at` and `definition` through the selected root's
    F# `ProjectReference` closure under the evaluated MSBuild transitivity and bounded child-TFM
-   policies, plus `references` counted across the selected physical root and every proven
-   source-`ProjectReference` F# workspace dependent. Each applicable dependent TFM is checked,
-   physical sites are deduplicated across TFMs, and only response samples are bounded. Binary,
-   unsupported, failed, or deadline-pending dependents are attributed explicitly and make the
-   returned total a workspace lower bound. An F# type-check
+   policies, plus `references` and position-only `implementations` across the selected physical
+   root, its checked closure, distinct declaring projects, and every proven source-`ProjectReference`
+   F# workspace dependent. References return compiler-bound non-definition uses. Implementations
+   use FCS entity identity, exact implemented abstract signatures, and typed AssemblyContents to
+   return named interface implementers, derived types, exact overrides, and object expressions;
+   positions on overrides retarget to their abstract slots with disclosure. Each applicable
+   dependent TFM is checked, physical sites are deduplicated across all contexts, and response lists
+   are byte-budgeted. Binary, unsupported, failed, or deadline-pending dependents are attributed
+   explicitly and make the returned total a workspace lower bound. An F# type-check
    context is exactly one physical `.fsproj` plus one target framework; ambiguous files require
    explicit selection, and the selection never changes or merges ownership/reference graph facts.
    C# regular and conversion operator handles bridge syntax rows to Roslyn with the uncapped
@@ -278,16 +282,27 @@ partial, including unobservable build authority above the workspace root; custom
 declarations, Directory.Build mutations outside the bounded reference projection, and ordinary
 project/import property assignment after semantic items fail closed. Workspace-contained managed `HintPath` snapshots have their original identity
 verified after the check; declarations may come from the captured F# project-reference closure while
-reference counts scan proven F# workspace dependents from the same pinned index snapshot. Because
+reference and implementation scans cover proven F# workspace dependents from the same pinned index
+snapshot. Because
 the persisted structural graph intentionally keeps raw, non-expanding project-file facts, reference
 discovery augments it with the bounded F# evaluator for every indexed F# project/TFM and reports
 `potentialConsumers`, `potentialConsumersEvaluated`, and `potentialConsumersUnevaluated`. Any
 unevaluated potential consumer makes the workspace total an attributed lower bound while preserving
 the exact counts of completed groups. A distinct declaring project is counted once, and test-project
-or generated-file filters remain explicit in group status and summary prose. The host's target-compatible
+or generated-file filters remain explicit in group status and summary prose. F# implementations
+match generic instantiations by their generic entity definition and admit implementing classes,
+structs, records, unions, and interfaces. Their closed `implementationKind` vocabulary is
+`interfaceImplementation`, `derivedType`, `override`, and `objectExpression`; concrete hits rank
+before abstract scaffolding, and `likelyImplementation` appears only for one concrete result with
+complete, untruncated coverage and exact semantic confidence. Group counts use first-discovery
+attribution under request-wide physical-site deduplication; each returned item's `project` remains
+its exact compiler owner. Typed expression traversal visits every FCS child form but excludes
+quotation bodies with `fsharp_workspace_quotation_bodies_excluded`. A separate
+`keepAssemblyContents=true` checker cache prevents these scans from evicting the cache used by
+`symbol_at`, `definition`, and `references`. The host's target-compatible
 `FSharp.Core` fallback is always disclosed as partial because it was not selected by evaluated
 project authority. C#-targeted F# project references, multi-target compatibility, netstandard1.x
-compile-input materialization, and the remaining semantic operations still disclose stable
+compile-input materialization, and callers/callees/hierarchy still disclose stable
 unsupported boundaries. Generic indexed search
 is language-neutral for C# and F# `.fs/.fsi`: an `.fsx`-only or other text-only scope is refused,
 while a mixed scope reports `unsupported_language_files_skipped`. This keeps
@@ -326,13 +341,14 @@ from the context. `partial:true` and `partialReason` remain visible independentl
 | `fsharp_core_reference_defaulted` | exact | The selected context used the expected `FSharp.Core` default without host fallback. |
 | `fsharp_binary_references_snapshotted` | exact | Binary inputs were copied and verified as immutable request evidence. |
 | `fsharp_package_references_snapshotted` | exact | Restored package inputs were copied and verified as immutable request evidence. |
-| `fsharp_references_workspace_dependents_not_scanned` | exact | The selected-project result is compiler-exact; this separately discloses that its workspace total is a lower bound. |
-| `fsharp_references_workspace_deadline` | exact | Completely scanned project groups remain compiler-exact, while unvisited dependents make the workspace total a lower bound. |
-| `fsharp_references_dependent_failed` | exact | A dependent context failed independently; successful groups remain compiler-exact and the failed group is attributed. |
-| `fsharp_references_dependent_discovery_incomplete` | exact | At least one potential F# consumer could not be evaluated from the pinned snapshot; completed groups remain compiler-exact while the workspace total is a lower bound. |
-| `fsharp_references_declaring_project_failed` | exact | The selected consumer was checked, but its distinct declaring-project context could not be counted; completed groups remain compiler-exact and the total is a lower bound. |
-| `fsharp_references_unsupported_boundary` | exact | A non-F# project-reference path was excluded explicitly from dependent scanning. |
-| `fsharp_references_binary_dependents_not_scanned` | exact | An assembly/HintPath-coupled consumer was identified but cannot be proven from source ProjectReference authority. |
+| `fsharp_workspace_dependents_not_scanned` | exact | The selected-context result is compiler-exact; this operation-neutral references/implementations token separately discloses that its workspace total is a lower bound. |
+| `fsharp_workspace_deadline` | exact | Completely scanned project groups remain compiler-exact, while unvisited dependents make the workspace total a lower bound. |
+| `fsharp_workspace_dependent_failed` | exact | A dependent context failed independently; successful groups remain compiler-exact and the failed group is attributed. |
+| `fsharp_workspace_dependent_discovery_incomplete` | exact | At least one potential F# consumer could not be evaluated from the pinned snapshot; completed groups remain compiler-exact while the workspace total is a lower bound. |
+| `fsharp_workspace_declaring_project_failed` | exact | The selected consumer was checked, but its distinct declaring-project context could not be counted; completed groups remain compiler-exact and the total is a lower bound. |
+| `fsharp_workspace_quotation_bodies_excluded` | exact | Quotation bodies were not traversed for implementations; completed contexts remain compiler-exact and the total is a lower bound. |
+| `fsharp_workspace_unsupported_boundary` | exact | A non-F# project-reference path was excluded from dependent scanning. |
+| `fsharp_workspace_binary_dependents_not_scanned` | exact | An assembly/HintPath-coupled consumer was identified but cannot be proven from source ProjectReference authority. |
 | `fsharp_core_reference_host_fallback` | indexed | A host-selected `FSharp.Core` substituted for project authority. |
 | `fsharp_semantic_diagnostics_present` | indexed | Compiler errors mean the selected context did not close cleanly. |
 

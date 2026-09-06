@@ -59,6 +59,12 @@ internal static class NoteIds
         "references.samples_byte_budget"; // bounded sample evidence was omitted by the final response byte budget
     public const string FSharpReferenceGroupsByteBudget =
         "fsharp.reference_groups_byte_budget"; // project-group metadata was omitted by the final response byte budget
+    public const string FSharpImplementationItemsByteBudget =
+        "fsharp.implementation_items_byte_budget";
+    public const string FSharpImplementationGroupsByteBudget =
+        "fsharp.implementation_groups_byte_budget";
+    public const string FSharpWorkspaceCoverageByteBudget =
+        "fsharp.workspace_coverage_byte_budget";
     public const string SemanticDeclarationSitesBudget =
         "semantic.declaration_sites_budget"; // optional declaration sites omitted by count/byte budget
     public const string DocumentationIdPositionShared =

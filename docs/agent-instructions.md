@@ -101,8 +101,11 @@ ownership, dependencies, or likely tests.
 - C# supports compiler-exact semantic navigation when its project model closes.
 - F# `.fs` and `.fsi` files support indexed declarations, outlines, position-based
   `symbol_at`, definitions through the selected root's F# `ProjectReference` closure under the
-  evaluated MSBuild transitivity and bounded child-TFM policies, and references counted across the
-  selected root, a distinct declaring project, and proven workspace dependents. Literal physical
+  evaluated MSBuild transitivity and bounded child-TFM policies, and compiler-bound references plus
+  position-only implementations across the selected closure, distinct declaring projects, and
+  proven workspace dependents. Implementations accept type or dispatch-slot positions, retarget
+  override positions with disclosure, return named implementers/derived types/exact overrides/typed
+  object expressions, and rank concrete hits before abstract scaffolding. Literal physical
   project paths are authoritative; non-F# targets, cycles, unsupported metadata, missing projects,
   and unavailable target frameworks fail closed without borrowing a last-built DLL. Exact child
   TFMs win; if exact is absent, only a single-target `netstandard` child is table-selectable.
@@ -115,10 +118,12 @@ ownership, dependencies, or likely tests.
   F# project/TFM from the same pinned snapshot; coverage reports evaluated and unevaluated potential
   consumers. Physical sites are deduplicated across contexts. Unevaluated, excluded, failed, or
   deadline-pending scope makes the total a workspace lower bound without discarding completely
-  scanned groups, while test-project and generated-file filters remain explicit. F# semantic confidence is
+  scanned groups, while test-project and generated-file filters remain explicit. Quotation bodies
+  are excluded from implementation traversal and disclosed through the operation-neutral
+  `fsharp_workspace_quotation_bodies_excluded` reason. F# semantic confidence is
   exact when the selected context carries only disclosed assumptions or immutable-evidence
   provenance; it is indexed when anything was substituted, errored, or removed from the context.
-  Broader F# semantic operations may return explicit unsupported or partial reasons. `.fsx`
+  F# callers, callees, and hierarchy may return explicit unsupported reasons. `.fsx`
   remains text-only.
 - When `search_symbol.fsharpParseCoverage` is present, `unrepresentedOwnerProjects` means an
   affected owner retained no syntax parse context; `partiallyTruncatedOwnerProjects` means it

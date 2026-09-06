@@ -1715,6 +1715,9 @@ try {
         Assert-True ([bool]$fsharpOverview.git.headMatchesIndex) "FSharp HEAD no longer matches the fresh integration index"
         Assert-Equal ([string]$fsharpOverview.meta.indexVersion) ([string]$fsharpCapabilities.index.indexVersion) "FSharp capabilities evidence is stale for the judged index epoch"
         Assert-CapabilitySemanticInputAuthority $fsharpCapabilities.semantic "FSharp"
+        Assert-Equal 1 @($fsharpCapabilities.features | Where-Object {
+            [string]$_.id -eq "fsharp-implementations-workspace"
+        }).Count "FSharp implementations feature id is missing or duplicated"
     }
 
     Test-IntegrationCase "official FSharp repository counts" {
@@ -1789,15 +1792,31 @@ try {
         mode = "auto"
         timeoutMs = 30000
     }
-    $evidence.results.fsharpSemanticBoundary = [ordered]@{ symbolAt = $fsharpSymbolAt; definition = $fsharpDefinition }
+    $fsharpImplementations = Invoke-McpTool $fsharpWriter "implementations" @{
+        path = [string]$fsharpBaseline.target.sourcePath
+        line = [int]$fsharpBaseline.target.line
+        column = [int]$fsharpBaseline.target.column
+        timeoutMs = 30000
+    }
+    $evidence.results.fsharpSemanticBoundary = [ordered]@{
+        symbolAt = $fsharpSymbolAt
+        definition = $fsharpDefinition
+        implementations = $fsharpImplementations
+    }
     Test-IntegrationCase "official FSharp bounded semantic boundary is explicit" {
-        foreach ($payload in @($fsharpSymbolAt, $fsharpDefinition)) {
+        foreach ($payload in @($fsharpSymbolAt, $fsharpDefinition, $fsharpImplementations)) {
             Assert-Equal ([string]$fsharpBaseline.target.semanticError) ([string]$payload.error) "Official FSharp semantic boundary changed"
             Assert-True ([bool]$payload.partial) "Official FSharp semantic boundary omitted partial=true"
             Assert-Equal ([string]$fsharpBaseline.target.semanticPartialReason) ([string]$payload.partialReason) "Official FSharp semantic partial reason changed"
             Assert-Equal ([string]$fsharpBaseline.target.projectPath) ([string]$payload.selectedFSharpTypeCheckContext.project) "Official FSharp semantic boundary selected the wrong project"
             Assert-Equal ([string]$fsharpBaseline.target.targetFramework) ([string]$payload.selectedFSharpTypeCheckContext.targetFramework) "Official FSharp semantic boundary selected the wrong target framework"
         }
+    }
+    Test-IntegrationCase "official FSharp implementations enters the semantic path" {
+        Assert-Equal "implementations" ([string]$fsharpImplementations.operation) `
+            "Official FSharp implementations returned the wrong operation identity"
+        Assert-True ([string]$fsharpImplementations.error -ne "unsupported_language") `
+            "Official FSharp implementations remained behind the unsupported-language gate"
     }
 
     $secondClient = Start-McpClient "second-client" $Workspace $IndexDb
