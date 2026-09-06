@@ -430,7 +430,7 @@ function isAbsoluteHttps(value) {
 
 function htmlCode(id) {
   const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`<pre\\s+id="${escaped}"><code>([\\s\\S]*?)<\\/code><\\/pre>`, "i").exec(html);
+  const match = new RegExp(`<pre\\s+id="${escaped}"[^>]*><code>([\\s\\S]*?)<\\/code><\\/pre>`, "i").exec(html);
   if (!match) return "";
   return match[1]
     .replaceAll("&lt;", "<")
@@ -692,10 +692,16 @@ check(!/<button\b(?![^>]*\btype="button")[^>]*>/i.test(html), "Every button must
 check(!/<article\b[^>]*\btabindex=/i.test(html), "Noninteractive article cards must not be keyboard tab stops.");
 check(/<p\b[^>]*class="[^"]*\bhero__eyebrow\b[^"]*"[^>]*>\s*Local code navigation for AI agents\s*<\/p>/i.test(html),
   "The hero eyebrow must remain text-only without the decorative cyan dot.");
-check(/<p\b[^>]*class="[^"]*\bhero__lead\b[^"]*"[^>]*>\s*PhoenixCodeNav helps Claude Code, Codex, and other MCP clients navigate large C# workspaces locally, efficiently, and with every answer labeled by confidence\.\s*<\/p>/i.test(html),
-  "The hero lead must use the direct 'workspaces locally' phrasing without an intervening dash.");
-check(/It is the connection that lets your coding agent use local tools\. Phoenix runs behind the agent\. It is not another editor or chat app\./i.test(html),
-  "The plain-language MCP explanation must use sentence breaks instead of an em dash.");
+const heroLeadMarkup = /<p\b[^>]*class="[^"]*\bhero__lead\b[^"]*"[^>]*>([\s\S]*?)<\/p>/i.exec(html)?.[1] ?? "";
+const heroLeadText = heroLeadMarkup.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+check(heroLeadText === "Explore large C# and mixed C#/F# repos through MCP or the CLI. Focused answers. Clear confidence labels.",
+  "The hero must introduce local navigation, MCP and CLI access, and confidence labels.");
+check(matches(/<span\b[^>]*>/gi, heroLeadMarkup).length === 6,
+  "The compact desktop hero lead must expose six lines for its visual contour.");
+check(/Connect your agent or call a tool from your terminal\. Same executable\. Same local engine\./i.test(html),
+  "The plain-language introduction must explain the shared MCP and CLI engine.");
+check(/<p\b[^>]*class="[^"]*\bhero__eyebrow\b[^"]*"[^>]*>[\s\S]*?<div\b[^>]*class="[^"]*\bhero__copy\b[^"]*"[^>]*>[\s\S]*?<figure\b[^>]*class="[^"]*\batlas\b[^"]*"[^>]*>[\s\S]*?<div\b[^>]*class="[^"]*\bhero__details\b[^"]*"[^>]*>[\s\S]*?<div\b[^>]*class="[^"]*\bhero__plain-language\b[^"]*"[^>]*>/i.test(html),
+  "The hero source order must keep its eyebrow and headline before the centered atlas, followed by the explanation and plain-language note.");
 
 const understanding = roslynBaseline.understandingTarget;
 const understandingSource = htmlCode("anatomy-raw");
@@ -776,8 +782,10 @@ check(/share one Phoenix daemon per workspace[\s\S]*typed, actionable cause/i.te
   "The FAQ must explain multi-agent daemon sharing and the typed startup-failure surface.");
 check(!/\bread-only follower\b|\bwriter\/follower\b/i.test(html),
   "The site must not describe the retired writer/follower topology as the current runtime.");
-check(/evaluated NuGet package closure[\s\S]*project-to-project F# references remain unsupported/i.test(html),
-  "The F# answer must pair the package-closure capability with the undisclosed-free project-reference boundary.");
+check(/Bounded F# support includes search, indexed declarations, outlines, position lookups, definitions through a supported F# project-reference closure, implementations, callers and callees, compiler-bound references across proven workspace dependents, and single-target netstandard2\.0\/2\.1 semantics\./i.test(html) &&
+  /F# type hierarchy, semantic navigation through C# project references, compatibility fallback from multi-target children, and netstandard1\.x compile inputs remain unsupported\./i.test(html) &&
+  !/references (?:only )?in the selected project|project-to-project F# references remain unsupported|F# implementations, callers, callees, and hierarchy remain unsupported|callers, callees[^.]*remain unsupported/i.test(html),
+  "The F# summary must state supported workspace navigation and the remaining language boundaries without retaining retired restrictions.");
 
 const proofCards = matches(/<article\b[^>]*class="[^"]*\bproof-card\b[^"]*"[^>]*>[\s\S]*?<\/article>/gi)
   .map((match) => match[0]);
@@ -818,10 +826,9 @@ check(!/href="#setup"/i.test(html),
   "The website must not retain links to the removed setup section.");
 check(installGuideLinks.length === 3 && installGuideLinks.every((tag) =>
   attribute(tag, "target") === "_blank" && attribute(tag, "rel").split(/\s+/).includes("noopener")),
-"The hero, final call to action, and footer must link safely to the README installation guide.");
-check(/<div class="section-label"[^>]*>\s*<span>06<\/span><span>The trust boundary<\/span>/i.test(html) &&
-  /<div class="section-label section-label--dark"[^>]*>\s*<span>07<\/span><span>Use the right tool<\/span>/i.test(html),
-"Section numbering must remain sequential after removing the setup walkthrough.");
+"The hero, MCP/CLI access section, and footer must link safely to the README installation guide.");
+check(/<section\b[^>]*id="capabilities"[\s\S]*<section\b[^>]*id="use"[\s\S]*<section\b[^>]*id="trust"[\s\S]*<details\b[^>]*id="technical"[\s\S]*<section\b[^>]*id="anatomy"/i.test(html),
+"The landing page must lead with capabilities, access, and boundaries while keeping the technical walkthrough in an optional disclosure.");
 
 const robots = modeRobots;
 if (launchMode) {
@@ -841,22 +848,41 @@ if (launchMode) {
 
 const stylesheet = stylesheets.length === 1 && stylesheets[0].exists ? readFileSync(stylesheets[0].path, "utf8") : "";
 const script = scripts.length === 1 && scripts[0].exists ? readFileSync(scripts[0].path, "utf8") : "";
+check(/const cx = width \* 0\.5;\s*const cy = height \* 0\.5;/i.test(script) &&
+  /horizon = parseFloat\(getComputedStyle\(sphere\)\.width\) \/ 2/.test(script),
+  "The centered hero atlas must draw the same sphere that the layout reserves.");
 check(/\.proof-dashboard\s+\.proof-card\.proof-card--shared\s*\{[^}]*grid-column:\s*1\s*\/\s*-1/i.test(stylesheet),
   "The Shared daemon card must span the proof dashboard without bypassing responsive CSS.");
 check(/\.setup-step__copy\s*\{[^}]*min-width:\s*0/i.test(stylesheet) &&
   /\.setup-step__copy\s+code\s*\{[^}]*overflow-wrap:\s*anywhere/i.test(stylesheet),
 "The larger anatomy copy must not let long inline identifiers widen the mobile layout.");
-check(/\.setup__head\s*\{[^}]*margin:\s*clamp\(65px,\s*9vw,\s*130px\)\s+0\s+clamp\(75px,\s*10vw,\s*145px\)/i.test(stylesheet),
+check(/\.setup__head\s*\{[^}]*margin:\s*clamp\(40px,\s*4\.5vw,\s*64px\)\s+0/i.test(stylesheet),
   "The anatomy heading must retain breathing room below its section label.");
 check(/\.hero__line\s*\{[^}]*overflow:\s*hidden[^}]*padding-bottom:\s*0\.2em[^}]*margin-bottom:\s*-0\.12em/i.test(stylesheet) &&
   /\.hero__line--accent\s*>\s*span\s*\{[^}]*padding-bottom:\s*0\.18em[^}]*margin-bottom:\s*-0\.18em/i.test(stylesheet),
   "The animated hero lines and gradient span must paint full descenders without changing line rhythm.");
+check(/\.hero__stage\s*\{[^}]*grid-template-areas:\s*"headline atlas details"/i.test(stylesheet) &&
+  /\.atlas\s*\{[^}]*grid-area:\s*atlas/i.test(stylesheet),
+  "The desktop hero must place the atlas between its headline and supporting details.");
+check(/@media\s*\(max-width:\s*1020px\)[\s\S]*?\.hero__stage\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)[^}]*grid-template-areas:\s*"headline"\s*"atlas"\s*"details"/i.test(stylesheet),
+  "The compact hero must preserve a readable headline, atlas, explanation, and plain-language sequence.");
+check(/\.hero__line\s*\{[^}]*width:\s*var\(--line-width/i.test(stylesheet) &&
+  /\.hero__lead\s*>\s*span\s*\{[^}]*margin-left:\s*var\(--line-inset/i.test(stylesheet),
+  "Both hero text contours must use their measured line boundaries.");
+check(/Math\.sqrt\(Math\.max\(0, radius \* radius - dy \* dy\)\)/.test(script) &&
+  /document\.fonts\?\.ready\.then\(resize\)/.test(script),
+  "The text contour must follow the sphere geometry and update when fonts become ready.");
+check(/\.hero__stage\s*\{[^}]*--sphere-size:\s*clamp\(/i.test(stylesheet) &&
+  /\.atlas__void\s*\{[^}]*width:\s*var\(--sphere-size\)[^}]*height:\s*var\(--sphere-size\)/i.test(stylesheet) &&
+  !/horizonScale/.test(script),
+  "The hero must share one fluid sphere size between its canvas and text layout.");
 check(/@media\s*\(min-width:\s*1021px\)[\s\S]*?\.nav__links a,\s*\.nav__github\s*\{[^}]*font-size:\s*17px/i.test(stylesheet) &&
-  /@media\s*\(min-width:\s*1021px\)[\s\S]*?\.hero__lead\s*\{[^}]*font-size:\s*clamp\(24px,\s*1\.8vw,\s*29px\)/i.test(stylesheet) &&
+  /\.hero__lead\s*\{[^}]*font-size:\s*clamp\(18px,\s*1\.55vw,\s*24px\)/i.test(stylesheet) &&
   /@media\s*\(min-width:\s*1021px\)[\s\S]*?\.hero__plain-language p\s*\{[^}]*font-size:\s*19px/i.test(stylesheet) &&
-  /@media\s*\(min-width:\s*1021px\)[\s\S]*?\.trust-rail__inner b\s*\{[^}]*font-size:\s*18px/i.test(stylesheet) &&
-  /@media\s*\(min-width:\s*1021px\)[\s\S]*?\.question-card p,[\s\S]*?\.faq details p\s*\{[^}]*font-size:\s*20px/i.test(stylesheet),
-"The desktop breakpoint must retain the larger navigation, hero, feature-rail, and supporting-content type scale.");
+  /\.capability-grid p\s*\{[^}]*font-size:\s*18px/i.test(stylesheet) &&
+  /\.access-card\s*>\s*p\s*\{[^}]*font-size:\s*18px/i.test(stylesheet) &&
+  /@media\s*\(min-width:\s*1021px\)[\s\S]*?\.faq details p\s*\{[^}]*font-size:\s*18px/i.test(stylesheet),
+"The desktop breakpoint must retain the larger navigation, hero, capability, access-card, and FAQ type scale.");
 const readableFontSize = (value) => {
   const normalized = value.trim();
   const supported = /^\d+(?:\.\d+)?px$/i.test(normalized) ||

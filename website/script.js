@@ -193,11 +193,19 @@
   function setupAtlas() {
     const atlas = document.getElementById("atlas");
     const scene = document.getElementById("atlas-scene");
+    const sphere = scene?.querySelector(".atlas__void");
+    const stage = atlas?.closest(".hero__stage");
     const canvas = document.getElementById("atlas-canvas");
     const context = canvas?.getContext("2d");
     const pauseButton = document.getElementById("atlas-pause");
     const pauseLabel = pauseButton?.querySelector(".atlas__pause-label");
-    if (!atlas || !scene || !canvas || !context || !pauseButton || !pauseLabel) return;
+    if (!atlas || !scene || !sphere || !stage || !canvas || !context || !pauseButton || !pauseLabel) return;
+
+    const copy = stage.querySelector(".hero__copy");
+    const details = stage.querySelector(".hero__details");
+    const headlineLines = [...stage.querySelectorAll(".hero__line")];
+    const leadLines = [...stage.querySelectorAll(".hero__lead > span")];
+    const desktop = window.matchMedia("(min-width: 1021px)");
 
     let state = reducedMotion.matches ? 3 : 0;
     // Keep explicit user intent separate from the operating-system preference so a live
@@ -207,6 +215,7 @@
     let width = 1;
     let height = 1;
     let dpr = 1;
+    let horizon = 1;
     let raf = 0;
     let timer = 0;
     let lastTime = performance.now();
@@ -214,10 +223,12 @@
     const TAU = Math.PI * 2;
     let stars = [];
     let disk = [];
+    let frontDisk = [];
 
     function createField() {
       const random = mulberry32(20260821);
-      const starCount = width < 520 ? 70 : 110;
+      const compactField = horizon * 2 < 520;
+      const starCount = compactField ? 70 : 110;
       stars = Array.from({ length: starCount }, () => ({
         x: random(),
         y: random(),
@@ -225,8 +236,8 @@
         twinkle: random() * TAU,
         warm: random() > 0.8
       }));
-      const diskCount = width < 520 ? 520 : 920;
-      disk = Array.from({ length: diskCount }, () => {
+      const diskCount = compactField ? 520 : 920;
+      const createGrain = () => {
         const band = Math.pow(random(), 1.5);
         return {
           a: 1.35 + band * 1.25,
@@ -235,17 +246,58 @@
           drift: (random() - 0.5) * 0.05,
           heat: 0.5 + random() * 0.5
         };
+      };
+      disk = Array.from({ length: diskCount }, createGrain);
+      // Add density only to the foreground band, preserving the rear ring's seeded field.
+      frontDisk = [...disk, ...Array.from({ length: Math.round(diskCount * 0.6) }, createGrain)];
+    }
+
+    function layoutOrbitCopy() {
+      if (!copy || !details) return;
+      if (!desktop.matches) {
+        [...headlineLines, ...leadLines].forEach((line) => {
+          line.style.removeProperty("--line-width");
+          line.style.removeProperty("--line-inset");
+        });
+        return;
+      }
+
+      // Layout coordinates ignore entrance-animation transforms. Use the nearest
+      // edge of each full line box so its corners also clear the luminous rim.
+      const cx = stage.clientWidth / 2;
+      const cy = atlas.offsetTop + atlas.offsetHeight / 2;
+      const gap = parseFloat(getComputedStyle(stage).getPropertyValue("--orbit-gap"));
+      const radius = horizon * 1.03 + gap;
+      const boundary = (line, owner) => {
+        const top = owner.offsetTop + line.offsetTop;
+        const bottom = top + line.offsetHeight;
+        const dy = Math.max(top - cy, cy - bottom, 0);
+        return Math.sqrt(Math.max(0, radius * radius - dy * dy));
+      };
+      const placements = [
+        ...headlineLines.map((line) => ({
+          line, width: cx - boundary(line, copy) - copy.offsetLeft
+        })),
+        ...leadLines.map((line) => {
+          const left = cx + boundary(line, details);
+          return { line, width: stage.clientWidth - left, inset: left - details.offsetLeft };
+        })
+      ];
+      placements.forEach(({ line, width: lineWidth, inset }) => {
+        line.style.setProperty("--line-width", `${lineWidth.toFixed(2)}px`);
+        if (inset !== undefined) line.style.setProperty("--line-inset", `${inset.toFixed(2)}px`);
       });
     }
 
     function resize() {
-      const rect = canvas.getBoundingClientRect();
-      width = Math.max(1, rect.width);
-      height = Math.max(1, rect.height);
+      width = Math.max(1, canvas.clientWidth);
+      height = Math.max(1, canvas.clientHeight);
+      horizon = parseFloat(getComputedStyle(sphere).width) / 2;
       dpr = Math.min(window.devicePixelRatio || 1, 1.5);
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      layoutOrbitCopy();
       createField();
       draw(performance.now(), true);
     }
@@ -264,8 +316,8 @@
     }
 
     function drawDiskPass(time, still, cx, cy, horizon, farPass, ramp) {
-      const flat = 0.12;
-      for (const grain of disk) {
+      const flat = farPass ? 0.12 : 0.09;
+      for (const grain of farPass ? disk : frontDisk) {
         const angle = grain.phi + (still ? 0 : time * 0.002 * (0.9 / Math.pow(grain.a, 1.5)));
         const sinA = Math.sin(angle);
         if (farPass ? sinA >= 0 : sinA < 0) continue;
@@ -279,14 +331,14 @@
 
         if (farPass) {
           const wrap = -sinA;
-          const ringR = horizon * (1.08 + t * 0.2) + grain.drift * horizon;
+          const ringR = horizon * (1.08 + t * 0.01) + grain.drift * horizon * 0.2;
           const px = cx + cosA * (radius + (ringR - radius) * wrap);
           const lift = wrap * (radius * flat + (ringR - radius * flat) * wrap);
           drawGrain(px, cy - lift, size, color, alpha);
-          drawGrain(px, cy + lift * 0.92, size * 0.85, color, alpha * 0.45);
+          drawGrain(px, cy + lift, size * 0.85, color, alpha * 0.45);
         } else {
           const px = cx + cosA * radius;
-          const py = cy + sinA * radius * flat + grain.drift * horizon;
+          const py = cy + sinA * radius * flat + grain.drift * horizon * 0.65;
           drawGrain(px, py, size, color, alpha);
         }
       }
@@ -302,8 +354,7 @@
         context.globalCompositeOperation = "source-over";
       }
       const cx = width * 0.5;
-      const cy = height * 0.52;
-      const horizon = Math.min(width, height) * 0.19;
+      const cy = height * 0.5;
       const ramp = 0.6 + state * 0.12;
       const einstein = horizon * (1.0 + state * 0.04);
 
@@ -341,7 +392,7 @@
       context.arc(cx, cy, horizon * 1.03, 0, TAU);
       context.strokeStyle = `rgba(255,228,190,${0.62 + state * 0.1})`;
       context.lineWidth = 1.8;
-      context.shadowBlur = 26;
+      context.shadowBlur = 14;
       context.shadowColor = "rgba(255,180,115,0.85)";
       context.stroke();
       context.shadowBlur = 0;
@@ -357,7 +408,12 @@
 
     function loop(time) {
       raf = 0;
-      if (!canAnimate()) return;
+      if (!canAnimate()) {
+        // A frame can observe the preference before its change notification.
+        // Apply the same still state and controls before stopping the loop.
+        if (reducedMotion.matches) applyReducedMotionPreference();
+        return;
+      }
       lastTime = time;
       draw(time);
       raf = requestAnimationFrame(loop);
@@ -385,6 +441,7 @@
       const motionPaused = reducedMotion.matches || userPaused;
       pauseButton.setAttribute("aria-pressed", String(motionPaused));
       pauseLabel.textContent = reducedMotion.matches ? "Motion reduced" : userPaused ? "Play motion" : "Pause motion";
+      pauseButton.title = pauseLabel.textContent;
       pauseButton.disabled = reducedMotion.matches;
       setGlobalMotionPaused(motionPaused);
     }
@@ -462,8 +519,11 @@
       }
     });
 
-    if ("ResizeObserver" in window) new ResizeObserver(resize).observe(canvas);
-    else window.addEventListener("resize", resize, { passive: true });
+    if ("ResizeObserver" in window) {
+      const observer = new ResizeObserver(resize);
+      [canvas, stage, copy, details].filter(Boolean).forEach((element) => observer.observe(element));
+    } else window.addEventListener("resize", resize, { passive: true });
+    document.fonts?.ready.then(resize);
 
     resize();
     setState(state);

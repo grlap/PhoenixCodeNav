@@ -1,6 +1,6 @@
 # PhoenixCodeNav website
 
-Static, package-free product website for PhoenixCodeNav. It is designed for people who are new to MCP and large-repository code navigation, while keeping the technical claims aligned with the repository documentation.
+Static, package-free product website for PhoenixCodeNav. The landing page introduces the product, three capabilities, MCP/CLI access, and confidence/local boundaries. An optional native disclosure contains the worked Roslyn example, operational signals, and deeper trust-boundary detail.
 
 ## Files
 
@@ -55,4 +55,5 @@ Before a public deployment:
 - The mobile menu is a native `details` element and gains focus containment when JavaScript runs.
 - The hero animation has a visible pause/play control and stops while offscreen or when the page is hidden.
 - `prefers-reduced-motion` skips continuous canvas animation, draws the final explanatory state as a still image, and reacts immediately when the preference changes after page load without losing the user's pause choice.
-- Code examples wrap instead of creating page-level horizontal overflow.
+- Code examples scroll horizontally inside keyboard-focusable, labeled regions instead of widening the page.
+- The circular black hole, tight gold ring, and orbiting particles are drawn locally in canvas, with a CSS fallback when JavaScript is unavailable. No external image asset is required.

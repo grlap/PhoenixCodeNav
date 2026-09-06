@@ -1,13 +1,21 @@
 # PhoenixCodeNav
 
-A code-navigation [MCP](https://modelcontextprotocol.io) server for **very large C# and mixed
-C#/F# workspaces** (designed for enterprise monorepos with thousands of csproj/fsproj, legacy
+A local code-navigation engine with an [MCP](https://modelcontextprotocol.io) server **and a CLI**
+for **very large C# and mixed C#/F# workspaces** (designed for enterprise monorepos with thousands of csproj/fsproj, legacy
 *and* SDK-style, net472-first).
-It gives coding agents (Claude Code, Codex, anything MCP) a fast, structured alternative to
-grep-driven exploration: ranked search, file outlines, exact references, project graphs, and
+It gives coding agents (Claude Code, Codex, MCP clients, and shell-only agents) a fast, structured
+alternative to grep-driven exploration: ranked search, file outlines, exact references, project graphs, and
 compact context packs — with strict ordinary response budgets so results stay compact. One
 declared exception preserves an intrinsically oversized compiler symbol identity intact instead
 of truncating or rejecting it, with exact byte metadata on that response.
+
+**Two ways in, one engine:** connect an agent through MCP, or call the same tools from your
+terminal with `PhoenixCodeNav.Mcp.exe <tool>`. Both use the same workspace daemon and return
+the same tool-result JSON. The CLI is included in the same executable; no separate CLI install
+or MCP client configuration is needed for shell use.
+
+[Install Phoenix](#install-work-machine) · [Connect an MCP client](#choose-how-to-connect) ·
+[Use the CLI](#use-from-the-command-line-cli)
 
 > Named after **Phoenix A**, the most massive known black hole — built to navigate the
 > heaviest repositories. No relation to Apache Phoenix.
@@ -31,7 +39,7 @@ navigation questions in four layers, each labeled with how trustworthy it is:
 | **Indexed text** (SQLite FTS5, C# + F# + Markdown + SQL) | `find_file`, `search_text`, `source_context`, `config_lookup`, `references` (candidates) | `indexed` |
 | **Syntax (C#)** (Roslyn parse, no compile; includes implicit/explicit conversion operators) | `outline`, `search_symbol`, `symbol_at`, `batch_outline` | `indexed` |
 | **Syntax (F#)** (FCS parse, no type check) | `search_symbol`; `outline` for project-owned `.fs` / `.fsi` | `indexed` |
-| **Semantic** (Roslyn for C#; bounded FCS type checks for F#) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at`, `definition` through an exact-first F# project-reference closure with bounded single-target `netstandard` compatibility, and references counted in the selected project | C# may be `exact`; successful bounded F# results may be `exact` when disclosed partial reasons preserve selected-context authority, while errors and authority loss are `indexed` |
+| **Semantic** (Roslyn for C#; bounded FCS type checks for F#) | C#: `definition`, `references`, `implementations`, `callers`, `callees`, `type_hierarchy`; F#: position `symbol_at`, `definition`, `references`, `implementations`, `callers`, and `callees`, with an exact-first F# project-reference closure and proven workspace-dependent scans for references, implementations, and callers | C# may be `exact`; successful bounded F# results may be `exact` when disclosed partial reasons preserve selected-context authority, while errors and authority loss are `indexed` |
 
 Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`project_graph`,
 `projects_containing`, `dependency_path`, `repo_overview`) and composites (`context_pack`,
@@ -57,8 +65,8 @@ specific to F#.
 **F# support is real, and deliberately bounded.** Phoenix indexes `.fs`, `.fsi`, and `.fsx` text,
 parses `.fsproj` compile ownership and references, and preserves C#↔F# project edges. Compile-owned
 `.fs` / `.fsi` files get indexed declaration-name search and syntax-only `outline`s from a pinned
-FSharp.Compiler.Service adapter, plus position-based `symbol_at`, `definition`, and selected-project
-`references` through a bounded FCS type check. The selected physical `.fsproj` + target-framework
+FSharp.Compiler.Service adapter, plus position-based `symbol_at`, `definition`, `references`,
+`implementations`, `callers`, and `callees` through bounded FCS type checks. The selected physical `.fsproj` + target-framework
 context recursively captures active F# `ProjectReference` inputs. An exact child target framework
 always wins. When exact is absent, only a single-target `netstandard1.0`–`netstandard2.1` child may
 be selected, according to Microsoft's public [.NET Standard implementation
@@ -74,12 +82,14 @@ transitive-reference default; `DisableTransitiveProjectReferences=true` and lega
 remain direct-only. Every captured physical project is checked once dependency-first, so child
 compiler errors are returned with their source paths and downgrade confidence through
 `fsharp_semantic_diagnostics_present` just like root errors. F# references count compiler-bound
-non-definition uses only in the selected root project and take bounded samples only from the pinned
-root source snapshot. Returned dependency declarations are identified separately by
+non-definition uses in the selected root, the symbol's declaring project in its F# reference
+closure, and proven F# workspace dependents across applicable target frameworks. Physical use
+sites are deduplicated across contexts, and bounded samples come from pinned source snapshots.
+Returned dependency declarations are identified separately by
 `declarationsFromProjectReferenceClosureCount`; `declarationsOutsideSelectedProjectCount` retains
 its existing count of declarations not returned in the response.
-The selected-project count is explicitly a workspace lower bound because
-dependent projects are not scanned yet. Active `PackageReference` items—including conditional central
+The total is a workspace lower bound only when coverage is incomplete; excluded, failed, and
+pending contexts are disclosed. Active `PackageReference` items—including conditional central
 `PackageVersion` authority from the nearest indexed `Directory.Packages.props`—use the selected
 target in an already-restored `project.assets.json`; reachable transitive compile assets are
 snapshotted without executing restore or MSBuild. Missing, unreadable, cyclic, metadata-unsupported,
@@ -96,9 +106,12 @@ retained none, while `partiallyTruncatedOwnerProjects` retained some but not all
 disjoint counts sum to the total. Scoped counts sum owner incidences per affected file, not
 distinct project identities. Missing rows are never treated as authoritative absence. Ordinary
 SDK/import limitations remain visible in
-`fsharpProjectOptionCoverage` as advisory evidence without making every search partial. F# implementations, callers/callees, and hierarchy stay
-**unsupported** rather than
-returning an empty or falsely exact answer. Phoenix never executes MSBuild targets or tasks: it
+`fsharpProjectOptionCoverage` as advisory evidence without making every search partial. F# implementations
+and callers scan proven workspace contexts; callees resolve the selected callable body through its
+F# project-reference closure. F# type hierarchy, semantic navigation through C# project references,
+compatibility fallback from multi-target children, and `netstandard1.x` compile inputs remain
+**unsupported** rather than returning an empty or falsely exact answer. Explicit target-framework
+selection and exact matches for multi-target projects are supported. Phoenix never executes MSBuild targets or tasks: it
 evaluates a documented subset of project files (simple properties and conditions, `Choose`, literal workspace-local
 `.props`, and the nearest ancestor `Directory.Build.props`/`.targets`). Unsupported authority either
 fails closed with a stable cause or continues only with an explicit partial cause; partial
@@ -264,6 +277,18 @@ semantic navigation. Keep the `portal/` directory beside the MCP executable so
 (A framework-dependent build — `dotnet publish -c Release -o artifacts/portable` — is ~5 MB
 but requires the .NET 10 runtime.)
 
+### Choose how to connect
+
+After installing the published executable, choose the interface that fits your workflow:
+
+| Workflow | Interface | Start here |
+|---|---|---|
+| An agent with MCP support | Register Phoenix as an MCP server | [Claude Code](#attach-to-claude-code) or [Codex](#attach-to-codex) |
+| A terminal, script, or shell-only agent | Invoke the same executable with a tool name | [CLI commands](#use-from-the-command-line-cli) |
+
+You can use both against one workspace. MCP sessions and CLI calls share its daemon, index,
+and warm semantic state.
+
 ### Attach to Claude Code
 
 Project-scoped `.mcp.json` at the repo root (recommended — checked in for the whole team):
@@ -300,12 +325,27 @@ env = { CODENAV_DEFAULT_QUERY_SCOPE = "first_party" }
 Then add the agent instructions from `docs/agent-instructions.md` to your repo's
 `CLAUDE.md` / `AGENTS.md` so agents prefer these tools over shell grep.
 
-### Use the same tools from a shell
+<a id="use-the-same-tools-from-a-shell"></a>
+
+### Use from the command line (CLI)
 
 Shell-only agents can call the published MCP executable directly. This is a CLI view of the MCP
 surface, not a second implementation: discovery and structural validation use the executable's
 own MCP registration metadata without starting the daemon; a validated invocation then joins the
 same workspace daemon and returns the tool's unchanged JSON envelope.
+
+With the publish directory on your `PATH`, start in the repository you want to navigate:
+
+```powershell
+PhoenixCodeNav.Mcp.exe tools
+PhoenixCodeNav.Mcp.exe search_symbol --workspace-root . --query IndexManager --limit 5
+```
+
+The first command discovers the available tools without starting a daemon. The second searches
+the current repository and starts or joins its shared daemon as needed. Substitute a symbol from
+your own codebase; use `help search_symbol` or `schema search_symbol` to inspect its arguments.
+If the executable is not on `PATH`, invoke its installed path instead, for example
+`& 'C:\tools\phoenix\PhoenixCodeNav.Mcp.exe' tools` in PowerShell.
 
 Invocation workspace precedence is `--workspace-root`, then `CODENAV_WORKSPACE_ROOT`, then the
 current working directory. This keeps the agent-natural `cd <repo>; PhoenixCodeNav.Mcp ...` form.
@@ -557,23 +597,28 @@ watcher, and lifecycle test projects under `tests/`.
   ordinary SDK/import limitations remain advisory structured coverage. `.fsx` stays text-only: script-only scopes are
   refused, while mixed scopes explicitly report skipped scripts. F# `outline` is syntax-only and
   limited to compile-owned `.fs` / `.fsi`.
-  F# semantics are position-only (`symbol_at`, `definition`, `references`) from one physical root
+  F# semantics are position-only (`symbol_at`, `definition`, `references`, `implementations`,
+  `callers`, and `callees`) from one physical root
   project and target framework, over a documented MSBuild-evaluation subset and its F#
   `ProjectReference` closure. Exact child TFMs win; table-compatible single-target
-  `netstandard2.0`/`netstandard2.1` children resolve, while multi-target compatibility and
+  `netstandard2.0`/`netstandard2.1` children resolve. Explicit selection and exact TFM matches
+  work for multi-target projects; compatibility fallback from multi-target children and
   `netstandard1.x` compile inputs fail closed. SDK-style projects are transitive by default;
   `DisableTransitiveProjectReferences=true` and legacy-style projects are direct-only. Definitions can
   resolve into that closure, and child compiler diagnostics are returned with their physical source
-  provenance. References exclude
-  declarations and dependency-project uses, preserve an exact count within the selected root while bounding only samples,
-  and mark the count as a workspace lower bound because dependent projects are not scanned.
+  provenance. References exclude declarations and count compiler-bound uses across the selected
+  root, the symbol's declaring project in its F# reference closure, and proven F# workspace
+  dependents across applicable TFMs. Physical sites are deduplicated; only samples are bounded.
+  The total is a lower bound only when coverage is incomplete, with the exclusions, failures,
+  and pending contexts disclosed.
   Unsupported authority either fails closed
   with a stable cause or continues only through the explicitly partial standard-SDK/toolchain and
   host-selected `FSharp.Core` boundaries described above. Within a successful F# semantic result,
   `exact` means the selected context carries only disclosed assumptions or immutable-evidence
   provenance; `indexed` means something was substituted, errored, or removed from that context.
-  F# implementations, callers/callees,
-  and hierarchy are not supported. Unscoped and explicit F# `search_symbol`
+  F# implementations and callers scan proven workspace contexts; callees resolve the selected
+  callable body through its F# project-reference closure. Type hierarchy and semantic navigation
+  through C# project references remain unsupported. Unscoped and explicit F# `search_symbol`
   scopes query the shared syntax index; results are partial when the scope contains a text-only
   language or when any F# parse context is failed/truncated or any actionable project-option
   context is incomplete.
