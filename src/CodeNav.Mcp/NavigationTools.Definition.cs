@@ -5,6 +5,10 @@ using ModelContextProtocol.Server;
 
 namespace CodeNav.Mcp;
 
+/// <summary>
+/// Owns: symbol_at and definition — dispatch, C# response shaping, declaration-body shaping, and live/indexed source disclosure.
+/// Does not own: F# shaping (NavigationTools.FSharp.cs), reference/implementation scans, or the shared selector and coverage primitives.
+/// </summary>
 public sealed partial class NavigationTools
 {
     [McpServerTool(Name = "symbol_at")]

@@ -4,6 +4,10 @@ using ModelContextProtocol.Server;
 
 namespace CodeNav.Mcp;
 
+/// <summary>
+/// Owns: outline and source_context — dispatch, C# syntactic outlines, and bounded live source reads, including ReadLinesUpTo.
+/// Does not own: F# outline shaping (NavigationTools.FSharp.cs), search, or compiler-semantic navigation.
+/// </summary>
 public sealed partial class NavigationTools
 {
     // ---------------------------------------------------------------- outline / source

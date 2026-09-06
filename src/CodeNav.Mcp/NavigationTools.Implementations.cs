@@ -5,6 +5,10 @@ using ModelContextProtocol.Server;
 
 namespace CodeNav.Mcp;
 
+/// <summary>
+/// Owns: implementations — dispatch, C# response shaping, and the index-driven base-list heuristic fallback with its bounded, "heuristic"-labeled result list.
+/// Does not own: F# shaping (NavigationTools.FSharp.cs), compiler resolution (CodeNav.Core), or the shared selector, coverage, and budget primitives.
+/// </summary>
 public sealed partial class NavigationTools
 {
     [McpServerTool(Name = "implementations")]

@@ -4,6 +4,10 @@ using ModelContextProtocol.Server;
 
 namespace CodeNav.Mcp;
 
+/// <summary>
+/// Owns: project_graph and projects_containing graph/ownership response shaping.
+/// Does not own: project discovery, index construction, or shared response primitives.
+/// </summary>
 public sealed partial class NavigationTools
 {
     // ---------------------------------------------------------------- projects

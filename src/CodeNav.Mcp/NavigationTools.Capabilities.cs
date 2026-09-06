@@ -5,6 +5,10 @@ using ModelContextProtocol.Server;
 
 namespace CodeNav.Mcp;
 
+/// <summary>
+/// Owns: server_capabilities and repo_overview — the features manifest, capability text budgets, and index/health summaries.
+/// Does not own: index-health production (CodeNav.Core), semantic execution, or the shared response primitives in NavigationTools.cs.
+/// </summary>
 public sealed partial class NavigationTools
 {
     // ---------------------------------------------------------------- capabilities / overview

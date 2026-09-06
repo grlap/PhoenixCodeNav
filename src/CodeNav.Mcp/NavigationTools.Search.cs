@@ -4,6 +4,10 @@ using ModelContextProtocol.Server;
 
 namespace CodeNav.Mcp;
 
+/// <summary>
+/// Owns: find_file, search_text, and search_symbol — indexed file, text, regex, and symbol discovery and their response shaping.
+/// Does not own: file outlines or source reads (NavigationTools.Outline.cs; declaration bodies in NavigationTools.Definition.cs), or compiler-semantic navigation.
+/// </summary>
 public sealed partial class NavigationTools
 {
     // ---------------------------------------------------------------- files / text
@@ -379,7 +383,6 @@ public sealed partial class NavigationTools
             meta,
         });
     }
-
 
     // ---------------------------------------------------------------- symbols
 

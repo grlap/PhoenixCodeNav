@@ -8,11 +8,12 @@ using ModelContextProtocol.Server;
 namespace CodeNav.Mcp;
 
 /// <summary>
-/// Owns: the MCP tool surface — argument handling, result shaping, budgets, and
-/// confidence/freshness metadata. Results carry the confidence they earn: "exact" for
-/// compiler-backed semantic answers, "indexed" for index/syntax-backed facts, and
-/// "heuristic" for naming/text inferences (implementations fallback, related_tests).
-/// Does not own: index building/queries (CodeNav.Core).
+/// Owns: NavigationTools construction and state, shared limits and test seams, and the argument, selector,
+/// confidence, coverage, freshness, shared symbol/group result-shaping, and error-response primitives its
+/// partials share. Results carry the confidence they earn: "exact" for compiler-backed semantic answers,
+/// "indexed" for index/syntax-backed facts, and "heuristic" for naming/text inferences (implementations
+/// fallback, related_tests).
+/// Does not own: individual MCP tool endpoints (the concern partials) or index building/queries (CodeNav.Core).
 /// </summary>
 [McpServerToolType]
 public sealed partial class NavigationTools

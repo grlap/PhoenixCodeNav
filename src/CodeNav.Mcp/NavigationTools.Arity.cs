@@ -2,6 +2,10 @@ using CodeNav.Core.Indexing;
 
 namespace CodeNav.Mcp;
 
+/// <summary>
+/// Owns: arity-qualified target selection for name-based semantic queries — ResolveArityTarget, ambiguity responses, and representative selection.
+/// Does not own: the tool endpoints that call it (the concern partials) or compiler resolution (CodeNav.Core).
+/// </summary>
 public sealed partial class NavigationTools
 {
     private sealed record ArityTargetSelection(

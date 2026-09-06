@@ -5,6 +5,10 @@ using ModelContextProtocol.Server;
 
 namespace CodeNav.Mcp;
 
+/// <summary>
+/// Owns: references — dispatch, C# filtering and grouping, and response shaping.
+/// Does not own: F# shaping (NavigationTools.FSharp.cs), compiler resolution (CodeNav.Core), or the shared selector, coverage, and budget primitives.
+/// </summary>
 public sealed partial class NavigationTools
 {
     [McpServerTool(Name = "references")]

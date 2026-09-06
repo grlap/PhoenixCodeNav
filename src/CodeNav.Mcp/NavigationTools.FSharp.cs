@@ -3,6 +3,10 @@ using CodeNav.Core.Semantic;
 
 namespace CodeNav.Mcp;
 
+/// <summary>
+/// Owns: F# response shaping for outline, symbol_at, definition, references, implementations, callers, and callees, plus the F# semantic meta and coverage envelopes.
+/// Does not own: C# tool dispatch (the concern partials), FCS execution (CodeNav.FSharp), or workspace/closure orchestration (CodeNav.Core SemanticService.FSharp partials).
+/// </summary>
 public sealed partial class NavigationTools
 {
     internal const int MaxFSharpOutlineParseContexts = 64;

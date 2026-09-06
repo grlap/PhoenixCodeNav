@@ -3,6 +3,10 @@ using ModelContextProtocol.Server;
 
 namespace CodeNav.Mcp;
 
+/// <summary>
+/// Owns: open_operations_portal — launching or reusing the local read-only Operations Portal for this workspace and shaping its url/instruction response.
+/// Does not own: portal hosting, health production, or the launcher implementation (IOperationsPortalLauncher).
+/// </summary>
 public sealed partial class NavigationTools
 {
     [McpServerTool(Name = "open_operations_portal")]

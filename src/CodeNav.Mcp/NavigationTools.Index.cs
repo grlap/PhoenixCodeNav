@@ -3,6 +3,10 @@ using ModelContextProtocol.Server;
 
 namespace CodeNav.Mcp;
 
+/// <summary>
+/// Owns: refresh_index request validation and mutation queueing.
+/// Does not own: index build/refresh execution or shared writer/unavailable envelopes.
+/// </summary>
 public sealed partial class NavigationTools
 {
     // ---------------------------------------------------------------- maintenance
