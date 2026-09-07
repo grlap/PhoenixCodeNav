@@ -9,7 +9,7 @@ namespace CodeNav.Tests;
 /// Regression coverage for review batch 4: PhoenixCodeNav-cdd (search_text line grading,
 /// no silent first-token substitution) and 1ze (heuristic confidence label).
 /// </summary>
-public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
+public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifetime
 {
     private readonly IndexFixture _fx;
     private readonly IndexManager _manager;
@@ -24,10 +24,18 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IDisposable
         _semantic = new SemanticService(_manager);
     }
 
-    public void Dispose()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
-        _semantic.Dispose();
-        _manager.Dispose();
+        try
+        {
+            _semantic.Dispose();
+        }
+        finally
+        {
+            await _manager.ShutdownAsync();
+        }
     }
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;

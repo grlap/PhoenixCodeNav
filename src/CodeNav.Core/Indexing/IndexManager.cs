@@ -2884,21 +2884,7 @@ public sealed class IndexManager : IDisposable
 
     public void Dispose()
     {
-        WorkspaceWatcher? watcher;
-        GitWatcher? gitWatcher;
-        lock (_disposeLock)
-        {
-            _disposed = true; // block any in-flight watcher publication
-            watcher = Interlocked.Exchange(ref _watcher, null);
-            gitWatcher = Interlocked.Exchange(ref _gitWatcher, null);
-        }
-        Telemetry.Dispose();                 // epuc.1: flush the bounded stream (2s cap)
-        TelemetryIpc.Dispose();              // x5ls.1: stop the IPC producer (2s cap)
-        gitWatcher?.Dispose();               // stop git HEAD signals
-        _gitHeadRetry?.Dispose();            // 17zd: stop the null-HEAD retry (callback checks _disposed)
-        _refreshRecoverySweepRetry?.Dispose(); // stop stale-input recovery retries
-        watcher?.Dispose();                  // stop new events reaching the queue
-        _refreshQueue.Writer.TryComplete();  // let the pump drain and exit its loop
+        StopBackgroundWorkAndDetachWatchers(disposeTelemetryBounded: true);
 
         // Let the startup task settle first (it may still be opening the store), then wait
         // for the pump to actually stop using the store. Only dispose the store once both
@@ -2927,6 +2913,75 @@ public sealed class IndexManager : IDisposable
                 TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);
         }
+    }
+
+    /// <summary>Stops watchers immediately, then awaits this manager's startup, refresh pump,
+    /// and telemetry writer before releasing its store and ownership. The wait is deliberately
+    /// unbounded: it waits only for work the manager started, while production hosts retain the
+    /// bounded Dispose path. The manager is terminal afterward; a later Start call is a no-op.
+    /// Callers that must remove the workspace after shutdown should await this method.</summary>
+    internal async ValueTask ShutdownAsync()
+    {
+        StopBackgroundWorkAndDetachWatchers(disposeTelemetryBounded: false);
+
+        Task waitDiagnostic = Task.Delay(DisposeWaitTimeoutForTest);
+        bool waitLogged = false;
+
+        Task start = _startTask ?? Task.CompletedTask;
+        if (!start.IsCompleted && await Task.WhenAny(start, waitDiagnostic).ConfigureAwait(false) == waitDiagnostic)
+        {
+            _log("IndexManager.ShutdownAsync: background work still running; ShutdownAsync continues to wait.");
+            waitLogged = true;
+        }
+        try { await start.ConfigureAwait(false); }
+        catch { /* faulted/cancelled startup still owns no work after completion */ }
+        Interlocked.Exchange(ref _gitWatcher, null)?.Dispose();
+        Interlocked.Exchange(ref _watcher, null)?.Dispose();
+
+        Task pump = _pump ?? Task.CompletedTask;
+        if (!waitLogged && !pump.IsCompleted &&
+            await Task.WhenAny(pump, waitDiagnostic).ConfigureAwait(false) == waitDiagnostic)
+        {
+            _log("IndexManager.ShutdownAsync: background work still running; ShutdownAsync continues to wait.");
+            waitLogged = true;
+        }
+        try { await pump.ConfigureAwait(false); }
+        catch { /* faulted/cancelled pump still owns no work after completion */ }
+
+        // Keep both telemetry sinks alive while the pump drains its final records. The IPC
+        // producer owns no workspace-resident file handle; the file log does, so await its
+        // actual drainer completion before releasing ownership to a caller deleting the root.
+        TelemetryIpc.Dispose();
+        Task telemetry = Telemetry.ShutdownAsync().AsTask();
+        if (!waitLogged && !telemetry.IsCompleted &&
+            await Task.WhenAny(telemetry, waitDiagnostic).ConfigureAwait(false) == waitDiagnostic)
+        {
+            _log("IndexManager.ShutdownAsync: background work still running; ShutdownAsync continues to wait.");
+        }
+        await telemetry.ConfigureAwait(false);
+        ReleaseOwnedResources();
+    }
+
+    private void StopBackgroundWorkAndDetachWatchers(bool disposeTelemetryBounded)
+    {
+        WorkspaceWatcher? watcher;
+        GitWatcher? gitWatcher;
+        lock (_disposeLock)
+        {
+            _disposed = true; // block any in-flight watcher publication
+            watcher = Interlocked.Exchange(ref _watcher, null);
+            gitWatcher = Interlocked.Exchange(ref _gitWatcher, null);
+        }
+        if (disposeTelemetryBounded)
+        {
+            Telemetry.Dispose();             // epuc.1: flush the bounded stream (2s cap)
+            TelemetryIpc.Dispose();          // x5ls.1: stop the IPC producer (2s cap)
+        }
+        gitWatcher?.Dispose();               // stop git HEAD signals
+        _gitHeadRetry?.Dispose();            // 17zd: stop the null-HEAD retry (callback checks _disposed)
+        _refreshRecoverySweepRetry?.Dispose(); // stop stale-input recovery retries
+        watcher?.Dispose();                  // stop new events reaching the queue
+        _refreshQueue.Writer.TryComplete();  // let the pump drain and exit its loop
     }
 
     private void ReleaseOwnedResources()

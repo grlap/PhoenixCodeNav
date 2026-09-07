@@ -9,7 +9,7 @@ namespace CodeNav.Tests;
 /// Builds one small synthetic workspace + index for either an exclusive mutable class or the
 /// shared read-only functional collection.
 /// </summary>
-public class IndexFixture : IDisposable
+public class IndexFixture : IAsyncLifetime
 {
     public string Root { get; }
     public string DbPath { get; }
@@ -83,11 +83,26 @@ public class IndexFixture : IDisposable
         get { EnsureSharedHost(); return _tools!; }
     }
 
-    public void Dispose()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
-        _semantic?.Dispose();
-        _manager?.Dispose(); // releases the store, pooled connections, and the ownership lease
-        TestWorkspaceCleanup.DeleteWorkspace(Root);
+        try
+        {
+            _semantic?.Dispose();
+        }
+        finally
+        {
+            try
+            {
+                if (_manager is not null)
+                    await _manager.ShutdownAsync();
+            }
+            finally
+            {
+                TestWorkspaceCleanup.DeleteWorkspace(Root);
+            }
+        }
     }
 }
 

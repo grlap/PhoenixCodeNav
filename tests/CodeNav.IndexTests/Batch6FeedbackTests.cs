@@ -10,7 +10,7 @@ namespace CodeNav.Tests;
 /// -r2o (references nudge + confidence notes), -zb9 (search_text containingSymbol),
 /// -gm8 (outline partialFiles, source_context budget hint).
 /// </summary>
-public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
+public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IAsyncLifetime
 {
     private readonly IndexFixture _fx;
     private readonly IndexManager _manager;
@@ -25,10 +25,18 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IDisposable
         _semantic = new SemanticService(_manager);
     }
 
-    public void Dispose()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
-        _semantic.Dispose();
-        _manager.Dispose();
+        try
+        {
+            _semantic.Dispose();
+        }
+        finally
+        {
+            await _manager.ShutdownAsync();
+        }
     }
 
     private NavigationTools Tools() => new(_manager, _semantic);

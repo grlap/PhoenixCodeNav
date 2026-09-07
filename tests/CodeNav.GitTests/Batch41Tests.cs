@@ -1549,6 +1549,237 @@ public class Batch41Tests
     }
 
     [Fact]
+    public async Task ShutdownAsyncReleasesLiveWatcherBeforeWorkspaceDeletion()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-41-async-dispose").FullName;
+        string db = IndexBuilder.DefaultDbPath(root);
+        IndexManager? manager = null;
+        bool deleted = false;
+        try
+        {
+            WriteLab(root);
+            IndexBuilder.Build(root, db);
+            manager = new IndexManager(root, db);
+            manager.Start();
+            Assert.True(WaitUntil(
+                () => manager.IsQueryable && manager.HasWorkspaceWatcherForTest,
+                20_000),
+                "the contract requires a live workspace watcher before shutdown");
+
+            await manager.ShutdownAsync();
+            Assert.False(manager.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(root, db));
+            manager = null;
+
+            Directory.Delete(root, recursive: true);
+            deleted = true;
+            Assert.False(Directory.Exists(root));
+        }
+        finally
+        {
+            if (manager is not null)
+                await manager.ShutdownAsync();
+            if (!deleted)
+                Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public async Task ShutdownAsyncWaitsForTelemetryWriterBeforeWorkspaceDeletion()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-41-async-telemetry").FullName;
+        string db = IndexBuilder.DefaultDbPath(root);
+        var writerCloseEntered = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseWriterClose = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var manager = new IndexManager(root, db);
+        bool deleted = false;
+        try
+        {
+            manager.Telemetry.BeforeWriterCloseForTest = async () =>
+            {
+                writerCloseEntered.TrySetResult(true);
+                await releaseWriterClose.Task;
+            };
+            manager.Telemetry.Emit(new { e = "shutdown_async_writer_contract" });
+            Assert.True(WaitUntil(() => File.Exists(manager.Telemetry.FilePath), 10_000));
+
+            Task shutdown = manager.ShutdownAsync().AsTask();
+            await writerCloseEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(shutdown.IsCompleted,
+                "shutdown must remain pending while the telemetry writer is still open");
+
+            releaseWriterClose.TrySetResult(true);
+            await shutdown;
+
+            Directory.Delete(root, recursive: true);
+            deleted = true;
+        }
+        finally
+        {
+            releaseWriterClose.TrySetResult(true);
+            await manager.ShutdownAsync();
+            if (!deleted)
+                Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public async Task ShutdownAsyncReleasesLeaseAfterBlockedStartupFinishes()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-41-async-startup").FullName;
+        string db = IndexBuilder.DefaultDbPath(root);
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var manager = new IndexManager(root, db)
+        {
+            StartupAfterLeaseAcquiredForTest = () =>
+            {
+                entered.Set();
+                release.Wait();
+            },
+        };
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "Held.cs"),
+                "namespace Lab { public class Held41Async { } }");
+            manager.Start(forceRebuild: true);
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+
+            Task shutdown = manager.ShutdownAsync().AsTask();
+            Assert.False(shutdown.IsCompleted);
+            Assert.True(IndexOwnershipLease.IsHeld(root, db));
+
+            release.Set();
+            await shutdown;
+            Assert.False(IndexOwnershipLease.IsHeld(root, db));
+
+            var successor = new IndexManager(root, db);
+            try
+            {
+                successor.Start();
+                Assert.True(WaitUntil(() => successor.IsQueryable, 20_000));
+                Assert.True(successor.IsWriter);
+            }
+            finally
+            {
+                await successor.ShutdownAsync();
+            }
+        }
+        finally
+        {
+            release.Set();
+            await manager.ShutdownAsync();
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public async Task ShutdownAsyncReleasesLeaseAfterBlockedRefreshPumpFinishes()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-41-async-pump").FullName;
+        string db = IndexBuilder.DefaultDbPath(root);
+        using var pumpEntered = new ManualResetEventSlim(false);
+        using var releasePump = new ManualResetEventSlim(false);
+        var manager = new IndexManager(root, db);
+        try
+        {
+            WriteLab(root);
+            IndexBuilder.Build(root, db);
+            manager.RefreshRequestPassedStartupBarrierForTest = () =>
+            {
+                pumpEntered.Set();
+                releasePump.Wait();
+            };
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            Assert.True(manager.RequestRefresh());
+            Assert.True(pumpEntered.Wait(TimeSpan.FromSeconds(10)));
+
+            Task shutdown = manager.ShutdownAsync().AsTask();
+            Assert.False(shutdown.IsCompleted);
+            Assert.True(IndexOwnershipLease.IsHeld(root, db));
+
+            releasePump.Set();
+            await shutdown;
+            Assert.False(IndexOwnershipLease.IsHeld(root, db));
+
+            var successor = new IndexManager(root, db);
+            try
+            {
+                successor.Start();
+                Assert.True(WaitUntil(() => successor.IsQueryable, 20_000));
+                Assert.True(successor.IsWriter);
+            }
+            finally
+            {
+                await successor.ShutdownAsync();
+            }
+        }
+        finally
+        {
+            releasePump.Set();
+            await manager.ShutdownAsync();
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public async Task ShutdownAsyncLogsOnceWhenBackgroundWorkOutlivesDisposeWaitTimeout()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-41-async-wait-log").FullName;
+        string db = IndexBuilder.DefaultDbPath(root);
+        using var pumpEntered = new ManualResetEventSlim(false);
+        using var releasePump = new ManualResetEventSlim(false);
+        var messages = new List<string>();
+        var manager = new IndexManager(root, db, message =>
+        {
+            lock (messages) messages.Add(message);
+        })
+        {
+            DisposeWaitTimeoutForTest = TimeSpan.FromMilliseconds(50),
+            RefreshRequestPassedStartupBarrierForTest = () =>
+            {
+                pumpEntered.Set();
+                releasePump.Wait();
+            },
+        };
+        try
+        {
+            WriteLab(root);
+            IndexBuilder.Build(root, db);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
+            Assert.True(manager.RequestRefresh());
+            Assert.True(pumpEntered.Wait(TimeSpan.FromSeconds(10)));
+
+            Task shutdown = manager.ShutdownAsync().AsTask();
+            Assert.True(WaitUntil(() =>
+            {
+                lock (messages)
+                    return messages.Count(message => message.Contains(
+                        "ShutdownAsync continues to wait", StringComparison.Ordinal)) == 1;
+            }, 10_000));
+
+            releasePump.Set();
+            await shutdown;
+            lock (messages)
+            {
+                Assert.Single(messages, message => message.Contains(
+                    "ShutdownAsync continues to wait", StringComparison.Ordinal));
+            }
+            Assert.False(IndexOwnershipLease.IsHeld(root, db));
+        }
+        finally
+        {
+            releasePump.Set();
+            await manager.ShutdownAsync();
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
     public void DisposeCleanupFailureRetainsLeaseUntilSafeRetry()
     {
         string root = Directory.CreateTempSubdirectory("codenav-41-dispose-fail-closed").FullName;

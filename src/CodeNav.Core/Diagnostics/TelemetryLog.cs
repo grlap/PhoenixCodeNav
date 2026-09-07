@@ -43,6 +43,8 @@ public sealed class TelemetryLog : IDisposable
     private bool _capAnnounced;
     private bool _ioFailed;
 
+    internal Func<Task>? BeforeWriterCloseForTest { get; set; }
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -155,7 +157,15 @@ public sealed class TelemetryLog : IDisposable
         }
         finally
         {
-            writer?.Dispose();
+            try
+            {
+                if (BeforeWriterCloseForTest is { } beforeWriterClose)
+                    await beforeWriterClose().ConfigureAwait(false);
+            }
+            finally
+            {
+                writer?.Dispose();
+            }
         }
     }
 
@@ -181,5 +191,13 @@ public sealed class TelemetryLog : IDisposable
     {
         _pending.Writer.TryComplete();
         try { _drainer.Wait(TimeSpan.FromSeconds(2)); } catch { /* teardown is best-effort */ }
+    }
+
+    /// <summary>Completes the bounded stream and waits until its writer is closed.</summary>
+    internal async ValueTask ShutdownAsync()
+    {
+        _pending.Writer.TryComplete();
+        try { await _drainer.ConfigureAwait(false); }
+        catch { /* telemetry teardown remains best-effort */ }
     }
 }
