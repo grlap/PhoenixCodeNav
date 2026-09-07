@@ -1456,13 +1456,16 @@ public sealed class SharedDaemonTests
             "Phoenix daemon handshake timeout ").FullName;
         DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
         IDaemonTransportListener listener = DaemonTransport.Listen(endpoint);
+        using var listenerLifetime = new CancellationTokenSource();
         var accepted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        TimeoutException? silentServerDrainTimeout = null;
+        Exception? silentServerDrainFailure = null;
         Task silentServer = Task.Run(async () =>
         {
-            await using Stream stream = await listener.AcceptAsync(CancellationToken.None);
+            await using Stream stream = await listener.AcceptAsync(listenerLifetime.Token);
             accepted.SetResult();
             await release.Task;
         });
@@ -1485,11 +1488,41 @@ public sealed class SharedDaemonTests
         }
         finally
         {
+            listenerLifetime.Cancel();
             release.TrySetResult();
-            await silentServer;
+            // Windows listener disposal is a no-op, so cancellation is the only way to
+            // release a pending accept there. Keep the cancellation lifetime explicit.
             await listener.DisposeAsync();
+            try
+            {
+                await silentServer.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (OperationCanceledException) when (listenerLifetime.IsCancellationRequested)
+            {
+            }
+            catch (TimeoutException ex)
+            {
+                silentServerDrainTimeout = ex;
+            }
+            catch (Exception ex)
+            {
+                silentServerDrainFailure = ex;
+            }
             await CleanupEndpointForTestAsync(endpoint);
             TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+
+        if (silentServerDrainTimeout is not null)
+        {
+            throw new TimeoutException(
+                "Silent fake daemon listener task did not stop within 10 seconds after cancellation.",
+                silentServerDrainTimeout);
+        }
+        if (silentServerDrainFailure is not null)
+        {
+            throw new InvalidOperationException(
+                "Silent fake daemon listener task faulted while draining after cancellation.",
+                silentServerDrainFailure);
         }
     }
 
@@ -1502,6 +1535,9 @@ public sealed class SharedDaemonTests
         IDaemonTransportListener? listener = null;
         Task? closeFirstConnection = null;
         McpClient? client = null;
+        using var firstConnectionLifetime = new CancellationTokenSource();
+        TimeoutException? firstConnectionDrainTimeout = null;
+        Exception? firstConnectionDrainFailure = null;
         try
         {
             listener = DaemonTransport.Listen(endpoint);
@@ -1509,12 +1545,24 @@ public sealed class SharedDaemonTests
             closeFirstConnection = Task.Run(async () =>
             {
                 await using Stream accepted = await firstListener.AcceptAsync(
-                    CancellationToken.None);
+                    firstConnectionLifetime.Token);
                 await firstListener.DisposeAsync();
             });
 
             client = await CreateClientAsync(FindMcpExecutable(), root);
-            await closeFirstConnection;
+            try
+            {
+                await closeFirstConnection.WaitAsync(
+                    TimeSpan.FromMilliseconds(TestProcessExitTimeoutMilliseconds));
+            }
+            catch (TimeoutException ex)
+            {
+                throw new TimeoutException(
+                    $"Published fake daemon listener task did not complete within " +
+                    $"{TestProcessExitTimeoutMilliseconds} ms. The test proxy most likely never " +
+                    "connected, so the handshake EOF may not have been produced.",
+                    ex);
+            }
 
             JsonElement capabilities = await CallAsync(client, "server_capabilities");
             Assert.Equal("daemon", capabilities.GetProperty("runtime")
@@ -1530,15 +1578,46 @@ public sealed class SharedDaemonTests
         }
         finally
         {
+            firstConnectionLifetime.Cancel();
             if (client is not null) await TryDisposeClientAsync(client);
             if (listener is not null) await listener.DisposeAsync();
             if (closeFirstConnection is not null)
             {
-                try { await closeFirstConnection; } catch { }
+                try
+                {
+                    await closeFirstConnection.WaitAsync(TimeSpan.FromSeconds(10));
+                }
+                catch (OperationCanceledException) when (firstConnectionLifetime.IsCancellationRequested)
+                {
+                }
+                catch (TimeoutException ex)
+                {
+                    firstConnectionDrainTimeout = ex;
+                }
+                catch (Exception ex)
+                {
+                    firstConnectionDrainFailure = ex;
+                }
             }
             try { await RetireDaemonForTestAsync(endpoint); } catch { }
             await CleanupEndpointForTestAsync(endpoint);
             TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+
+        // The body currently awaits closeFirstConnection; these guards preserve honest
+        // failure reporting if a future edit moves or removes that await.
+        if (firstConnectionDrainTimeout is not null)
+        {
+            throw new TimeoutException(
+                "Published fake daemon listener task did not complete cleanly within 10 seconds " +
+                "after cancellation.",
+                firstConnectionDrainTimeout);
+        }
+        if (firstConnectionDrainFailure is not null)
+        {
+            throw new InvalidOperationException(
+                "Published fake daemon listener task faulted while draining after cancellation.",
+                firstConnectionDrainFailure);
         }
     }
 
