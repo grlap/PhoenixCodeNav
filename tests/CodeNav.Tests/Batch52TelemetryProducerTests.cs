@@ -29,157 +29,229 @@ public class Batch52TelemetryProducerTests
     public void NegotiatesAndPublishesSaltedSnapshotWithOrderedEnvelope()
     {
         string root = Directory.CreateTempSubdirectory("codenav-52-nego").FullName;
-        using var broker = new TestTelemetryBroker();
-        using (var producer = NewProducer(broker, root))
+        bool deleted = false;
+        try
         {
-            Assert.True(WaitUntil(() => broker.FramesOfType("instance.snapshot").Count > 0, 15_000),
-                "no instance.snapshot arrived after negotiation");
+            using (var broker = new TestTelemetryBroker())
+            using (var producer = NewProducer(broker, root))
+            {
+                Assert.True(WaitUntil(() => broker.FramesOfType("instance.snapshot").Count > 0, 15_000),
+                    "no instance.snapshot arrived after negotiation");
 
-            // hello carried the pre-negotiation identity fields and nothing sensitive.
-            Assert.True(broker.HelloLines.TryPeek(out string? hello));
-            using var helloDoc = JsonDocument.Parse(hello!);
-            Assert.Equal("phoenix.telemetry", helloDoc.RootElement.GetProperty("protocol").GetString());
-            Assert.Equal(1, helloDoc.RootElement.GetProperty("supportedVersions")[0].GetInt32());
-            Assert.Equal(Environment.ProcessId, helloDoc.RootElement.GetProperty("processId").GetInt32());
-            Assert.DoesNotContain(":\\\\", hello);
+                // hello carried the pre-negotiation identity fields and nothing sensitive.
+                Assert.True(broker.HelloLines.TryPeek(out string? hello));
+                using var helloDoc = JsonDocument.Parse(hello!);
+                Assert.Equal("phoenix.telemetry", helloDoc.RootElement.GetProperty("protocol").GetString());
+                Assert.Equal(1, helloDoc.RootElement.GetProperty("supportedVersions")[0].GetInt32());
+                Assert.Equal(Environment.ProcessId, helloDoc.RootElement.GetProperty("processId").GetInt32());
+                Assert.DoesNotContain(":\\\\", hello);
 
-            var snap = broker.FramesOfType("instance.snapshot")[0].RootElement;
-            Assert.Equal(1, snap.GetProperty("version").GetInt32());
-            Assert.Equal(producer.InstanceId, snap.GetProperty("instanceId").GetString());
-            var data = snap.GetProperty("data");
+                var snap = broker.FramesOfType("instance.snapshot")[0].RootElement;
+                Assert.Equal(1, snap.GetProperty("version").GetInt32());
+                Assert.Equal(producer.InstanceId, snap.GetProperty("instanceId").GetString());
+                var data = snap.GetProperty("data");
 
-            // Identity contract: base64url HMACs the portal can recompute for grouping —
-            // the test derives them independently from the broker's salt. CanonicalPath is
-            // the shared folding rule (case-folds on Windows only — review F17).
-            string canonicalRoot = TelemetryIdentity.CanonicalPath(root);
-            Assert.Equal(
-                "wa_" + Base64UrlHmac(broker.Salt, "workspace\0" + canonicalRoot),
-                data.GetProperty("workspace").GetProperty("id").GetString());
-            Assert.StartsWith("ix_",
-                data.GetProperty("index").GetProperty("id").GetString());
+                // Identity contract: base64url HMACs the portal can recompute for grouping —
+                // the test derives them independently from the broker's salt. CanonicalPath is
+                // the shared folding rule (case-folds on Windows only — review F17).
+                string canonicalRoot = TelemetryIdentity.CanonicalPath(root);
+                Assert.Equal(
+                    "wa_" + Base64UrlHmac(broker.Salt, "workspace\0" + canonicalRoot),
+                    data.GetProperty("workspace").GetProperty("id").GetString());
+                Assert.StartsWith("ix_",
+                    data.GetProperty("index").GetProperty("id").GetString());
 
-            // Wire order: sequences strictly increase in arrival order.
-            var sequences = broker.Frames.Select(f =>
-                f.RootElement.GetProperty("sequence").GetInt64()).ToList();
-            Assert.True(sequences.Count > 0);
-            Assert.True(sequences.SequenceEqual(sequences.OrderBy(s => s)),
-                "wire sequences must be non-decreasing in arrival order");
-            Assert.Equal(sequences.Count, sequences.Distinct().Count());
+                // Wire order: sequences strictly increase in arrival order.
+                var sequences = broker.Frames.Select(f =>
+                    f.RootElement.GetProperty("sequence").GetInt64()).ToList();
+                Assert.True(sequences.Count > 0);
+                Assert.True(sequences.SequenceEqual(sequences.OrderBy(s => s)),
+                    "wire sequences must be non-decreasing in arrival order");
+                Assert.Equal(sequences.Count, sequences.Distinct().Count());
+            }
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
-        TestWorkspaceCleanup.DeleteWorkspace(root);
+        finally
+        {
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
     }
 
     [Fact]
     public void ReconnectAfterBufferPressureDisclosesDropsAndResendsSnapshot()
     {
         string root = Directory.CreateTempSubdirectory("codenav-52-drop").FullName;
-        using var broker = new TestTelemetryBroker();
-        using (var producer = NewProducer(broker, root))
+        bool deleted = false;
+        try
         {
-            Assert.True(WaitUntil(() => broker.FramesOfType("instance.snapshot").Count > 0, 15_000));
-            broker.DropConnection();
-
-            // Flood well past the queue capacity while the portal is gone.
-            for (int i = 0; i < 2400; i++)
+            using (var broker = new TestTelemetryBroker())
+            using (var producer = NewProducer(broker, root))
             {
-                int n = i;
-                producer.Emit("diagnostic.event", _ => new { code = "test.flood", n });
-            }
-            Assert.True(producer.DroppedRecords > 0, "flood past capacity must evict");
+                Assert.True(WaitUntil(() => broker.FramesOfType("instance.snapshot").Count > 0, 15_000));
+                broker.DropConnection();
 
-            Assert.True(WaitUntil(() => broker.Connections >= 2
-                && broker.FramesOfType("instance.snapshot").Count >= 2, 30_000),
-                "producer must reconnect and resend a fresh snapshot");
-            Assert.True(WaitUntil(() => broker.FramesOfType("telemetry.dropped").Count > 0, 15_000),
-                "drops must be disclosed after reconnect");
-            var drop = broker.FramesOfType("telemetry.dropped")[0].RootElement.GetProperty("data");
-            Assert.True(drop.GetProperty("records").GetInt64() > 0);
-            Assert.Equal("producer_buffer_full", drop.GetProperty("reason").GetString());
+                // Flood well past the queue capacity while the portal is gone.
+                for (int i = 0; i < 2400; i++)
+                {
+                    int n = i;
+                    producer.Emit("diagnostic.event", _ => new { code = "test.flood", n });
+                }
+                Assert.True(producer.DroppedRecords > 0, "flood past capacity must evict");
+
+                Assert.True(WaitUntil(() => broker.Connections >= 2
+                    && broker.FramesOfType("instance.snapshot").Count >= 2, 30_000),
+                    "producer must reconnect and resend a fresh snapshot");
+                Assert.True(WaitUntil(() => broker.FramesOfType("telemetry.dropped").Count > 0, 15_000),
+                    "drops must be disclosed after reconnect");
+                var drop = broker.FramesOfType("telemetry.dropped")[0].RootElement.GetProperty("data");
+                Assert.True(drop.GetProperty("records").GetInt64() > 0);
+                Assert.Equal("producer_buffer_full", drop.GetProperty("reason").GetString());
+            }
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
-        TestWorkspaceCleanup.DeleteWorkspace(root);
+        finally
+        {
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
     }
 
     [Fact]
     public void PrivacyTripwireBlocksPathCarryingFramesButNotCleanOnes()
     {
         string root = Directory.CreateTempSubdirectory("codenav-52-privacy").FullName;
-        using var broker = new TestTelemetryBroker();
-        using (var producer = NewProducer(broker, root))
+        bool deleted = false;
+        try
         {
-            Assert.True(WaitUntil(() => broker.FramesOfType("instance.snapshot").Count > 0, 15_000));
-
-            // A future instrumentation bug: a raw path (drive-rooted AND the workspace root
-            // itself) sneaks into an approved-looking field. The gate must eat both.
-            producer.Emit("diagnostic.event", _ => new { code = "bad", detail = @"C:\secret\place" });
-            producer.Emit("diagnostic.event", _ => new { code = "bad2", detail = root });
-            producer.Emit("diagnostic.event", _ => new { code = "good", count = 3 });
-
-            Assert.True(WaitUntil(() => broker.FramesOfType("diagnostic.event")
-                .Any(f => f.RootElement.GetProperty("data").GetProperty("code").GetString() == "good"),
-                15_000), "the clean frame must still arrive");
-            foreach (var f in broker.FramesOfType("diagnostic.event"))
+            using (var broker = new TestTelemetryBroker())
+            using (var producer = NewProducer(broker, root))
             {
-                string code = f.RootElement.GetProperty("data").GetProperty("code").GetString()!;
-                Assert.Equal("good", code); // the two path-carrying frames never hit the wire
+                Assert.True(WaitUntil(() => broker.FramesOfType("instance.snapshot").Count > 0, 15_000));
+
+                // A future instrumentation bug: a raw path (drive-rooted AND the workspace root
+                // itself) sneaks into an approved-looking field. The gate must eat both.
+                producer.Emit("diagnostic.event", _ => new { code = "bad", detail = @"C:\secret\place" });
+                producer.Emit("diagnostic.event", _ => new { code = "bad2", detail = root });
+                producer.Emit("diagnostic.event", _ => new { code = "good", count = 3 });
+
+                Assert.True(WaitUntil(() => broker.FramesOfType("diagnostic.event")
+                    .Any(f => f.RootElement.GetProperty("data").GetProperty("code").GetString() == "good"),
+                    15_000), "the clean frame must still arrive");
+                foreach (var f in broker.FramesOfType("diagnostic.event"))
+                {
+                    string code = f.RootElement.GetProperty("data").GetProperty("code").GetString()!;
+                    Assert.Equal("good", code); // the two path-carrying frames never hit the wire
+                }
+
+                // Review F4: the rejected frames consumed sequences — the gap they leave must be
+                // disclosed in-band, not read as silent loss with all drop gauges at zero.
+                Assert.True(WaitUntil(() => broker.FramesOfType("telemetry.dropped").Any(f =>
+                    f.RootElement.GetProperty("data").GetProperty("reason").GetString()
+                        == "producer_validation_rejected"), 15_000),
+                    "send-time rejects must be disclosed as telemetry.dropped");
+                Assert.True(producer.ValidationRejected >= 2);
             }
 
-            // Review F4: the rejected frames consumed sequences — the gap they leave must be
-            // disclosed in-band, not read as silent loss with all drop gauges at zero.
-            Assert.True(WaitUntil(() => broker.FramesOfType("telemetry.dropped").Any(f =>
-                f.RootElement.GetProperty("data").GetProperty("reason").GetString()
-                    == "producer_validation_rejected"), 15_000),
-                "send-time rejects must be disclosed as telemetry.dropped");
-            Assert.True(producer.ValidationRejected >= 2);
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
-        TestWorkspaceCleanup.DeleteWorkspace(root);
+        finally
+        {
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
     }
 
     [Fact]
     public void ResyncTriggersFreshSnapshotAndUnknownControlIsIgnored()
     {
         string root = Directory.CreateTempSubdirectory("codenav-52-resync").FullName;
-        using var broker = new TestTelemetryBroker();
-        using (var producer = NewProducer(broker, root))
+        bool deleted = false;
+        try
         {
-            Assert.True(WaitUntil(() => broker.FramesOfType("instance.snapshot").Count > 0, 15_000));
-            broker.SendControl(new { protocol = "phoenix.telemetry", type = "future_thing" });
-            broker.SendControl(new { protocol = "phoenix.telemetry", version = 1, type = "resync", reason = "sequence_gap" });
-            Assert.True(WaitUntil(() => broker.FramesOfType("instance.snapshot").Count >= 2, 15_000),
-                "resync must produce a fresh snapshot (and the unknown frame must not kill the session)");
+            using (var broker = new TestTelemetryBroker())
+            using (var producer = NewProducer(broker, root))
+            {
+                Assert.True(WaitUntil(() => broker.FramesOfType("instance.snapshot").Count > 0, 15_000));
+                broker.SendControl(new { protocol = "phoenix.telemetry", type = "future_thing" });
+                broker.SendControl(new { protocol = "phoenix.telemetry", version = 1, type = "resync", reason = "sequence_gap" });
+                Assert.True(WaitUntil(() => broker.FramesOfType("instance.snapshot").Count >= 2, 15_000),
+                    "resync must produce a fresh snapshot (and the unknown frame must not kill the session)");
+            }
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
-        TestWorkspaceCleanup.DeleteWorkspace(root);
+        finally
+        {
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
     }
 
     [Fact]
     public void RejectStandsDownWithoutRetryStorm()
     {
         string root = Directory.CreateTempSubdirectory("codenav-52-reject").FullName;
-        using var broker = new TestTelemetryBroker(rejectMode: true);
-        using (var producer = NewProducer(broker, root))
+        bool deleted = false;
+        try
         {
-            Assert.True(WaitUntil(() => broker.Connections >= 1, 15_000));
-            int seen = broker.Connections;
-            Thread.Sleep(3000); // the reject backoff is minutes; no second attempt this soon
-            Assert.Equal(seen, broker.Connections);
-            producer.Emit("diagnostic.event", _ => new { code = "still.safe" }); // never throws
+            using (var broker = new TestTelemetryBroker(rejectMode: true))
+            using (var producer = NewProducer(broker, root))
+            {
+                Assert.True(WaitUntil(() => broker.Connections >= 1, 15_000));
+                int seen = broker.Connections;
+                Thread.Sleep(3000); // the reject backoff is minutes; no second attempt this soon
+                Assert.Equal(seen, broker.Connections);
+                producer.Emit("diagnostic.event", _ => new { code = "still.safe" }); // never throws
+            }
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
-        TestWorkspaceCleanup.DeleteWorkspace(root);
+        finally
+        {
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
     }
 
     [Fact]
     public void DisabledProducerNeverConnectsAndEmitIsFreeToCall()
     {
         string root = Directory.CreateTempSubdirectory("codenav-52-disabled").FullName;
-        using var broker = new TestTelemetryBroker();
-        using (var producer = new TelemetryProducer(root, Path.Combine(root, "index.db"),
-            ids => new { }, pipeName: broker.PipeName, enabled: false))
+        bool deleted = false;
+        try
         {
-            producer.Emit("diagnostic.event", _ => new { code = "ignored" });
-            Thread.Sleep(500);
-            Assert.Equal(0, broker.Connections);
-            Assert.Equal(0, producer.QueuedRecords);
+            using (var broker = new TestTelemetryBroker())
+            using (var producer = new TelemetryProducer(root, Path.Combine(root, "index.db"),
+                ids => new { }, pipeName: broker.PipeName, enabled: false))
+            {
+                producer.Emit("diagnostic.event", _ => new { code = "ignored" });
+                Thread.Sleep(500);
+                Assert.Equal(0, broker.Connections);
+                Assert.Equal(0, producer.QueuedRecords);
+            }
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
-        TestWorkspaceCleanup.DeleteWorkspace(root);
+        finally
+        {
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
     }
 
     [Fact]

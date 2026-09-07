@@ -18,6 +18,7 @@ public sealed class PortalLauncherRuntimeTests
             "Phoenix portal identity aliases ").FullName;
         string workspace = Directory.CreateDirectory(
             Path.Combine(root, "PortalIdentityCaseProbe")).FullName;
+        bool deleted = false;
         try
         {
             string expected = PortalLaunchCoordinator.WorkspaceCoordinationKey(workspace);
@@ -37,10 +38,15 @@ public sealed class PortalLauncherRuntimeTests
                     expected,
                     PortalLaunchCoordinator.WorkspaceCoordinationKey(alias));
             }
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
         finally
         {
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -52,28 +58,35 @@ public sealed class PortalLauncherRuntimeTests
 
         string root = CreateRuntimeSecurityTestRoot();
         string workspace = Directory.CreateDirectory(Path.Combine(root, "workspace")).FullName;
+        bool deleted = false;
         try
         {
-            await using PortalLaunchCoordinator coordinator =
+            await using (PortalLaunchCoordinator coordinator =
                 await PortalLaunchCoordinator.AcquireAsync(
                     workspace,
                     CancellationToken.None,
-                    root);
+                    root))
+            {
+                Assert.True(coordinator.IsOwner);
+                UnixFileMode expected = UnixFileMode.UserRead
+                    | UnixFileMode.UserWrite
+                    | UnixFileMode.UserExecute;
+                string applicationDirectory = Path.Combine(root, ".phoenixcodenav");
+                string runtimeDirectory = Path.Combine(applicationDirectory, "runtime");
+                string portalDirectory = Path.Combine(runtimeDirectory, "portal");
+                Assert.Equal(expected, File.GetUnixFileMode(applicationDirectory));
+                Assert.Equal(expected, File.GetUnixFileMode(runtimeDirectory));
+                Assert.Equal(expected, File.GetUnixFileMode(portalDirectory));
+            }
 
-            Assert.True(coordinator.IsOwner);
-            UnixFileMode expected = UnixFileMode.UserRead
-                | UnixFileMode.UserWrite
-                | UnixFileMode.UserExecute;
-            string applicationDirectory = Path.Combine(root, ".phoenixcodenav");
-            string runtimeDirectory = Path.Combine(applicationDirectory, "runtime");
-            string portalDirectory = Path.Combine(runtimeDirectory, "portal");
-            Assert.Equal(expected, File.GetUnixFileMode(applicationDirectory));
-            Assert.Equal(expected, File.GetUnixFileMode(runtimeDirectory));
-            Assert.Equal(expected, File.GetUnixFileMode(portalDirectory));
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
         finally
         {
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -89,6 +102,7 @@ public sealed class PortalLauncherRuntimeTests
         UnixFileMode privateMode = UnixFileMode.UserRead
             | UnixFileMode.UserWrite
             | UnixFileMode.UserExecute;
+        bool deleted = false;
         try
         {
             File.SetUnixFileMode(
@@ -105,11 +119,20 @@ public sealed class PortalLauncherRuntimeTests
 
             Assert.Contains("writable by other users", error.Message, StringComparison.Ordinal);
             Assert.False(Directory.Exists(Path.Combine(unsafeBase, ".phoenixcodenav")));
+
+            File.SetUnixFileMode(unsafeBase, privateMode);
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
         finally
         {
-            File.SetUnixFileMode(unsafeBase, privateMode);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+            {
+                if (Directory.Exists(unsafeBase))
+                    File.SetUnixFileMode(unsafeBase, privateMode);
+                TestWorkspaceCleanup.DeleteWorkspace(root);
+            }
         }
     }
 
@@ -123,6 +146,7 @@ public sealed class PortalLauncherRuntimeTests
         string actualBase = Directory.CreateDirectory(Path.Combine(root, "actual-base")).FullName;
         string linkedBase = Path.Combine(root, "linked-base");
         string workspace = Directory.CreateDirectory(Path.Combine(root, "workspace")).FullName;
+        bool deleted = false;
         try
         {
             Directory.CreateSymbolicLink(linkedBase, actualBase);
@@ -135,10 +159,15 @@ public sealed class PortalLauncherRuntimeTests
 
             Assert.Contains("reparse point", error.Message, StringComparison.Ordinal);
             Assert.False(Directory.Exists(Path.Combine(actualBase, ".phoenixcodenav")));
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
         finally
         {
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -150,6 +179,7 @@ public sealed class PortalLauncherRuntimeTests
         PortalLaunchCoordinator? owner = null;
         var listener = new TcpListener(IPAddress.Loopback, 0);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        bool deleted = false;
         try
         {
             owner = await PortalLaunchCoordinator.AcquireAsync(
@@ -208,18 +238,26 @@ public sealed class PortalLauncherRuntimeTests
             await owner.DisposeAsync();
             owner = null;
 
-            await using PortalLaunchCoordinator contender =
-                await contenderTask.WaitAsync(timeout.Token);
-            Assert.True(contender.IsOwner);
-            Assert.Null(contender.ReusedHandshake);
-            Assert.False(File.Exists(descriptorPath));
+            await using (PortalLaunchCoordinator contender =
+                await contenderTask.WaitAsync(timeout.Token))
+            {
+                Assert.True(contender.IsOwner);
+                Assert.Null(contender.ReusedHandshake);
+                Assert.False(File.Exists(descriptorPath));
+            }
+
+            listener.Stop();
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
         finally
         {
             listener.Stop();
             if (owner is not null)
                 await owner.DisposeAsync();
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -229,6 +267,7 @@ public sealed class PortalLauncherRuntimeTests
         string root = Directory.CreateTempSubdirectory("Phoenix portal launcher workspace ").FullName;
         Process? owner = null;
         Process? restarted = null;
+        bool deleted = false;
         try
         {
             string executable = Path.Combine(
@@ -254,6 +293,7 @@ public sealed class PortalLauncherRuntimeTests
             {
                 JsonElement reused = await ReadHandshakeAsync(helper, TimeSpan.FromSeconds(10));
                 await helper.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.True(helper.HasExited, "the reuse helper must exit before workspace cleanup");
                 Assert.Equal(0, helper.ExitCode);
                 Assert.Equal("reused", reused.GetProperty("status").GetString());
                 Assert.Equal(url, reused.GetProperty("url").GetString());
@@ -284,6 +324,7 @@ public sealed class PortalLauncherRuntimeTests
             int priorPid = owner.Id;
             string priorUrl = url;
             await StopAsync(owner);
+            Assert.True(owner.HasExited, "the original portal must exit before restart");
             owner.Dispose();
             owner = null;
 
@@ -293,6 +334,15 @@ public sealed class PortalLauncherRuntimeTests
             Assert.Equal(restarted.Id, fresh.GetProperty("pid").GetInt32());
             Assert.NotEqual(priorPid, restarted.Id);
             Assert.NotEqual(priorUrl, fresh.GetProperty("url").GetString());
+
+            await StopAsync(restarted);
+            Assert.True(restarted.HasExited, "the restarted portal must exit before workspace cleanup");
+            restarted.Dispose();
+            restarted = null;
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
         finally
         {
@@ -306,7 +356,8 @@ public sealed class PortalLauncherRuntimeTests
                 await StopAsync(restarted);
                 restarted.Dispose();
             }
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
