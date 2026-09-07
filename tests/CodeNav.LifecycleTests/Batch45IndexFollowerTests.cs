@@ -2372,6 +2372,7 @@ public sealed class Batch45IndexFollowerTests
         IndexManager? follower = null;
         IndexManager? successor = null;
         SemanticService? followerSemantic = null;
+        bool deleted = false;
         try
         {
             WriteWorkspace(root);
@@ -2439,6 +2440,29 @@ public sealed class Batch45IndexFollowerTests
             Assert.Equal("follower", index.GetProperty("mode").GetString());
             Assert.Equal(successor.Health().IndexVersion,
                 index.GetProperty("indexVersion").GetString());
+
+            followerSemantic.Dispose();
+            followerSemantic = null;
+            await successor.ShutdownAsync();
+            successor = null;
+            await follower.ShutdownAsync();
+            follower = null;
+
+            Assert.True(child.HasExited,
+                $"child Phoenix must exit before workspace cleanup: {CompletedText(childStderr)}");
+            await childStdout;
+            childStdout = null;
+            await childStderr;
+            childStderr = null;
+            child.Dispose();
+            child = null;
+
+            Assert.False(IndexOwnershipLease.IsHeld(root, database),
+                "the workspace ownership lease remained held before strict cleanup");
+            TestWorkspaceCleanup.ClearIndexPools(root);
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            Assert.False(Directory.Exists(root));
+            deleted = true;
         }
         finally
         {
@@ -2457,7 +2481,8 @@ public sealed class Batch45IndexFollowerTests
             child?.Dispose();
             GC.KeepAlive(childStdout);
             GC.KeepAlive(childStderr);
-            Cleanup(root);
+            if (!deleted)
+                Cleanup(root);
         }
     }
 
