@@ -28,10 +28,11 @@ public sealed class WorkspaceWatcher : IDisposable
     private readonly ConcurrentDictionary<string, byte> _pending = new(WorkspacePaths.FileSystemPathComparer);
     private readonly ConcurrentDictionary<string, byte> _knownDirs = new(WorkspacePaths.FileSystemPathComparer);
     private readonly System.Threading.Timer _debounce;
+    private readonly Task _seed;
     private readonly object _sync = new();
     private volatile bool _sweepRequested;
     private volatile bool _seedComplete;
-    private bool _disposed;
+    private volatile bool _disposed;
 
     public WorkspaceWatcher(string root, Action<IReadOnlyCollection<string>> onBatch, Action onSweep)
     {
@@ -42,7 +43,7 @@ public sealed class WorkspaceWatcher : IDisposable
 
         // Learn the existing directory layout in the background so even never-touched
         // folders are classifiable when deleted. Best-effort; excludes and links skipped.
-        _ = Task.Run(SeedKnownDirs);
+        _seed = Task.Run(SeedKnownDirs);
 
         _fsw = new FileSystemWatcher(_root)
         {
@@ -232,13 +233,26 @@ public sealed class WorkspaceWatcher : IDisposable
 
     public void Dispose()
     {
+        bool disposeWatcher = false;
         lock (_sync)
         {
-            if (_disposed) return;
-            _disposed = true;
-            _debounce.Dispose(); // under the lock: no ArmDebounce can touch it afterward
+            if (!_disposed)
+            {
+                _disposed = true;
+                _debounce.Dispose(); // under the lock: no ArmDebounce can touch it afterward
+                disposeWatcher = true;
+            }
         }
-        _fsw.EnableRaisingEvents = false;
-        _fsw.Dispose();
+
+        if (disposeWatcher)
+        {
+            _fsw.EnableRaisingEvents = false;
+            _fsw.Dispose();
+        }
+
+        // The volatile disposal flag is checked at every seed stack pop, so this is
+        // bounded by the current Directory.EnumerateDirectories(...).ToList() call.
+        // Do not add a timeout: disposal promises that the seed owns no live handles.
+        _seed.Wait();
     }
 }

@@ -10,7 +10,8 @@ public sealed class WatcherTimingIsolationCollection { }
 /// <summary>
 /// Regression coverage for review batch 3: PhoenixCodeNav-mkf (directory renames must
 /// trigger a sweep), 6d2 (watcher Dispose is race-safe), eot (reparse-point exclusion),
-/// mz6 (IndexManager Dispose is race-safe).
+/// mz6 (IndexManager Dispose is race-safe), plus explicit asynchronous-shutdown release
+/// contracts.
 /// </summary>
 [Collection("Watcher timing isolation")]
 public class WatcherTests
@@ -19,6 +20,7 @@ public class WatcherTests
     public void DirectoryRenameTriggersSweepNotSilentDrop()
     {
         string root = Path.GetFullPath(Directory.CreateTempSubdirectory("codenav-watch").FullName);
+        bool deleted = false;
         try
         {
             string sub = Path.Combine(root, "Feature");
@@ -42,10 +44,15 @@ public class WatcherTests
 
             Assert.True(sweeps > 0,
                 "directory rename must escalate to a detect-all sweep (mkf: was silently dropped)");
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            deleted = true;
+            Assert.False(Directory.Exists(root));
         }
         finally
         {
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -55,6 +62,7 @@ public class WatcherTests
         // .NET project folders are dotted (Acme.Payments); the old extension heuristic
         // misclassified them as files and dropped the delete. They must sweep.
         string root = Path.GetFullPath(Directory.CreateTempSubdirectory("codenav-dotted").FullName);
+        bool deleted = false;
         try
         {
             string proj = Path.Combine(root, "Acme.Payments");
@@ -74,10 +82,15 @@ public class WatcherTests
                 }
             }
             Assert.True(sweeps > 0, "deleting a dotted project directory must trigger a sweep");
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            deleted = true;
+            Assert.False(Directory.Exists(root));
         }
         finally
         {
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -86,6 +99,7 @@ public class WatcherTests
     {
         // Deleting LICENSE/Dockerfile (no extension, not a known dir) must NOT force a sweep.
         string root = Path.GetFullPath(Directory.CreateTempSubdirectory("codenav-lic").FullName);
+        bool deleted = false;
         try
         {
             string license = Path.Combine(root, "LICENSE");
@@ -99,10 +113,15 @@ public class WatcherTests
                 Thread.Sleep(1500); // well past the 600ms debounce
             }
             Assert.Equal(0, Volatile.Read(ref sweeps));
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            deleted = true;
+            Assert.False(Directory.Exists(root));
         }
         finally
         {
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -112,6 +131,7 @@ public class WatcherTests
         // A directory 'Changed' (mtime bump when a child is added) must not escalate to a
         // full sweep — the child's own event covers it.
         string root = Path.GetFullPath(Directory.CreateTempSubdirectory("codenav-add").FullName);
+        bool deleted = false;
         try
         {
             string lib = Path.Combine(root, "Lib");
@@ -128,10 +148,15 @@ public class WatcherTests
             }
             Assert.Equal(0, Volatile.Read(ref sweeps));
             Assert.True(Volatile.Read(ref batches) > 0, "the added .cs file should still produce a per-file batch");
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            deleted = true;
+            Assert.False(Directory.Exists(root));
         }
         finally
         {
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -139,6 +164,7 @@ public class WatcherTests
     public void DisposeIsSafeUnderInFlightEvents()
     {
         string root = Path.GetFullPath(Directory.CreateTempSubdirectory("codenav-watch2").FullName);
+        bool deleted = false;
         try
         {
             // Repeatedly create a watcher, generate a burst of events, and dispose racing
@@ -156,10 +182,15 @@ public class WatcherTests
             }
             Thread.Sleep(200); // give any stray threadpool callbacks time to (not) throw
             Assert.True(true);
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            deleted = true;
+            Assert.False(Directory.Exists(root));
         }
         finally
         {
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 }
@@ -185,6 +216,7 @@ public class ReparsePointTests
     public void EscapesViaReparsePointFalseForCleanTree()
     {
         string root = Path.GetFullPath(Directory.CreateTempSubdirectory("codenav-clean").FullName);
+        bool deleted = false;
         try
         {
             string sub = Path.Combine(root, "a", "b");
@@ -194,20 +226,27 @@ public class ReparsePointTests
             Assert.False(WorkspacePaths.EscapesViaReparsePoint(root, file));
             // Not-yet-created leaf under a clean tree is fine too.
             Assert.False(WorkspacePaths.EscapesViaReparsePoint(root, Path.Combine(sub, "new.cs")));
+
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            deleted = true;
+            Assert.False(Directory.Exists(root));
         }
         finally
         {
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
     [Fact]
     public void RefreshIndexSkipsContentReachedThroughAJunction()
     {
-        // Junctions (mklink /J) don't require elevation on Windows; skip gracefully elsewhere.
+        // Directory-link support is a hard prerequisite: prefer a managed symlink, use a
+        // Windows junction fallback, and surface the reported failure instead of skipping.
         string root = Path.GetFullPath(Directory.CreateTempSubdirectory("codenav-junc").FullName);
         string outside = Path.GetFullPath(Directory.CreateTempSubdirectory("codenav-ext").FullName);
         string dbPath = IndexBuilder.DefaultDbPath(root);
+        bool deleted = false;
         try
         {
             // Minimal indexable workspace so the index/db exist.
@@ -216,10 +255,9 @@ public class ReparsePointTests
 
             File.WriteAllText(Path.Combine(outside, "secret.cs"), "namespace S { class JunctionSecretMarker {} }");
             string linkDir = Path.Combine(root, "linked");
-            if (!TryCreateJunction(linkDir, outside))
-            {
-                return; // junction creation unavailable in this environment — inconclusive, skip
-            }
+            Assert.True(
+                TestWorkspaceCleanup.TryCreateDirectoryLink(linkDir, outside, out string? failure),
+                $"directory-link prerequisite failed: {failure}");
 
             try
             {
@@ -229,13 +267,20 @@ public class ReparsePointTests
                     var result = DeltaRefresher.Refresh(store, root, new[] { rel });
                     Assert.Equal(0, result.AddedFiles);
                 }
-                using var q = new IndexQueries(dbPath);
-                Assert.Empty(q.SearchSymbols("JunctionSecretMarker", "exact", null, 5));
+                using (var q = new IndexQueries(dbPath))
+                {
+                    Assert.Empty(q.SearchSymbols("JunctionSecretMarker", "exact", null, 5));
+                }
             }
             finally
             {
                 try { Directory.Delete(linkDir); } catch { } // remove the junction, not its target
             }
+
+            TestWorkspaceCleanup.ClearIndexPools(root);
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            deleted = true;
+            Assert.False(Directory.Exists(root));
         }
         finally
         {
@@ -243,63 +288,121 @@ public class ReparsePointTests
             // delete ('outside' holds no db; its clear is a harmless no-op kept for symmetry).
             TestWorkspaceCleanup.ClearIndexPools(root);
             TestWorkspaceCleanup.ClearIndexPools(outside);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (!deleted)
+                TestWorkspaceCleanup.DeleteWorkspace(root);
             TestWorkspaceCleanup.DeleteWorkspace(outside);
-        }
-    }
-
-    private static bool TryCreateJunction(string link, string target)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-            using var p = Process.Start(psi);
-            if (p is null) return false;
-            p.WaitForExit(5000);
-            return p.ExitCode == 0 && Directory.Exists(link);
-        }
-        catch
-        {
-            return false;
         }
     }
 }
 
-public class IndexManagerLifecycleTests : IClassFixture<IndexFixture>
+public class IndexManagerLifecycleTests : IClassFixture<IndexFixture>, IClassFixture<DisposeIndexFixture>
 {
     private readonly IndexFixture _fx;
+    private readonly DisposeIndexFixture _disposeFx;
 
-    public IndexManagerLifecycleTests(IndexFixture fx) => _fx = fx;
+    public IndexManagerLifecycleTests(IndexFixture fx, DisposeIndexFixture disposeFx)
+    {
+        _fx = fx;
+        _disposeFx = disposeFx;
+    }
 
     [Fact]
     public void DisposeRacingStartupDoesNotThrow()
     {
-        // Dispose immediately after Start, racing the background open-store task.
-        for (int i = 0; i < 6; i++)
+        IndexManager? manager = null;
+        try
         {
-            var mgr = new IndexManager(_fx.Root, _fx.DbPath);
-            mgr.Start();
-            mgr.Dispose();
+            // Dispose immediately after Start, racing the background open-store task.
+            for (int i = 0; i < 6; i++)
+            {
+                manager = new IndexManager(_disposeFx.Root, _disposeFx.DbPath);
+                manager.Start();
+                Assert.True(manager.IsWriter,
+                    $"iteration {i} must acquire writer ownership before racing Dispose");
+                manager.Dispose();
+                manager = null;
+                Assert.True(WaitUntil(
+                    () => !IndexOwnershipLease.IsHeld(_disposeFx.Root, _disposeFx.DbPath),
+                    30_000),
+                    $"bounded Dispose must release ownership before iteration {i + 1}");
+            }
         }
-        Assert.True(true); // reaching here without an exception/crash is the assertion
+        finally
+        {
+            manager?.Dispose();
+        }
     }
 
     [Fact]
     public void DisposeAfterReadyWaitsForPumpAndCleansUp()
     {
-        var mgr = new IndexManager(_fx.Root, _fx.DbPath);
-        mgr.Start();
-        for (int i = 0; i < 600 && !mgr.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-        Assert.True(mgr.IsQueryable);
+        IndexManager? manager = null;
+        try
+        {
+            manager = new IndexManager(_disposeFx.Root, _disposeFx.DbPath);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000),
+                "manager did not become queryable before the bounded Dispose contract");
 
-        mgr.RequestRefresh();      // give the pump in-flight work
-        mgr.Dispose();             // must settle the pump before disposing the store
-        Assert.True(true);
+            manager.RequestRefresh(); // give the pump in-flight work
+            manager.Dispose();        // must settle the pump before disposing the store
+            manager = null;
+            Assert.True(WaitUntil(
+                () => !IndexOwnershipLease.IsHeld(_disposeFx.Root, _disposeFx.DbPath),
+                30_000),
+                "bounded Dispose must eventually release ownership after pump work");
+        }
+        finally
+        {
+            manager?.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task ShutdownAsyncRacingStartupDoesNotThrow()
+    {
+        // Shut down immediately after Start, racing the background open-store task.
+        for (int i = 0; i < 6; i++)
+        {
+            var mgr = new IndexManager(_fx.Root, _fx.DbPath);
+            mgr.Start();
+            await mgr.ShutdownAsync();
+            Assert.False(mgr.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(_fx.Root, _fx.DbPath));
+        }
+    }
+
+    [Fact]
+    public async Task ShutdownAsyncAfterReadyWaitsForPumpAndCleansUp()
+    {
+        var mgr = new IndexManager(_fx.Root, _fx.DbPath);
+        try
+        {
+            mgr.Start();
+            Assert.True(WaitUntil(
+                () => mgr.IsQueryable && mgr.HasWorkspaceWatcherForTest,
+                30_000),
+                "manager did not publish its workspace watcher before asynchronous shutdown");
+
+            mgr.RequestRefresh();      // give the pump in-flight work
+            await mgr.ShutdownAsync(); // must settle the pump before disposing the store
+            Assert.False(mgr.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(_fx.Root, _fx.DbPath));
+        }
+        finally
+        {
+            await mgr.ShutdownAsync();
+        }
+    }
+
+    private static bool WaitUntil(Func<bool> condition, int timeoutMs)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            if (condition()) return true;
+            Thread.Sleep(25);
+        }
+        return condition();
     }
 }

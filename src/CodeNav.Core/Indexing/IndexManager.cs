@@ -2918,8 +2918,9 @@ public sealed class IndexManager : IDisposable
     /// <summary>Stops watchers immediately, then awaits this manager's startup, refresh pump,
     /// and telemetry writer before releasing its store and ownership. The wait is deliberately
     /// unbounded: it waits only for work the manager started, while production hosts retain the
-    /// bounded Dispose path. The manager is terminal afterward; a later Start call is a no-op.
-    /// Callers that must remove the workspace after shutdown should await this method.</summary>
+    /// bounded Dispose path. The manager is terminal afterward; repeated calls are safe, and a
+    /// later Start call is a no-op. Callers that must remove the workspace after shutdown should
+    /// await this method.</summary>
     internal async ValueTask ShutdownAsync()
     {
         StopBackgroundWorkAndDetachWatchers(disposeTelemetryBounded: false);
