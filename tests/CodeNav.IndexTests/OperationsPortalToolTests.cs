@@ -280,6 +280,7 @@ public sealed class OperationsPortalToolTests
     {
         string root = Directory.CreateTempSubdirectory("Phoenix portal MCP runtime ").FullName;
         int? portalPid = null;
+        bool testSucceeded = false;
         try
         {
             string repository = FindRepositoryRoot();
@@ -341,6 +342,7 @@ public sealed class OperationsPortalToolTests
                 "server_capabilities",
                 timeout.Token);
             Assert.Equal("0.12.89", capabilities.GetProperty("version").GetString());
+            int mcpPid = capabilities.GetProperty("runtime").GetProperty("processId").GetInt32();
             Assert.Contains(
                 capabilities.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -356,28 +358,31 @@ public sealed class OperationsPortalToolTests
                 session.GetLeftPart(UriPartial.Authority) + "/",
                 timeout.Token);
             Assert.True(shell.IsSuccessStatusCode);
+            using System.Diagnostics.Process mcpProcess =
+                System.Diagnostics.Process.GetProcessById(mcpPid);
+            await client.DisposeAsync();
+            await client.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+            await mcpProcess.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            testSucceeded = true;
         }
         finally
         {
-            if (portalPid is int pid)
+            bool cleanupSucceeded = false;
+            try
             {
-                try
-                {
-                    using System.Diagnostics.Process process =
-                        System.Diagnostics.Process.GetProcessById(pid);
-                    if (!process.HasExited)
-                        process.Kill(entireProcessTree: true);
-                    await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-                }
-                catch (ArgumentException)
-                {
-                }
-                catch (TimeoutException)
-                {
-                }
+                bool portalExited = await TestProcessLifecycle.StopProcessAsync(portalPid);
+                // This needs the workspace path to derive the user-profile coordination key.
+                PortalTestRuntimeCleanup.DeleteCoordinationFiles(root);
+                if (testSucceeded)
+                    Assert.True(portalExited, "the packaged portal must exit before cleanup");
+                cleanupSucceeded = testSucceeded;
             }
-            PortalTestRuntimeCleanup.DeleteCoordinationFiles(root);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            finally
+            {
+                ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(
+                    cleanupSucceeded,
+                    root);
+            }
         }
     }
 

@@ -2458,9 +2458,8 @@ public sealed class Batch45IndexFollowerTests
             child = null;
 
             Assert.False(IndexOwnershipLease.IsHeld(root, database),
-                "the workspace ownership lease remained held before strict cleanup");
-            TestWorkspaceCleanup.ClearIndexPools(root);
-            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+                "the workspace ownership lease remained held before cleanup");
+            TestWorkspaceCleanup.DeleteWorkspace(root);
             Assert.False(Directory.Exists(root));
             deleted = true;
         }

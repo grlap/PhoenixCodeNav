@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Diagnostics;
 using System.Text.Json;
 using CodeNav.Mcp;
 using ModelContextProtocol.Client;
@@ -49,6 +50,8 @@ public sealed class McpArgumentValidationTests
     {
         string root = Directory.CreateTempSubdirectory(
             "Phoenix MCP argument validation ").FullName;
+        int? startedMcpPid = null;
+        bool testSucceeded = false;
         try
         {
             string executable = FindMcpExecutable();
@@ -167,10 +170,25 @@ public sealed class McpArgumentValidationTests
             Assert.False(valid.IsError is true);
             JsonElement capabilities = ParseContent(valid);
             Assert.Equal("phoenixCodeNav", capabilities.GetProperty("server").GetString());
+            startedMcpPid = capabilities.GetProperty("runtime").GetProperty("processId").GetInt32();
+            using Process mcpProcess = Process.GetProcessById(startedMcpPid.Value);
+            await client.DisposeAsync();
+            await client.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+            await mcpProcess.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            testSucceeded = true;
         }
         finally
         {
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            try
+            {
+                ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
+            }
+            catch (Exception ex) when (startedMcpPid is int processId)
+            {
+                throw new IOException(
+                    $"The standalone MCP runtime started by this test reported pid={processId}.",
+                    ex);
+            }
         }
     }
 

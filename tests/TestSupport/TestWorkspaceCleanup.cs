@@ -23,6 +23,7 @@ namespace CodeNav.Tests;
 internal static class TestWorkspaceCleanup
 {
     private const int MaxTraversalDepth = 256;
+    private const string FailurePathDataKey = "CodeNav.TestWorkspaceCleanup.FailurePath";
 
     /// <summary>Create a directory reparse point for containment canaries. Prefer the managed
     /// symlink API, then fall back to a Windows junction so ordinary non-elevated Windows test
@@ -148,7 +149,147 @@ internal static class TestWorkspaceCleanup
     /// proving release.</summary>
     internal static void DeleteWorkspaceStrict(string root)
     {
-        DeleteTreeNoFollow(root, depth: 0);
+        try
+        {
+            DeleteTreeNoFollow(root, depth: 0);
+        }
+        catch (Exception ex)
+        {
+            // This is diagnostic evidence after the strict verdict is already failure, not a
+            // retry policy: make exactly one immediate re-attempt with no sleep, pool clear,
+            // timeout, or additional count. The original failure is always rethrown, even when
+            // the re-attempt removes the tree.
+            long reattemptStarted = Stopwatch.GetTimestamp();
+            Exception? reattemptFailure = null;
+            try
+            {
+                DeleteTreeNoFollow(root, depth: 0);
+            }
+            catch (Exception retryException)
+            {
+                reattemptFailure = retryException;
+            }
+            TimeSpan reattemptElapsed = Stopwatch.GetElapsedTime(reattemptStarted);
+            string offendingPath = ex.Data[FailurePathDataKey] as string ?? root;
+            string snapshot;
+            try
+            {
+                snapshot = DescribeStrictFailureProcesses(root);
+            }
+            catch (Exception snapshotFailure)
+            {
+                snapshot = $"  <process snapshot failed: {snapshotFailure.GetType().Name}: " +
+                           $"{snapshotFailure.Message}>";
+            }
+
+            throw new IOException(
+                $"Strict test cleanup failed while deleting '{root}'. " +
+                $"Offending path reported by the cleanup walker: '{offendingPath}'. " +
+                $"Filesystem error: {ex.Message}\n" +
+                (reattemptFailure is null
+                    ? $"The single immediate diagnostic re-attempt succeeded after " +
+                      $"{reattemptElapsed.TotalMilliseconds:F3} ms; the original failure " +
+                      "remains the test verdict.\n"
+                    : $"The single immediate diagnostic re-attempt also failed after " +
+                      $"{reattemptElapsed.TotalMilliseconds:F3} ms: " +
+                      $"{reattemptFailure.GetType().Name}: {reattemptFailure.Message}\n") +
+                "Process snapshot selectors: PhoenixCodeNav*-named processes, plus processes " +
+                "whose MainModule path lies under the root.\n" +
+                "Known gap: a framework-dependent launch hosted by dotnet.exe can hold a " +
+                "module under the root while both its process name and MainModule path are " +
+                "outside the root; MainModule access can also be unavailable across integrity " +
+                "or bitness boundaries.\n" + snapshot,
+                ex);
+        }
+    }
+
+    private static string DescribeStrictFailureProcesses(string root)
+    {
+        StringComparison pathComparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        string normalizedRoot = Path.GetFullPath(root).TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var matches = new List<string>();
+
+        foreach (Process process in Process.GetProcesses())
+        {
+            using (process)
+            {
+                int processId;
+                string processName;
+                try
+                {
+                    processId = process.Id;
+                    processName = process.ProcessName;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                string? imagePath = null;
+                string imageDisplay;
+                try
+                {
+                    imagePath = process.MainModule?.FileName;
+                    imageDisplay = imagePath ?? "<unavailable>";
+                }
+                catch (Exception imageFailure)
+                {
+                    imageDisplay = $"<unavailable: {imageFailure.GetType().Name}>";
+                }
+
+                bool nameMatches = processName.StartsWith(
+                    "PhoenixCodeNav",
+                    StringComparison.OrdinalIgnoreCase);
+                bool imageMatches = false;
+                if (imagePath is not null)
+                {
+                    try
+                    {
+                        imageMatches = Path.GetFullPath(imagePath)
+                            .StartsWith(normalizedRoot, pathComparison);
+                    }
+                    catch
+                    {
+                        // The process-name selector remains available when the image path races.
+                    }
+                }
+
+                if (!nameMatches && !imageMatches)
+                    continue;
+
+                string startTime;
+                try
+                {
+                    startTime = process.StartTime.ToString("O");
+                }
+                catch (Exception startFailure)
+                {
+                    startTime = $"<unavailable: {startFailure.GetType().Name}>";
+                }
+
+                string hasExited;
+                try
+                {
+                    hasExited = process.HasExited ? "true" : "false";
+                }
+                catch (Exception stateFailure)
+                {
+                    hasExited = $"<unavailable: {stateFailure.GetType().Name}>";
+                }
+
+                matches.Add(
+                    $"  pid={processId}; name={processName}; image={imageDisplay}; " +
+                    $"start={startTime}; hasExited={hasExited}");
+            }
+        }
+
+        return matches.Count == 0
+            ? "  <no process matched either selector>"
+            : string.Join(Environment.NewLine, matches);
     }
 
     /// <summary>Scoped pool release plus bounded, no-follow deletion of a test workspace.
@@ -166,6 +307,12 @@ internal static class TestWorkspaceCleanup
             try
             {
                 DeleteTreeNoFollow(root, depth: 0);
+                if (attempt > 0)
+                {
+                    Console.Error.WriteLine(
+                        $"Test cleanup removed '{root}' on bounded attempt {attempt + 1} " +
+                        "after a transient filesystem failure.");
+                }
                 return;
             }
             catch (Exception ex)
@@ -185,30 +332,39 @@ internal static class TestWorkspaceCleanup
 
     private static void DeleteTreeNoFollow(string path, int depth)
     {
-        if (depth > MaxTraversalDepth)
-            throw new IOException(
-                $"Test cleanup traversal exceeded {MaxTraversalDepth} levels at '{path}'.");
-
-        FileAttributes attributes = File.GetAttributes(path);
-        if ((attributes & FileAttributes.ReparsePoint) != 0)
+        try
         {
-            DeleteEntry(path, attributes);
-            return;
-        }
+            if (depth > MaxTraversalDepth)
+                throw new IOException(
+                    $"Test cleanup traversal exceeded {MaxTraversalDepth} levels at '{path}'.");
 
-        if ((attributes & FileAttributes.Directory) == 0)
+            FileAttributes attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                DeleteEntry(path, attributes);
+                return;
+            }
+
+            if ((attributes & FileAttributes.Directory) == 0)
+            {
+                DeleteEntry(path, attributes);
+                return;
+            }
+
+            // Snapshot children before removal. Deleting while a lazy directory enumeration is
+            // active can skip entries on Windows and force a complete retry of a large Git tree.
+            foreach (string child in Directory.GetFileSystemEntries(path))
+                DeleteTreeNoFollow(child, depth + 1);
+
+            ClearReadOnly(path, attributes);
+            Directory.Delete(path, recursive: false);
+        }
+        catch (Exception ex)
         {
-            DeleteEntry(path, attributes);
-            return;
+            if (!ex.Data.Contains(FailurePathDataKey))
+                ex.Data[FailurePathDataKey] = path;
+            throw;
         }
-
-        // Snapshot children before removal. Deleting while a lazy directory enumeration is
-        // active can skip entries on Windows and force a complete retry of a large Git tree.
-        foreach (string child in Directory.GetFileSystemEntries(path))
-            DeleteTreeNoFollow(child, depth + 1);
-
-        ClearReadOnly(path, attributes);
-        Directory.Delete(path, recursive: false);
     }
 
     private static void DeleteEntry(string path, FileAttributes attributes)
@@ -228,4 +384,5 @@ internal static class TestWorkspaceCleanup
         if ((attributes & FileAttributes.ReadOnly) != 0)
             File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
     }
+
 }

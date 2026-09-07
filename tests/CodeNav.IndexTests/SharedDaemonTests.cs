@@ -75,6 +75,7 @@ public sealed class SharedDaemonTests
             "Phoenix failed startup cleanup ").FullName;
         Process? malformed = null;
         Process? timedOut = null;
+        bool testSucceeded = false;
         try
         {
             string executable = FindMcpExecutable();
@@ -101,6 +102,7 @@ public sealed class SharedDaemonTests
                         CancellationToken.None));
             Assert.Equal("daemon_startup_report_timeout", timeout.Failure.Cause);
             Assert.True(timedOut.HasExited);
+            testSucceeded = true;
         }
         finally
         {
@@ -114,7 +116,7 @@ public sealed class SharedDaemonTests
                 await DaemonProcessIsolation.TerminateFailedStartupAsync(timedOut);
                 timedOut.Dispose();
             }
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -154,6 +156,7 @@ public sealed class SharedDaemonTests
         string moved = original + "-moved";
         McpClient? client = null;
         DaemonEndpoint? endpoint = null;
+        bool testSucceeded = false;
         try
         {
             File.WriteAllText(Path.Combine(original, "Moved.cs"),
@@ -171,13 +174,15 @@ public sealed class SharedDaemonTests
             Assert.Contains("--rebuild", meta.GetProperty("recovery").GetString());
             Assert.False(meta.GetProperty("retryable").GetBoolean());
             Assert.False(File.Exists(endpoint.DescriptorPath));
+            testSucceeded = true;
         }
         finally
         {
-            if (client is not null) await TryDisposeClientAsync(client);
+            if (client is not null)
+                await DisposeClientForCleanupAsync(client, testSucceeded);
             if (endpoint is not null) await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(moved);
             TestWorkspaceCleanup.DeleteWorkspace(original);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, moved);
         }
     }
 
@@ -192,6 +197,7 @@ public sealed class SharedDaemonTests
         McpClient? second = null;
         McpClient? repaired = null;
         DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        bool testSucceeded = false;
         try
         {
             writer.Start();
@@ -213,11 +219,11 @@ public sealed class SharedDaemonTests
             Assert.Equal(firstStatus, File.ReadAllBytes(endpoint.StartupStatusPath));
             Assert.False(File.Exists(endpoint.DescriptorPath));
 
-            await TryDisposeClientAsync(second);
+            await DisposeClientAsync(second);
             second = null;
-            await TryDisposeClientAsync(first);
+            await DisposeClientAsync(first);
             first = null;
-            writer.Dispose();
+            await writer.ShutdownAsync();
 
             repaired = await CreateClientAsync(FindMcpExecutable(), root);
             JsonElement repairedCapabilities = await CallAsync(
@@ -225,16 +231,20 @@ public sealed class SharedDaemonTests
             Assert.Equal("daemon", repairedCapabilities.GetProperty("runtime")
                 .GetProperty("indexMode").GetString());
             Assert.False(File.Exists(endpoint.StartupStatusPath));
+            testSucceeded = true;
         }
         finally
         {
-            if (repaired is not null) await TryDisposeClientAsync(repaired);
+            if (repaired is not null)
+                await DisposeClientForCleanupAsync(repaired, testSucceeded);
             try { await RetireDaemonForTestAsync(endpoint); } catch { }
-            if (second is not null) await TryDisposeClientAsync(second);
-            if (first is not null) await TryDisposeClientAsync(first);
-            writer.Dispose();
+            if (second is not null)
+                await DisposeClientForCleanupAsync(second, testSucceeded);
+            if (first is not null)
+                await DisposeClientForCleanupAsync(first, testSucceeded);
+            await writer.ShutdownAsync();
             await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -246,6 +256,7 @@ public sealed class SharedDaemonTests
         string executable = FindMcpExecutable();
         DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
         McpClient? client = null;
+        bool testSucceeded = false;
         try
         {
             File.WriteAllText(Path.Combine(root, "CliTarget.cs"),
@@ -432,14 +443,16 @@ public sealed class SharedDaemonTests
             Assert.Equal(1, domainFailure.ExitCode);
             Assert.Equal("symbol_not_found",
                 domainFailure.Payload.GetProperty("error").GetString());
+            testSucceeded = true;
         }
         finally
         {
-            if (client is not null) await TryDisposeClientAsync(client);
+            if (client is not null)
+                await DisposeClientForCleanupAsync(client, testSucceeded);
             try { await RetireDaemonForTestAsync(endpoint); } catch { }
             await CleanupEndpointForTestAsync(endpoint);
             try { File.Delete(argumentsFile); } catch { }
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -450,6 +463,7 @@ public sealed class SharedDaemonTests
             "Phoenix cold concurrent agent CLI ").FullName;
         string executable = FindMcpExecutable();
         DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        bool testSucceeded = false;
         try
         {
             Assert.False(File.Exists(endpoint.DescriptorPath));
@@ -474,12 +488,13 @@ public sealed class SharedDaemonTests
             DaemonDescriptorRecord descriptor = Assert.IsType<DaemonDescriptorRecord>(
                 DaemonDescriptor.TryRead(endpoint));
             Assert.Equal(firstPid, descriptor.Pid);
+            testSucceeded = true;
         }
         finally
         {
             try { await RetireDaemonForTestAsync(endpoint); } catch { }
             await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -529,6 +544,7 @@ public sealed class SharedDaemonTests
         string executable = FindMcpExecutable();
         DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
         using var writer = new IndexManager(root, database);
+        bool testSucceeded = false;
         try
         {
             writer.Start();
@@ -541,12 +557,13 @@ public sealed class SharedDaemonTests
                 .GetProperty("indexMode").GetString());
             Assert.Equal("daemon_writer_unavailable", refusal.Payload.GetProperty("meta")
                 .GetProperty("cause").GetString());
+            testSucceeded = true;
         }
         finally
         {
-            writer.Dispose();
+            await writer.ShutdownAsync();
             await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -681,6 +698,7 @@ public sealed class SharedDaemonTests
         var clients = new List<McpClient>();
         Process? daemon = null;
         DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
+        bool testSucceeded = false;
         try
         {
             Assert.False(Directory.Exists(Path.Combine(root, ".codenav")));
@@ -732,11 +750,12 @@ public sealed class SharedDaemonTests
                 DaemonEndpoint.Create(spelling, null).DatabaseKey));
             Assert.Equal(endpoint.DatabaseKey,
                 DaemonEndpoint.Create(root, IndexBuilder.DefaultDbPath(alias)).DatabaseKey);
+            testSucceeded = true;
         }
         finally
         {
             foreach (McpClient client in clients)
-                await TryDisposeClientAsync(client);
+                await DisposeClientForCleanupAsync(client, testSucceeded);
             try { await RetireDaemonForTestAsync(endpoint); } catch { }
             if (daemon is not null)
             {
@@ -752,7 +771,7 @@ public sealed class SharedDaemonTests
             }
             await CleanupEndpointForTestAsync(endpoint);
             TestWorkspaceCleanup.DeleteWorkspace(aliasParent);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -1336,6 +1355,7 @@ public sealed class SharedDaemonTests
         using var firstHandlerEntered = new ManualResetEventSlim();
         using var releaseFirstHandler = new ManualResetEventSlim();
         int handlerOrdinal = 0;
+        bool testSucceeded = false;
         var daemon = new DaemonServer(
             endpoint,
             indexDb: null,
@@ -1382,6 +1402,7 @@ public sealed class SharedDaemonTests
                 await DaemonProtocol.ReadResponseAsync(first, firstTimeout.Token));
             Assert.True(firstResponse.Accepted);
             Assert.Equal(firstRequest.Nonce, firstResponse.Nonce);
+            testSucceeded = true;
         }
         finally
         {
@@ -1392,7 +1413,7 @@ public sealed class SharedDaemonTests
             try { await daemonTask; } catch (OperationCanceledException) { }
             PhoenixRuntimeMode.Set(PhoenixProcessMode.Standalone);
             await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            StrictWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -1406,6 +1427,7 @@ public sealed class SharedDaemonTests
         using var daemonLifetime = new CancellationTokenSource();
         using var handlerEntered = new ManualResetEventSlim();
         using var releaseHandler = new ManualResetEventSlim();
+        bool testSucceeded = false;
         var daemon = new DaemonServer(
             endpoint,
             indexDb: null,
@@ -1436,6 +1458,7 @@ public sealed class SharedDaemonTests
             using var readTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await Assert.ThrowsAnyAsync<IOException>(() =>
                 DaemonProtocol.ReadResponseAsync(client, readTimeout.Token).AsTask());
+            testSucceeded = true;
         }
         finally
         {
@@ -1445,7 +1468,7 @@ public sealed class SharedDaemonTests
             try { await daemonTask; } catch (OperationCanceledException) { }
             PhoenixRuntimeMode.Set(PhoenixProcessMode.Standalone);
             await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            StrictWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -1538,6 +1561,7 @@ public sealed class SharedDaemonTests
         using var firstConnectionLifetime = new CancellationTokenSource();
         TimeoutException? firstConnectionDrainTimeout = null;
         Exception? firstConnectionDrainFailure = null;
+        bool bodySucceeded = false;
         try
         {
             listener = DaemonTransport.Listen(endpoint);
@@ -1572,42 +1596,54 @@ public sealed class SharedDaemonTests
             Assert.Equal("daemon", descriptor.ProcessMode);
             Assert.NotEqual(Environment.ProcessId, descriptor.Pid);
 
-            await TryDisposeClientAsync(client);
+            await DisposeClientAsync(client);
             client = null;
             await RetireDaemonForTestAsync(endpoint);
+            bodySucceeded = true;
         }
         finally
         {
-            firstConnectionLifetime.Cancel();
-            if (client is not null) await TryDisposeClientAsync(client);
-            if (listener is not null) await listener.DisposeAsync();
-            if (closeFirstConnection is not null)
+            bool cleanupSucceeded = false;
+            try
             {
-                try
+                firstConnectionLifetime.Cancel();
+                if (client is not null)
+                    await DisposeClientForCleanupAsync(client, bodySucceeded);
+                if (listener is not null) await listener.DisposeAsync();
+                if (closeFirstConnection is not null)
                 {
-                    await closeFirstConnection.WaitAsync(TimeSpan.FromSeconds(10));
+                    try
+                    {
+                        await closeFirstConnection.WaitAsync(TimeSpan.FromSeconds(10));
+                    }
+                    catch (OperationCanceledException) when (firstConnectionLifetime.IsCancellationRequested)
+                    {
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        firstConnectionDrainTimeout = ex;
+                    }
+                    catch (Exception ex)
+                    {
+                        firstConnectionDrainFailure = ex;
+                    }
                 }
-                catch (OperationCanceledException) when (firstConnectionLifetime.IsCancellationRequested)
-                {
-                }
-                catch (TimeoutException ex)
-                {
-                    firstConnectionDrainTimeout = ex;
-                }
-                catch (Exception ex)
-                {
-                    firstConnectionDrainFailure = ex;
-                }
+                try { await RetireDaemonForTestAsync(endpoint); } catch { }
+                await CleanupEndpointForTestAsync(endpoint);
+                cleanupSucceeded = true;
             }
-            try { await RetireDaemonForTestAsync(endpoint); } catch { }
-            await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            finally
+            {
+                if (!bodySucceeded || !cleanupSucceeded)
+                    TestWorkspaceCleanup.DeleteWorkspace(root);
+            }
         }
 
         // The body currently awaits closeFirstConnection; these guards preserve honest
         // failure reporting if a future edit moves or removes that await.
         if (firstConnectionDrainTimeout is not null)
         {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
             throw new TimeoutException(
                 "Published fake daemon listener task did not complete cleanly within 10 seconds " +
                 "after cancellation.",
@@ -1615,10 +1651,12 @@ public sealed class SharedDaemonTests
         }
         if (firstConnectionDrainFailure is not null)
         {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
             throw new InvalidOperationException(
                 "Published fake daemon listener task faulted while draining after cancellation.",
                 firstConnectionDrainFailure);
         }
+        ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(success: true, root);
     }
 
     [Fact]
@@ -1628,6 +1666,7 @@ public sealed class SharedDaemonTests
         McpClient? first = null;
         McpClient? second = null;
         McpClient? mismatch = null;
+        bool testSucceeded = false;
         try
         {
             string executable = FindMcpExecutable();
@@ -1684,6 +1723,7 @@ public sealed class SharedDaemonTests
                 unavailableError.GetProperty("error").GetString());
             Assert.Equal("daemon_index_destination_mismatch",
                 unavailableError.GetProperty("cause").GetString());
+            testSucceeded = true;
         }
         finally
         {
@@ -1694,9 +1734,12 @@ public sealed class SharedDaemonTests
                 try { await RetireDaemonForTestAsync(endpoint); } catch { }
             }
             await Task.WhenAll(
-                mismatch is null ? Task.CompletedTask : TryDisposeClientAsync(mismatch),
-                second is null ? Task.CompletedTask : TryDisposeClientAsync(second),
-                first is null ? Task.CompletedTask : TryDisposeClientAsync(first));
+                mismatch is null ? Task.CompletedTask :
+                    DisposeClientForCleanupAsync(mismatch, testSucceeded),
+                second is null ? Task.CompletedTask :
+                    DisposeClientForCleanupAsync(second, testSucceeded),
+                first is null ? Task.CompletedTask :
+                    DisposeClientForCleanupAsync(first, testSucceeded));
             if (endpoint is not null)
             {
                 await WaitUntilAsync(
@@ -1707,7 +1750,7 @@ public sealed class SharedDaemonTests
                 try { File.Delete(endpoint.StartupLockPath); } catch { }
                 DaemonStartupStatus.Delete(endpoint);
             }
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -1725,6 +1768,7 @@ public sealed class SharedDaemonTests
         using var buildEntered = new ManualResetEventSlim();
         using var releaseBuild = new ManualResetEventSlim();
         bool rebuildUsedDedicatedThread = false;
+        bool testSucceeded = false;
         using var daemonLifetime = new CancellationTokenSource();
         var daemon = new DaemonServer(
             endpoint,
@@ -1778,14 +1822,17 @@ public sealed class SharedDaemonTests
                 secondReady.GetProperty("index").GetProperty("state").GetString());
             Assert.Equal(daemonPid, secondReady.GetProperty("runtime")
                 .GetProperty("processId").GetInt32());
+            testSucceeded = true;
         }
         finally
         {
             releaseBuild.Set();
             try { await RetireDaemonForTestAsync(endpoint); } catch { }
             await Task.WhenAll(
-                second is null ? Task.CompletedTask : TryDisposeClientAsync(second),
-                first is null ? Task.CompletedTask : TryDisposeClientAsync(first));
+                second is null ? Task.CompletedTask :
+                    DisposeClientForCleanupAsync(second, testSucceeded),
+                first is null ? Task.CompletedTask :
+                    DisposeClientForCleanupAsync(first, testSucceeded));
             daemonLifetime.Cancel();
             try
             {
@@ -1797,8 +1844,8 @@ public sealed class SharedDaemonTests
                 PhoenixRuntimeMode.Set(PhoenixProcessMode.Standalone);
             }
             await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
             TestWorkspaceCleanup.DeleteWorkspace(alternateRuntime);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -1817,6 +1864,7 @@ public sealed class SharedDaemonTests
         using var buildEntered = new ManualResetEventSlim();
         using var releaseBuild = new ManualResetEventSlim();
         bool rebuildUsedDedicatedThread = false;
+        bool testSucceeded = false;
         using var daemonLifetime = new CancellationTokenSource();
         var daemon = new DaemonServer(
             endpoint,
@@ -1859,12 +1907,14 @@ public sealed class SharedDaemonTests
 
             releaseBuild.Set();
             await WaitForIndexStateAsync(client, "ready");
+            testSucceeded = true;
         }
         finally
         {
             releaseBuild.Set();
             try { await RetireDaemonForTestAsync(endpoint); } catch { }
-            if (client is not null) await TryDisposeClientAsync(client);
+            if (client is not null)
+                await DisposeClientForCleanupAsync(client, testSucceeded);
             daemonLifetime.Cancel();
             try
             {
@@ -1876,7 +1926,7 @@ public sealed class SharedDaemonTests
                 PhoenixRuntimeMode.Set(PhoenixProcessMode.Standalone);
             }
             await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -1897,6 +1947,7 @@ public sealed class SharedDaemonTests
         using var fakeLifetime = new CancellationTokenSource();
         var retired = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        bool testSucceeded = false;
         Task fakeDaemon = ServeOlderLegacyDaemonAsync(
             legacy, retired, fakeLifetime.Token);
         try
@@ -1919,17 +1970,19 @@ public sealed class SharedDaemonTests
                 capabilities.GetProperty("runtime").GetProperty("indexMode").GetString());
             Assert.NotEqual(Environment.ProcessId, capabilities.GetProperty("runtime")
                 .GetProperty("processId").GetInt32());
+            testSucceeded = true;
         }
         finally
         {
             fakeLifetime.Cancel();
             try { await fakeDaemon; } catch (OperationCanceledException) { }
             try { await RetireDaemonForTestAsync(stable); } catch { }
-            if (client is not null) await TryDisposeClientAsync(client);
+            if (client is not null)
+                await DisposeClientForCleanupAsync(client, testSucceeded);
             await CleanupEndpointForTestAsync(stable);
             try { File.Delete(legacy.StartupLockPath); } catch { }
-            TestWorkspaceCleanup.DeleteWorkspace(root);
             TestWorkspaceCleanup.DeleteWorkspace(legacyParent);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -1938,11 +1991,12 @@ public sealed class SharedDaemonTests
     {
         string root = Directory.CreateTempSubdirectory(
             "Phoenix framework default daemon ").FullName;
+        string indexDb = Path.Combine(root, ".codenav", "framework-index.db");
         McpClient? client = null;
         DaemonEndpoint? endpoint = null;
+        bool testSucceeded = false;
         try
         {
-            string indexDb = Path.Combine(root, ".codenav", "framework-index.db");
             endpoint = DaemonEndpoint.Create(root, indexDb);
             if (!OperatingSystem.IsWindows())
             {
@@ -1964,6 +2018,7 @@ public sealed class SharedDaemonTests
             client = null;
             Assert.True(IndexOwnershipLease.IsHeld(root, indexDb),
                 "the shared daemon released its ownership lease when only its proxy exited");
+            testSucceeded = true;
         }
         finally
         {
@@ -1971,9 +2026,12 @@ public sealed class SharedDaemonTests
             {
                 try { await RetireDaemonForTestAsync(endpoint); } catch { }
             }
-            if (client is not null) await TryDisposeClientAsync(client);
+            if (client is not null)
+                await DisposeClientForCleanupAsync(client, testSucceeded);
             if (endpoint is not null) await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            if (testSucceeded)
+                StrictWorkspaceCleanup.AssertLeaseReleased(root, indexDb);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccessWithoutLease(testSucceeded, root);
         }
     }
 
@@ -1984,6 +2042,7 @@ public sealed class SharedDaemonTests
         McpClient? first = null;
         McpClient? successor = null;
         DaemonEndpoint? endpoint = null;
+        bool testSucceeded = false;
         try
         {
             string executable = FindMcpExecutable();
@@ -1999,7 +2058,7 @@ public sealed class SharedDaemonTests
                 await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
             }
             await first.Completion.WaitAsync(TimeSpan.FromSeconds(10));
-            await TryDisposeClientAsync(first);
+            await DisposeClientAsync(first);
             first = null;
 
             successor = await CreateClientAsync(executable, root);
@@ -2009,6 +2068,7 @@ public sealed class SharedDaemonTests
             Assert.Equal(successorPid, DaemonDescriptor.TryRead(endpoint)?.Pid);
             JsonElement refresh = await CallAsync(successor, "refresh_index");
             Assert.True(refresh.GetProperty("queued").GetBoolean());
+            testSucceeded = true;
         }
         finally
         {
@@ -2024,11 +2084,13 @@ public sealed class SharedDaemonTests
             }
             if (retirementAccepted && successor is not null)
                 try { await successor.Completion.WaitAsync(TimeSpan.FromSeconds(10)); } catch { }
-            if (successor is not null) await TryDisposeClientAsync(successor);
-            if (first is not null) await TryDisposeClientAsync(first);
+            if (successor is not null)
+                await DisposeClientForCleanupAsync(successor, testSucceeded);
+            if (first is not null)
+                await DisposeClientForCleanupAsync(first, testSucceeded);
             if (endpoint is not null)
                 await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -2039,6 +2101,7 @@ public sealed class SharedDaemonTests
         McpClient? daemonClient = null;
         McpClient? standaloneClient = null;
         DaemonEndpoint? endpoint = null;
+        bool testSucceeded = false;
         try
         {
             string executable = FindMcpExecutable();
@@ -2067,6 +2130,7 @@ public sealed class SharedDaemonTests
                 refreshError.GetProperty("error").GetString());
             Assert.Equal("standalone_writer_unavailable",
                 refreshError.GetProperty("cause").GetString());
+            testSucceeded = true;
         }
         finally
         {
@@ -2075,11 +2139,13 @@ public sealed class SharedDaemonTests
                 try { await RetireDaemonForTestAsync(endpoint); } catch { }
             }
             await Task.WhenAll(
-                standaloneClient is null ? Task.CompletedTask : TryDisposeClientAsync(standaloneClient),
-                daemonClient is null ? Task.CompletedTask : TryDisposeClientAsync(daemonClient));
+                standaloneClient is null ? Task.CompletedTask :
+                    DisposeClientForCleanupAsync(standaloneClient, testSucceeded),
+                daemonClient is null ? Task.CompletedTask :
+                    DisposeClientForCleanupAsync(daemonClient, testSucceeded));
             if (endpoint is not null)
                 await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -2105,6 +2171,9 @@ public sealed class SharedDaemonTests
         var daemonClients = new List<McpClient>();
         McpClient? standalone = null;
         DaemonEndpoint? endpoint = null;
+        int? startedDaemonPid = null;
+        int? startedStandalonePid = null;
+        bool testSucceeded = false;
         try
         {
             string executable = FindMcpExecutable();
@@ -2118,19 +2187,19 @@ public sealed class SharedDaemonTests
 
             JsonElement[] daemonCapabilities = await Task.WhenAll(
                 daemonClients.Select(client => CallAsync(client, "server_capabilities")));
-            int daemonPid = daemonCapabilities[0].GetProperty("runtime")
+            startedDaemonPid = daemonCapabilities[0].GetProperty("runtime")
                 .GetProperty("processId").GetInt32();
             Assert.All(daemonCapabilities, capability => Assert.Equal(
-                daemonPid,
+                startedDaemonPid,
                 capability.GetProperty("runtime").GetProperty("processId").GetInt32()));
             JsonElement standaloneCapabilities = await CallAsync(
                 standalone, "server_capabilities");
-            int standalonePid = standaloneCapabilities.GetProperty("runtime")
+            startedStandalonePid = standaloneCapabilities.GetProperty("runtime")
                 .GetProperty("processId").GetInt32();
-            Assert.NotEqual(daemonPid, standalonePid);
+            Assert.NotEqual(startedDaemonPid, startedStandalonePid);
 
-            using Process daemonProcess = Process.GetProcessById(daemonPid);
-            using Process standaloneProcess = Process.GetProcessById(standalonePid);
+            using Process daemonProcess = Process.GetProcessById(startedDaemonPid.Value);
+            using Process standaloneProcess = Process.GetProcessById(startedStandalonePid.Value);
             long daemonBytes = await MinimumWorkingSetAsync(daemonProcess);
             long standaloneBytes = await MinimumWorkingSetAsync(standaloneProcess);
             long allowed = checked(standaloneBytes + standaloneBytes / 2 + 32L * 1024 * 1024);
@@ -2144,6 +2213,7 @@ public sealed class SharedDaemonTests
             Assert.True(
                 daemonLatency <= relativeCeiling,
                 $"Median warm daemon relay latency {daemonLatency} materially exceeded the 2x standalone plus 100 ms ceiling {relativeCeiling}; median standalone latency was {standaloneLatency}.");
+            testSucceeded = true;
         }
         finally
         {
@@ -2151,14 +2221,26 @@ public sealed class SharedDaemonTests
             {
                 try { await RetireDaemonForTestAsync(endpoint); } catch { }
             }
-            IEnumerable<Task> disposals = daemonClients.Select(TryDisposeClientAsync);
+            IEnumerable<Task> disposals = daemonClients.Select(client =>
+                DisposeClientForCleanupAsync(client, testSucceeded));
             if (standalone is not null)
-                disposals = disposals.Append(TryDisposeClientAsync(standalone));
+                disposals = disposals.Append(
+                    DisposeClientForCleanupAsync(standalone, testSucceeded));
             await Task.WhenAll(disposals);
             if (endpoint is not null)
                 await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(daemonRoot);
-            TestWorkspaceCleanup.DeleteWorkspace(standaloneRoot);
+            try
+            {
+                ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(
+                    testSucceeded, daemonRoot, standaloneRoot);
+            }
+            catch (Exception ex) when (startedDaemonPid.HasValue || startedStandalonePid.HasValue)
+            {
+                throw new IOException(
+                    $"This test reported daemonPid={startedDaemonPid?.ToString() ?? "<none>"}; " +
+                    $"standalonePid={startedStandalonePid?.ToString() ?? "<none>"}.",
+                    ex);
+            }
         }
     }
 
@@ -2171,6 +2253,7 @@ public sealed class SharedDaemonTests
         DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
         using Process daemon = LaunchDaemonForTest(
             FindMcpExecutable(), root, keepAlive, idleMilliseconds: 350);
+        bool testSucceeded = false;
         try
         {
             await WaitUntilAsync(
@@ -2186,6 +2269,7 @@ public sealed class SharedDaemonTests
             }
             await daemon.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
             Assert.Equal(0, daemon.ExitCode);
+            testSucceeded = true;
         }
         finally
         {
@@ -2196,7 +2280,7 @@ public sealed class SharedDaemonTests
                 catch { daemon.Kill(entireProcessTree: false); }
             }
             await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -2210,6 +2294,7 @@ public sealed class SharedDaemonTests
             root, Path.Combine(root, "other-index.db"));
         using Process daemon = LaunchDaemonForTest(
             FindMcpExecutable(), root, keepAlive: true, idleMilliseconds: 350);
+        bool testSucceeded = false;
         try
         {
             await WaitUntilAsync(
@@ -2228,6 +2313,7 @@ public sealed class SharedDaemonTests
 
             // Cleanup is idempotent when the authority-bound endpoint is already gone.
             await DaemonRetirement.RetireForHarnessAsync(endpoint, timeout.Token);
+            testSucceeded = true;
         }
         finally
         {
@@ -2238,7 +2324,7 @@ public sealed class SharedDaemonTests
                 catch { daemon.Kill(entireProcessTree: false); }
             }
             await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -2317,6 +2403,7 @@ public sealed class SharedDaemonTests
         Task fakeDaemon = ServeOlderDestinationMismatchDaemonAsync(
             endpoint, retiredKey, fakeLifetime.Token);
         McpClient? client = null;
+        bool testSucceeded = false;
         try
         {
             await WaitUntilAsync(
@@ -2334,15 +2421,17 @@ public sealed class SharedDaemonTests
             Assert.Equal(successor.Pid, capabilities.GetProperty("runtime")
                 .GetProperty("processId").GetInt32());
             Assert.Equal(endpoint.DatabaseKey, successor.DatabaseKey);
+            testSucceeded = true;
         }
         finally
         {
-            if (client is not null) await TryDisposeClientAsync(client);
+            if (client is not null)
+                await DisposeClientForCleanupAsync(client, testSucceeded);
             fakeLifetime.Cancel();
             try { await fakeDaemon; } catch (OperationCanceledException) { }
             try { await RetireDaemonForTestAsync(endpoint); } catch { }
             await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -2479,6 +2568,7 @@ public sealed class SharedDaemonTests
         using var releaseStartup = new ManualResetEventSlim();
         using var daemonLifetime = new CancellationTokenSource();
         McpClient? successor = null;
+        bool testSucceeded = false;
         var daemon = new DaemonServer(
             endpoint,
             indexDb: null,
@@ -2520,6 +2610,7 @@ public sealed class SharedDaemonTests
             Assert.Equal("daemon", capabilities.GetProperty("runtime")
                 .GetProperty("indexMode").GetString());
             Assert.Equal(0, await daemonTask.WaitAsync(timeout.Token));
+            testSucceeded = true;
         }
         finally
         {
@@ -2527,13 +2618,13 @@ public sealed class SharedDaemonTests
             if (successor is not null)
             {
                 try { await RetireDaemonForTestAsync(endpoint); } catch { }
-                await TryDisposeClientAsync(successor);
+                await DisposeClientForCleanupAsync(successor, testSucceeded);
             }
             daemonLifetime.Cancel();
             try { await daemonTask; } catch (OperationCanceledException) { }
             PhoenixRuntimeMode.Set(PhoenixProcessMode.Standalone);
             await CleanupEndpointForTestAsync(endpoint);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
+            ExternalProcessWorkspaceCleanup.DeleteAfterSuccess(testSucceeded, root);
         }
     }
 
@@ -2773,6 +2864,16 @@ public sealed class SharedDaemonTests
         try { await DisposeClientAsync(client); } catch { }
     }
 
+    private static async Task DisposeClientForCleanupAsync(
+        McpClient client,
+        bool testSucceeded)
+    {
+        if (testSucceeded)
+            await DisposeClientAsync(client);
+        else
+            await TryDisposeClientAsync(client);
+    }
+
     private static async Task<CliResult> RunCliAsync(
         string executable,
         string root,
@@ -2820,19 +2921,14 @@ public sealed class SharedDaemonTests
             process.StandardInput.BaseStream.Close();
         }
 
-        try
-        {
-            await process.WaitForExitAsync()
-                .WaitAsync(TimeSpan.FromSeconds(30));
-        }
-        catch
-        {
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
-            throw;
-        }
-
-        string output = await stdout;
-        string diagnostics = await stderr;
+        RedirectedProcessResult captured = await TestProcessLifecycle.WaitForExitAndDrainAsync(
+            process,
+            stdout,
+            stderr,
+            TimeSpan.FromSeconds(30),
+            "Phoenix CLI test process");
+        string output = captured.Output;
+        string diagnostics = captured.Error;
         string[] diagnosticLines = diagnostics.Split(
             ['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         Assert.All(diagnosticLines, line => Assert.Equal(
@@ -2846,7 +2942,7 @@ public sealed class SharedDaemonTests
         }
         using JsonDocument document = JsonDocument.Parse(output);
         return new CliResult(
-            process.ExitCode,
+            captured.ExitCode,
             document.RootElement.Clone(),
             output);
     }

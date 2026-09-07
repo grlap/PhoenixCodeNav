@@ -31,7 +31,7 @@ public sealed class FSharpSingleFilePublishTests
             if (Directory.Exists(publish))
                 Directory.Delete(publish, recursive: true);
 
-            ProcessResult result = await RunAsync("dotnet",
+            RedirectedProcessResult result = await RunAsync("dotnet",
             [
                 "publish", project, "-c", "Release", "--no-restore",
                 "-p:UseSharedCompilation=false",
@@ -85,6 +85,7 @@ public sealed class FSharpSingleFilePublishTests
         string publish = Path.Combine(root, "published pair with spaces");
         string workspace = Path.Combine(root, "FSharp workspace with spaces");
         int? portalPid = null;
+        bool testSucceeded = false;
         Directory.CreateDirectory(publish);
         Directory.CreateDirectory(workspace);
         try
@@ -92,7 +93,7 @@ public sealed class FSharpSingleFilePublishTests
             string repository = FindRepositoryRoot();
             string project = Path.Combine(repository, "src", "CodeNav.Mcp",
                 "CodeNav.Mcp.csproj");
-            ProcessResult result = await RunAsync("dotnet",
+            RedirectedProcessResult result = await RunAsync("dotnet",
             [
                 "publish", project, "-c", "Release", "-r", "win-x64",
                 "--no-restore",
@@ -148,6 +149,7 @@ public sealed class FSharpSingleFilePublishTests
             JsonElement capabilities = await WaitForReadyAsync(client, TimeSpan.FromSeconds(60),
                 mcpTimeout.Token);
             Assert.Equal("0.12.89", capabilities.GetProperty("version").GetString());
+            int mcpPid = capabilities.GetProperty("runtime").GetProperty("processId").GetInt32();
             JsonElement detailedCapabilities = await CallJsonAsync(client,
                 "server_capabilities", new Dictionary<string, object?>
                 {
@@ -226,28 +228,42 @@ public sealed class FSharpSingleFilePublishTests
                 new Uri(portalUri.GetLeftPart(UriPartial.Authority) + "/healthz"),
                 mcpTimeout.Token);
             Assert.True(health.IsSuccessStatusCode);
+            using Process mcpProcess = Process.GetProcessById(mcpPid);
+            await client.DisposeAsync();
+            await client.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+            await mcpProcess.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            testSucceeded = true;
         }
         finally
         {
-            if (portalPid is int pid)
+            bool cleanupSucceeded = false;
+            try
+            {
+                bool portalExited = await TestProcessLifecycle.StopProcessAsync(portalPid);
+                PortalTestRuntimeCleanup.DeleteCoordinationFiles(workspace);
+                if (testSucceeded)
+                {
+                    Assert.True(portalExited, "the published portal must exit before cleanup");
+                    StrictWorkspaceCleanup.AssertLeaseReleased(workspace);
+                }
+                cleanupSucceeded = testSucceeded;
+            }
+            finally
             {
                 try
                 {
-                    using Process portal = Process.GetProcessById(pid);
-                    if (!portal.HasExited)
-                        portal.Kill(entireProcessTree: true);
-                    await portal.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                    ExternalProcessWorkspaceCleanup.DeleteAfterSuccessWithoutLease(
+                        cleanupSucceeded,
+                        workspace);
                 }
-                catch (ArgumentException)
+                finally
                 {
-                }
-                catch (TimeoutException)
-                {
+                    // The outer tree contains freshly published images. Process exit is proven
+                    // above, but Windows can release those image sections just after exit, so
+                    // this tree is deliberately tolerant cleanup, not a handle-release proof.
+                    TestWorkspaceCleanup.DeleteWorkspace(root);
                 }
             }
-            PortalTestRuntimeCleanup.DeleteCoordinationFiles(workspace);
-            TestWorkspaceCleanup.ClearIndexPools(workspace);
-            TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }
 
@@ -311,7 +327,7 @@ public sealed class FSharpSingleFilePublishTests
                throw new InvalidOperationException("Could not locate PhoenixCodeNav.sln.");
     }
 
-    private static async Task<ProcessResult> RunAsync(string fileName,
+    private static async Task<RedirectedProcessResult> RunAsync(string fileName,
         IEnumerable<string> arguments, string workingDirectory, TimeSpan timeout)
     {
         var start = new ProcessStartInfo(fileName)
@@ -329,83 +345,7 @@ public sealed class FSharpSingleFilePublishTests
                                 throw new InvalidOperationException($"Could not start {fileName}.");
         Task<string> output = process.StandardOutput.ReadToEndAsync();
         Task<string> error = process.StandardError.ReadToEndAsync();
-        using var cts = new CancellationTokenSource(timeout);
-        try
-        {
-            // Process.WaitForExitAsync also waits for redirected streams to reach EOF. A
-            // descendant can keep those pipe handles open after the direct process exits, so
-            // observe process exit independently and spend the same deadline on pipe drainage.
-            await WaitForExitSignalAsync(process, cts.Token);
-            string[] captured = await Task.WhenAll(output, error).WaitAsync(cts.Token);
-            return new(process.ExitCode, captured[0], captured[1]);
-        }
-        catch (OperationCanceledException) when (cts.IsCancellationRequested)
-        {
-            Exception? cleanupError = null;
-            try
-            {
-                if (!process.HasExited) process.Kill(entireProcessTree: true);
-                using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                await WaitForExitSignalAsync(process, cleanupCts.Token);
-            }
-            catch (Exception ex)
-            {
-                cleanupError = ex;
-            }
-
-            // A descendant can retain inherited pipe handles after the direct process exits.
-            // Closing our readers is the only bounded way to release those reads once the parent
-            // can no longer be traversed by Process.Kill(entireProcessTree: true).
-            // StreamReader.Close can wait behind its outstanding async read. Close the pipe
-            // streams themselves so the reads fault/complete without making cleanup unbounded.
-            try { process.StandardOutput.BaseStream.Dispose(); }
-            catch (Exception ex) { cleanupError ??= ex; }
-            try { process.StandardError.BaseStream.Dispose(); }
-            catch (Exception ex) { cleanupError ??= ex; }
-            string[] captured = await ObserveReadersAsync(output, error);
-            throw new TimeoutException(
-                $"{fileName} exceeded {timeout}.\n{captured[0]}\n{captured[1]}", cleanupError);
-        }
+        return await TestProcessLifecycle.WaitForExitAndDrainAsync(
+            process, output, error, timeout, fileName);
     }
-
-    private static async Task WaitForExitSignalAsync(Process process,
-        CancellationToken cancellationToken)
-    {
-        if (process.HasExited) return;
-        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnExited(object? _, EventArgs __) => completion.TrySetResult();
-        process.Exited += OnExited;
-        try
-        {
-            process.EnableRaisingEvents = true;
-            if (process.HasExited) return;
-            await completion.Task.WaitAsync(cancellationToken);
-        }
-        finally
-        {
-            process.Exited -= OnExited;
-        }
-    }
-
-    private static async Task<string[]> ObserveReadersAsync(params Task<string>[] readers)
-    {
-        Task<string[]> all = Task.WhenAll(readers);
-        Task completed = await Task.WhenAny(all, Task.Delay(TimeSpan.FromMilliseconds(250)));
-        if (completed == all)
-        {
-            try { return await all; }
-            catch { }
-        }
-
-        _ = all.ContinueWith(static task => _ = task.Exception,
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-        return readers.Select(static reader => reader.Status == TaskStatus.RanToCompletion
-                ? reader.Result
-                : "<redirected output unavailable after deadline>")
-            .ToArray();
-    }
-
-    private sealed record ProcessResult(int ExitCode, string Output, string Error);
 }
