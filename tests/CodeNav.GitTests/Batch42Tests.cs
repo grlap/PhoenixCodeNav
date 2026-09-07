@@ -564,11 +564,13 @@ public class Batch42Tests
             Git(origin, "config user.email test@example.com");
             Git(origin, "config user.name CodeNavTest");
             Git(origin, "config commit.gpgsign false");
+            Git(origin, "config core.longpaths true");
             File.WriteAllText(Path.Combine(origin, "Child.cs"), "class Child { }\n");
             Git(origin, "add -A");
             Git(origin, "commit -q -m initial");
 
             WriteReviewRepo(root);
+            Git(root, "config core.longpaths true");
             string submodulePath = "Sub" + new string('x', 80);
             Git(root,
                 $"-c protocol.file.allow=always submodule add -q \"{origin}\" {submodulePath}");

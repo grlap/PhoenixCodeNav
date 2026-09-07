@@ -554,6 +554,61 @@ function Remove-FreshIndexRun([string]$AnchorPath, [string]$RunRoot,
     [IO.Directory]::Delete($RunRoot, $false)
 }
 
+function Remove-SelfTestEntryNoFollow([string]$Path) {
+    $item = Get-Item -LiteralPath $Path -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        if ($item.PSIsContainer) { [IO.Directory]::Delete($Path, $false) }
+        else { [IO.File]::Delete($Path) }
+        return
+    }
+    if ($item.PSIsContainer) {
+        foreach ($child in @(Get-ChildItem -LiteralPath $Path -Force)) {
+            Remove-SelfTestEntryNoFollow $child.FullName
+        }
+        if (($item.Attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) {
+            $item.Attributes = $item.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly)
+        }
+        [IO.Directory]::Delete($Path, $false)
+    } else {
+        if (($item.Attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) {
+            $item.Attributes = $item.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly)
+        }
+        [IO.File]::Delete($Path)
+    }
+}
+
+function Remove-FreshIndexLifecycleSelfTestRoot([string]$Root) {
+    if (-not (Test-Path -LiteralPath $Root)) { return }
+    $full = [IO.Path]::GetFullPath($Root)
+    $parent = [IO.Path]::GetFullPath((Split-Path -Parent $full)).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $expectedParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $comparison = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        [StringComparison]::OrdinalIgnoreCase
+    } else { [StringComparison]::Ordinal }
+    Assert-True ($parent.Equals($expectedParent, $comparison)) `
+        "Fresh-index lifecycle self-test cleanup escaped TEMP: $full"
+    Assert-True ([IO.Path]::GetFileName($full) -match
+        '^PhoenixCodeNav-fresh-index-selftest-[0-9a-f]{32}$') `
+        "Fresh-index lifecycle self-test cleanup refused an unknown root: $full"
+    $rootItem = Get-Item -LiteralPath $full -Force
+    Assert-True ($rootItem.PSIsContainer -and
+        ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) `
+        "Fresh-index lifecycle self-test root is not a plain directory: $full"
+    Remove-SelfTestEntryNoFollow $full
+}
+
+function Assert-ExactSelfTestChildren([string]$Parent, [string[]]$Expected,
+    [string]$Label) {
+    $actual = @(Get-ChildItem -LiteralPath $Parent -Force |
+        ForEach-Object { [IO.Path]::GetFullPath($_.FullName) } | Sort-Object)
+    $expectedFull = @($Expected |
+        ForEach-Object { [IO.Path]::GetFullPath($_) } | Sort-Object)
+    Assert-Equal ($expectedFull -join "`n") ($actual -join "`n") `
+        "$Label contains unexpected residue"
+}
+
 function Assert-FriendRelationshipAuthority($Payload, [string]$Label,
     [bool]$RequireCoverage = $true, [object[]]$ExpectedUnprovenProjects = @()) {
     $expectedConfidence = if ($null -ne $baseline.target.PSObject.Properties["friendRelationshipConfidence"]) {
@@ -957,90 +1012,146 @@ if ($SelfTestFreshIndexLifecycleContract) {
     [IO.Directory]::CreateDirectory($selfTestRoot) | Out-Null
     $anchor = Join-Path $selfTestRoot "anchor"
     $outside = Join-Path $selfTestRoot "outside"
-    [IO.Directory]::CreateDirectory($anchor) | Out-Null
-    [IO.Directory]::CreateDirectory($outside) | Out-Null
-    $outsideMarker = Join-Path $outside "outside-marker.txt"
-    [IO.File]::WriteAllText($outsideMarker, "outside")
-    $linkedRoot = Join-Path $anchor "linked-integration"
-    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-        New-Item -ItemType Junction -Path $linkedRoot -Target $outside | Out-Null
-    } else {
-        [IO.Directory]::CreateSymbolicLink($linkedRoot, $outside) | Out-Null
-    }
-    $linkRejected = $false
+    $run = $null
+    $probeProcess = $null
+    $probeStdout = $null
+    $probeStderr = $null
+    $selfTestFailure = $null
+    $selfTestBodyCompleted = $false
+    $selfTestCleanupFailures = [Collections.Generic.List[string]]::new()
     try {
-        Assert-VerifiedDirectoryChain $anchor $linkedRoot "Linked self-test root"
-    } catch {
-        $linkRejected = $_.Exception.Message -match "reparse point"
-    }
-    Assert-True $linkRejected "Fresh-index containment accepted a linked ancestor"
-    Assert-True (Test-Path -LiteralPath $outsideMarker -PathType Leaf) `
-        "Fresh-index containment modified the outside marker"
-    [IO.Directory]::Delete($linkedRoot, $false)
+        [IO.Directory]::CreateDirectory($anchor) | Out-Null
+        [IO.Directory]::CreateDirectory($outside) | Out-Null
+        $outsideMarker = Join-Path $outside "outside-marker.txt"
+        [IO.File]::WriteAllText($outsideMarker, "outside")
+        $linkedRoot = Join-Path $anchor "linked-integration"
+        if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+            New-Item -ItemType Junction -Path $linkedRoot -Target $outside | Out-Null
+        } else {
+            [IO.Directory]::CreateSymbolicLink($linkedRoot, $outside) | Out-Null
+        }
+        $linkRejected = $false
+        try {
+            Assert-VerifiedDirectoryChain $anchor $linkedRoot "Linked self-test root"
+        } catch {
+            $linkRejected = $_.Exception.Message -match "reparse point"
+        }
+        Assert-True $linkRejected "Fresh-index containment accepted a linked ancestor"
+        Assert-True (Test-Path -LiteralPath $outsideMarker -PathType Leaf) `
+            "Fresh-index containment modified the outside marker"
+        [IO.Directory]::Delete($linkedRoot, $false)
 
-    $integrationRoot = Join-Path $anchor "artifacts\external-integration"
-    $leasePath = Join-Path $integrationRoot ".fresh-index-gate.lock"
-    $run = New-FreshIndexRun $anchor $integrationRoot $leasePath
-    $probeStart = New-Object Diagnostics.ProcessStartInfo
-    # Reuse the exact host executable. `Get-Command pwsh` can legitimately return both the
-    # Homebrew cellar binary and its /opt/homebrew/bin link; stringifying that array produces one
-    # invalid, space-separated FileName.
-    $probeStart.FileName = (Get-Process -Id $PID).Path
-    $probeStart.Arguments = "-NoProfile -ExecutionPolicy Bypass -File $(Quote-ProcessArgument $PSCommandPath) -SelfTestFreshIndexLeaseProbe -SelfTestLeasePath $(Quote-ProcessArgument $leasePath)"
-    $probeStart.UseShellExecute = $false
-    $probeStart.CreateNoWindow = $true
-    $probeStart.RedirectStandardOutput = $true
-    $probeStart.RedirectStandardError = $true
-    $probeProcess = [Diagnostics.Process]::Start($probeStart)
-    $probeStdout = $probeProcess.StandardOutput.ReadToEndAsync()
-    $probeStderr = $probeProcess.StandardError.ReadToEndAsync()
-    $probeProcess.WaitForExit()
-    $probeStdout.Wait()
-    $probeStderr.Wait()
-    Assert-Equal 23 $probeProcess.ExitCode `
-        "Fresh-index lease allowed a second process to acquire ownership; stdout=$([string]$probeStdout.Result); stderr=$([string]$probeStderr.Result)"
-    Assert-True ([string]$probeStderr.Result -match "LEASE_PROBE_REJECTED") `
-        "Fresh-index lease probe did not report the ownership collision"
-    $probeProcess.Dispose()
+        $integrationRoot = Join-Path $anchor "artifacts\external-integration"
+        $leasePath = Join-Path $integrationRoot ".fresh-index-gate.lock"
+        $run = New-FreshIndexRun $anchor $integrationRoot $leasePath
+        $probeStart = New-Object Diagnostics.ProcessStartInfo
+        # Reuse the exact host executable. `Get-Command pwsh` can legitimately return both the
+        # Homebrew cellar binary and its /opt/homebrew/bin link; stringifying that array produces one
+        # invalid, space-separated FileName.
+        $probeStart.FileName = (Get-Process -Id $PID).Path
+        $probeStart.Arguments = "-NoProfile -ExecutionPolicy Bypass -File $(Quote-ProcessArgument $PSCommandPath) -SelfTestFreshIndexLeaseProbe -SelfTestLeasePath $(Quote-ProcessArgument $leasePath)"
+        $probeStart.UseShellExecute = $false
+        $probeStart.CreateNoWindow = $true
+        $probeStart.RedirectStandardOutput = $true
+        $probeStart.RedirectStandardError = $true
+        $probeProcess = [Diagnostics.Process]::Start($probeStart)
+        $probeStdout = $probeProcess.StandardOutput.ReadToEndAsync()
+        $probeStderr = $probeProcess.StandardError.ReadToEndAsync()
+        $probeProcess.WaitForExit()
+        $probeStdout.Wait()
+        $probeStderr.Wait()
+        Assert-Equal 23 $probeProcess.ExitCode `
+            "Fresh-index lease allowed a second process to acquire ownership; stdout=$([string]$probeStdout.Result); stderr=$([string]$probeStderr.Result)"
+        Assert-True ([string]$probeStderr.Result -match "LEASE_PROBE_REJECTED") `
+            "Fresh-index lease probe did not report the ownership collision"
+        $probeProcess.Dispose()
+        $probeProcess = $null
 
-    $roslynDb = Join-Path $run.Root "roslyn-index.db"
-    $fsharpDb = Join-Path $run.Root "fsharp-index.db"
-    foreach ($artifact in @($roslynDb, "$roslynDb-wal", $fsharpDb, "$fsharpDb-shm")) {
-        [IO.File]::WriteAllText($artifact, "self-test")
-    }
-    $unexpected = Join-Path $run.Root "unexpected.txt"
-    [IO.File]::WriteAllText($unexpected, "must survive exact cleanup")
-    $unexpectedRejected = $false
-    try {
+        $roslynDb = Join-Path $run.Root "roslyn-index.db"
+        $fsharpDb = Join-Path $run.Root "fsharp-index.db"
+        foreach ($artifact in @($roslynDb, "$roslynDb-wal", $fsharpDb, "$fsharpDb-shm")) {
+            [IO.File]::WriteAllText($artifact, "self-test")
+        }
+        $unexpected = Join-Path $run.Root "unexpected.txt"
+        [IO.File]::WriteAllText($unexpected, "must survive exact cleanup")
+        $unexpectedRejected = $false
+        try {
+            Remove-FreshIndexRun $anchor $run.Root @($roslynDb, $fsharpDb)
+        } catch {
+            $unexpectedRejected = $_.Exception.Message -match "unexpected entries"
+        }
+        Assert-True $unexpectedRejected "Fresh-index cleanup silently removed an unknown entry"
+        Assert-True (Test-Path -LiteralPath $unexpected -PathType Leaf) `
+            "Fresh-index cleanup recursively deleted an unknown entry"
+        Remove-Item -LiteralPath $unexpected -Force
         Remove-FreshIndexRun $anchor $run.Root @($roslynDb, $fsharpDb)
+        $packageFailureObserved = $false
+        try {
+            New-IsolatedPackagesRoot $anchor $integrationRoot $true | Out-Null
+        } catch {
+            $packageFailureObserved = $_.Exception.Message -match `
+                "test-only isolated package root verification failure"
+        }
+        Assert-True $packageFailureObserved `
+            "Isolated package-root post-create failure was not observed"
+        Assert-Equal 0 (@(Get-ChildItem -LiteralPath $integrationRoot -Force | Where-Object {
+            $_.Name -like "fresh-packages-*"
+        }).Count) "Failed isolated package-root verification leaked its directory"
+        $selfTestBodyCompleted = $true
     } catch {
-        $unexpectedRejected = $_.Exception.Message -match "unexpected entries"
+        $selfTestFailure = $_
+    } finally {
+        if ($null -ne $probeProcess) {
+            try {
+                if (-not $probeProcess.HasExited) {
+                    try { $probeProcess.Kill($true) } catch { }
+                    try { $probeProcess.WaitForExit() } catch { }
+                }
+            } catch {
+                $selfTestCleanupFailures.Add("probe process state: $($_.Exception.Message)")
+            }
+        }
+        if ($null -ne $probeStdout) { try { $probeStdout.Wait() } catch { } }
+        if ($null -ne $probeStderr) { try { $probeStderr.Wait() } catch { } }
+        if ($null -ne $probeProcess) {
+            try { $probeProcess.Dispose() }
+            catch { $selfTestCleanupFailures.Add("probe process: $($_.Exception.Message)") }
+        }
+        if ($null -ne $run) {
+            try { $run.Lease.Dispose() }
+            catch { $selfTestCleanupFailures.Add("fresh-index lease: $($_.Exception.Message)") }
+        }
+        if ($selfTestBodyCompleted) {
+            try {
+                Assert-ExactSelfTestChildren $selfTestRoot @($anchor, $outside) `
+                    "Fresh-index lifecycle self-test root"
+                Assert-ExactSelfTestChildren $anchor @((Split-Path -Parent $integrationRoot)) `
+                    "Fresh-index lifecycle anchor"
+                Assert-ExactSelfTestChildren (Split-Path -Parent $integrationRoot) @($integrationRoot) `
+                    "Fresh-index lifecycle artifacts root"
+                Assert-ExactSelfTestChildren $integrationRoot @($leasePath) `
+                    "Fresh-index lifecycle integration root"
+                Assert-ExactSelfTestChildren $outside @($outsideMarker) `
+                    "Fresh-index lifecycle outside root"
+            } catch {
+                $selfTestCleanupFailures.Add("residue proof: $($_.Exception.Message)")
+            }
+        }
+        try { Remove-FreshIndexLifecycleSelfTestRoot $selfTestRoot }
+        catch { $selfTestCleanupFailures.Add("TEMP root: $($_.Exception.Message)") }
     }
-    Assert-True $unexpectedRejected "Fresh-index cleanup silently removed an unknown entry"
-    Assert-True (Test-Path -LiteralPath $unexpected -PathType Leaf) `
-        "Fresh-index cleanup recursively deleted an unknown entry"
-    Remove-Item -LiteralPath $unexpected -Force
-    Remove-FreshIndexRun $anchor $run.Root @($roslynDb, $fsharpDb)
-    $packageFailureObserved = $false
-    try {
-        New-IsolatedPackagesRoot $anchor $integrationRoot $true | Out-Null
-    } catch {
-        $packageFailureObserved = $_.Exception.Message -match `
-            "test-only isolated package root verification failure"
+    if ($null -ne $selfTestFailure) {
+        if ($selfTestCleanupFailures.Count -gt 0) {
+            $selfTestFailure.ErrorDetails = [Management.Automation.ErrorDetails]::new(
+                "$($selfTestFailure.Exception.Message); cleanup failures: " +
+                ($selfTestCleanupFailures -join "; "))
+        }
+        throw $selfTestFailure
     }
-    Assert-True $packageFailureObserved `
-        "Isolated package-root post-create failure was not observed"
-    Assert-Equal 0 (@(Get-ChildItem -LiteralPath $integrationRoot -Force | Where-Object {
-        $_.Name -like "fresh-packages-*"
-    }).Count) "Failed isolated package-root verification leaked its directory"
-    $run.Lease.Dispose()
-    Remove-Item -LiteralPath $leasePath -Force
-    [IO.Directory]::Delete($integrationRoot, $false)
-    [IO.Directory]::Delete((Split-Path -Parent $integrationRoot), $false)
-    Remove-Item -LiteralPath $outsideMarker -Force
-    [IO.Directory]::Delete($outside, $false)
-    [IO.Directory]::Delete($anchor, $false)
-    [IO.Directory]::Delete($selfTestRoot, $false)
+    if ($selfTestCleanupFailures.Count -gt 0) {
+        throw "Fresh-index lifecycle self-test cleanup failed: " +
+            ($selfTestCleanupFailures -join "; ")
+    }
     Write-Host "Fresh-index lifecycle contract self-test passed"
     exit 0
 }

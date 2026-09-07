@@ -63,6 +63,7 @@ marked as facts.
   `Project.fsproj` parse context).
 - Fact: RavenDB build profile reference (24-core, Release): ~9.6 s wall
   dominated by the single SQLite writer thread.
+- Fact: the gate wrapper runs every child under a private per-run TEMP root (~28 characters deeper than the user TEMP) and disables shared compilation, the MSBuild server, and node reuse so the persistent build servers do not outlive the gate holding files in that root; measured cost is a Release rebuild of 10.5 s → 12.5 s (+2.0 s, 2026-09-06). New Git-invoking temp fixtures must assume the shorter path budget.
 
 ## Commit Discipline — NEVER check in without review
 
