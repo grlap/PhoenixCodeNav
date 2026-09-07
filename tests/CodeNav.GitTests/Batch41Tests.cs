@@ -116,10 +116,12 @@ public class Batch41Tests
     }
 
     [Fact]
-    public void SnapshotIsRelocatableConsistentFromALiveDbAndRefusesToClobber()
+    public async Task SnapshotIsRelocatableConsistentFromALiveDbAndRefusesToClobber()
     {
         string rootA = Directory.CreateTempSubdirectory("codenav-41-snapA").FullName;
         string rootB = Directory.CreateTempSubdirectory("codenav-41-snapB").FullName;
+        IndexManager? manager = null;
+        bool deleted = false;
         try
         {
             WriteLab(rootA);
@@ -130,45 +132,75 @@ public class Batch41Tests
             // Snapshot from a LIVE manager (pump running, WAL active) — must open cleanly,
             // pass integrity_check, and answer queries under the OTHER root (relocatability:
             // everything stored is workspace-relative).
-            using (var m = new IndexManager(rootA, dbA))
-            {
-                m.Start();
-                Assert.True(WaitUntil(() => m.IsQueryable, 20000));
-                string dbB = IndexBuilder.DefaultDbPath(rootB);
-                IndexStore.SnapshotTo(dbA, dbB);
+            manager = new IndexManager(rootA, dbA);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20000));
+            string dbB = IndexBuilder.DefaultDbPath(rootB);
+            IndexStore.SnapshotTo(dbA, dbB);
 
-                using var conn = new SqliteConnection(
-                    new SqliteConnectionStringBuilder
-                    {
-                        DataSource = dbB,
-                        Mode = SqliteOpenMode.ReadOnly,
-                        Pooling = false,
-                    }.ToString());
+            using (var conn = new SqliteConnection(
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = dbB,
+                    Mode = SqliteOpenMode.ReadOnly,
+                    Pooling = false,
+                }.ToString()))
+            {
                 conn.Open();
                 using var check = conn.CreateCommand();
                 check.CommandText = "PRAGMA integrity_check";
                 Assert.Equal("ok", (string)check.ExecuteScalar()!);
+            }
 
-                using var qB = new IndexQueries(dbB);
+            using (var qB = new IndexQueries(dbB))
+            {
                 Assert.Single(qB.SearchSymbols("Alpha41", "exact", null, 2));
                 Assert.Single(qB.ProjectsContaining("Lab/Alpha.cs"));
+            }
 
-                // No silent clobber — the caller deletes explicitly. Pin the GUARD's message:
-                // a bare Throws<IOException> passed vacuously under a guard-removed probe
-                // (the probe's own delete threw delete-in-use IOException instead).
-                var clobber = Assert.Throws<IOException>(() => IndexStore.SnapshotTo(dbA, dbB));
-                Assert.Contains("already exists", clobber.Message);
+            // No silent clobber — the caller deletes explicitly. Pin the GUARD's message:
+            // a bare Throws<IOException> passed vacuously under a guard-removed probe
+            // (the probe's own delete threw delete-in-use IOException instead).
+            var clobber = Assert.Throws<IOException>(() => IndexStore.SnapshotTo(dbA, dbB));
+            Assert.Contains("already exists", clobber.Message);
+
+            await manager.ShutdownAsync();
+            Assert.False(manager.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(rootA, dbA));
+            manager = null;
+            // The rootB SQLite pool is a process-level cache opened by this test, not manager state.
+            TestWorkspaceCleanup.ClearIndexPools(rootB);
+            string indexA = Path.GetDirectoryName(dbA)!;
+            string indexB = Path.GetDirectoryName(dbB)!;
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(indexA);
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(indexB);
+            Assert.False(Directory.Exists(indexA));
+            Assert.False(Directory.Exists(indexB));
+            Cleanup(rootA);
+            Cleanup(rootB);
+            deleted = true;
+        }
+        finally
+        {
+            if (manager is not null)
+                await manager.ShutdownAsync();
+            if (!deleted)
+            {
+                Cleanup(rootA);
+                Cleanup(rootB);
             }
         }
-        finally { Cleanup(rootA); Cleanup(rootB); }
     }
 
     [Fact]
-    public void IndexWorktreeSeedsReconcilesCommitsAndDirtWithoutTouchingMain()
+    public async Task IndexWorktreeSeedsReconcilesCommitsAndDirtWithoutTouchingMain()
     {
         if (!GitInfo.GitAvailable || OperatingSystem.IsMacOS()) return;
         string root = Path.GetFullPath(Directory.CreateTempSubdirectory("codenav-41-e2e").FullName);
         string wt = Path.GetFullPath(Path.Combine(root, "..", Path.GetFileName(root) + "-wt"));
+        IndexManager? manager = null;
+        SemanticService? semantic = null;
+        bool deleted = false;
         try
         {
             WriteRepo(root);
@@ -181,11 +213,12 @@ public class Batch41Tests
             File.WriteAllText(Path.Combine(wt, "Lab", "Dirty.cs"), "namespace Lab { public class Dirty41 { } }");
 
             string db = IndexBuilder.DefaultDbPath(root);
-            using var m = new IndexManager(root, db);
-            m.Start();
-            Assert.True(WaitUntil(() => m.IsQueryable && m.Health().IndexedCommit is not null, 30000),
+            manager = new IndexManager(root, db);
+            semantic = new SemanticService(manager);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable && manager.Health().IndexedCommit is not null, 30000),
                 "main index did not record its git baseline");
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(manager, semantic);
 
             // The listing sees both worktrees; the sibling has no index yet.
             var listed = Parse(tools.Worktrees()).GetProperty("worktrees").EnumerateArray().ToList();
@@ -209,7 +242,7 @@ public class Batch41Tests
                 Assert.Single(qWt.SearchSymbols("Dirty41", "exact", null, 2));     // status-dirt half
             }
             // Isolation: the MAIN index never saw the worktree's symbols.
-            using (var qMain = m.OpenQueries())
+            using (var qMain = manager.OpenQueries())
             {
                 Assert.Empty(qMain.SearchSymbols("Committed41", "exact", null, 2));
                 Assert.Empty(qMain.SearchSymbols("Dirty41", "exact", null, 2));
@@ -262,17 +295,48 @@ public class Batch41Tests
             Assert.Equal("refreshed", conflictRefresh.GetProperty("action").GetString());
             Assert.False(conflictRefresh.GetProperty("usedFullSweep").GetBoolean(),
                 "a complete unmerged dirt manifest should drive a targeted reconcile");
+
+            semantic.Dispose();
+            semantic = null;
+            await manager.ShutdownAsync();
+            Assert.False(manager.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(root, db));
+            manager = null;
+            // The worktree index pool is a process-level cache opened by this test, not manager state.
+            IndexQueries.ClearPoolsFor(wtDb);
+            string mainIndex = Path.GetDirectoryName(db)!;
+            string worktreeIndex = Path.GetDirectoryName(wtDb)!;
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(mainIndex);
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(worktreeIndex);
+            Assert.False(Directory.Exists(mainIndex));
+            Assert.False(Directory.Exists(worktreeIndex));
+            CleanupWorktree(root, wt);
+            Cleanup(root);
+            deleted = true;
         }
-        finally { Cleanup(root); CleanupWorktree(root, wt); }
+        finally
+        {
+            semantic?.Dispose();
+            if (manager is not null)
+                await manager.ShutdownAsync();
+            if (!deleted)
+            {
+                CleanupWorktree(root, wt);
+                Cleanup(root);
+            }
+        }
     }
 
     [Fact]
-    public void LinuxCaseDistinctWorktreeRootsNeverAlias()
+    public async Task LinuxCaseDistinctWorktreeRootsNeverAlias()
     {
         if (!OperatingSystem.IsLinux() || !GitInfo.GitAvailable) return;
         string container = Directory.CreateTempSubdirectory("codenav-41-case").FullName;
         string root = Path.Combine(container, "CaseRoot");
         string wt = Path.Combine(container, "caseroot");
+        IndexManager? manager = null;
+        SemanticService? semantic = null;
+        bool deleted = false;
         try
         {
             Directory.CreateDirectory(root);
@@ -280,8 +344,8 @@ public class Batch41Tests
             Git(root, $"worktree add -b case-review \"{wt}\"");
 
             string db = IndexBuilder.DefaultDbPath(root);
-            using var manager = new IndexManager(root, db);
-            using var semantic = new SemanticService(manager);
+            manager = new IndexManager(root, db);
+            semantic = new SemanticService(manager);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
 
@@ -297,21 +361,43 @@ public class Batch41Tests
             var tools = new NavigationTools(manager, semantic);
             JsonElement sibling = Parse(tools.IndexWorktree(wt, "refresh"));
             Assert.Equal("worktree_index_missing", sibling.GetProperty("error").GetString());
+
+            semantic.Dispose();
+            semantic = null;
+            await manager.ShutdownAsync();
+            Assert.False(manager.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(root, db));
+            manager = null;
+            string indexDirectory = Path.GetDirectoryName(db)!;
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(indexDirectory);
+            Assert.False(Directory.Exists(indexDirectory));
+            CleanupWorktree(root, wt);
+            Cleanup(container);
+            deleted = true;
         }
         finally
         {
-            CleanupWorktree(root, wt);
-            Cleanup(container);
+            semantic?.Dispose();
+            if (manager is not null)
+                await manager.ShutdownAsync();
+            if (!deleted)
+            {
+                CleanupWorktree(root, wt);
+                Cleanup(container);
+            }
         }
     }
 
     [Fact]
-    public void WorktreeIndexesMapConfiguredSubtreeOntoEveryGitWorktreeRoot()
+    public async Task WorktreeIndexesMapConfiguredSubtreeOntoEveryGitWorktreeRoot()
     {
         if (!GitInfo.GitAvailable || OperatingSystem.IsMacOS()) return;
         string root = Path.GetFullPath(
             Directory.CreateTempSubdirectory("codenav-41-subtree").FullName);
         string wt = Path.GetFullPath(Path.Combine(root, "..", Path.GetFileName(root) + "-wt"));
+        IndexManager? manager = null;
+        SemanticService? semantic = null;
+        bool deleted = false;
         try
         {
             WriteRepo(root);
@@ -325,8 +411,8 @@ public class Batch41Tests
             Git(wt, "commit -q -m subtree-change");
 
             string db = IndexBuilder.DefaultDbPath(workspace);
-            using var manager = new IndexManager(workspace, db);
-            using var semantic = new SemanticService(manager);
+            manager = new IndexManager(workspace, db);
+            semantic = new SemanticService(manager);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable &&
                 manager.Health().IndexedCommit is not null, 30_000));
@@ -351,32 +437,62 @@ public class Batch41Tests
             Assert.True(File.Exists(siblingDb));
             Assert.False(Directory.Exists(Path.Combine(wt, ".codenav")),
                 "a subtree-scoped Phoenix must never create an index at the sibling repo root");
-            using var queries = new IndexQueries(siblingDb);
-            Assert.Single(queries.SearchSymbols("Alpha41", "exact", null, 2));
-            Assert.Single(queries.SearchSymbols("SubtreeOnly41", "exact", null, 2));
+            using (var queries = new IndexQueries(siblingDb))
+            {
+                Assert.Single(queries.SearchSymbols("Alpha41", "exact", null, 2));
+                Assert.Single(queries.SearchSymbols("SubtreeOnly41", "exact", null, 2));
+            }
+
+            semantic.Dispose();
+            semantic = null;
+            await manager.ShutdownAsync();
+            Assert.False(manager.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(workspace, db));
+            manager = null;
+            // The sibling index pool is a process-level cache opened by this test, not manager state.
+            IndexQueries.ClearPoolsFor(siblingDb);
+            string mainIndex = Path.GetDirectoryName(db)!;
+            string siblingIndex = Path.GetDirectoryName(siblingDb)!;
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(mainIndex);
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(siblingIndex);
+            Assert.False(Directory.Exists(mainIndex));
+            Assert.False(Directory.Exists(siblingIndex));
+            CleanupWorktree(root, wt);
+            Cleanup(root);
+            deleted = true;
         }
         finally
         {
-            CleanupWorktree(root, wt);
-            Cleanup(root);
+            semantic?.Dispose();
+            if (manager is not null)
+                await manager.ShutdownAsync();
+            if (!deleted)
+            {
+                CleanupWorktree(root, wt);
+                Cleanup(root);
+            }
         }
     }
 
     [Fact]
-    public void IndexWorktreeGuardsValidateOwnershipAndTargets()
+    public async Task IndexWorktreeGuardsValidateOwnershipAndTargets()
     {
         if (!GitInfo.GitAvailable || OperatingSystem.IsMacOS()) return;
         string root = Path.GetFullPath(Directory.CreateTempSubdirectory("codenav-41-guard").FullName);
         string wt = Path.GetFullPath(Path.Combine(root, "..", Path.GetFileName(root) + "-wt"));
+        string db = IndexBuilder.DefaultDbPath(root);
+        IndexManager? manager = null;
+        SemanticService? semantic = null;
+        bool deleted = false;
         try
         {
             WriteRepo(root);
             Git(root, $"worktree add -b review \"{wt}\"");
-            string db = IndexBuilder.DefaultDbPath(root);
-            using var m = new IndexManager(root, db);
-            m.Start();
-            Assert.True(WaitUntil(() => m.IsQueryable, 20000));
-            var tools = new NavigationTools(m, new SemanticService(m));
+            manager = new IndexManager(root, db);
+            semantic = new SemanticService(manager);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.IsQueryable, 20000));
+            var tools = new NavigationTools(manager, semantic);
 
             Assert.Equal("bad_request", Parse(tools.IndexWorktree(wt, "yolo")).GetProperty("error").GetString());
             Assert.Equal("worktree_not_found",
@@ -397,13 +513,20 @@ public class Batch41Tests
                     published.GetMeta("workspace_root")!),
                     "the staged sibling publication retained the main workspace owner");
             }
-            using (var siblingManager = new IndexManager(wt, wtDb))
+            var siblingManager = new IndexManager(wt, wtDb);
+            try
             {
                 siblingManager.Start();
                 Assert.True(WaitUntil(() => siblingManager.IsQueryable, 20_000));
                 var locked = Parse(tools.IndexWorktree(wt, "refresh"));
                 Assert.Equal("worktree_index_locked", locked.GetProperty("error").GetString());
             }
+            finally
+            {
+                await siblingManager.ShutdownAsync();
+            }
+            Assert.False(siblingManager.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(wt, wtDb));
 
             string foreignRoot = Directory.CreateTempSubdirectory(
                 "codenav-41-foreign-claim").FullName;
@@ -418,16 +541,44 @@ public class Batch41Tests
                         root, db, wt, "refresh", _ => { });
                     Assert.Equal("worktree_index_locked", lockedByClaim.Action);
                 }
+                Cleanup(foreignRoot);
             }
             finally
             {
-                Cleanup(foreignRoot);
+                if (Directory.Exists(foreignRoot))
+                    Cleanup(foreignRoot);
             }
 
             // Phoenix lease released — the same call succeeds again.
             Assert.Equal("refreshed", Parse(tools.IndexWorktree(wt, "refresh")).GetProperty("action").GetString());
+
+            semantic.Dispose();
+            semantic = null;
+            await manager.ShutdownAsync();
+            Assert.False(manager.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(root, db));
+            manager = null;
+            string mainIndex = Path.GetDirectoryName(db)!;
+            string worktreeIndex = Path.GetDirectoryName(wtDb)!;
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(mainIndex);
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(worktreeIndex);
+            Assert.False(Directory.Exists(mainIndex));
+            Assert.False(Directory.Exists(worktreeIndex));
+            CleanupWorktree(root, wt);
+            Cleanup(root);
+            deleted = true;
         }
-        finally { Cleanup(root); CleanupWorktree(root, wt); }
+        finally
+        {
+            semantic?.Dispose();
+            if (manager is not null)
+                await manager.ShutdownAsync();
+            if (!deleted)
+            {
+                CleanupWorktree(root, wt);
+                Cleanup(root);
+            }
+        }
     }
 
     [Fact]
@@ -442,10 +593,13 @@ public class Batch41Tests
         using var installReached = new ManualResetEventSlim(false);
         using var releaseInstall = new ManualResetEventSlim(false);
         Task<WorktreeIndexResult>? refresh = null;
+        IndexManager? writer = null;
+        IndexManager? follower = null;
         IndexManager? midSeedFollower = null;
         IndexManager? restartedWriter = null;
         IndexQueries? activeQuery = null;
         IndexReadSnapshot? activeSnapshot = null;
+        bool deleted = false;
         var publicationLog = new System.Collections.Concurrent.ConcurrentQueue<string>();
         try
         {
@@ -457,16 +611,17 @@ public class Batch41Tests
                 root, mainDb, wt, "create", _ => { }).Action);
 
             string wtDb = IndexBuilder.DefaultDbPath(wt);
-            using var writer = new IndexManager(wt, wtDb);
+            writer = new IndexManager(wt, wtDb);
             writer.Start();
             Assert.True(WaitUntil(() => writer.IsQueryable, 20_000),
                 writer.Health().Error);
-            using var follower = new IndexManager(wt, wtDb);
+            follower = new IndexManager(wt, wtDb);
             follower.Start();
             Assert.True(WaitUntil(() => follower.IsQueryable, 20_000),
                 follower.Health().Error);
 
-            writer.Dispose();
+            await writer.ShutdownAsync();
+            Assert.False(writer.HasWorkspaceWatcherForTest);
             Assert.True(WaitUntil(() => !IndexOwnershipLease.IsHeld(wt, wtDb), 10_000));
             Assert.True(follower.IsQueryable, follower.Health().Error);
             // Open both handles before Ensure inspects the destination. This leaves genuine
@@ -527,7 +682,7 @@ public class Batch41Tests
             Assert.True(midSeedFollower.IsFollower,
                 "restart-only follower unexpectedly promoted after seeding released the mutex");
 
-            midSeedFollower.Dispose();
+            await midSeedFollower.ShutdownAsync();
             midSeedFollower = null;
             restartedWriter = new IndexManager(wt, wtDb);
             restartedWriter.Start();
@@ -535,9 +690,30 @@ public class Batch41Tests
                 restartedWriter.Health().Error);
             Assert.True(restartedWriter.IsWriter);
 
-            using var published = new IndexStore(wtDb, createNew: false);
-            Assert.True(IndexOwnershipLease.SameWorkspaceIdentity(wt,
-                published.GetMeta("workspace_root")!));
+            using (var published = new IndexStore(wtDb, createNew: false))
+            {
+                Assert.True(IndexOwnershipLease.SameWorkspaceIdentity(wt,
+                    published.GetMeta("workspace_root")!));
+            }
+
+            await restartedWriter.ShutdownAsync();
+            Assert.False(restartedWriter.HasWorkspaceWatcherForTest);
+            restartedWriter = null;
+            await follower.ShutdownAsync();
+            follower = null;
+            await writer.ShutdownAsync();
+            writer = null;
+            Assert.False(IndexOwnershipLease.IsHeld(wt, wtDb));
+            WorktreeIndexer.BeforeAnchoredInstallForTest = null;
+            string mainIndex = Path.GetDirectoryName(mainDb)!;
+            string worktreeIndex = Path.GetDirectoryName(wtDb)!;
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(mainIndex);
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(worktreeIndex);
+            Assert.False(Directory.Exists(mainIndex));
+            Assert.False(Directory.Exists(worktreeIndex));
+            CleanupWorktree(root, wt);
+            Cleanup(root);
+            deleted = true;
         }
         finally
         {
@@ -549,10 +725,19 @@ public class Batch41Tests
             WorktreeIndexer.BeforeAnchoredInstallForTest = null;
             activeSnapshot?.Dispose();
             activeQuery?.Dispose();
-            restartedWriter?.Dispose();
-            midSeedFollower?.Dispose();
-            CleanupWorktree(root, wt);
-            Cleanup(root);
+            if (restartedWriter is not null)
+                await restartedWriter.ShutdownAsync();
+            if (midSeedFollower is not null)
+                await midSeedFollower.ShutdownAsync();
+            if (follower is not null)
+                await follower.ShutdownAsync();
+            if (writer is not null)
+                await writer.ShutdownAsync();
+            if (!deleted)
+            {
+                CleanupWorktree(root, wt);
+                Cleanup(root);
+            }
         }
     }
 
@@ -992,12 +1177,15 @@ public class Batch41Tests
     }
 
     [Fact]
-    public void NormalIndexAuthorityRejectsLinkedDefaultParentWithoutTouchingTarget()
+    public async Task NormalIndexAuthorityRejectsLinkedDefaultParentWithoutTouchingTarget()
     {
         string root = Directory.CreateTempSubdirectory("codenav-41-main-parent").FullName;
         string external = Directory.CreateTempSubdirectory(
             "codenav-41-main-parent-external").FullName;
         string link = Path.Combine(root, ".codenav");
+        string database = IndexBuilder.DefaultDbPath(root);
+        IndexManager? manager = null;
+        bool deleted = false;
         try
         {
             WriteLab(root);
@@ -1006,7 +1194,7 @@ public class Batch41Tests
             if (OperatingSystem.IsWindows()) CreateJunction(link, external);
             else Directory.CreateSymbolicLink(link, external);
 
-            using var manager = new IndexManager(root);
+            manager = new IndexManager(root);
             manager.Start();
             Assert.True(WaitUntil(() => manager.State == "failed", 10_000));
             Assert.Contains("destination", manager.Health().Error ?? "",
@@ -1014,23 +1202,39 @@ public class Batch41Tests
             Assert.Throws<IOException>(() => IndexBuilder.Build(root));
             Assert.Equal("external-marker", File.ReadAllText(marker));
             Assert.False(File.Exists(Path.Combine(external, "index.db")));
+
+            await manager.ShutdownAsync();
+            Assert.False(IndexOwnershipLease.IsHeld(root, database));
+            manager = null;
+            if (Directory.Exists(link)) Directory.Delete(link);
+            Cleanup(root);
+            Cleanup(external);
+            deleted = true;
         }
         finally
         {
+            if (manager is not null)
+                await manager.ShutdownAsync();
             try { if (Directory.Exists(link)) Directory.Delete(link); } catch { }
-            Cleanup(root);
-            Cleanup(external);
+            if (!deleted)
+            {
+                Cleanup(root);
+                Cleanup(external);
+            }
         }
     }
 
     [Fact]
-    public void UnixNormalIndexAuthorityRejectsDanglingParentAndDatabaseLinks()
+    public async Task UnixNormalIndexAuthorityRejectsDanglingParentAndDatabaseLinks()
     {
         if (OperatingSystem.IsWindows()) return;
         string root = Directory.CreateTempSubdirectory("codenav-41-main-dangling").FullName;
         string missingParent = root + "-missing-parent";
         string missingDatabase = root + "-missing-index.db";
         string indexDirectory = Path.Combine(root, ".codenav");
+        string database = Path.Combine(indexDirectory, "index.db");
+        IndexManager? manager = null;
+        bool deleted = false;
         try
         {
             WriteLab(root);
@@ -1040,19 +1244,29 @@ public class Batch41Tests
             Directory.Delete(indexDirectory);
 
             Directory.CreateDirectory(indexDirectory);
-            string database = Path.Combine(indexDirectory, "index.db");
             File.CreateSymbolicLink(database, missingDatabase);
-            using var manager = new IndexManager(root);
+            manager = new IndexManager(root);
             manager.Start();
             Assert.True(WaitUntil(() => manager.State == "failed", 10_000));
             Assert.Contains("destination", manager.Health().Error ?? "",
                 StringComparison.OrdinalIgnoreCase);
             Assert.False(File.Exists(missingDatabase));
+
+            await manager.ShutdownAsync();
+            Assert.False(IndexOwnershipLease.IsHeld(root, database));
+            manager = null;
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(indexDirectory);
+            Assert.False(Directory.Exists(indexDirectory));
+            Cleanup(root);
+            deleted = true;
         }
         finally
         {
+            if (manager is not null)
+                await manager.ShutdownAsync();
             try { if (Directory.Exists(indexDirectory)) Directory.Delete(indexDirectory, true); } catch { }
-            Cleanup(root);
+            if (!deleted)
+                Cleanup(root);
             Cleanup(missingParent);
             try { File.Delete(missingDatabase); } catch { }
         }
@@ -1112,7 +1326,7 @@ public class Batch41Tests
     [InlineData("-wal")]
     [InlineData("-shm")]
     [InlineData("-journal")]
-    public void WindowsNormalIndexAuthorityRejectsJunctionSqliteSidecars(string suffix)
+    public async Task WindowsNormalIndexAuthorityRejectsJunctionSqliteSidecars(string suffix)
     {
         if (!OperatingSystem.IsWindows()) return;
         string root = Directory.CreateTempSubdirectory("codenav-41-sidecar-junction").FullName;
@@ -1120,6 +1334,8 @@ public class Batch41Tests
             "codenav-41-sidecar-junction-external").FullName;
         string database = IndexBuilder.DefaultDbPath(root);
         string sidecar = database + suffix;
+        IndexManager? manager = null;
+        bool deleted = false;
         try
         {
             WriteLab(root);
@@ -1128,18 +1344,34 @@ public class Batch41Tests
             File.WriteAllText(marker, "external-marker");
             CreateJunction(sidecar, external);
 
-            using var manager = new IndexManager(root, database);
+            manager = new IndexManager(root, database);
             manager.Start();
             Assert.True(WaitUntil(() => manager.State == "failed", 10_000));
             Assert.Throws<IOException>(() => IndexBuilder.Build(root, database));
             Assert.Equal("external-marker", File.ReadAllText(marker));
             Assert.False(File.Exists(Path.Combine(external, "index.db")));
+
+            await manager.ShutdownAsync();
+            Assert.False(IndexOwnershipLease.IsHeld(root, database));
+            manager = null;
+            if (Directory.Exists(sidecar)) Directory.Delete(sidecar);
+            string indexDirectory = Path.GetDirectoryName(database)!;
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(indexDirectory);
+            Assert.False(Directory.Exists(indexDirectory));
+            Cleanup(root);
+            Cleanup(external);
+            deleted = true;
         }
         finally
         {
+            if (manager is not null)
+                await manager.ShutdownAsync();
             try { if (Directory.Exists(sidecar)) Directory.Delete(sidecar); } catch { }
-            Cleanup(root);
-            Cleanup(external);
+            if (!deleted)
+            {
+                Cleanup(root);
+                Cleanup(external);
+            }
         }
     }
 
@@ -1215,11 +1447,14 @@ public class Batch41Tests
     }
 
     [Fact]
-    public void ExternalAndRelativeIndexDatabaseParentsAreCreatedAndUsable()
+    public async Task ExternalAndRelativeIndexDatabaseParentsAreCreatedAndUsable()
     {
         string root = Directory.CreateTempSubdirectory("codenav-41-external-root").FullName;
         string external = Directory.CreateTempSubdirectory(
             "codenav-41-external-db").FullName;
+        IndexManager? manager = null;
+        string? relativeAbsolute = null;
+        bool deleted = false;
         try
         {
             WriteLab(root);
@@ -1229,21 +1464,42 @@ public class Batch41Tests
             using (var queries = new IndexQueries(directDb))
                 Assert.Single(queries.SearchSymbols("Alpha41", "exact", null, 2));
 
-            string relativeAbsolute = Path.Combine(external, "relative", "nested", "index.db");
+            relativeAbsolute = Path.Combine(external, "relative", "nested", "index.db");
             string relative = Path.GetRelativePath(Environment.CurrentDirectory, relativeAbsolute);
-            using var manager = new IndexManager(root, relative);
+            manager = new IndexManager(root, relative);
             manager.Start();
             Assert.True(WaitUntil(() => manager.State is "ready" or "failed", 20_000));
             Assert.Equal("ready", manager.State);
             Assert.Equal(Path.GetFullPath(relativeAbsolute), manager.DbPath);
             Assert.True(File.Exists(relativeAbsolute));
-            using var managerQueries = manager.OpenQueries();
-            Assert.Single(managerQueries.SearchSymbols("Alpha41", "exact", null, 2));
+            using (var managerQueries = manager.OpenQueries())
+                Assert.Single(managerQueries.SearchSymbols("Alpha41", "exact", null, 2));
+
+            await manager.ShutdownAsync();
+            Assert.False(manager.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(root, relativeAbsolute));
+            manager = null;
+            // The directDb SQLite pool is a process-level cache opened by this test, not manager state.
+            IndexQueries.ClearPoolsFor(directDb);
+            string directIndex = Path.GetDirectoryName(directDb)!;
+            string relativeIndex = Path.GetDirectoryName(relativeAbsolute)!;
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(directIndex);
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(relativeIndex);
+            Assert.False(Directory.Exists(directIndex));
+            Assert.False(Directory.Exists(relativeIndex));
+            Cleanup(root);
+            Cleanup(external);
+            deleted = true;
         }
         finally
         {
-            Cleanup(root);
-            Cleanup(external);
+            if (manager is not null)
+                await manager.ShutdownAsync();
+            if (!deleted)
+            {
+                Cleanup(root);
+                Cleanup(external);
+            }
         }
     }
 
@@ -1506,12 +1762,13 @@ public class Batch41Tests
     }
 
     [Fact]
-    public void DeferredDisposeReleasesLeaseAfterBlockedStartupFinishes()
+    public async Task DeferredDisposeReleasesLeaseAfterBlockedStartupFinishes()
     {
         string root = Directory.CreateTempSubdirectory("codenav-41-deferred-dispose").FullName;
         string db = IndexBuilder.DefaultDbPath(root);
         using var entered = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        bool deleted = false;
         var manager = new IndexManager(root, db)
         {
             DisposeWaitTimeoutForTest = TimeSpan.FromMilliseconds(50),
@@ -1536,15 +1793,35 @@ public class Batch41Tests
             Assert.True(WaitUntil(() => !IndexOwnershipLease.IsHeld(root, db), 20_000),
                 "the completion continuation must release the lease without another Dispose call");
 
-            using var successor = new IndexManager(root, db);
-            successor.Start();
-            Assert.True(WaitUntil(() => successor.IsQueryable, 20_000));
+            var successor = new IndexManager(root, db);
+            try
+            {
+                successor.Start();
+                Assert.True(WaitUntil(() => successor.IsQueryable, 20_000));
+                Assert.True(successor.IsWriter);
+            }
+            finally
+            {
+                await successor.ShutdownAsync();
+            }
+            Assert.False(successor.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(root, db));
+
+            await manager.ShutdownAsync();
+            Assert.False(manager.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(root, db));
+            string indexDirectory = Path.GetDirectoryName(db)!;
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(indexDirectory);
+            Assert.False(Directory.Exists(indexDirectory));
+            Cleanup(root);
+            deleted = true;
         }
         finally
         {
             release.Set();
-            manager.Dispose();
-            Cleanup(root);
+            await manager.ShutdownAsync();
+            if (!deleted)
+                Cleanup(root);
         }
     }
 
@@ -1571,7 +1848,10 @@ public class Batch41Tests
             Assert.False(IndexOwnershipLease.IsHeld(root, db));
             manager = null;
 
-            Directory.Delete(root, recursive: true);
+            string indexDirectory = Path.GetDirectoryName(db)!;
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(indexDirectory);
+            Assert.False(Directory.Exists(indexDirectory));
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
             deleted = true;
             Assert.False(Directory.Exists(root));
         }
@@ -1613,8 +1893,9 @@ public class Batch41Tests
             releaseWriterClose.TrySetResult(true);
             await shutdown;
 
-            Directory.Delete(root, recursive: true);
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
             deleted = true;
+            Assert.False(Directory.Exists(root));
         }
         finally
         {
@@ -1632,6 +1913,7 @@ public class Batch41Tests
         string db = IndexBuilder.DefaultDbPath(root);
         using var entered = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
+        bool deleted = false;
         var manager = new IndexManager(root, db)
         {
             StartupAfterLeaseAcquiredForTest = () =>
@@ -1666,12 +1948,16 @@ public class Batch41Tests
             {
                 await successor.ShutdownAsync();
             }
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            deleted = true;
+            Assert.False(Directory.Exists(root));
         }
         finally
         {
             release.Set();
             await manager.ShutdownAsync();
-            Cleanup(root);
+            if (!deleted)
+                Cleanup(root);
         }
     }
 
@@ -1682,6 +1968,7 @@ public class Batch41Tests
         string db = IndexBuilder.DefaultDbPath(root);
         using var pumpEntered = new ManualResetEventSlim(false);
         using var releasePump = new ManualResetEventSlim(false);
+        bool deleted = false;
         var manager = new IndexManager(root, db);
         try
         {
@@ -1716,12 +2003,16 @@ public class Batch41Tests
             {
                 await successor.ShutdownAsync();
             }
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            deleted = true;
+            Assert.False(Directory.Exists(root));
         }
         finally
         {
             releasePump.Set();
             await manager.ShutdownAsync();
-            Cleanup(root);
+            if (!deleted)
+                Cleanup(root);
         }
     }
 
@@ -1733,6 +2024,7 @@ public class Batch41Tests
         using var pumpEntered = new ManualResetEventSlim(false);
         using var releasePump = new ManualResetEventSlim(false);
         var messages = new List<string>();
+        bool deleted = false;
         var manager = new IndexManager(root, db, message =>
         {
             lock (messages) messages.Add(message);
@@ -1770,12 +2062,16 @@ public class Batch41Tests
                     "ShutdownAsync continues to wait", StringComparison.Ordinal));
             }
             Assert.False(IndexOwnershipLease.IsHeld(root, db));
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(root);
+            deleted = true;
+            Assert.False(Directory.Exists(root));
         }
         finally
         {
             releasePump.Set();
             await manager.ShutdownAsync();
-            Cleanup(root);
+            if (!deleted)
+                Cleanup(root);
         }
     }
 
@@ -1811,11 +2107,13 @@ public class Batch41Tests
     }
 
     [Fact]
-    public void PostBuildSweepReconcilesProjectEditBeforeWatcherAttachmentWithoutSolutionAuthority()
+    public async Task PostBuildSweepReconcilesProjectEditBeforeWatcherAttachmentWithoutSolutionAuthority()
     {
         string root = Directory.CreateTempSubdirectory("codenav-41-post-build-sweep").FullName;
         string database = IndexBuilder.DefaultDbPath(root);
         int mutated = 0;
+        IndexManager? manager = null;
+        bool deleted = false;
         try
         {
             WriteLab(root);
@@ -1827,7 +2125,7 @@ public class Batch41Tests
             File.WriteAllText(Path.Combine(dependencyDir, "Dependency.cs"),
                 "namespace Dependency { public class Dependency41 { } }");
 
-            using var manager = new IndexManager(root, database, message =>
+            manager = new IndexManager(root, database, message =>
             {
                 if (!message.StartsWith("Parsing ", StringComparison.Ordinal) ||
                     Interlocked.Exchange(ref mutated, 1) != 0)
@@ -1862,10 +2160,26 @@ public class Batch41Tests
             Assert.Equal(1, Volatile.Read(ref mutated));
             Assert.Empty(Directory.EnumerateFiles(root, "*.sln*",
                 SearchOption.AllDirectories));
-            using var finalQueries = new IndexQueries(database);
-            Assert.Single(finalQueries.SearchSymbols("Dependency41", "exact", null, 2));
+            using (var finalQueries = new IndexQueries(database))
+                Assert.Single(finalQueries.SearchSymbols("Dependency41", "exact", null, 2));
+
+            await manager.ShutdownAsync();
+            Assert.False(manager.HasWorkspaceWatcherForTest);
+            Assert.False(IndexOwnershipLease.IsHeld(root, database));
+            manager = null;
+            string indexDirectory = Path.GetDirectoryName(database)!;
+            TestWorkspaceCleanup.DeleteWorkspaceStrict(indexDirectory);
+            Assert.False(Directory.Exists(indexDirectory));
+            Cleanup(root);
+            deleted = true;
         }
-        finally { Cleanup(root); }
+        finally
+        {
+            if (manager is not null)
+                await manager.ShutdownAsync();
+            if (!deleted)
+                Cleanup(root);
+        }
     }
 
     [Fact]

@@ -11,11 +11,14 @@ namespace CodeNav.Tests;
 /// ObjectDisposedException on the SQLitePCL handle mid-query). Clearing is scoped to the index
 /// databases that actually live under the workspace being deleted, so sibling tests can no
 /// longer interfere through the pool, by construction.
-/// Deliberately does not own: assertions — cleanup stays best-effort because watchers and
-/// in-flight non-SQLite handles can still hold a temp dir briefly. It does own clearing the
-/// read-only attribute Git gives loose objects on Windows; otherwise every successful Git
-/// fixture leaves its .git/objects tree behind. Batch49PoolScopingTests owns deterministic
-/// canaries for both the pooled-handle and read-only-object cases.
+/// Owns two teardown modes: <see cref="DeleteWorkspaceStrict"/> proves release of a non-Git
+/// workspace root or Phoenix index artifact in one decisive pass; <see cref="DeleteWorkspace"/>
+/// tolerantly finishes Git trees, source roots, and worktrees, where watchers and in-flight
+/// non-SQLite handles can still hold a directory briefly. The shared no-follow
+/// walker clears the read-only attribute Git gives loose objects on Windows for both modes;
+/// otherwise every successful Git fixture leaves its .git/objects tree behind.
+/// Batch49PoolScopingTests owns deterministic canaries for both the pooled-handle and
+/// read-only-object cases.
 /// </summary>
 internal static class TestWorkspaceCleanup
 {
@@ -136,6 +139,16 @@ internal static class TestWorkspaceCleanup
         }
         catch (IOException) { /* enumeration raced a concurrent delete; nothing left to clear */ }
         catch (UnauthorizedAccessException) { /* ditto */ }
+    }
+
+    /// <summary>Delete the resource whose handle release is being proven — a workspace root or
+    /// Phoenix index artifact — in a single no-follow pass, propagating any failure. This owns
+    /// the decisive handle-release proof: the absence of retries is the point.
+    /// <see cref="DeleteWorkspace"/> remains the tolerant teardown for tests that are not
+    /// proving release.</summary>
+    internal static void DeleteWorkspaceStrict(string root)
+    {
+        DeleteTreeNoFollow(root, depth: 0);
     }
 
     /// <summary>Scoped pool release plus bounded, no-follow deletion of a test workspace.
