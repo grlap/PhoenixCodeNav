@@ -160,6 +160,38 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Fact]
+    public void ImportGroupsPreserveOrderHonorConditionsAndRejectNonImports()
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Build/First.props"] =
+                "<Project><PropertyGroup><AssemblyName>$(AssemblyName)-FIRST</AssemblyName></PropertyGroup></Project>",
+            ["Build/Second.props"] =
+                "<Project><PropertyGroup><AssemblyName>$(AssemblyName)-SECOND</AssemblyName></PropertyGroup></Project>",
+            ["Build/Skipped.props"] =
+                "<Project><PropertyGroup><AssemblyName>SKIPPED</AssemblyName></PropertyGroup></Project>",
+        };
+        FSharpSemanticOptionsSnapshot ordered = EvaluateBoundedProject("""
+            <PropertyGroup><AssemblyName>ROOT</AssemblyName></PropertyGroup>
+            <ImportGroup>
+              <Import Project="../Build/First.props" />
+              <Import Project="../Build/Second.props" />
+            </ImportGroup>
+            <ImportGroup Condition="false">
+              <Import Project="../Build/Skipped.props" />
+            </ImportGroup>
+            """, imports);
+
+        Assert.Null(ordered.Error);
+        Assert.Equal("ROOT-FIRST-SECOND", ordered.AssemblyName);
+
+        FSharpSemanticOptionsSnapshot invalid = EvaluateBoundedProject(
+            "<ImportGroup><PropertyGroup /></ImportGroup>");
+        Assert.Equal("fsharp_semantic_import_unsupported", invalid.Error);
+        Assert.Empty(invalid.SourceFiles);
+    }
+
+    [Fact]
     public void ProjectReferencesPreserveLiteralOrderAndBoundedMetadataSemantics()
     {
         FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("""

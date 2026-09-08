@@ -78,12 +78,17 @@ public static partial class ProjectFileParser
         DirectoryBuildTargets,
     }
 
+    private readonly record struct FSharpChooseState(
+        bool HasSemanticItemPhaseFacts,
+        bool HasDirectSemanticFacts);
+
     /// <summary>
     /// A deliberately small MSBuild evaluation projection. It evaluates only the ordered property,
     /// import, condition, compile-item, and reference facts needed by Stage 2A.1. It never loads
     /// MSBuild, executes a target/task, restores a package, or treats a solution as authority.
     /// </summary>
-    private sealed class FSharpSemanticProjectEvaluator
+    private sealed class FSharpSemanticProjectEvaluator :
+        BoundedMsBuildProjectEvaluator<FSharpSemanticDocumentRole, FSharpChooseState>
     {
         private static readonly Regex PropertyReference = new(
             @"\$\((?<name>[A-Za-z_][A-Za-z0-9_.-]*)\)",
@@ -148,15 +153,12 @@ public static partial class ProjectFileParser
             new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _referenceInputConsumedProperties =
             new(StringComparer.OrdinalIgnoreCase);
-        private readonly HashSet<string> _activeImports =
-            new(WorkspacePaths.FileSystemPathComparer);
         private readonly Dictionary<string, string?> _importSnapshots =
             new(WorkspacePaths.FileSystemPathComparer);
         private readonly Dictionary<string, XElement> _importRoots =
             new(WorkspacePaths.FileSystemPathComparer);
         private readonly SortedSet<string> _partialReasons = new(StringComparer.Ordinal);
 
-        private int _evaluationDepth;
         private bool _semanticItemPhaseStarted;
         private bool _directSemanticItemPhaseStarted;
         private string? _error;
@@ -172,6 +174,8 @@ public static partial class ProjectFileParser
             string? directoryBuildTargetsPath,
             CancellationToken cancellationToken,
             FSharpSemanticEvaluationBudget budget)
+            : base(cancellationToken, MaxFSharpSemanticEvaluationDepth,
+                MaxFSharpSemanticImportDepth)
         {
             _projectPath = WorkspacePaths.ToGitPath(projectPath).TrimStart('/');
             _projectDir = WorkspacePaths.ToGitPath(
@@ -312,6 +316,87 @@ public static partial class ProjectFileParser
         private void CheckCancellation() =>
             _cancellationToken.ThrowIfCancellationRequested();
 
+        protected override bool HasEvaluationError => _error is not null;
+
+        protected override void SetEvaluationError(string cause) =>
+            _error = "fsharp_semantic_" + cause;
+
+        protected override bool ShouldProcessElement(XElement element, string documentPath,
+            out bool process) => ShouldProcess(element, documentPath, out process);
+
+        protected override bool ValidateContainer(XElement container)
+        {
+            if (!HasCompilerSchedulingProjectAttribute(container)) return true;
+            _error = "fsharp_semantic_target_evaluation_unsupported";
+            return false;
+        }
+
+        protected override void ProcessPropertyGroupElement(XElement group, string documentPath,
+            FSharpSemanticDocumentRole role) => ProcessPropertyGroup(group, documentPath, role);
+
+        protected override void ProcessItemGroupElement(XElement group, string documentPath,
+            FSharpSemanticDocumentRole role) => ProcessItemGroup(group, documentPath, role);
+
+        protected override void ProcessImportElement(XElement import, string documentPath,
+            FSharpSemanticDocumentRole role, int depth) =>
+            ProcessImport(import, documentPath, role, depth);
+
+        protected override void ProcessOtherElement(XElement element, string documentPath,
+            FSharpSemanticDocumentRole role, int depth)
+        {
+            switch (element.Name.LocalName)
+            {
+                case "Target":
+                    if (!ContainsSemanticTargetFacts(element)) return;
+                    if (!ShouldProcess(element, documentPath, out bool processTarget)) return;
+                    if (processTarget)
+                        _error = "fsharp_semantic_target_evaluation_unsupported";
+                    return;
+                case "ItemDefinitionGroup":
+                    if (!element.Descendants().Any(candidate =>
+                            IsSemanticItemName(candidate.Name.LocalName))) return;
+                    if (!ShouldProcess(element, documentPath,
+                            out bool processDefinitions)) return;
+                    if (processDefinitions)
+                        _error = "fsharp_semantic_item_definition_unsupported";
+                    return;
+            }
+        }
+
+        protected override bool TryReserveImportOccurrence() =>
+            _budget.TryReserveImportOccurrence();
+
+        protected override bool TryResolveImportRootCore(string importPath,
+            out XElement? root) => TryResolveImportRoot(importPath, out root);
+
+        protected override bool ValidateImportedRoot(XElement root)
+        {
+            if (ValidateSdkAuthority(root, allowStandardSdk: false)) return true;
+            _error = "fsharp_semantic_sdk_unsupported";
+            return false;
+        }
+
+        protected override FSharpChooseState CaptureChooseState(XElement choose)
+        {
+            bool hasFacts = ContainsSemanticChooseItemPhaseFacts(choose,
+                out bool hasDirectFacts);
+            return new(hasFacts, hasDirectFacts);
+        }
+
+        protected override void OnChooseSkipped(XElement choose, FSharpChooseState state)
+        {
+            if (!state.HasSemanticItemPhaseFacts || !ConditionMayDependOnProperties(choose)) return;
+            _semanticItemPhaseStarted = true;
+            _directSemanticItemPhaseStarted |= state.HasDirectSemanticFacts;
+        }
+
+        protected override void OnChooseCompleted(XElement choose, FSharpChooseState state)
+        {
+            if (!state.HasSemanticItemPhaseFacts) return;
+            _semanticItemPhaseStarted = true;
+            _directSemanticItemPhaseStarted |= state.HasDirectSemanticFacts;
+        }
+
         private static bool IsDirectoryBuildRole(FSharpSemanticDocumentRole role) =>
             role is FSharpSemanticDocumentRole.DirectoryBuildProps or
                 FSharpSemanticDocumentRole.DirectoryBuildTargets;
@@ -368,72 +453,8 @@ public static partial class ProjectFileParser
                 _partialReasons.Count == 0 ? null : string.Join(';', _partialReasons), error);
 
         private void ProcessContainer(XElement container, string documentPath,
-            FSharpSemanticDocumentRole role, int depth)
-        {
-            CheckCancellation();
-            if (_error is not null) return;
-            if (++_evaluationDepth > MaxFSharpSemanticEvaluationDepth)
-            {
-                _evaluationDepth--;
-                _error = "fsharp_semantic_evaluation_depth_limit";
-                return;
-            }
-            try
-            {
-                if (!ShouldProcess(container, documentPath, out bool process)) return;
-                if (!process) return;
-                if (HasCompilerSchedulingProjectAttribute(container))
-                {
-                    _error = "fsharp_semantic_target_evaluation_unsupported";
-                    return;
-                }
-
-                foreach (XElement child in container.Elements())
-                {
-                    CheckCancellation();
-                    if (_error is not null) return;
-                    switch (child.Name.LocalName)
-                    {
-                        case "PropertyGroup":
-                            ProcessPropertyGroup(child, documentPath, role);
-                            break;
-                        case "ItemGroup":
-                            ProcessItemGroup(child, documentPath, role);
-                            break;
-                        case "Import":
-                            ProcessImport(child, documentPath, role, depth);
-                            break;
-                        case "ImportGroup":
-                            ProcessImportGroup(child, documentPath, role, depth);
-                            break;
-                        case "Choose":
-                            ProcessChoose(child, documentPath, role, depth);
-                            break;
-                        case "Target":
-                            if (!ContainsSemanticTargetFacts(child)) break;
-                            if (!ShouldProcess(child, documentPath, out bool processTarget)) return;
-                            if (processTarget)
-                                _error = "fsharp_semantic_target_evaluation_unsupported";
-                            break;
-                        case "ItemDefinitionGroup":
-                            if (!child.Descendants().Any(element =>
-                                    IsSemanticItemName(element.Name.LocalName))) break;
-                            if (!ShouldProcess(child, documentPath,
-                                    out bool processDefinitions)) return;
-                            if (processDefinitions)
-                                _error = "fsharp_semantic_item_definition_unsupported";
-                            break;
-                            // SDK declarations, UsingTask registrations, ProjectExtensions, and
-                            // unrelated item kinds do not contribute facts to this bounded projection.
-                            // They are never executed.
-                    }
-                }
-            }
-            finally
-            {
-                _evaluationDepth--;
-            }
-        }
+            FSharpSemanticDocumentRole role, int depth) =>
+            ProcessEvaluationContainer(container, documentPath, role, depth);
 
         private void ProcessPropertyGroup(XElement group, string documentPath,
             FSharpSemanticDocumentRole role)
@@ -1295,24 +1316,6 @@ public static partial class ProjectFileParser
             return true;
         }
 
-        private void ProcessImportGroup(XElement group, string documentPath,
-            FSharpSemanticDocumentRole role, int depth)
-        {
-            CheckCancellation();
-            if (!ShouldProcess(group, documentPath, out bool process) || !process) return;
-            foreach (XElement child in group.Elements())
-            {
-                CheckCancellation();
-                if (child.Name.LocalName != "Import")
-                {
-                    _error = "fsharp_semantic_import_unsupported";
-                    return;
-                }
-                ProcessImport(child, documentPath, role, depth);
-                if (_error is not null) return;
-            }
-        }
-
         private void ProcessImport(XElement import, string documentPath,
             FSharpSemanticDocumentRole role, int depth)
         {
@@ -1422,43 +1425,8 @@ public static partial class ProjectFileParser
         }
 
         private void ProcessResolvedImport(string importPath,
-            FSharpSemanticDocumentRole role, int depth)
-        {
-            if (!_budget.TryReserveImportOccurrence())
-            {
-                _error = "fsharp_semantic_import_occurrence_limit";
-                return;
-            }
-            if (depth >= MaxFSharpSemanticImportDepth)
-            {
-                _error = "fsharp_semantic_import_depth_limit";
-                return;
-            }
-            if (!_activeImports.Add(importPath))
-            {
-                _error = "fsharp_semantic_import_cycle";
-                return;
-            }
-
-            try
-            {
-                if (!TryResolveImportRoot(importPath, out XElement? importedRoot) ||
-                    importedRoot is null) return;
-                // Imported project inputs are data-only in this projection. Any SDK declaration would
-                // introduce resolver-controlled implicit props/targets at a nested authority
-                // boundary, even when it names the otherwise allowlisted root SDK.
-                if (!ValidateSdkAuthority(importedRoot, allowStandardSdk: false))
-                {
-                    _error = "fsharp_semantic_sdk_unsupported";
-                    return;
-                }
-                ProcessContainer(importedRoot, importPath, role, depth + 1);
-            }
-            finally
-            {
-                _activeImports.Remove(importPath);
-            }
-        }
+            FSharpSemanticDocumentRole role, int depth) =>
+            ProcessResolvedEvaluationImport(importPath, role, depth);
 
         private bool TryResolveImportRoot(string importPath, out XElement? importedRoot)
         {
@@ -1605,61 +1573,6 @@ public static partial class ProjectFileParser
                     return true;
             }
             return false;
-        }
-
-        private void ProcessChoose(XElement choose, string documentPath,
-            FSharpSemanticDocumentRole role, int depth)
-        {
-            CheckCancellation();
-            bool hasSemanticItemPhaseFacts =
-                ContainsSemanticChooseItemPhaseFacts(choose, out bool hasDirectSemanticFacts);
-            if (!ShouldProcess(choose, documentPath, out bool process)) return;
-            if (!process)
-            {
-                if (hasSemanticItemPhaseFacts && ConditionMayDependOnProperties(choose))
-                {
-                    _semanticItemPhaseStarted = true;
-                    _directSemanticItemPhaseStarted |= hasDirectSemanticFacts;
-                }
-                return;
-            }
-            XElement? otherwise = null;
-            foreach (XElement branch in choose.Elements())
-            {
-                CheckCancellation();
-                if (branch.Name.LocalName == "Otherwise")
-                {
-                    if (otherwise is not null)
-                    {
-                        _error = "fsharp_semantic_condition_unsupported";
-                        return;
-                    }
-                    otherwise = branch;
-                    continue;
-                }
-                if (branch.Name.LocalName != "When" ||
-                    branch.Attribute("Condition") is null)
-                {
-                    _error = "fsharp_semantic_condition_unsupported";
-                    return;
-                }
-                if (!ShouldProcess(branch, documentPath, out bool selected)) return;
-                if (!selected) continue;
-                ProcessContainer(branch, documentPath, role, depth);
-                if (_error is null && hasSemanticItemPhaseFacts)
-                {
-                    _semanticItemPhaseStarted = true;
-                    _directSemanticItemPhaseStarted |= hasDirectSemanticFacts;
-                }
-                return;
-            }
-            if (otherwise is not null)
-                ProcessContainer(otherwise, documentPath, role, depth);
-            if (_error is null && hasSemanticItemPhaseFacts)
-            {
-                _semanticItemPhaseStarted = true;
-                _directSemanticItemPhaseStarted |= hasDirectSemanticFacts;
-            }
         }
 
         private bool AcceptKnownFSharpSemanticImport(string project)
