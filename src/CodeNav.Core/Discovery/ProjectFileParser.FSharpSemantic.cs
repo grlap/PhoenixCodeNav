@@ -1128,8 +1128,9 @@ public static partial class ProjectFileParser
             void Add(string? expression)
             {
                 if (string.IsNullOrEmpty(expression)) return;
-                foreach (Match match in PropertyReference.Matches(expression))
-                    _referenceInputConsumedProperties.Add(match.Groups["name"].Value);
+                foreach (string name in
+                         BoundedMsBuildExpressionEvaluator.ReferencedPropertyNames(expression))
+                    _referenceInputConsumedProperties.Add(name);
             }
 
             foreach (XAttribute attribute in item.Attributes()) Add(attribute.Value);
@@ -1495,9 +1496,10 @@ public static partial class ProjectFileParser
             void AddProperties(string? expression)
             {
                 if (_error is not null || string.IsNullOrEmpty(expression)) return;
-                foreach (Match match in PropertyReference.Matches(expression))
+                foreach (string name in
+                         BoundedMsBuildExpressionEvaluator.ReferencedPropertyNames(expression))
                 {
-                    if (!AddProperty(match.Groups["name"].Value)) return;
+                    if (!AddProperty(name)) return;
                 }
             }
 

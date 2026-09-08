@@ -160,6 +160,94 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Fact]
+    public void PropertyStartsWithUsesOrdinalScalarSemanticsAndComposesWithOrExists()
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("""
+            <PropertyGroup Condition="$(TargetFramework.StartsWith('net')) Or Exists('web.config')">
+              <DefineConstants>PREFIX_MATCH</DefineConstants>
+              <AssemblyName>Before$(TargetFramework.StartsWith('net'))$(TargetFramework.StartsWith('NET'))$(TargetFramework.StartsWith(&quot;net&quot;))After</AssemblyName>
+            </PropertyGroup>
+            <PropertyGroup Condition="$(TargetFramework.StartsWith('NET'))">
+              <DefineConstants>WRONG_CASE</DefineConstants>
+            </PropertyGroup>
+            """, existsResolver: _ => null);
+
+        Assert.Null(result.Error);
+        Assert.Equal("BeforeTrueFalseTrueAfter", result.AssemblyName);
+        Assert.Contains("--define:PREFIX_MATCH", result.CommandLineArgs);
+        Assert.DoesNotContain("--define:WRONG_CASE", result.CommandLineArgs);
+    }
+
+    [Fact]
+    public void PropertyStartsWithUnescapesEachScalarOnce()
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("""
+            <PropertyGroup>
+              <Escaped>%6eet</Escaped>
+              <Malformed>50% faster</Malformed>
+              <LineFeed>%0aABC</LineFeed>
+              <AssemblyName>Literal$(TargetFramework.StartsWith('%6eet'))Receiver$(Escaped.StartsWith('net'))Single$(Escaped.StartsWith('%256e'))Malformed$(Malformed.StartsWith('50%'))MalformedLiteral$(LineFeed.StartsWith('%A '))</AssemblyName>
+              <DefineConstants Condition="$(TargetFramework.StartsWith('%6eet')) And $(Escaped.StartsWith('net'))">ESCAPED_MATCH</DefineConstants>
+            </PropertyGroup>
+            """);
+
+        Assert.Null(result.Error);
+        Assert.Equal(
+            "LiteralTrueReceiverTrueSingleFalseMalformedTrueMalformedLiteralFalse",
+            result.AssemblyName);
+        Assert.Contains("--define:ESCAPED_MATCH", result.CommandLineArgs);
+    }
+
+    [Fact]
+    public void PropertyStartsWithFailsClosedForAnUnresolvedReceiver()
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("""
+            <PropertyGroup Condition="$(Undefined.StartsWith('x'))">
+              <DefineConstants>WRONG_UNRESOLVED</DefineConstants>
+            </PropertyGroup>
+            """);
+
+        Assert.Equal("fsharp_semantic_condition_property_unresolved", result.Error);
+        Assert.DoesNotContain("--define:WRONG_UNRESOLVED", result.CommandLineArgs);
+    }
+
+    [Fact]
+    public void PropertyStartsWithReceiversParticipateInReferenceEvaluationOrder()
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("""
+            <PropertyGroup><Flavor>net</Flavor></PropertyGroup>
+            <ItemGroup><Refs Include="System" Condition="$(Flavor.StartsWith('net'))" /></ItemGroup>
+            <PropertyGroup><Flavor>other</Flavor></PropertyGroup>
+            <ItemGroup><Reference Include="@(Refs)" /></ItemGroup>
+            """);
+
+        Assert.Equal("fsharp_semantic_evaluation_order_unsupported", result.Error);
+    }
+
+    [Fact]
+    public void DirectoryBuildDependencyDiscoveryTracksStartsWithReceivers()
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.props"] = """
+                <Project>
+                  <PropertyGroup><Flavor>net</Flavor></PropertyGroup>
+                  <ItemGroup><ReferencesToAdd Include="System" Condition="$(Flavor.StartsWith('net'))" /></ItemGroup>
+                  <PropertyGroup><Flavor>other</Flavor></PropertyGroup>
+                </Project>
+                """,
+            ["Directory.Build.targets"] =
+                "<Project><ItemGroup><Reference Include=\"@(ReferencesToAdd)\" /></ItemGroup></Project>",
+        };
+
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("", imports,
+            directoryBuildPropsPath: "Directory.Build.props",
+            directoryBuildTargetsPath: "Directory.Build.targets");
+
+        Assert.Equal("fsharp_semantic_evaluation_order_unsupported", result.Error);
+    }
+
+    [Fact]
     public void ExistsUsesIndexedNonImportFilesAndCapturesBothPresenceStates()
     {
         var probes = new List<string>();
@@ -837,6 +925,8 @@ public partial class FSharpSemanticStage2Tests
     [InlineData("<Import Project=\"../Build/Missing.props\" />", "fsharp_semantic_import_unavailable")]
     [InlineData("<PropertyGroup><DefineConstants>$([System.String]::Copy('X'))</DefineConstants></PropertyGroup>", "fsharp_semantic_property_function_unsupported")]
     [InlineData("<PropertyGroup><RootDir>$([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)', '$(MSBuildProjectDirectory)'))</RootDir></PropertyGroup>", "fsharp_semantic_property_function_unsupported")]
+    [InlineData("<PropertyGroup Condition=\"$(TargetFramework.Contains('net'))\"><DefineConstants>X</DefineConstants></PropertyGroup>", "fsharp_semantic_property_function_unsupported")]
+    [InlineData("<PropertyGroup Condition=\"$(TargetFramework.StartsWith('net').StartsWith('T'))\"><DefineConstants>X</DefineConstants></PropertyGroup>", "fsharp_semantic_property_function_unsupported")]
     [InlineData("<PropertyGroup Condition=\"'$(Flavor.ToUpper())' == 'X'\"><DefineConstants>X</DefineConstants></PropertyGroup>", "fsharp_semantic_property_function_unsupported")]
     [InlineData("<PropertyGroup Condition=\"HasTrailingSlash('x')\"><DefineConstants>X</DefineConstants></PropertyGroup>", "fsharp_semantic_condition_unsupported")]
     [InlineData("<PropertyGroup Condition=\"'x' == 'x')\"><DefineConstants>X</DefineConstants></PropertyGroup>", "fsharp_semantic_condition_unsupported")]

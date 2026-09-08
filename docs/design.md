@@ -205,8 +205,10 @@ literal workspace-local `.props` imports with count/depth/aggregate-byte limits 
 pinned workspace index (including `web.config`) and never reads the live filesystem. A missing row is
 not promoted to absence because it cannot be distinguished from a link or non-regular input skipped
 by the no-follow scanner; those paths, excluded directories, and unproven host aliases fail closed.
-The established `.props` import resolver continues to prove both presence and absence under its
-existing import budgets. Every decided normalized path participates in the FCS fingerprint. The
+The established `.props` import resolver remains a deliberate compatibility exception: it decides
+presence and absence from indexed import content under its existing budgets, so its missing-row
+result retains the index's excluded/no-follow blind spot. Every decided normalized path participates
+in the FCS fingerprint. The
 probe set needs no separate cap: existing condition/expression budgets transitively bound it, and a
 decision that cannot enter the identity is incomplete. Import traversal remains restricted to the
 documented `.props`/`.targets` authority. This deliberate behavior extension invalidates the earlier
@@ -215,9 +217,9 @@ nothing new to `index.db`, so the schema version is unchanged.
 Unique imported files, active import occurrences, condition depth, and evaluator nesting are bounded
 separately. Only the conventional self-default property idiom may treat an unset property as empty;
 other unresolved ambient/global condition inputs fail closed.
-The sole property-function exception is the exact path-only
+The declared property-function allowlist contains two exact shapes. The path-only
 `$([MSBuild]::MakeRelative($(MSBuildProjectDirectory), $(MSBuildThisFileDirectory)))`
-shape (with optional matching single or double quotes around either reserved property). It is
+shape allows optional matching single or double quotes around either reserved property. It is
 evaluated lexically without loading MSBuild: the first operand remains the selected project's
 directory, the second tracks the currently evaluated project or imported `.props` document, and
 the scalar result preserves current MSBuild behavior: `.` for the same directory, host-native
@@ -226,7 +228,11 @@ Both operands are canonical workspace-contained identities captured from the pin
 parent segments in the relative result are valid and are checked only when a consuming import,
 source, reference, or ProjectReference resolves them back against its contained base. Reversed
 operands, extra arguments, nested calls, arbitrary properties, and every other property function
-retain `fsharp_semantic_property_function_unsupported` rather than being approximated.
+retain `fsharp_semantic_property_function_unsupported` rather than being approximated. The scalar
+`$(Property.StartsWith('literal'))` uses ordinal, case-sensitive matching after one MSBuild-style
+percent-unescape of both the receiver and literal, and returns the native `True`/`False` scalar;
+the double-quoted literal form is equivalent, while nested expressions and all other string
+methods remain unsupported.
 Consumers normalize repeated separators, so repositories that spell an explicit separator after
 the property remain compatible with MSBuild releases whose trailing-separator behavior differed;
 Phoenix does not detect or host the repository's MSBuild version.
@@ -312,8 +318,9 @@ Import paths are selected only from canonical paths in the pinned index using th
 ambiguous Windows case aliases fail closed, and semantic evaluation never walks the mutable live
 filesystem to resolve casing.
 Known compiler target imports are terminal boundaries. It never runs MSBuild, targets, or tasks and
-rejects property functions other than the exact bounded `MakeRelative` path intrinsic described
-above, compiler-item transforms/metadata outside restored PackageReference
+rejects property functions other than the exact bounded `MakeRelative` path intrinsic and
+`Property.StartsWith` scalar shape described above, compiler-item transforms/metadata outside
+restored PackageReference
 authority, imported compile items, and unsupported conditions
 with stable causes. Standard `Microsoft.NET.Sdk` and recognized toolchain implicit authority are
 partial, including unobservable build authority above the workspace root; custom/child/qualified SDK

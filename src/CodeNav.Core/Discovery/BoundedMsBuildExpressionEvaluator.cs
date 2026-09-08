@@ -22,6 +22,11 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         @"\$\((?<name>[A-Za-z_][A-Za-z0-9_.-]*)\)",
         RegexOptions.CultureInvariant);
 
+    private static readonly Regex PropertyStartsWith = new(
+        @"\$\(\s*(?<name>[A-Za-z_][A-Za-z0-9_.-]*)\.StartsWith\(\s*" +
+        @"(?:'(?<argument>[^'\r\n$]*)'|""(?<argument>[^""\r\n$]*)"")\s*\)\s*\)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
     private static readonly Regex ExistsCondition = new(
         @"^Exists\s*\(\s*(?:'(?<path>[^'\r\n]*)'|""(?<path>[^""\r\n]*)"")\s*\)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -178,13 +183,17 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             return false;
         }
 
-        var builder = new StringBuilder(input.Length);
+        if (!TryExpandPropertyStringFunctions(input, out string scalarInput,
+                out bool functionsComplete, out error))
+            return false;
+
+        var builder = new StringBuilder(scalarInput.Length);
         int cursor = 0;
-        bool allComplete = true;
-        foreach (Match match in PropertyReference.Matches(input))
+        bool allComplete = functionsComplete;
+        foreach (Match match in PropertyReference.Matches(scalarInput))
         {
             CheckCancellation();
-            builder.Append(input, cursor, match.Index - cursor);
+            builder.Append(scalarInput, cursor, match.Index - cursor);
             string name = match.Groups["name"].Value;
             if (_properties.TryGetValue(name, out BoundedMsBuildProperty property))
             {
@@ -207,7 +216,7 @@ internal sealed class BoundedMsBuildExpressionEvaluator
                 return false;
             }
         }
-        builder.Append(input, cursor, input.Length - cursor);
+        builder.Append(scalarInput, cursor, scalarInput.Length - cursor);
         if (builder.Length > _maxPropertyValueChars)
         {
             error = "property_value_limit";
@@ -218,6 +227,75 @@ internal sealed class BoundedMsBuildExpressionEvaluator
                    !output.Contains("$(", StringComparison.Ordinal) &&
                    !output.Contains("%(", StringComparison.Ordinal) &&
                    (allowItemReferences || !output.Contains("@(", StringComparison.Ordinal));
+        return true;
+    }
+
+    internal static IEnumerable<string> ReferencedPropertyNames(string input)
+    {
+        foreach (Match match in SupportedPropertyMatches(input))
+            yield return match.Groups["name"].Value;
+    }
+
+    private bool TryExpandPropertyStringFunctions(string input, out string output,
+        out bool complete, out string? error)
+    {
+        CheckCancellation();
+        error = null;
+        MatchCollection matches = PropertyStartsWith.Matches(input);
+        if (matches.Count == 0)
+        {
+            output = input;
+            complete = true;
+            return true;
+        }
+
+        var builder = new StringBuilder(input.Length);
+        int cursor = 0;
+        bool allComplete = true;
+        foreach (Match match in matches)
+        {
+            CheckCancellation();
+            builder.Append(input, cursor, match.Index - cursor);
+            string name = match.Groups["name"].Value;
+            if (_properties.TryGetValue(name, out BoundedMsBuildProperty property))
+            {
+                if (property.Complete)
+                {
+                    string receiver = UnescapeMsBuildScalar(property.Value);
+                    string argument = UnescapeMsBuildScalar(match.Groups["argument"].Value);
+                    bool startsWith = receiver.StartsWith(argument, StringComparison.Ordinal);
+                    builder.Append(startsWith ? "True" : "False");
+                }
+                else
+                {
+                    builder.Append(match.Value);
+                    allComplete = false;
+                }
+            }
+            else
+            {
+                builder.Append(match.Value);
+                allComplete = false;
+            }
+            cursor = match.Index + match.Length;
+            if (builder.Length > _maxPropertyValueChars)
+            {
+                output = "";
+                complete = false;
+                error = "property_value_limit";
+                return false;
+            }
+        }
+        builder.Append(input, cursor, input.Length - cursor);
+        if (builder.Length > _maxPropertyValueChars)
+        {
+            output = "";
+            complete = false;
+            error = "property_value_limit";
+            return false;
+        }
+        output = builder.ToString();
+        complete = allComplete;
         return true;
     }
 
@@ -254,20 +332,53 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         CheckCancellation();
         if (!allowItemReferences && input.Contains("@(", StringComparison.Ordinal) ||
             input.Contains("%(", StringComparison.Ordinal)) return true;
-        MatchCollection simpleProperties = PropertyReference.Matches(input);
-        int simpleIndex = 0;
+        Match[] supported = SupportedPropertyMatches(input);
+        int supportedIndex = 0;
         int cursor = 0;
         while ((cursor = input.IndexOf("$(", cursor, StringComparison.Ordinal)) >= 0)
         {
             CheckCancellation();
-            while (simpleIndex < simpleProperties.Count &&
-                   simpleProperties[simpleIndex].Index < cursor) simpleIndex++;
-            if (simpleIndex >= simpleProperties.Count ||
-                simpleProperties[simpleIndex].Index != cursor) return true;
-            cursor += simpleProperties[simpleIndex].Length;
-            simpleIndex++;
+            while (supportedIndex < supported.Length &&
+                   supported[supportedIndex].Index < cursor) supportedIndex++;
+            if (supportedIndex >= supported.Length ||
+                supported[supportedIndex].Index != cursor) return true;
+            cursor += supported[supportedIndex].Length;
+            supportedIndex++;
         }
         return false;
+    }
+
+    private static Match[] SupportedPropertyMatches(string input) =>
+        PropertyReference.Matches(input).Cast<Match>()
+            .Concat(PropertyStartsWith.Matches(input).Cast<Match>())
+            .OrderBy(match => match.Index)
+            .ThenByDescending(match => match.Length)
+            .ToArray();
+
+    private static string UnescapeMsBuildScalar(string value)
+    {
+        int firstEscape = value.IndexOf('%');
+        if (firstEscape < 0) return value;
+
+        var builder = new StringBuilder(value.Length);
+        builder.Append(value, 0, firstEscape);
+        for (int index = firstEscape; index < value.Length; index++)
+        {
+            if (value[index] == '%' && index + 2 < value.Length &&
+                char.IsAsciiHexDigit(value[index + 1]) &&
+                char.IsAsciiHexDigit(value[index + 2]) &&
+                byte.TryParse(value.AsSpan(index + 1, 2), NumberStyles.HexNumber,
+                    CultureInfo.InvariantCulture, out byte unescaped))
+            {
+                builder.Append((char)unescaped);
+                index += 2;
+            }
+            else
+            {
+                builder.Append(value[index]);
+            }
+        }
+        return builder.ToString();
     }
 
     private static bool TryParseExists(string expression, out string path)

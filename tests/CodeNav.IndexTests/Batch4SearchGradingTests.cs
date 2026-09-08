@@ -401,6 +401,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("fsharp-semantic-bounded-project-evaluation", ids);
         Assert.Contains("fsharp-semantic-makerelative-project-root", ids);
         Assert.Contains("fsharp-semantic-indexed-file-exists", ids);
+        Assert.Contains("fsharp-semantic-property-startswith", ids);
         Assert.Contains("fsharp-semantic-package-asset-closure", ids);
         Assert.Contains("csharp-semantic-central-package-management", ids);
         Assert.Contains("csharp-semantic-central-package-property-expansion", ids);
@@ -1358,8 +1359,14 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("other functions fail closed", makeRelative);
         string indexedExists = Summary("fsharp-semantic-indexed-file-exists");
         Assert.Contains("v0.12.92", indexedExists);
+        Assert.Contains("indexed-file presence", indexedExists);
         Assert.Contains("web.config", indexedExists);
         Assert.Contains("unproven paths fail closed", indexedExists);
+        string startsWith = Summary("fsharp-semantic-property-startswith");
+        Assert.Contains("v0.12.93", startsWith);
+        Assert.Contains("F#", startsWith);
+        Assert.Contains("ordinal/case-sensitive", startsWith);
+        Assert.Contains("other string methods fail closed", startsWith);
         string defaultBaseline = Summary("review-default-baseline-honesty");
         Assert.Contains("bounded git_index_baseline_unavailable", defaultBaseline);
         Assert.Contains("refresh_index", defaultBaseline);
