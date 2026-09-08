@@ -7,6 +7,7 @@
     <IsPackable>false</IsPackable>
     <AssemblyName>CodeNav.IndexTests</AssemblyName>
     <RootNamespace>CodeNav.Tests</RootNamespace>
+    <GenerateProgramFile>false</GenerateProgramFile>
   </PropertyGroup>
 
   <ItemGroup>

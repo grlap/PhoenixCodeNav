@@ -70,7 +70,7 @@ public class Batch16RegexSearchTests
                 manager.Start();
                 for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
                 Assert.True(manager.IsQueryable);
-                var tools = new NavigationTools(manager, new SemanticService(manager));
+                var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
 
                 // \b-bounded literal -> SOUND FTS narrowing; matches 'public' as a whole word on the two
                 // 'public static' lines, not inside 'publicstatic'.

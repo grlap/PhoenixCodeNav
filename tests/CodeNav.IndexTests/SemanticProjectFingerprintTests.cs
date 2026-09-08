@@ -24,7 +24,7 @@ public sealed class SemanticProjectFingerprintTests
             Assert.True(WaitUntil(() => manager.IsQueryable, 20000));
 
             var log = new List<string>();
-            using var workspace = new SemanticWorkspace(root, dbPath, log.Add);
+            using var workspace = new SemanticWorkspace(root, dbPath, log.Add, enableRoslynPersistence: false);
             using var beforeLoad = await workspace.EnsureLoadedAsync(
                 new[] { "Package.Consumer", "Other.Consumer" }, CancellationToken.None);
             var (beforeSolution, beforeCoverage) = beforeLoad;

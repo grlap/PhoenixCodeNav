@@ -40,7 +40,10 @@ public static class ReferenceAssemblyLocator
             var refs = new List<MetadataReference>();
             if (dir is not null)
             {
-                foreach (var dll in EnumerateRefDlls(dir))
+                // Targeting packs also ship native helpers and managed netmodules. Neither
+                // is a standalone assembly reference; CreateFromFile can defer that failure
+                // until compilation, so apply the same admission rule as the F# path.
+                foreach (var dll in EnumerateRefDlls(dir).Where(IsManagedAssemblyPath))
                 {
                     try { refs.Add(MetadataReference.CreateFromFile(dll)); }
                     catch (Exception) { /* skip unreadable assembly */ }

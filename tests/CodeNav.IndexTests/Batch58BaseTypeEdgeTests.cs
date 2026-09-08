@@ -259,7 +259,7 @@ public class Batch58BaseTypeEdgeTests
             manager.Start();
             IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
                 "base-type edge index did not become fresh");
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return; // deterministic index assertions above still run
             var tools = new NavigationTools(manager, semantic);
 

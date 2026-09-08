@@ -47,7 +47,7 @@ public class FSharpOutlineStage1Tests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement implementation = Parse(tools.Outline("Core/Library.fs", depth: 2));
@@ -526,7 +526,7 @@ public class FSharpOutlineStage1Tests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement malformed = Parse(tools.Outline("Core/Library.fs"));
@@ -701,7 +701,7 @@ public class FSharpOutlineStage1Tests
             var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            var semantic = new SemanticService(manager);
+            var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             return new OutlineFixture(manager, semantic);
         }
 

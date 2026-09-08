@@ -1872,7 +1872,7 @@ public sealed class UnavailableSourceRefreshTests
                 snapshot.Health.RefreshIncompleteReason);
             Assert.Single(snapshot.Queries.SearchSymbols("Retained", "exact", null, 2));
 
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
             using JsonDocument review = JsonDocument.Parse(
                 tools.ReviewPack(paths: relativePath));
             JsonElement response = review.RootElement;

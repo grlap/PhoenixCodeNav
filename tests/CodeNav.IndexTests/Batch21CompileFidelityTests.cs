@@ -174,7 +174,7 @@ public class Batch21CompileFidelityTests
             IndexBuilder.Build(root, dbPath);
 
             var manager = new IndexManager(root, dbPath);
-            var semantic = new SemanticService(manager);
+            var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             try
             {
                 manager.Start();

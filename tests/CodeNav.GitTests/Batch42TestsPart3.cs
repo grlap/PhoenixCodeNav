@@ -25,7 +25,7 @@ public class Batch42TestsPart3
         {
             WriteReviewRepo(root);
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
 
             string exactPaths = JsonSerializer.Serialize(new[]
             {
@@ -84,7 +84,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m owner-operation-order-baseline");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             File.Move(Path.Combine(root, oldPath.Replace('/', Path.DirectorySeparatorChar)),
                 Path.Combine(root, newPath.Replace('/', Path.DirectorySeparatorChar)));
             m.RequestRefresh(new[] { oldPath, newPath });
@@ -122,7 +122,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m response-file-baseline");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             const string oldPath = "Lib/Widget.cs";
             const string newPath = "Lib/MovedWidget.cs";
             File.Move(Path.Combine(root, oldPath.Replace('/', Path.DirectorySeparatorChar)),
@@ -180,7 +180,7 @@ public class Batch42TestsPart3
         {
             WriteReviewRepo(root);
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             string[] paths =
             [
                 "build/App.csproj.user",
@@ -240,7 +240,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m solution-nonauthority-baseline");
 
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
             File.Move(Path.Combine(root,
                     moveSource.Replace('/', Path.DirectorySeparatorChar)),
                 Path.Combine(root, moveTarget.Replace('/', Path.DirectorySeparatorChar)));
@@ -299,7 +299,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m solution-state-matrix-baseline");
 
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
             const string moveSource = "Lib/Widget.cs";
             const string moveTarget = "Lib/MatrixMovedWidget.cs";
             File.Move(Path.Combine(root, moveSource.Replace('/', Path.DirectorySeparatorChar)),
@@ -374,7 +374,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m solution-authority-baseline");
 
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
             File.Move(Path.Combine(root, moveSource.Replace('/', Path.DirectorySeparatorChar)),
                 Path.Combine(root, moveTarget.Replace('/', Path.DirectorySeparatorChar)));
             File.AppendAllText(Path.Combine(root, solutionPath), "modified\n");
@@ -589,7 +589,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m unevaluated-owner-baseline");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             File.Move(Path.Combine(root, oldPath.Replace('/', Path.DirectorySeparatorChar)),
                 Path.Combine(root, newPath.Replace('/', Path.DirectorySeparatorChar)));
             m.RequestRefresh(new[] { oldPath, newPath });
@@ -637,7 +637,7 @@ public class Batch42TestsPart3
             Git(root, "add -A");
             Git(root, "commit -q -m case-owner-baseline");
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             File.Move(Path.Combine(root, oldPath.Replace('/', Path.DirectorySeparatorChar)),
                 Path.Combine(root, newPath.Replace('/', Path.DirectorySeparatorChar)));
             m.RequestRefresh(new[] { oldPath, newPath });
@@ -683,7 +683,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m sdk-default-membership-baseline");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             string destination = Path.Combine(root,
                 newPath.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
@@ -745,7 +745,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m imported-owner-baseline");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             File.Move(Path.Combine(root, oldPath.Replace('/', Path.DirectorySeparatorChar)),
                 Path.Combine(root, newPath.Replace('/', Path.DirectorySeparatorChar)));
             m.RequestRefresh(new[] { oldPath, newPath });
@@ -798,7 +798,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m expression-owner-baseline");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             File.Move(Path.Combine(root, oldPath.Replace('/', Path.DirectorySeparatorChar)),
                 Path.Combine(root, newPath.Replace('/', Path.DirectorySeparatorChar)));
             m.RequestRefresh(new[] { oldPath, newPath });
@@ -849,7 +849,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m conditioned-owner-baseline");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             File.Move(Path.Combine(root, oldPath.Replace('/', Path.DirectorySeparatorChar)),
                 Path.Combine(root, newPath.Replace('/', Path.DirectorySeparatorChar)));
             m.RequestRefresh(new[] { oldPath, newPath });
@@ -967,7 +967,7 @@ public class Batch42TestsPart3
             using var manager = StartManager(root);
             Assert.True(WaitUntil(() => manager.State == "ready", 20_000));
             IndexHealth before = manager.Health();
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
             int refreshes = 0;
             manager.ReviewSnapshotAfterQueryForTest = sql =>
             {
@@ -1024,7 +1024,7 @@ public class Batch42TestsPart3
         {
             WriteReviewRepo(root);
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
             using var waiting = new ManualResetEventSlim(false);
             using var boundary = new ManualResetEventSlim(false);
             using var completed = new ManualResetEventSlim(false);
@@ -1106,7 +1106,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m per-hunk-baseline");
 
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
             File.WriteAllText(fullPath,
                 "namespace PerHunkMapping42;\n" +
                 "public class NewPerHunkType42 : NewPerHunkBase42\n" +
@@ -1284,7 +1284,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m owner-glob-coverage-baseline");
 
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
             tools.ReviewProjectGlobBudgetFactoryForTest = () =>
                 new CodeNav.Core.Discovery.GlobMatchBudget(32, 1,
                     TimeSpan.FromSeconds(10));
@@ -1335,7 +1335,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m shape-cause-baseline");
 
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
             File.Delete(Path.Combine(root, "Lib", "Old.cs"));
             manager.RequestRefresh(new[] { "Lib/Old.cs" });
             Assert.True(WaitUntil(() =>
@@ -1411,7 +1411,7 @@ public class Batch42TestsPart3
             const string unrelatedDeletion = "Lib/Old.cs";
 
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
             tools.ReviewProjectGlobBudgetFactoryForTest = () =>
                 new CodeNav.Core.Discovery.GlobMatchBudget(256, 1_000_000,
                     Timeout.InfiniteTimeSpan);
@@ -1476,7 +1476,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m preflight-budget-baseline");
 
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
             // One default-SDK owner lookup costs 16 operations. The exact move consumes two
             // complete lookups (32); the ordinary deletion's preflight gets four operations into
             // its entry checkpoint, then exhausts before it can evaluate the project.
@@ -1547,7 +1547,7 @@ public class Batch42TestsPart3
             Git(root, "commit -q -m move-budget-baseline");
 
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
             tools.ReviewProjectGlobBudgetFactoryForTest = () =>
                 new CodeNav.Core.Discovery.GlobMatchBudget(64, 256,
                     TimeSpan.FromSeconds(10));

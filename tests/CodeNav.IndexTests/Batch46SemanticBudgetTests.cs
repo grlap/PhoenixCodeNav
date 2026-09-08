@@ -135,7 +135,7 @@ public class Batch46SemanticBudgetTests
                     "IBudgetProbe", "exact", new[] { "interface" }, 10));
             }
 
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
 
             // n7ly: startup publishes queryability before its queued freshness sweep has
@@ -191,7 +191,7 @@ public class Batch46SemanticBudgetTests
                     "IBudgetProbe", "exact", new[] { "interface" }, 10));
             }
 
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
 
             var hierarchyAttempt = await SemanticRetry.UntilAsync(
@@ -259,7 +259,7 @@ public class Batch46SemanticBudgetTests
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 30_000), "index did not become queryable");
 
-            using (var probe = new SemanticService(manager))
+            using (var probe = new SemanticService(manager, enableRoslynPersistence: false))
             {
                 if (!probe.FrameworkRefsAvailable) return;
             }
@@ -277,7 +277,7 @@ public class Batch46SemanticBudgetTests
                 name: "Run", maxProjects: 1, timeoutMs: 120_000));
             AssertPartial(callers);
 
-            using (var referenceSemantic = new SemanticService(manager))
+            using (var referenceSemantic = new SemanticService(manager, enableRoslynPersistence: false))
             {
                 var referenceTools = new NavigationTools(manager, referenceSemantic);
                 JsonElement references = SemanticRetry.ParseWithRetry(
@@ -298,7 +298,7 @@ public class Batch46SemanticBudgetTests
 
             JsonElement Invoke(Func<NavigationTools, string> invoke)
             {
-                using var semantic = new SemanticService(manager);
+                using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
                 var tools = new NavigationTools(manager, semantic);
                 // n7ly: the deliberate budget-partial answers at EXACT confidence; transient
                 // degrades do not — retry rides them out (a fresh cold cluster per Invoke made
@@ -335,7 +335,7 @@ public class Batch46SemanticBudgetTests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 30_000), manager.Health().Error);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
             using JsonDocument document = JsonDocument.Parse(SemanticRetry.ParseExactWithRetry( // n7ly sweep
@@ -483,7 +483,7 @@ public class Batch46SemanticBudgetTests
             manager.Start();
             IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
                 "declaration-budget index did not become fresh");
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
 
@@ -529,7 +529,7 @@ public class Batch46SemanticBudgetTests
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 30_000),
                 manager.Health().Error);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
 
@@ -614,7 +614,7 @@ public class Batch46SemanticBudgetTests
             };
             try
             {
-                using var semantic = new SemanticService(manager);
+                using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
                 var tools = new NavigationTools(manager, semantic);
                 using JsonDocument response = JsonDocument.Parse(SemanticRetry.ParseExactWithRetry( // n7ly sweep
                     () => tools.Implementations(name: "IBudgetProbe", maxProjects: 4, timeoutMs: 120_000)).GetRawText());

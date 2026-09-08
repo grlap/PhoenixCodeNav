@@ -127,7 +127,7 @@ public class Batch38Tests
         {
             WriteParityWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // Two compiled declarations share the name 'Dual'; name-mode picks the first by
             // path order (AaCore). A handle to the ZzOther row must PIN it — no re-picking.
@@ -162,7 +162,7 @@ public class Batch38Tests
         {
             WriteParityWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // IGhost is declared ONLY in an orphaned file (no project compiles it), so semantic
             // resolution deterministically fails — while the base-list index knows GhostImpl.
@@ -213,7 +213,7 @@ public class Batch38Tests
                 }
                 """);
             using var m = BuildAndStart(root);
-            using var sem = new SemanticService(m);
+            using var sem = new SemanticService(m, enableRoslynPersistence: false);
             if (!sem.FrameworkRefsAvailable) return; // env guard: needs the semantic path to answer
             var tools = new NavigationTools(m, sem);
 
@@ -237,7 +237,7 @@ public class Batch38Tests
         {
             WriteParityWorkspace(root);
             using var m = BuildAndStart(root);
-            using var sem = new SemanticService(m);
+            using var sem = new SemanticService(m, enableRoslynPersistence: false);
             if (!sem.FrameworkRefsAvailable) return; // env guard
             var tools = new NavigationTools(m, sem);
 

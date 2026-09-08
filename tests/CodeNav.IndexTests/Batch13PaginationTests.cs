@@ -54,7 +54,7 @@ public class Batch13PaginationTests
                 manager.Start();
                 for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
                 Assert.True(manager.IsQueryable);
-                var tools = new NavigationTools(manager, new SemanticService(manager));
+                var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
 
                 int total = Parse(tools.SearchText("MATCHME", limit: 20)).GetProperty("preciseCount").GetInt32();
                 Assert.True(total >= hitCount, $"expected >= {hitCount} precise hits, got {total}");

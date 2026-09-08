@@ -55,7 +55,7 @@ public class Batch34TestGapTests
             using var m = new IndexManager(root, dbPath);
             m.Start();
             Assert.True(WaitUntil(() => m.IsQueryable, 15000));
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             var mega = Parse(tools.Outline("P/Mega00.cs"))
                 .GetProperty("symbols")[0].GetProperty("members").EnumerateArray()
@@ -88,7 +88,7 @@ public class Batch34TestGapTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var m = new IndexManager(root, dbPath);
-            var semantic = new SemanticService(m);
+            var semantic = new SemanticService(m, enableRoslynPersistence: false);
             try
             {
                 m.Start();
@@ -129,7 +129,7 @@ public class Batch34TestGapTests
             using var m = new IndexManager(root, dbPath);
             m.Start();
             Assert.True(WaitUntil(() => m.IsQueryable, 15000));
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             static JsonElement AsJson(object body) => JsonDocument.Parse(Json.Serialize(body)).RootElement;
 
@@ -181,7 +181,7 @@ public class Batch34TestGapTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var m = new IndexManager(root, dbPath);
-            var semantic = new SemanticService(m);
+            var semantic = new SemanticService(m, enableRoslynPersistence: false);
             try
             {
                 m.Start();
@@ -322,7 +322,7 @@ public class Batch34TestGapTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 15_000));
             if (!semantic.FrameworkRefsAvailable) return;

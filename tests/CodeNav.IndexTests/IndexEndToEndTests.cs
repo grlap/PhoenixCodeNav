@@ -53,7 +53,7 @@ public class IndexFixture : IAsyncLifetime
                     "shared fixture index did not become ready");
                 Assert.True(manager.IsWriter,
                     $"shared fixture requires writer authority: {manager.Health().Error}");
-                semantic = new CodeNav.Core.Semantic.SemanticService(manager);
+                semantic = new CodeNav.Core.Semantic.SemanticService(manager, enableRoslynPersistence: false);
                 var tools = new NavigationTools(manager, semantic);
                 _manager = manager;
                 _semantic = semantic;

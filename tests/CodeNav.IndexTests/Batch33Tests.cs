@@ -67,7 +67,7 @@ public class Batch33Tests
             using var m = new IndexManager(root, dbPath);
             m.Start();
             Assert.True(WaitUntil(() => m.IsQueryable, 15000));
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             var hits = Parse(tools.SearchSymbol("Mixed", match: "exact")).GetProperty("symbols");
             var mixed = hits[0];
             Assert.Equal("public", mixed.GetProperty("accessors").GetProperty("get").GetString());
@@ -104,7 +104,7 @@ public class Batch33Tests
             string dbPath = IndexBuilder.DefaultDbPath(root);
 
             using var m = new IndexManager(root, dbPath);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             m.Start();
             Assert.True(WaitUntil(() => m.State == "failed", 15000), $"expected failed, got {m.State}");
 
@@ -195,7 +195,7 @@ public class Batch33Tests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var m = new IndexManager(root, dbPath);
-            var semantic = new SemanticService(m);
+            var semantic = new SemanticService(m, enableRoslynPersistence: false);
             try
             {
                 m.Start();
@@ -280,7 +280,7 @@ public class Batch33Tests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             if (!semantic.FrameworkRefsAvailable) return;
@@ -335,7 +335,7 @@ public class Batch33Tests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             if (!semantic.FrameworkRefsAvailable) return;

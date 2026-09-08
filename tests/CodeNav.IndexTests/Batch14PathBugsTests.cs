@@ -102,7 +102,7 @@ public class Batch14PathBugsTests
                     before = q.Overview().CsFiles;
                 }
 
-                using var semantic = new SemanticService(manager);
+                using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
                 var tools = new NavigationTools(manager, semantic);
                 string platformPath = forward.Replace('/', Path.DirectorySeparatorChar);
                 tools.RefreshIndex(paths: platformPath);

@@ -22,7 +22,7 @@ public class Batch6FeedbackTests : IClassFixture<IndexFixture>, IAsyncLifetime
         _manager = new IndexManager(_fx.Root, _fx.DbPath);
         _manager.Start();
         for (int i = 0; i < 600 && !_manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-        _semantic = new SemanticService(_manager);
+        _semantic = new SemanticService(_manager, enableRoslynPersistence: false);
     }
 
     public Task InitializeAsync() => Task.CompletedTask;

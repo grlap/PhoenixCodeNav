@@ -28,7 +28,7 @@ public class Batch39Tests
         {
             WriteTextLabWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // Deletion typo: 'WdgetFactory' -> WidgetFactory (the field's exact miss class).
             var deletion = Parse(tools.SearchText("WdgetFactory"));
@@ -63,7 +63,7 @@ public class Batch39Tests
         {
             WriteTextLabWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // 'Mode4' has BOTH a token-form variant with hits ("Mode 4" in a comment) and a
             // spelling neighbor (class Mode5). Form variants preserve the caller's spelling —
@@ -83,7 +83,7 @@ public class Batch39Tests
         {
             WriteTextLabWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // No ED-1 neighbor anywhere: honest absence, no didYouMean.
             var none = Parse(tools.SearchText("Zqxjklmv"));
@@ -111,7 +111,7 @@ public class Batch39Tests
         {
             WriteTextLabWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // Scoped to a glob with no matches: the redirect must say where the text DOES
             // live — now with line + containingSymbol, not just a bare path string.

@@ -1315,7 +1315,7 @@ public sealed class AgentExperienceFixture : IDisposable
         Manager.Start();
         IndexManagerTestSupport.WaitUntilReady(Manager, TimeSpan.FromSeconds(30),
             "agent-experience fixture did not become queryable");
-        Semantic = new SemanticService(Manager);
+        Semantic = new SemanticService(Manager, enableRoslynPersistence: false);
         Tools = new NavigationTools(Manager, Semantic);
     }
 

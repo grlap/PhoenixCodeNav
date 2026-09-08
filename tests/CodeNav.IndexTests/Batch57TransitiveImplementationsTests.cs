@@ -81,7 +81,7 @@ public class Batch57TransitiveImplementationsTests
                     $"closure walk incomplete: [{string.Join(", ", closureProbe.Select(h => h.Name))}]");
             }
             using var m = new IndexManager(root, dbPath);
-            var semantic = new SemanticService(m);
+            var semantic = new SemanticService(m, enableRoslynPersistence: false);
             try
             {
                 m.Start();
@@ -180,7 +180,7 @@ public class Batch57TransitiveImplementationsTests
             manager.Start();
             IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
                 "capped transitive-implementations index did not become fresh");
-            using (var probe = new SemanticService(manager))
+            using (var probe = new SemanticService(manager, enableRoslynPersistence: false))
             {
                 if (!probe.FrameworkRefsAvailable) return;
             }
@@ -221,7 +221,7 @@ public class Batch57TransitiveImplementationsTests
 
             JsonElement Invoke(Func<NavigationTools, string> operation)
             {
-                using var semantic = new SemanticService(manager)
+                using var semantic = new SemanticService(manager, enableRoslynPersistence: false)
                 {
                     TestOnlyImplementationClosureMaxTypes = 1,
                 };

@@ -77,7 +77,7 @@ public sealed class VendorFixture : IDisposable
                 manager.Start();
                 for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
                 Assert.True(manager.IsQueryable, "index did not become queryable");
-                var semantic = new CodeNav.Core.Semantic.SemanticService(manager);
+                var semantic = new CodeNav.Core.Semantic.SemanticService(manager, enableRoslynPersistence: false);
                 _manager = manager;
                 _semantic = semantic;
                 _tools = new NavigationTools(manager, semantic);

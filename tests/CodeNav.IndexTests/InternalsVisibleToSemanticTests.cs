@@ -24,7 +24,7 @@ public sealed class InternalsVisibleToSemanticTests
             Assert.True(WaitUntil(() => manager.IsQueryable, 20000),
                 "manager did not become queryable");
 
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             Assert.True(semantic.FrameworkRefsAvailable,
                 "reference assemblies are required for the semantic friend-assembly regression");
             var tools = new NavigationTools(manager, semantic);
@@ -215,7 +215,7 @@ public sealed class InternalsVisibleToSemanticTests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
 
             var tools = new NavigationTools(manager, semantic);
@@ -249,7 +249,7 @@ public sealed class InternalsVisibleToSemanticTests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
 
@@ -301,7 +301,7 @@ public sealed class InternalsVisibleToSemanticTests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
 
@@ -421,7 +421,7 @@ public sealed class InternalsVisibleToSemanticTests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
 

@@ -216,7 +216,7 @@ class Global { }"),
                 .GetCompilationAsync())!;
             INamedTypeSymbol symbol = compilation.GetTypeByMetadataName("X")!;
             using var manager = new IndexManager(root, Path.Combine(root, "unused.db"));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
 
             SemanticService.ReferenceDocumentScope scope = await semantic
                 .PlanReferenceDocumentScopeAsync(symbol, solution, CancellationToken.None);
@@ -311,7 +311,7 @@ class Global { }"),
                 .GetCompilationAsync())!;
             INamedTypeSymbol symbol = compilation.GetTypeByMetadataName("ITarget")!;
             using var manager = new IndexManager(root, Path.Combine(root, "unused.db"));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
 
             SemanticService.ReferenceDocumentScope scope = await semantic
                 .PlanReferenceDocumentScopeAsync(symbol, solution, CancellationToken.None);

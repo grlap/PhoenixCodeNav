@@ -80,7 +80,7 @@ public class Batch24ModifiersDeadlineTests
             using var m = new IndexManager(root, dbPath);
             m.Start();
             Assert.True(WaitUntil(() => m.IsQueryable, 15000));
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             var outline = Parse(tools.Outline("P/Hierarchy.cs"));
             var types = outline.GetProperty("symbols")[0].GetProperty("members").EnumerateArray().ToList();
@@ -122,7 +122,7 @@ public class Batch24ModifiersDeadlineTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var m = new IndexManager(root, dbPath);
-            var semantic = new SemanticService(m);
+            var semantic = new SemanticService(m, enableRoslynPersistence: false);
             try
             {
                 m.Start();

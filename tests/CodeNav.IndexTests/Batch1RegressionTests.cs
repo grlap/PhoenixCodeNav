@@ -85,7 +85,7 @@ public class Batch1ToolTests : IClassFixture<IndexFixture>, IAsyncLifetime
         _manager = new IndexManager(_fx.Root, _fx.DbPath);
         _manager.Start();
         for (int i = 0; i < 600 && !_manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-        _semantic = new SemanticService(_manager);
+        _semantic = new SemanticService(_manager, enableRoslynPersistence: false);
         _tools = new NavigationTools(_manager, _semantic);
     }
 
@@ -214,7 +214,7 @@ public class Batch1ToolTests : IClassFixture<IndexFixture>, IAsyncLifetime
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
             Assert.True(manager.IsQueryable);

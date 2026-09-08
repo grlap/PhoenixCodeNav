@@ -30,7 +30,7 @@ public sealed class CSharpCentralPackageManagementTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
 
-            using var workspace = new SemanticWorkspace(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
             using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
                 ["Cpm.Consumer"], CancellationToken.None);
 
@@ -55,7 +55,7 @@ public sealed class CSharpCentralPackageManagementTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
 
-            using var workspace = new SemanticWorkspace(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
             using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
                 ["Cpm.Consumer"], CancellationToken.None);
 
@@ -88,7 +88,7 @@ public sealed class CSharpCentralPackageManagementTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
 
-            using var workspace = new SemanticWorkspace(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
             using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
                 ["Cpm.Consumer"], CancellationToken.None);
 
@@ -129,7 +129,7 @@ public sealed class CSharpCentralPackageManagementTests
             Assert.True(WaitUntil(() => manager.IsQueryable, 20000));
 
             var log = new List<string>();
-            using var workspace = new SemanticWorkspace(root, dbPath, log.Add);
+            using var workspace = new SemanticWorkspace(root, dbPath, log.Add, enableRoslynPersistence: false);
             using (SemanticSolutionLease before = await workspace.EnsureLoadedAsync(
                        ["Cpm.Consumer"], CancellationToken.None))
             {
@@ -172,7 +172,7 @@ public sealed class CSharpCentralPackageManagementTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
 
-            using var workspace = new SemanticWorkspace(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
             using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
                 ["Cpm.Consumer"], CancellationToken.None);
 
@@ -232,7 +232,7 @@ public sealed class CSharpCentralPackageManagementTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
 
-            using var workspace = new SemanticWorkspace(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
             using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
                 ["Cpm.Consumer"], CancellationToken.None);
 
@@ -285,7 +285,7 @@ public sealed class CSharpCentralPackageManagementTests
             IndexBuilder.Build(workspaceRoot, dbPath);
 
             var log = new List<string>();
-            using var workspace = new SemanticWorkspace(workspaceRoot, dbPath, log.Add);
+            using var workspace = new SemanticWorkspace(workspaceRoot, dbPath, log.Add, enableRoslynPersistence: false);
             using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
                 ["Cpm.Consumer"], CancellationToken.None);
 
@@ -332,7 +332,7 @@ public sealed class CSharpCentralPackageManagementTests
             string dbPath = IndexBuilder.DefaultDbPath(workspaceRoot);
             IndexBuilder.Build(workspaceRoot, dbPath);
 
-            using var workspace = new SemanticWorkspace(workspaceRoot, dbPath);
+            using var workspace = new SemanticWorkspace(workspaceRoot, dbPath, enableRoslynPersistence: false);
             using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
                 ["Cpm.Consumer"], CancellationToken.None);
 
@@ -571,7 +571,7 @@ public sealed class CSharpCentralPackageManagementTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
 
-            using var workspace = new SemanticWorkspace(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
             using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
                 ["Cpm.Consumer"], CancellationToken.None);
 
@@ -606,7 +606,7 @@ public sealed class CSharpCentralPackageManagementTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
 
-            using var workspace = new SemanticWorkspace(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
             using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
                 ["Cpm.Consumer"], CancellationToken.None);
 

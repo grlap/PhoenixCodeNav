@@ -159,7 +159,7 @@ public sealed class Batch44GitSubtreeTests
             string dbPath = IndexBuilder.DefaultDbPath(workspace);
             IndexBuilder.Build(workspace, dbPath);
             using var manager = new IndexManager(workspace, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(
                     () => manager.IsQueryable && manager.Health().IndexedCommit is not null, 30_000),
@@ -294,7 +294,7 @@ public sealed class Batch44GitSubtreeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             var tools = new NavigationTools(manager, semantic);
@@ -361,7 +361,7 @@ public sealed class Batch44GitSubtreeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             var tools = new NavigationTools(manager, semantic);
@@ -413,7 +413,7 @@ public sealed class Batch44GitSubtreeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             var tools = new NavigationTools(manager, semantic);
@@ -464,7 +464,7 @@ public sealed class Batch44GitSubtreeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             var tools = new NavigationTools(manager, semantic);
@@ -521,7 +521,7 @@ public sealed class Batch44GitSubtreeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             var tools = new NavigationTools(manager, semantic);
@@ -591,7 +591,7 @@ public sealed class Batch44GitSubtreeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             var tools = new NavigationTools(manager, semantic);
@@ -647,7 +647,7 @@ public sealed class Batch44GitSubtreeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             var tools = new NavigationTools(manager, semantic);
@@ -804,7 +804,7 @@ public sealed class Batch44GitSubtreeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             int stableReadyObservations = 0;
             Assert.True(WaitUntil(() =>
@@ -973,7 +973,7 @@ public sealed class Batch44GitSubtreeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
 
@@ -1263,7 +1263,7 @@ public sealed class Batch44GitSubtreeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             Assert.True(semantic.FrameworkRefsAvailable);
@@ -1334,7 +1334,7 @@ public sealed class Batch44GitSubtreeTests
             Assert.True(statuses.Single(status => status.IsThisWorkspace).Path == expectedMain);
 
             using var manager = new IndexManager(main, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             var tools = new NavigationTools(manager, semantic);

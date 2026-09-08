@@ -40,7 +40,7 @@ public class Batch53MetadataRefCacheTests
                 "namespace P; public sealed class UsesVendor : V.A { }");
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
-            using var firstWorkspace = new SemanticWorkspace(root, dbPath);
+            using var firstWorkspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
             using SemanticSolutionLease firstLoad = await firstWorkspace.EnsureLoadedAsync(
                 ["P"], CancellationToken.None);
             PortableExecutableReference first = Assert.Single(
@@ -55,7 +55,7 @@ public class Batch53MetadataRefCacheTests
             // A rebuilt dll must invalidate: same path, new content/mtime → fresh instance.
             EmitAssembly(dll, "VendorLib", "namespace V { public class A { public int X; } }");
             File.SetLastWriteTimeUtc(dll, DateTime.UtcNow.AddHours(1));
-            using var secondWorkspace = new SemanticWorkspace(root, dbPath);
+            using var secondWorkspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
             using SemanticSolutionLease secondLoad = await secondWorkspace.EnsureLoadedAsync(
                 ["P"], CancellationToken.None);
             PortableExecutableReference second = Assert.Single(
@@ -103,7 +103,7 @@ public class Batch53MetadataRefCacheTests
 
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
-            using var ws = new SemanticWorkspace(root, dbPath);
+            using var ws = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
             using var load = await ws.EnsureLoadedAsync(
                 new[] { "P1", "P2" }, CancellationToken.None);
             var (solution, coverage) = load;

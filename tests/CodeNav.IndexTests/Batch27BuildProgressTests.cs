@@ -79,7 +79,7 @@ public class Batch27BuildProgressTests
             // cut at 40 projects built in ~250ms and the error probe missed the window.
             WorkspaceGenerator.Generate(root, targetProjects: 200, seed: 9);
             using var m = new IndexManager(root, IndexBuilder.DefaultDbPath(root));
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             m.Start();
 
             JsonElement? buildingCaps = null;

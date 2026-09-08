@@ -1,4 +1,6 @@
 using CodeNav.Core.Semantic;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using System.Text.Json;
 
 namespace CodeNav.Tests;
@@ -6,6 +8,57 @@ namespace CodeNav.Tests;
 [Collection(CSharpCpmEnvironmentIsolationCollection.Name)]
 public sealed class FSharpPackageRootAuthorityTests
 {
+    [Fact]
+    public void FrameworkAssemblyInputsRejectNonAssembliesAndRetainManagedFacades()
+    {
+        string references = Directory.CreateTempSubdirectory("codenav-framework-assembly-inputs").FullName;
+        string? prior = Environment.GetEnvironmentVariable("CODENAV_NET472_REFS");
+        try
+        {
+            string facades = Path.Combine(references, "Facades");
+            Directory.CreateDirectory(facades);
+            string[] expected = [Path.Combine(references, "mscorlib.dll"),
+                Path.Combine(references, "System.dll"), Path.Combine(references, "System.Core.dll"),
+                Path.Combine(facades, "ValidFacade.dll")];
+            foreach (string file in expected) Emit(file, OutputKind.DynamicallyLinkedLibrary);
+            string netmodule = Path.Combine(references, "Companion.dll");
+            Emit(netmodule, OutputKind.NetModule);
+            string nonManaged = Path.Combine(facades, "NativeHelper.dll");
+            File.WriteAllText(nonManaged, "not a managed PE assembly");
+            Assert.False(ReferenceAssemblyLocator.IsManagedAssemblyPath(netmodule));
+            Assert.False(ReferenceAssemblyLocator.IsManagedAssemblyPath(nonManaged));
+
+            Environment.SetEnvironmentVariable("CODENAV_NET472_REFS", references);
+            ReferenceAssemblyLocator.ResetCachesForTests();
+            IReadOnlyList<MetadataReference> actual = ReferenceAssemblyLocator.Net472References(out string? source);
+            Assert.Equal(references, source);
+            Assert.Equal(expected.Order(StringComparer.Ordinal), actual.Select(reference => reference.Display!).Order(StringComparer.Ordinal));
+            foreach (MetadataReference reference in actual)
+            {
+                using Metadata metadata = ((PortableExecutableReference)reference).GetMetadata();
+                Assert.IsType<AssemblyMetadata>(metadata);
+            }
+            Assert.Same(actual, ReferenceAssemblyLocator.Net472References(out _));
+            Assert.True(File.Exists(netmodule), "Companion files must stay on disk; only standalone admission changes.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("CODENAV_NET472_REFS", prior);
+            ReferenceAssemblyLocator.ResetCachesForTests();
+            TestWorkspaceCleanup.DeleteWorkspace(references);
+        }
+
+        static void Emit(string path, OutputKind kind)
+        {
+            var compilation = CSharpCompilation.Create(Path.GetFileNameWithoutExtension(path),
+                [CSharpSyntaxTree.ParseText("public sealed class FixtureType { }")],
+                [MetadataReference.CreateFromFile(typeof(object).Assembly.Location)],
+                new CSharpCompilationOptions(kind));
+            var result = compilation.Emit(path);
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+        }
+    }
+
     [Fact]
     public void ExplicitGlobalPackagesRootIsExclusiveOutsideTheWorkspace()
     {

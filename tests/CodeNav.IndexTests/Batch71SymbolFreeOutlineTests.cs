@@ -32,7 +32,7 @@ public class Batch71SymbolFreeOutlineTests
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, TimeSpan.FromSeconds(30)),
                 "index did not become queryable");
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement commentsOnly = Parse(tools.Outline("P/CommentsOnly.cs"));

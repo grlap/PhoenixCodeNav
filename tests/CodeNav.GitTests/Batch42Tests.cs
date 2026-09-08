@@ -59,7 +59,7 @@ public class Batch42Tests
             Git(root, "commit -q -m conversion-access-fixture");
 
             using var manager = StartManager(root);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
             File.WriteAllText(path, File.ReadAllText(path)
                 .Replace("=> 0;", "=> 1;")
@@ -151,7 +151,7 @@ public class Batch42Tests
             Git(root, "commit -q -m generic-conversion-baseline");
 
             using var manager = StartManager(root);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
             File.WriteAllText(path, newSource);
             manager.RequestRefresh([relativePath]);
@@ -193,7 +193,7 @@ public class Batch42Tests
         {
             WriteReviewRepo(root);
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // Edit ONE method body, uncommitted; let the index reflect it before packing.
             string widgetPath = Path.Combine(root, "Lib", "Widget.cs");
@@ -242,7 +242,7 @@ public class Batch42Tests
         {
             WriteReviewRepo(root);
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             string widget = Path.Combine(root, "Lib", "Widget.cs");
             string worktreeBytes = File.ReadAllText(widget);
             File.WriteAllText(widget, "namespace Lib { public class StagedOnlyPayload { } }\n");
@@ -277,7 +277,7 @@ public class Batch42Tests
             Git(root, "commit -q -m feature-change");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             var dirtOnly = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
                 () => tools.ReviewPack(),
@@ -481,7 +481,7 @@ public class Batch42Tests
         {
             WriteReviewRepo(root);
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // Delete a committed file whose type is still NAMED elsewhere (Consumer uses it).
             File.Delete(Path.Combine(root, "Lib", "Old.cs"));
@@ -521,7 +521,7 @@ public class Batch42Tests
             Git(root, "add -A");
             Git(root, "commit -q -m project-shape-baseline");
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // An untracked new class + a modified csproj, both uncommitted.
             File.WriteAllText(Path.Combine(root, "Lib", "Fresh.cs"),
@@ -586,7 +586,7 @@ public class Batch42Tests
             Git(root, $"add {submodulePath}");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             var full = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
                 () => tools.ReviewPack(),
                 j => j.TryGetProperty("coverage", out _), "review_pack with coverage");
@@ -661,7 +661,7 @@ public class Batch42Tests
             using var m = StartManager(root);
             Assert.False(File.Exists(marker),
                 "workspace startup must not execute a nested repository's clean filter");
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             string fullJson = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
                 () => tools.ReviewPack(),
                 j => j.TryGetProperty("changedFiles", out _), "review_pack with changedFiles").GetRawText();
@@ -737,7 +737,7 @@ public class Batch42Tests
             using var m = new IndexManager(root, dbPath);
             m.Start();
             Assert.True(WaitUntil(() => m.IsQueryable, 20000));
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             Assert.Equal("search_text.did_you_mean",
                 Parse(tools.SearchText("WdgetFactory")).GetProperty("noteId").GetString());
@@ -786,7 +786,7 @@ public class Batch42Tests
             Git(root, "commit -q -m spaces");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // Modified tracked space-path file: MEMBER granularity, not a ghost whole-file,
             // and never miscounted as untracked.
@@ -842,7 +842,7 @@ public class Batch42Tests
             Git(root, "commit -q -m big");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             string text = File.ReadAllText(bigPath);
             for (int i = 0; i < 136; i += 2) // every other method: 68 hunks
@@ -889,7 +889,7 @@ public class Batch42Tests
             Git(root, "commit -q -m many-file-level-hunks");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             string edited = File.ReadAllText(path);
             for (int i = 0; i < 136; i += 2)
@@ -949,7 +949,7 @@ public class Batch42Tests
             Git(root, "commit -q -m signature-replacement-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(path,
                 """
@@ -1013,7 +1013,7 @@ public class Batch42Tests
             Git(root, "commit -q -m operator-signature-replacement-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(path,
                 """
@@ -1107,7 +1107,7 @@ public class Batch42Tests
             Git(root, "commit -q -m checked-operator-baseline");
 
             using var manager = StartManager(root);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
             File.WriteAllText(path,
                 "namespace Lib;\n" +
@@ -1158,7 +1158,7 @@ public class Batch42Tests
             Git(root, "commit -q -m namespace-scope-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(blockPath, File.ReadAllText(blockPath)
                 .Replace("block-marker", "block-edited", StringComparison.Ordinal));
@@ -1208,7 +1208,7 @@ public class Batch42Tests
             Git(root, "commit -q -m inline-namespace-comment-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(blockPath, File.ReadAllText(blockPath)
                 .Replace("block-inline-marker", "block-inline-edited",
@@ -1263,7 +1263,7 @@ public class Batch42Tests
                 TestGit.ProcessExitTimeoutMilliseconds));
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(path, "global using System.IO;\n");
             m.RequestRefresh(new[] { "Lib/OneDirective.cs" });
@@ -1320,7 +1320,7 @@ public class Batch42Tests
             Git(root, "commit -q -m mixed-hunk-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(path,
                 "global using System.IO;\n" +
@@ -1384,7 +1384,7 @@ public class Batch42Tests
         {
             WriteReviewRepo(root);
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             string widget = Path.Combine(root, "Lib", "Widget.cs");
             File.WriteAllText(widget, File.ReadAllText(widget)
@@ -1425,7 +1425,7 @@ public class Batch42Tests
         {
             WriteReviewRepo(root);
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             string csPaths = string.Join(',', Enumerable.Range(0, 201)
                 .Select(i => $"Generated/F{i:D3}.cs"));
 
@@ -1479,7 +1479,7 @@ public class Batch42Tests
             Git(root, "add -A");
             Git(root, "commit -q -m initial");
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             string json = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
                 () => tools.ReviewPack(paths: "Huge/Huge.cs", maxBytes: 2048),
@@ -1518,7 +1518,7 @@ public class Batch42Tests
             Git(root, "add -A");
             Git(root, "commit -q -m deletion-cap-fixture");
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             foreach (string path in deletedPaths) File.Delete(Path.Combine(root, path));
             m.RequestRefresh(deletedPaths);
@@ -1567,7 +1567,7 @@ public class Batch42Tests
             Git(root, "commit -q -m oversized-deleted-blob-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.Delete(path);
             m.RequestRefresh(new[] { relativePath });
@@ -1624,7 +1624,7 @@ public class Batch42Tests
             Git(root, "commit -q -m base-recovery-budget-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m))
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false))
             {
                 // This case proves the cumulative character bound. Parallel solution runs can
                 // legitimately make the independent wall-clock bound win first, so remove only
@@ -1681,7 +1681,7 @@ public class Batch42Tests
             Git(root, "commit -q -m symbol-less-move-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.Move(Path.Combine(root, oldPath), Path.Combine(root, newPath));
             m.RequestRefresh(new[] { oldPath, newPath });
@@ -1726,7 +1726,7 @@ public class Batch42Tests
             Git(root, "commit -q -m normalized-move-fixture");
 
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
 
             File.Move(Path.Combine(root, oldPath), Path.Combine(root, newPath));
             File.WriteAllText(Path.Combine(root, newPath),
@@ -1776,7 +1776,7 @@ public class Batch42Tests
             Git(root, "commit -q -m competing-normalized-move-fixture");
 
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
 
             File.Delete(Path.Combine(root, oldLfPath));
             File.Move(Path.Combine(root, oldCrLfPath), Path.Combine(root, newPath));

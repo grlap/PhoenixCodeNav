@@ -30,7 +30,7 @@ public class Batch72PathListInputTests
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, TimeSpan.FromSeconds(30)),
                 "index did not become queryable");
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement jsonArray = Parse(tools.RefreshIndex(paths:

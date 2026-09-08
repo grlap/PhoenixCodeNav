@@ -503,7 +503,7 @@ public sealed class Batch45IndexFollowerTests
                     IndexDestinationClaimState.Ready, 20_000),
                 writer.Health().Error);
 
-            using var semantic = new SemanticService(recovering);
+            using var semantic = new SemanticService(recovering, enableRoslynPersistence: false);
             var tools = new NavigationTools(recovering, semantic);
             JsonElement response = Parse(tools.RefreshIndex(force: "full"));
             AssertWriterRequired(response);
@@ -616,7 +616,7 @@ public sealed class Batch45IndexFollowerTests
             Assert.Equal("follower", follower.AccessMode);
             Assert.Equal("follower", follower.Health().AccessMode);
 
-            using var semantic = new SemanticService(follower);
+            using var semantic = new SemanticService(follower, enableRoslynPersistence: false);
             var tools = new NavigationTools(follower, semantic);
             JsonElement capabilities = Parse(tools.ServerCapabilities());
             Assert.Equal("follower",
@@ -705,7 +705,7 @@ public sealed class Batch45IndexFollowerTests
 
             File.WriteAllText(Path.Combine(root, "Beta.cs"),
                 "namespace Batch45; public class Beta45 { }");
-            using var semantic = new SemanticService(follower);
+            using var semantic = new SemanticService(follower, enableRoslynPersistence: false);
             var tools = new NavigationTools(follower, semantic);
 
             JsonElement indexed = Parse(tools.SearchSymbol("Beta45", match: "exact"));
@@ -863,7 +863,7 @@ public sealed class Batch45IndexFollowerTests
             follower.Start();
             Assert.True(WaitUntil(() => follower.IsQueryable, 20_000),
                 follower.Health().Error);
-            using var semantic = new SemanticService(follower);
+            using var semantic = new SemanticService(follower, enableRoslynPersistence: false);
             var tools = new NavigationTools(follower, semantic);
 
             int blocked = 0;
@@ -1008,7 +1008,7 @@ public sealed class Batch45IndexFollowerTests
             Assert.Equal(IndexDestinationClaimState.Ready,
                 IndexDestinationClaim.ReadState(root, database));
 
-            using var semantic = new SemanticService(follower);
+            using var semantic = new SemanticService(follower, enableRoslynPersistence: false);
             var tools = new NavigationTools(follower, semantic);
             Assert.True(WaitUntil(() => HasSymbol(tools, "Alpha45"), 10_000),
                 "follower could not query the replacement index after releasing its snapshot");
@@ -1435,7 +1435,7 @@ public sealed class Batch45IndexFollowerTests
                 IndexDestinationClaim.ReadState(root, manager.DatabaseIoPath));
             using (IndexQueries oldQueries = manager.OpenQueries())
                 Assert.Single(oldQueries.SearchSymbols("Alpha45", "exact", null, 2));
-            using (var semantic = new SemanticService(manager))
+            using (var semantic = new SemanticService(manager, enableRoslynPersistence: false))
             {
                 var tools = new NavigationTools(manager, semantic);
                 JsonElement response = Parse(
@@ -2143,7 +2143,7 @@ public sealed class Batch45IndexFollowerTests
                 successor.Health().IndexVersion != oldVersion, 20_000),
                 successor.Health().Error);
 
-            using var semantic = new SemanticService(follower);
+            using var semantic = new SemanticService(follower, enableRoslynPersistence: false);
             var tools = new NavigationTools(follower, semantic);
             Assert.True(WaitUntil(() => HasSymbol(tools, "Alpha45"), 10_000),
                 "surviving follower could not query the successor's replacement index");
@@ -2257,7 +2257,7 @@ public sealed class Batch45IndexFollowerTests
                 40_000);
             Assert.NotEqual(oldVersion, rebuilt.GetProperty("indexVersion").GetString());
 
-            using var semantic = new SemanticService(follower);
+            using var semantic = new SemanticService(follower, enableRoslynPersistence: false);
             var tools = new NavigationTools(follower, semantic);
             Assert.True(WaitUntil(() => HasSymbol(tools, "Alpha45"), 10_000),
                 "foreign follower could not query the replacement index");
@@ -2330,7 +2330,7 @@ public sealed class Batch45IndexFollowerTests
                     StringComparison.OrdinalIgnoreCase);
                 Assert.False(follower.RequestRefresh());
                 Assert.False(follower.RequestFullRebuild());
-                using var semantic = new SemanticService(follower);
+                using var semantic = new SemanticService(follower, enableRoslynPersistence: false);
                 var tools = new NavigationTools(follower, semantic);
                 JsonElement refresh = Parse(tools.RefreshIndex(force: "full"));
                 JsonElement worktree = Parse(tools.IndexWorktree(
@@ -2398,7 +2398,7 @@ public sealed class Batch45IndexFollowerTests
             Assert.True(follower.IsQueryable, follower.Health().Error);
             Assert.False(follower.IsWriter);
             Assert.Equal("follower", follower.AccessMode);
-            followerSemantic = new SemanticService(follower);
+            followerSemantic = new SemanticService(follower, enableRoslynPersistence: false);
             var followerTools = new NavigationTools(follower, followerSemantic);
             Assert.True(HasSymbol(followerTools, "Alpha45"));
 

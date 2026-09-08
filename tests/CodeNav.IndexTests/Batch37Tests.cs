@@ -32,7 +32,7 @@ public class Batch37Tests
         {
             WriteQuartetWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // Case-insensitive on purpose — the graph's own comparer.
             var same = Parse(tools.DependencyPath("lib", "Lib"));
@@ -55,7 +55,7 @@ public class Batch37Tests
         {
             WriteQuartetWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // Zeta's owner (Lib) has a HintPath consumer — the note states the design inline.
             var mixed = Parse(tools.Impact("Zeta"));
@@ -81,7 +81,7 @@ public class Batch37Tests
         {
             WriteQuartetWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             var related = Parse(tools.RelatedTests("Zeta"));
             var groups = related.GetProperty("testGroups").EnumerateArray()
@@ -183,7 +183,7 @@ public class Batch37Tests
         {
             WriteQuartetWorkspace(root);
             using var m = BuildAndStart(root);
-            using var sem = new SemanticService(m);
+            using var sem = new SemanticService(m, enableRoslynPersistence: false);
             if (!sem.FrameworkRefsAvailable) return; // env guard: no reference assemblies
             var tools = new NavigationTools(m, sem);
 
@@ -230,7 +230,7 @@ public class Batch37Tests
         {
             WriteQuartetWorkspace(root);
             using var m = BuildAndStart(root);
-            using var sem = new SemanticService(m);
+            using var sem = new SemanticService(m, enableRoslynPersistence: false);
             if (!sem.FrameworkRefsAvailable) return; // env guard
             var tools = new NavigationTools(m, sem);
 

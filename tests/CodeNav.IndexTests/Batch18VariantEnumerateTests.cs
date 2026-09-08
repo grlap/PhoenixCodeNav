@@ -63,7 +63,7 @@ public class Batch18VariantTests
                 manager.Start();
                 for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
                 Assert.True(manager.IsQueryable);
-                var tools = new NavigationTools(manager, new SemanticService(manager));
+                var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
 
                 // Split: "Zmode4" -> 0 hits, but "Zmode 4" exists -> suggested, not substituted.
                 var split = JsonDocument.Parse(tools.SearchText("Zmode4")).RootElement;

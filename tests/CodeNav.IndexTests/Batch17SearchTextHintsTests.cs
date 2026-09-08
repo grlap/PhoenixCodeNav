@@ -43,7 +43,7 @@ public class Batch17SearchTextHintsTests : IDisposable
         _manager = new IndexManager(_root, dbPath);
         _manager.Start();
         for (int i = 0; i < 600 && !_manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-        _semantic = new SemanticService(_manager);
+        _semantic = new SemanticService(_manager, enableRoslynPersistence: false);
         _tools = new NavigationTools(_manager, _semantic);
     }
 

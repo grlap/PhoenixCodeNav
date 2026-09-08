@@ -78,7 +78,7 @@ public sealed class Batch60ReferenceDocumentScopeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 30_000));
             if (!semantic.FrameworkRefsAvailable) return;
@@ -162,7 +162,7 @@ public sealed class Batch60ReferenceDocumentScopeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 30_000));
             if (!semantic.FrameworkRefsAvailable) return;
@@ -268,7 +268,7 @@ public sealed class Batch60ReferenceDocumentScopeTests
                 .GetCompilationAsync())!;
             INamedTypeSymbol symbol = compilation.GetTypeByMetadataName("N.ITarget")!;
             using var manager = new IndexManager(root, Path.Combine(root, "unused.db"));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
 
             SemanticService.ReferenceDocumentScope scope = await semantic
                 .PlanReferenceDocumentScopeAsync(symbol, solution, CancellationToken.None);
@@ -330,7 +330,7 @@ public sealed class Batch60ReferenceDocumentScopeTests
                 await project.GetSourceGeneratedDocumentsAsync(),
                 document => document.Name == "GeneratedUse.g.cs");
             using var manager = new IndexManager(root, Path.Combine(root, "unused.db"));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
 
             SemanticService.ReferenceDocumentScope scope = await semantic
                 .PlanReferenceDocumentScopeAsync(symbol, solution, CancellationToken.None);
@@ -401,7 +401,7 @@ public sealed class Batch60ReferenceDocumentScopeTests
                 .GetCompilationAsync())!;
             INamedTypeSymbol symbol = compilation.GetTypeByMetadataName("ITarget")!;
             using var manager = new IndexManager(root, Path.Combine(root, "unused.db"));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
 
             SemanticService.ReferenceDocumentScope scope = await semantic
                 .PlanReferenceDocumentScopeAsync(symbol, solution, CancellationToken.None);
@@ -464,7 +464,7 @@ public sealed class Batch60ReferenceDocumentScopeTests
                 .GetCompilationAsync())!;
             INamedTypeSymbol beforeSymbol = beforeCompilation.GetTypeByMetadataName("N.ITarget")!;
             using var manager = new IndexManager(root, Path.Combine(root, "unused.db"));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             SemanticService.ReferenceDocumentScope prior = await semantic
                 .PlanReferenceDocumentScopeAsync(beforeSymbol, before, CancellationToken.None);
             Assert.DoesNotContain(prior.Documents!, document => document.Id == useDocument);
@@ -535,7 +535,7 @@ public sealed class Batch60ReferenceDocumentScopeTests
             IMethodSymbol collectionBuilder = compilation.GetTypeByMetadataName("Builder")!
                 .GetMembers("Create").OfType<IMethodSymbol>().Single();
             using var manager = new IndexManager(root, Path.Combine(root, "unused.db"));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
 
             SemanticService.ReferenceDocumentScope concreteScope = await semantic
                 .PlanReferenceDocumentScopeAsync(concrete, solution, CancellationToken.None);
@@ -626,7 +626,7 @@ public sealed class Batch60ReferenceDocumentScopeTests
             Compilation compilation = (await solution.GetProject(projectId)!
                 .GetCompilationAsync())!;
             using var manager = new IndexManager(root, Path.Combine(root, "unused.db"));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
 
             for (int index = 0; index < 70; index++)
             {

@@ -238,7 +238,7 @@ public class Batch47GenericArityTests
             _manager.Start();
             Assert.True(WaitUntil(() => _manager.Health().State == "ready", 30_000),
                 _manager.Health().Error);
-            Semantic = new SemanticService(_manager);
+            Semantic = new SemanticService(_manager, enableRoslynPersistence: false);
             Tools = new NavigationTools(_manager, Semantic);
         }
 

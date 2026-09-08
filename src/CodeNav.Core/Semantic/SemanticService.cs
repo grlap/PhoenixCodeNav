@@ -243,13 +243,16 @@ public sealed partial class SemanticService : IDisposable
 
     private readonly IndexManager _manager;
     private readonly Action<string> _log;
+    private readonly bool _enableRoslynPersistence;
     private readonly object _gate = new();
     private SemanticWorkspace? _workspace;
 
-    public SemanticService(IndexManager manager, Action<string>? log = null)
+    public SemanticService(IndexManager manager, Action<string>? log = null,
+        bool enableRoslynPersistence = true)
     {
         _manager = manager;
         _log = log ?? (_ => { });
+        _enableRoslynPersistence = enableRoslynPersistence;
     }
 
     /// <summary>TEST SEAM (tof): invoked once per counted reference location with the running
@@ -331,7 +334,8 @@ public sealed partial class SemanticService : IDisposable
             {
                 string databasePath = _manager.DatabaseIoPath; // validates held authority each use
                 return _workspace ??= new SemanticWorkspace(_manager.WorkspaceRoot,
-                    databasePath, _log, poolIndexConnections: _manager.IsWriter);
+                    databasePath, _log, poolIndexConnections: _manager.IsWriter,
+                    enableRoslynPersistence: _enableRoslynPersistence);
             }
         }
     }

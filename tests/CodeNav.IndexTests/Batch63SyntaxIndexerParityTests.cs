@@ -416,7 +416,7 @@ public sealed class Batch63SyntaxIndexerParityTests
                 Assert.False(queries.AllProjectTestOnlyFlags()["Consumer"]);
             }
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
                 "conversion-handle index did not become fresh");
@@ -675,7 +675,7 @@ public sealed class Batch63SyntaxIndexerParityTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             // A freshly opened index is queryable while its mandatory startup sweep is still
             // converging. Exact semantic handles intentionally refuse that stale window, so wait
@@ -789,7 +789,7 @@ public sealed class Batch63SyntaxIndexerParityTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50);
             Assert.True(manager.IsQueryable, "stale-handle index did not become queryable");
@@ -917,7 +917,7 @@ public sealed class Batch63SyntaxIndexerParityTests
             long plainOrdinal;
             long genericOrdinal;
             using (var manager = new IndexManager(root, dbPath))
-            using (var semantic = new SemanticService(manager))
+            using (var semantic = new SemanticService(manager, enableRoslynPersistence: false))
             {
                 manager.Start();
                 Assert.True(SpinWait.SpinUntil(() => manager.IsQueryable, 20_000));
@@ -944,7 +944,7 @@ public sealed class Batch63SyntaxIndexerParityTests
                 root, sourceWriteBatchSize: 1, buildCaptureTestHooks: buildHooks);
 
             using (var manager = new IndexManager(root, dbPath))
-            using (var semantic = new SemanticService(manager))
+            using (var semantic = new SemanticService(manager, enableRoslynPersistence: false))
             {
                 manager.Start();
                 Assert.True(SpinWait.SpinUntil(() => manager.IsQueryable, 20_000));
@@ -996,7 +996,7 @@ public sealed class Batch63SyntaxIndexerParityTests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(SpinWait.SpinUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement boundary = ParseJson(tools.References(

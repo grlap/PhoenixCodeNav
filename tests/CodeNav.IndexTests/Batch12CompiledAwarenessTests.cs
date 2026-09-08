@@ -60,7 +60,7 @@ public class Batch12CompiledAwarenessTests
                 manager.Start();
                 for (int i = 0; i < 600 && !manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
                 Assert.True(manager.IsQueryable);
-                var tools = new NavigationTools(manager, new CodeNav.Core.Semantic.SemanticService(manager));
+                var tools = new NavigationTools(manager, new CodeNav.Core.Semantic.SemanticService(manager, enableRoslynPersistence: false));
 
                 // The per-hit flag is additive: the hit is returned AND tagged orphaned:true (never hidden).
                 var hit = JsonDocument.Parse(tools.SearchSymbol("OrphanMarkerType", match: "exact"))

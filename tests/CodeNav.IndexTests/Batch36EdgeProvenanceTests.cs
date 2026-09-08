@@ -134,7 +134,7 @@ public class Batch36EdgeProvenanceTests
         {
             WriteProvenanceWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             var graph = Parse(tools.ProjectGraph("Lib", 1, "upstream"));
             var kindsByFrom = graph.GetProperty("edges").EnumerateArray()
@@ -157,7 +157,7 @@ public class Batch36EdgeProvenanceTests
         {
             WriteProvenanceWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             var dep = Parse(tools.DependencyPath("Top", "Lib"));
             Assert.True(dep.GetProperty("found").GetBoolean());
@@ -185,7 +185,7 @@ public class Batch36EdgeProvenanceTests
         {
             WriteProvenanceWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             var impact = Parse(tools.Impact("Zeta"));
             var split = impact.GetProperty("directDependentProjects");
@@ -228,7 +228,7 @@ public class Batch36EdgeProvenanceTests
         {
             WriteProvenanceWorkspace(root);
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // House serialization style: null fields are OMITTED (WhenWritingNull) — so the
             // orphan row ships {orphaned:true, ...} with project ABSENT; orphaned is the
@@ -320,7 +320,7 @@ public class Batch36EdgeProvenanceTests
             }
 
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             string json = tools.DependencyPath(Name(0, 0), Name(12, 0), maxPaths: 10);
 
             Assert.True(System.Text.Encoding.UTF8.GetByteCount(json) <= Json.HardBudgetBytes,
@@ -376,7 +376,7 @@ public class Batch36EdgeProvenanceTests
             }
 
             using var m = BuildAndStart(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             string json = tools.DependencyPath(Name(0), Name(len - 1), maxPaths: 10);
 
             Assert.True(System.Text.Encoding.UTF8.GetByteCount(json) <= Json.HardBudgetBytes,

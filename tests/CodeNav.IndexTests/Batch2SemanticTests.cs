@@ -110,7 +110,7 @@ public class Batch2SemanticTests : IClassFixture<IndexFixture>
                 .First(p => !p.EndsWith(".Tests", StringComparison.OrdinalIgnoreCase));
         }
 
-        var workspace = new SemanticWorkspace(_fx.Root, _fx.DbPath);
+        var workspace = new SemanticWorkspace(_fx.Root, _fx.DbPath, enableRoslynPersistence: false);
         try
         {
             var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Acme.Platform.Common", dependent };

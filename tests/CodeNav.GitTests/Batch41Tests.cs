@@ -214,7 +214,7 @@ public class Batch41Tests
 
             string db = IndexBuilder.DefaultDbPath(root);
             manager = new IndexManager(root, db);
-            semantic = new SemanticService(manager);
+            semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable && manager.Health().IndexedCommit is not null, 30000),
                 "main index did not record its git baseline");
@@ -345,7 +345,7 @@ public class Batch41Tests
 
             string db = IndexBuilder.DefaultDbPath(root);
             manager = new IndexManager(root, db);
-            semantic = new SemanticService(manager);
+            semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
 
@@ -412,7 +412,7 @@ public class Batch41Tests
 
             string db = IndexBuilder.DefaultDbPath(workspace);
             manager = new IndexManager(workspace, db);
-            semantic = new SemanticService(manager);
+            semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable &&
                 manager.Health().IndexedCommit is not null, 30_000));
@@ -489,7 +489,7 @@ public class Batch41Tests
             WriteRepo(root);
             Git(root, $"worktree add -b review \"{wt}\"");
             manager = new IndexManager(root, db);
-            semantic = new SemanticService(manager);
+            semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20000));
             var tools = new NavigationTools(manager, semantic);

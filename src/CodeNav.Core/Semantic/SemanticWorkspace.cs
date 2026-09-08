@@ -118,7 +118,7 @@ public sealed partial class SemanticWorkspace : IDisposable
         new(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true, concurrentBuild: true);
 
     public SemanticWorkspace(string workspaceRoot, string dbPath, Action<string>? log = null,
-        bool poolIndexConnections = true)
+        bool poolIndexConnections = true, bool enableRoslynPersistence = true)
     {
         _workspaceRoot = workspaceRoot;
         _dbPath = dbPath;
@@ -127,14 +127,16 @@ public sealed partial class SemanticWorkspace : IDisposable
 
         // Roslyn's SyntaxTreeIndex persistence is disabled when Solution.FilePath is null.
         // AdhocWorkspace starts with such an anonymous solution, so replace it with a stable
-        // storage identity before adding projects. The synthetic path is never read and is not
-        // solution/build authority; it only selects Roslyn's local application-data cache.
+        // storage identity before adding projects. Hosts with multiple independent workspaces
+        // can explicitly opt out of that cache while retaining the same stable IDs. This choice
+        // does not affect Phoenix's index connection pool. The synthetic path is never read and
+        // is not solution/build authority; it only selects Roslyn's local application-data cache.
         _workspace = new AdhocWorkspace();
         string solutionIdentityPath = PersistentSolutionIdentityPath(workspaceRoot);
         _workspace.AddSolution(SolutionInfo.Create(
             StableSolutionId(workspaceRoot),
             VersionStamp.Create(),
-            filePath: solutionIdentityPath));
+            filePath: enableRoslynPersistence ? solutionIdentityPath : null));
     }
 
     /// <summary>LoadedBefore is null when the load died QUEUED for the gate — the warm-set

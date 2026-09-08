@@ -226,6 +226,11 @@ missing or unusable, and availability remains false unless valid assemblies with
 `mscorlib`, `System`, and `System.Core` identities are present. C# semantic coverage reports the
 exact selected `frameworkRefsSource` and counts only package DLLs successfully admitted as compiler
 metadata in `resolvedPackageDllCount`.
+Since v0.12.90, C# framework-reference admission also requires managed assembly
+metadata for every root/facade DLL, matching the F# path. Native targeting-pack helpers
+and standalone managed netmodules are not admitted as assembly references; valid
+assemblies remain eligible and companion files stay on disk. This filtering happens
+once while populating the process-wide framework-reference cache.
 Active package identities are matched against the selected target in the project's existing
 `obj/project.assets.json`; Phoenix never restores or invokes MSBuild. The assets snapshot must name
 the same physical project, selected framework, exact case-insensitive explicit direct package identity set, and evaluated version
@@ -608,7 +613,20 @@ This is the part designed specifically for net472 enterprise scale.
   application-data SQLite store after an MCP process restart instead of rebuilding them across
   every project touched by named-type global-alias discovery. The synthetic path is never read,
   solution files remain non-authoritative, and changed bytes or parse options invalidate through
-  Roslyn's existing checksums.
+  Roslyn's existing checksums. `SemanticService` and `SemanticWorkspace` accept an explicit
+  per-instance `enableRoslynPersistence` constructor option, defaulting to `true`. An opt-out
+  leaves only `Solution.FilePath` null; stable IDs and Phoenix index connection pooling are
+  unchanged. Ordinary in-process tests opt out to avoid overlapping Unix Roslyn write caches.
+  A separate-process product canary retains actual persistence coverage: disk reuse after exit,
+  source/preprocessor invalidation, and enabled/disabled semantic parity. A two-project canary
+  additionally proves cold misses and fresh-process warm hits for both `SyntaxTreeIndex` and
+  `TopLevelSyntaxTreeIndex` before checking exact cross-project reference sites, implementations,
+  derived types, and overrides. Its phases run disabled, enabled cold, then enabled warm in
+  separate processes over the same fixture. The parent takes the existing process-heavy test
+  lease; the 60-second child deadline is unchanged, and timeout diagnostics preserve phase and
+  partial stdout/stderr through the shared bounded process teardown. This temporary embedding
+  option does not change the daemon default or repair Roslyn's shared Unix cache namespace; see
+  [the investigation and repair stages](roslyn-unix-sqlite-write-cache-investigation.md).
 - **Pinned long scans.** Candidate enumeration and semantic cluster loading pin one local SQLite
   read epoch. A writer drains its own pinned snapshots before rebuilding. A database-destination
   claim stops new Windows compatibility-reader opens before replacement while already-open bounded operations

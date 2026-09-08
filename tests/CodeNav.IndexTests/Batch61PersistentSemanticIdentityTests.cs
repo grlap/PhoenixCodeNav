@@ -12,21 +12,73 @@ namespace CodeNav.Tests;
 public sealed class Batch61PersistentSemanticIdentityTests
 {
     [Fact]
+    public void PersistenceIsEnabledByDefaultAndOptOutPreservesStableIds()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-61-option").FullName;
+        try
+        {
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            // Identity-only: do not load projects, compile, or invoke SymbolFinder here.
+            // Enabled persistence needs a separate process (SemanticPersistenceProcessTests),
+            // since disposing a workspace does not drain Roslyn's background storage work.
+            using var enabled = new SemanticWorkspace(root, dbPath);
+            using var disabled = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
+            Assert.Equal(Path.Combine(Path.GetFullPath(root), ".codenav", "phoenix-semantic-workspace.sln"),
+                enabled.TestOnlyCurrentSolution.FilePath);
+            Assert.Null(disabled.TestOnlyCurrentSolution.FilePath);
+            Assert.Equal(enabled.TestOnlyCurrentSolution.Id, disabled.TestOnlyCurrentSolution.Id);
+            ProjectId enabledProject = enabled.TestOnlyStableProjectId("P");
+            ProjectId disabledProject = disabled.TestOnlyStableProjectId("P");
+            Assert.Equal(enabledProject, disabledProject);
+            Assert.Equal(SemanticWorkspace.TestOnlyStableDocumentId(enabledProject, "Use.cs"),
+                SemanticWorkspace.TestOnlyStableDocumentId(disabledProject, "Use.cs"));
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void ServiceAppliesItsPersistenceChoiceWhenCreatingTheLazyWorkspace()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-61-service-option").FullName;
+        try
+        {
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+            using var manager = new IndexManager(root, dbPath);
+            manager.Start();
+            IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30), "persistence fixture not ready");
+            // Identity-only even though the lazy workspace is created. Keep semantic loads
+            // in the separate-process canary so this parallel test never opens a Roslyn store.
+            using var enabled = new SemanticService(manager);
+            using var disabled = new SemanticService(manager, enableRoslynPersistence: false);
+            Assert.NotNull(enabled.TestOnlyWorkspace.TestOnlyCurrentSolution.FilePath);
+            Assert.Null(disabled.TestOnlyWorkspace.TestOnlyCurrentSolution.FilePath);
+            Assert.Equal(enabled.TestOnlyWorkspace.TestOnlyCurrentSolution.Id,
+                disabled.TestOnlyWorkspace.TestOnlyCurrentSolution.Id);
+        }
+        finally
+        {
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
     public void StableSemanticIdentitiesAreRepeatableAndWorkspaceScoped()
     {
         string root = Directory.CreateTempSubdirectory("codenav-61-identity").FullName;
         string otherRoot = Directory.CreateTempSubdirectory("codenav-61-other").FullName;
         try
         {
-            using var first = new SemanticWorkspace(root, Path.Combine(root, "index.db"));
-            using var second = new SemanticWorkspace(root, Path.Combine(root, "other.db"));
-            using var other = new SemanticWorkspace(otherRoot, Path.Combine(otherRoot, "index.db"));
+            using var first = new SemanticWorkspace(root, Path.Combine(root, "index.db"), enableRoslynPersistence: false);
+            using var second = new SemanticWorkspace(root, Path.Combine(root, "other.db"), enableRoslynPersistence: false);
+            using var other = new SemanticWorkspace(otherRoot, Path.Combine(otherRoot, "index.db"), enableRoslynPersistence: false);
 
             Assert.Equal(first.TestOnlyCurrentSolution.Id, second.TestOnlyCurrentSolution.Id);
             Assert.NotEqual(first.TestOnlyCurrentSolution.Id, other.TestOnlyCurrentSolution.Id);
-            Assert.Equal(Path.Combine(Path.GetFullPath(root), ".codenav",
-                    "phoenix-semantic-workspace.sln"),
-                first.TestOnlyCurrentSolution.FilePath);
+            Assert.Null(first.TestOnlyCurrentSolution.FilePath);
 
             ProjectId firstProject = first.TestOnlyStableProjectId("Example");
             ProjectId secondProject = second.TestOnlyStableProjectId("example");
@@ -85,7 +137,7 @@ public sealed class Batch61PersistentSemanticIdentityTests
         string root = Directory.CreateTempSubdirectory("codenav-61-storage").FullName;
         try
         {
-            using var workspace = new SemanticWorkspace(root, Path.Combine(root, "index.db"));
+            using var workspace = new SemanticWorkspace(root, Path.Combine(root, "index.db"), enableRoslynPersistence: false);
             HostWorkspaceServices services = workspace.TestOnlyCurrentSolution.Workspace.Services;
             Type serviceType = typeof(Workspace).Assembly.GetType(
                 "Microsoft.CodeAnalysis.SQLite.v2.SQLitePersistentStorageService",
@@ -111,9 +163,9 @@ public sealed class Batch61PersistentSemanticIdentityTests
         string root = Directory.CreateTempSubdirectory("codenav-61-invalidation").FullName;
         try
         {
-            using var identity = new SemanticWorkspace(root, Path.Combine(root, "index.db"));
+            using var identity = new SemanticWorkspace(root, Path.Combine(root, "index.db"), enableRoslynPersistence: false);
             SolutionId solutionId = identity.TestOnlyCurrentSolution.Id;
-            string solutionPath = identity.TestOnlyCurrentSolution.FilePath!;
+            string solutionPath = Path.Combine(root, "identity-only.sln");
             ProjectId projectId = identity.TestOnlyStableProjectId("P");
             DocumentId targetId = SemanticWorkspace.TestOnlyStableDocumentId(
                 projectId, "Target.cs");
@@ -142,7 +194,7 @@ public sealed class Batch61PersistentSemanticIdentityTests
     private static async Task<(SolutionId Solution, ProjectId Project, DocumentId Document)>
         CaptureIds(string root, string dbPath)
     {
-        using var workspace = new SemanticWorkspace(root, dbPath);
+        using var workspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
         using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
             ["P"], CancellationToken.None);
         Project project = Assert.Single(lease.Solution.Projects);
@@ -155,8 +207,10 @@ public sealed class Batch61PersistentSemanticIdentityTests
         CSharpParseOptions parseOptions)
     {
         using var workspace = new AdhocWorkspace();
+        // Ordinary in-process semantic invalidation test: keep persistence off. The separate
+        // process canary proves real disk writes/reuse/invalidation with the production default.
         Solution solution = workspace.AddSolution(SolutionInfo.Create(
-            solutionId, VersionStamp.Create(), solutionPath));
+            solutionId, VersionStamp.Create()));
         solution = solution.AddProject(ProjectInfo.Create(
                 projectId, VersionStamp.Create(), "P", "P", LanguageNames.CSharp,
                 filePath: Path.Combine(solutionPath, "..", "P.csproj"),

@@ -39,7 +39,7 @@ public class Batch51TelemetryTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
                 "cold-phase telemetry index did not become fresh");
@@ -362,7 +362,7 @@ public class Batch51TelemetryTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var m = new IndexManager(root, dbPath);
-            var semantic = new SemanticService(m);
+            var semantic = new SemanticService(m, enableRoslynPersistence: false);
             using var phaseListener = new TestSemanticPhaseListener();
             try
             {
@@ -705,7 +705,7 @@ public class Batch51TelemetryTests
         string root = Directory.CreateTempSubdirectory("codenav-51-gate").FullName;
         try
         {
-            using var ws = new SemanticWorkspace(root, Path.Combine(root, "index.db"));
+            using var ws = new SemanticWorkspace(root, Path.Combine(root, "index.db"), enableRoslynPersistence: false);
             var box = new SemanticWorkspace.LoadStatsBox();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                 ws.EnsureLoadedAsync(new[] { "P" }, new CancellationToken(canceled: true),

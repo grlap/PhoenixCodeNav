@@ -493,7 +493,7 @@ public class FSharpTierATests
                     symbol.Name == "fsharpTierAMarker" && symbol.Kind == "value");
             }
 
-            using (var semanticWorkspace = new SemanticWorkspace(root, dbPath))
+            using (var semanticWorkspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false))
             {
                 using var load = await semanticWorkspace.EnsureLoadedAsync(
                     ["Streams.CSharp", "Streams.Core"], CancellationToken.None);
@@ -507,9 +507,9 @@ public class FSharpTierATests
 
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
-            Assert.True(WaitUntil(() => manager.IsQueryable, 30_000),
-                manager.Health().Error);
-            using var semantic = new SemanticService(manager);
+            IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
+                "mixed-language index did not finish its startup freshness sweep");
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement capabilities = Parse(tools.ServerCapabilities());
@@ -629,9 +629,11 @@ public class FSharpTierATests
             Assert.Equal("fsproj", projectOutline.GetProperty("language").GetString());
             Assert.DoesNotContain("F# is indexed", projectOutline.GetProperty("detail").GetString(),
                 StringComparison.Ordinal);
-            JsonElement fsharpAt = Parse(tools.SymbolAt("Core/Library.fs", 2, 5,
-                timeoutMs: 60_000));
-            Assert.True(fsharpAt.GetProperty("found").GetBoolean());
+            string fsharpAtJson = tools.SymbolAt("Core/Library.fs", 2, 5,
+                timeoutMs: 60_000);
+            JsonElement fsharpAt = Parse(fsharpAtJson);
+            Assert.True(fsharpAt.TryGetProperty("found", out JsonElement found) &&
+                found.ValueKind == JsonValueKind.True, fsharpAtJson);
             Assert.Equal("fsharpTierAMarker",
                 fsharpAt.GetProperty("symbol").GetProperty("name").GetString());
             JsonElement fsharpDefinition = Parse(tools.Definition(path: "Core/Library.fs",
@@ -765,7 +767,7 @@ public class FSharpTierATests
 
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
-            using (var workspace = new SemanticWorkspace(root, dbPath))
+            using (var workspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false))
             {
                 using var load = await workspace.EnsureLoadedAsync(
                     ["Shared.Logical"], CancellationToken.None);
@@ -785,7 +787,7 @@ public class FSharpTierATests
             manager.Start();
             IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
                 "mixed-language collision index did not become fresh");
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
             JsonElement ambiguous = Parse(tools.ProjectGraph("Shared.Logical", 1, "both"));
             Assert.Equal("project_ambiguous", ambiguous.GetProperty("error").GetString());
@@ -885,7 +887,7 @@ public class FSharpTierATests
                 Assert.False(queries.HasSemanticCSharpPath("Consumer", "Shared.Logical"));
             }
 
-            using (var workspace = new SemanticWorkspace(root, dbPath))
+            using (var workspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false))
             {
                 using var warmLoad = await workspace.EnsureLoadedAsync(
                     ["Shared.Logical", "Cs.Dependency"],
@@ -920,7 +922,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
             JsonElement references = SemanticRetry.ParseWithRetry(
@@ -999,7 +1001,7 @@ public class FSharpTierATests
                 }
             }
 
-            using var workspace = new SemanticWorkspace(root, dbPath);
+            using var workspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
             using var load = await workspace.EnsureLoadedAsync(
                 ["Bare", "Shared.Assembly"], CancellationToken.None);
             ClusterCoverage coverage = load.Coverage;
@@ -1094,7 +1096,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
 
@@ -1239,7 +1241,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
 
@@ -1342,7 +1344,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             if (!semantic.FrameworkRefsAvailable) return;
             var tools = new NavigationTools(manager, semantic);
             JsonElement references = SemanticRetry.ParseExactWithRetry(
@@ -1549,7 +1551,7 @@ public class FSharpTierATests
                 "module Core.Untracked\nlet value = 3\n");
 
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             var tools = new NavigationTools(manager, semantic);
@@ -1638,7 +1640,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement pairs = Parse(tools.SearchSymbol("Pair", match: "exact",
@@ -1769,7 +1771,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement result = Parse(tools.SearchSymbol("previouslyValidMarker",
@@ -1943,7 +1945,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement ownerB = Parse(tools.SearchSymbol("ownerBContextMarker",
@@ -2034,7 +2036,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
             JsonElement result = Parse(tools.SearchSymbol("ownerCoverageMarker",
                 match: "exact", pathGlob: "Shared/Library.fs"));
@@ -2090,7 +2092,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement result = Parse(tools.SearchSymbol("omittedRecoveryMarker",
@@ -2178,7 +2180,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement retained = Parse(tools.SearchSymbol("retainedContextMarker",
@@ -2264,7 +2266,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement result = Parse(tools.SearchSymbol("optionCoverageMarker",
@@ -2341,7 +2343,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
             JsonElement result = Parse(tools.SearchSymbol("globalCoverageMarker",
                 match: "exact", pathGlob: "ValidOwner/Library.fs"));
@@ -2426,7 +2428,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement result = Parse(tools.SearchSymbol("survivingContextMarker",
@@ -2547,7 +2549,7 @@ public class FSharpTierATests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             JsonElement indexed = Parse(tools.Definition(

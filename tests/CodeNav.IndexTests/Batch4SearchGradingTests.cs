@@ -21,7 +21,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         _manager = new IndexManager(_fx.Root, _fx.DbPath);
         _manager.Start();
         for (int i = 0; i < 600 && !_manager.IsQueryable; i++) Thread.Sleep(50); // 30s: the 5s wait was the suite-wide startup-starvation flake class
-        _semantic = new SemanticService(_manager);
+        _semantic = new SemanticService(_manager, enableRoslynPersistence: false);
     }
 
     public Task InitializeAsync() => Task.CompletedTask;
@@ -1346,6 +1346,10 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("v0.12.71", frameworkSource);
         Assert.Contains("frameworkRefsSource", frameworkSource);
         Assert.Contains("exact", frameworkSource);
+        string frameworkInputs = Summary("semantic-framework-managed-assembly-inputs");
+        Assert.Contains("v0.12.90", frameworkInputs);
+        Assert.Contains("managed assemblies and facades", frameworkInputs);
+        Assert.Contains("native DLLs and standalone netmodules", frameworkInputs);
         string defaultBaseline = Summary("review-default-baseline-honesty");
         Assert.Contains("bounded git_index_baseline_unavailable", defaultBaseline);
         Assert.Contains("refresh_index", defaultBaseline);

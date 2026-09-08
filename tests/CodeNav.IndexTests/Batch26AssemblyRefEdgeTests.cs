@@ -131,7 +131,7 @@ public class Batch26AssemblyRefEdgeTests
             using var m = new IndexManager(root, dbPath);
             m.Start();
             Assert.True(WaitUntil(() => m.IsQueryable, 20000));
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             var impact = Parse(tools.Impact("IPartnerContract"));
             // Owner must be the COMPILED declarer, so its dependents (SoapA/SoapB/SoapA.NetNew
@@ -190,7 +190,7 @@ public class Batch26AssemblyRefEdgeTests
                 // (reintroduction-caught: the edges-gutted run passed this way). A fresh
                 // workspace forces references to discover SoapA/SoapB via the dependents
                 // closure — which only the recovered assembly-ref edges can populate.
-                using (var semRefs = new SemanticService(m))
+                using (var semRefs = new SemanticService(m, enableRoslynPersistence: false))
                 {
                     if (!semRefs.FrameworkRefsAvailable) return; // env guard: no reference assemblies
                     var toolsRefs = new NavigationTools(m, semRefs);
@@ -212,7 +212,7 @@ public class Batch26AssemblyRefEdgeTests
                         refs.GetProperty("meta").GetProperty("indexSchema").GetString());
                 }
 
-                using (var semImpls = new SemanticService(m))
+                using (var semImpls = new SemanticService(m, enableRoslynPersistence: false))
                 {
                     var toolsImpls = new NavigationTools(m, semImpls);
                     var impls = Parse(toolsImpls.Implementations(name: "IPartnerContract", timeoutMs: 90000));
@@ -227,7 +227,7 @@ public class Batch26AssemblyRefEdgeTests
                 // Field goldens (0.7.0 feedback, synthetic mirror of the monorepo canary):
                 // baseList usage counts must equal the IMPLEMENTER COUNT exactly — the field P1
                 // was totalReferences 13 for 8 implementers (same physical site counted twice).
-                using (var semGold = new SemanticService(m))
+                using (var semGold = new SemanticService(m, enableRoslynPersistence: false))
                 {
                     var toolsGold = new NavigationTools(m, semGold);
                     var baseList = Parse(toolsGold.References(name: "IPartnerContract", usageKinds: "baseList", timeoutMs: 90000));
@@ -303,7 +303,7 @@ public class Batch26AssemblyRefEdgeTests
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var m = new IndexManager(root, dbPath);
-            var semantic = new SemanticService(m);
+            var semantic = new SemanticService(m, enableRoslynPersistence: false);
             try
             {
                 m.Start();

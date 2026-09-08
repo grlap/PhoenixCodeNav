@@ -409,7 +409,7 @@ public partial class FSharpSemanticStage2Tests
             // index_snapshot_unavailable window.
             Assert.True(WaitUntil(() => manager.State == "ready", 30_000),
                 manager.Health().Error);
-            var semantic = new SemanticService(manager);
+            var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             return new Fixture(manager, semantic);
         }
 

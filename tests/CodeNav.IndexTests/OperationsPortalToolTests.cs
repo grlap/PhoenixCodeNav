@@ -155,7 +155,7 @@ public sealed class OperationsPortalToolTests
         try
         {
             using var manager = new IndexManager(root, Path.Combine(root, "index.db"));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var launcher = new FakeLauncher(new OperationsPortalLaunchResult(
                 true,
                 Status: "started",
@@ -179,7 +179,7 @@ public sealed class OperationsPortalToolTests
             Assert.False(response.GetProperty("browserOpened").GetBoolean());
             Assert.Contains("Show the url field verbatim", response.GetProperty("instruction").GetString());
             Assert.Equal(Path.GetFullPath(root), launcher.WorkspaceRoot);
-            Assert.StartsWith("0.12.89+",
+            Assert.StartsWith("0.12.90+",
                 response.GetProperty("meta").GetProperty("build").GetString());
             Assert.Equal(
                 "indexed",
@@ -198,7 +198,7 @@ public sealed class OperationsPortalToolTests
         try
         {
             using var manager = new IndexManager(root, Path.Combine(root, "index.db"));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(
                 manager,
                 semantic,
@@ -341,7 +341,7 @@ public sealed class OperationsPortalToolTests
                 client,
                 "server_capabilities",
                 timeout.Token);
-            Assert.Equal("0.12.89", capabilities.GetProperty("version").GetString());
+            Assert.Equal("0.12.90", capabilities.GetProperty("version").GetString());
             int mcpPid = capabilities.GetProperty("runtime").GetProperty("processId").GetInt32();
             Assert.Contains(
                 capabilities.GetProperty("features").EnumerateArray(),

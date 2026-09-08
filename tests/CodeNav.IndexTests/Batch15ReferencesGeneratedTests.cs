@@ -43,7 +43,7 @@ public class Batch15ReferencesGeneratedTests
                 using (var q = manager.OpenQueries())
                     Assert.Contains("WiGen.g.cs", q.GeneratedPaths()); // the helper the semantic path uses
 
-                var tools = new NavigationTools(manager, new SemanticService(manager));
+                var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
                 int incTrue = Parse(tools.References(name: "WiThreeMarker", mode: "indexed", includeGenerated: true))
                     .GetProperty("totalCandidates").GetInt32();
                 var falseResp = Parse(tools.References(name: "WiThreeMarker", mode: "indexed", includeGenerated: false));

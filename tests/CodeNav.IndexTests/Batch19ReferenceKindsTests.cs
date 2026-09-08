@@ -72,7 +72,7 @@ public class Batch19ReferenceKindsTests
             IndexBuilder.Build(root, dbPath);
 
             var manager = new IndexManager(root, dbPath);
-            var semantic = new SemanticService(manager);
+            var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             try
             {
                 manager.Start();

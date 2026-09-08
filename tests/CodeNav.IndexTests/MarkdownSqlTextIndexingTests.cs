@@ -98,7 +98,7 @@ public class MarkdownSqlTextIndexingTests
             manager.Start();
             Assert.True(SpinWait.SpinUntil(() => manager.IsQueryable, 30_000),
                 manager.Health().Error);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
             JsonElement markdownSymbols = Parse(tools.SearchSymbol(
                 "Anything",
@@ -200,7 +200,7 @@ public class MarkdownSqlTextIndexingTests
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(SpinWait.SpinUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
             JsonElement response = Parse(tools.SearchText(
                 "PhoenixMarkdownCandidateCapMarker",

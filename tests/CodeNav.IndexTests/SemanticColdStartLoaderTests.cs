@@ -24,7 +24,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             int active = 0;
             int maximum = 0;
             var bothEntered = NewSignal();
@@ -68,7 +68,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             int captures = 0;
             var captureEntered = NewSignal();
             var releaseCapture = NewSignal();
@@ -112,7 +112,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             var captureEntered = NewSignal();
             workspace.TestOnlyBeforeProjectCaptureAsync = async (_, cancellationToken) =>
             {
@@ -155,7 +155,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             var fastPrepared = NewSignal();
             workspace.TestOnlyAfterPreparedHandlePublished = name =>
             {
@@ -195,7 +195,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 1);
+                preparationConcurrency: 1, enableRoslynPersistence: false);
             using var canceled = new CancellationTokenSource();
             int projectRowQueries = 0;
             int captures = 0;
@@ -235,7 +235,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 1);
+                preparationConcurrency: 1, enableRoslynPersistence: false);
             using var canceled = new CancellationTokenSource();
             int projectRowQueries = 0;
             workspace.TestOnlyBeforeColdStartSql = sql =>
@@ -284,7 +284,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             using (SemanticSolutionLease owners = await workspace.EnsureLoadedAsync(
                        ["OwnerA", "OwnerB"], CancellationToken.None))
             {
@@ -349,7 +349,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             using (SemanticSolutionLease owners = await workspace.EnsureLoadedAsync(
                        ["OwnerA", "OwnerB"], CancellationToken.None))
             {
@@ -419,7 +419,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             using var manager = new IndexManager(root, dbPath);
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
 
             int column = consumerSource.IndexOf("ITarget", StringComparison.Ordinal) + 1;
             var result = await SemanticRetry.UntilAsync(
@@ -448,7 +448,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             int captures = 0;
             var captureEntered = NewSignal();
             var releaseCapture = NewSignal();
@@ -492,7 +492,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             IndexBuilder.Build(root, dbPath);
             File.Delete(Path.Combine(root, "P", "P.cs"));
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 1);
+                preparationConcurrency: 1, enableRoslynPersistence: false);
             var fallbackEntered = NewSignal();
             workspace.TestOnlyBeforeIndexedFallbackAsync = async (_, cancellationToken) =>
             {
@@ -530,7 +530,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             IndexBuilder.Build(root, dbPath);
             File.Delete(Path.Combine(root, "P", "P.cs"));
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             int captures = 0;
             workspace.TestOnlyBeforeProjectCaptureAsync = (_, _) =>
             {
@@ -595,7 +595,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             using (SemanticSolutionLease warm = await workspace.EnsureLoadedAsync(
                        ["A"], CancellationToken.None))
             {
@@ -651,7 +651,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             int captures = 0;
             int beforeCommitCalls = 0;
             var beforeCommit = NewSignal();
@@ -706,7 +706,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
 
             using SemanticSolutionLease load = await workspace.EnsureLoadedAsync(
                 ["P"], CancellationToken.None);
@@ -740,7 +740,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 1);
+                preparationConcurrency: 1, enableRoslynPersistence: false);
 
             using SemanticSolutionLease load = await workspace.EnsureLoadedAsync(
                 ["DeepProject"], CancellationToken.None);
@@ -765,7 +765,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 1);
+                preparationConcurrency: 1, enableRoslynPersistence: false);
             var gate = (SemaphoreSlim)typeof(SemanticWorkspace).GetField("_gate",
                 BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(workspace)!;
             await gate.WaitAsync();
@@ -832,7 +832,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             manager.Start();
             Assert.True(WaitUntil(() => manager.State == "ready", 20_000),
                 manager.Health().Error);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
 
             var (declaration, reason, projectModelUnproven, partialReason) =
                 await semantic.DefinitionAsync("CSharpOwner/ExactType.cs", 2,
@@ -858,7 +858,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             var beforeCommit = NewSignal();
             var releaseCommit = NewSignal();
             workspace.TestOnlyBeforeCommitAsync = async cancellationToken =>
@@ -897,7 +897,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             var commitEntered = NewSignal();
             workspace.TestOnlyBeforeCommitAsync = async cancellationToken =>
             {
@@ -934,7 +934,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2)
+                preparationConcurrency: 2, enableRoslynPersistence: false)
             {
                 TestOnlyRejectPreparedCommit = true,
             };
@@ -969,7 +969,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             try
             {
                 SemanticSolutionLease before = await workspace.EnsureLoadedAsync(
@@ -1021,7 +1021,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             try
             {
                 using (SemanticSolutionLease resident = await workspace.EnsureLoadedAsync(
@@ -1070,7 +1070,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 1);
+                preparationConcurrency: 1, enableRoslynPersistence: false);
 
             using SemanticSolutionLease load = await workspace.EnsureLoadedAsync(
                 ["P"], CancellationToken.None);
@@ -1096,7 +1096,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             var firstReserved = NewSignal();
             var releaseFirst = NewSignal();
             workspace.TestOnlyBeforeProjectCaptureAsync = async (name, cancellationToken) =>
@@ -1144,7 +1144,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 1);
+                preparationConcurrency: 1, enableRoslynPersistence: false);
 
             using (SemanticSolutionLease first = await workspace.EnsureLoadedAsync(
                        ["A"], CancellationToken.None))
@@ -1181,12 +1181,12 @@ public class SemanticColdStartLoaderTests : IDisposable
                 string root, string dbPath, int cap)
             {
                 using var workspace = new SemanticWorkspace(root, dbPath,
-                    preparationConcurrency: 2)
+                    preparationConcurrency: 2, enableRoslynPersistence: false)
                 {
                     TestOnlyMaxLoadedProjects = cap,
                 };
                 using var manager = new IndexManager(root, dbPath);
-                using var semantic = new SemanticService(manager);
+                using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
                 string[] all = ["A", "B", "C", "D"];
 
                 Solution broadSolution;
@@ -1251,7 +1251,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2)
+                preparationConcurrency: 2, enableRoslynPersistence: false)
             {
                 TestOnlyManagedHeapBytes = static () => 0,
             };
@@ -1313,12 +1313,12 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2)
+                preparationConcurrency: 2, enableRoslynPersistence: false)
             {
                 TestOnlyManagedHeapBytes = static () => 0,
             };
             using var manager = new IndexManager(root, dbPath);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             string[] all = ["A", "B", "C", "D"];
 
             Solution broadSolution;
@@ -1391,13 +1391,13 @@ public class SemanticColdStartLoaderTests : IDisposable
             string secondDb = IndexBuilder.DefaultDbPath(secondRoot);
             IndexBuilder.Build(firstRoot, firstDb);
             IndexBuilder.Build(secondRoot, secondDb);
-            using var first = new SemanticWorkspace(firstRoot, firstDb)
+            using var first = new SemanticWorkspace(firstRoot, firstDb, enableRoslynPersistence: false)
             {
                 TestOnlyRetentionInputPressureBytes = 1,
                 TestOnlyRetentionInputTargetBytes = 0,
                 TestOnlyManagedHeapBytes = static () => 0,
             };
-            using var second = new SemanticWorkspace(secondRoot, secondDb)
+            using var second = new SemanticWorkspace(secondRoot, secondDb, enableRoslynPersistence: false)
             {
                 TestOnlyRetentionInputPressureBytes = 1,
                 TestOnlyRetentionInputTargetBytes = 0,
@@ -1451,7 +1451,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2)
+                preparationConcurrency: 2, enableRoslynPersistence: false)
             {
                 TestOnlyRetentionInputPressureBytes = 1,
                 TestOnlyRetentionInputTargetBytes = 0,
@@ -1486,7 +1486,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2)
+                preparationConcurrency: 2, enableRoslynPersistence: false)
             {
                 TestOnlyRetentionInputPressureBytes = 1,
                 TestOnlyRetentionInputTargetBytes = 0,
@@ -1542,7 +1542,7 @@ public class SemanticColdStartLoaderTests : IDisposable
                 string dbPath = IndexBuilder.DefaultDbPath(root);
                 IndexBuilder.Build(root, dbPath);
                 using var workspace = new SemanticWorkspace(root, dbPath,
-                    preparationConcurrency: 2)
+                    preparationConcurrency: 2, enableRoslynPersistence: false)
                 {
                     TestOnlyRetentionInputPressureBytes = long.MaxValue,
                     TestOnlyRetentionInputTargetBytes = 0,
@@ -1587,7 +1587,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             manager.Start();
             Assert.True(WaitUntil(() => manager.State == "ready", 30_000),
                 manager.Health().Error);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             SemanticWorkspace workspace = semantic.TestOnlyWorkspace;
             workspace.TestOnlyManagedHeapBytes = static () => 0;
 
@@ -1639,7 +1639,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             // guarantees TryOpenReviewSnapshot can succeed under full-suite contention.
             Assert.True(WaitUntil(() => manager.State == "ready", 30_000),
                 manager.Health().Error);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             SemanticWorkspace workspace = semantic.TestOnlyWorkspace;
             workspace.TestOnlyMaxLoadedProjects = 1;
             workspace.TestOnlyManagedHeapBytes = static () => 0;
@@ -1697,7 +1697,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2)
+                preparationConcurrency: 2, enableRoslynPersistence: false)
             {
                 TestOnlyRetentionInputPressureBytes = 1,
                 TestOnlyRetentionInputTargetBytes = 0,
@@ -1739,7 +1739,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 1);
+                preparationConcurrency: 1, enableRoslynPersistence: false);
             using (SemanticSolutionLease first = await workspace.EnsureLoadedAsync(
                        ["A"], CancellationToken.None))
             {
@@ -1793,7 +1793,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 1);
+                preparationConcurrency: 1, enableRoslynPersistence: false);
             using SemanticSolutionLease load = await workspace.EnsureLoadedAsync(
                 ["Dependency", "Consumer"], CancellationToken.None);
 
@@ -1845,7 +1845,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             int dependencyAttempts = 0;
             workspace.TestOnlyBeforeProjectCaptureAsync = (name, _) =>
             {
@@ -1919,7 +1919,7 @@ public class SemanticColdStartLoaderTests : IDisposable
             manager.Start();
             Assert.True(WaitUntil(() => manager.IsQueryable, 20_000));
             using var workspace = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             using (SemanticSolutionLease warm = await workspace.EnsureLoadedAsync(
                        ["Dependency", "Consumer"], CancellationToken.None))
             {

@@ -37,7 +37,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m cross-project-move-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.Move(Path.Combine(root, oldPath), Path.Combine(root, newPath));
             m.RequestRefresh(new[] { oldPath, newPath });
@@ -108,7 +108,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m shared-project-domain-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             using (var baselineQueries = m.OpenQueries())
             {
                 HashSet<string> baselineOwners = baselineQueries.ProjectsContaining(oldPath)
@@ -185,7 +185,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m modified-move-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.Move(Path.Combine(root, oldPath), Path.Combine(root, newPath));
             File.WriteAllText(Path.Combine(root, newPath),
@@ -245,7 +245,7 @@ public class Batch42TestsPart2
             Git(root, "add -A");
             Git(root, "commit -q -m initial");
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             var pack = SemanticRetry.ParseWithRetry( // n7ly sweep: retries transient degrades
                 () => tools.ReviewPack(paths: "App/Target.cs", maxBytes: 24576),
@@ -282,7 +282,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m relocated-member-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.Delete(Path.Combine(root, oldPath));
             File.WriteAllText(Path.Combine(root, newPath),
@@ -346,7 +346,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m solution-relocated-member-fixture");
 
             using var manager = StartManager(root);
-            var tools = new NavigationTools(manager, new SemanticService(manager));
+            var tools = new NavigationTools(manager, new SemanticService(manager, enableRoslynPersistence: false));
 
             File.Delete(Path.Combine(root, oldPath));
             File.WriteAllText(Path.Combine(root, newPath),
@@ -416,7 +416,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m unrelated-survivor-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             const string oldPath = "Lib/Old.cs";
             File.Delete(Path.Combine(root, oldPath));
@@ -472,7 +472,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m unrelated-no-call-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.Delete(Path.Combine(root, oldPath));
             m.RequestRefresh(new[] { oldPath });
@@ -523,7 +523,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m project-domain-survivor-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.Delete(Path.Combine(root, generatedOld));
             File.Delete(Path.Combine(root, baseOld));
@@ -599,7 +599,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m old-side-deletion-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(Path.Combine(root, mixedPath),
                 "public class KeptOldSide42 { }\n");
@@ -661,7 +661,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m multiline-namespace-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(path, File.ReadAllText(path).Replace(
                 "final-name-marker", "final-name-edited", StringComparison.Ordinal));
@@ -715,7 +715,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m generic-container-identity-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(path,
                 "namespace GenericContainerIdentity42;\n" +
@@ -779,7 +779,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m explicit-interface-identity-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(path,
                 "namespace ExplicitInterfaceIdentity42;\n" +
@@ -834,7 +834,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m namespace-declaration-reference-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.Delete(Path.Combine(root, oldPath));
             m.RequestRefresh(new[] { oldPath });
@@ -898,7 +898,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m default-and-linked-owner-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             using (var baselineQueries = m.OpenQueries())
             {
                 HashSet<string> owners = baselineQueries.ProjectsContaining(oldPath)
@@ -993,7 +993,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m tuple-declaration-key-fixture");
 
             using var manager = StartManager(root);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             var tools = new NavigationTools(manager, semantic);
 
             File.WriteAllText(path,
@@ -1053,7 +1053,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m method-declaration-key-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(path,
                 "namespace DeclarationKey42;\n" +
@@ -1117,7 +1117,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m type-and-overload-declaration-key-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(baseListFullPath,
                 "namespace DeclarationKey42;\n" +
@@ -1241,7 +1241,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m declaration-note-cause");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             File.WriteAllText(Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar)),
                 "public class RenamedDeclarationNoteCause42 { }\n");
             RefreshAndWait(m, path, "RenamedDeclarationNoteCause42");
@@ -1572,7 +1572,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m ignore-build-authority-fixture");
 
             using var manager = StartManager(root);
-            using var semantic = new SemanticService(manager);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
             string deletedPath = Path.Combine(root, "Lib", "Old.cs");
             File.Delete(deletedPath);
             manager.RequestRefresh(["Lib/Old.cs"]);
@@ -1693,7 +1693,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m declaration-key-trivia-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             // The spelling stays syntax-equivalent and only trivia around generic punctuation
             // changes. Alias-versus-qualified equivalence is deliberately not asserted: that
@@ -1774,7 +1774,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m generic-parameter-identity-fixture");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
 
             File.WriteAllText(renameFullPath,
                 "namespace GenericParameterIdentity42;\n" +
@@ -1854,7 +1854,7 @@ public class Batch42TestsPart2
         {
             WriteReviewRepo(root);
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             // This test RACES the watcher: the file must still be unindexed when the pack
             // runs, and once a debounced refresh indexes it the classification flips to
             // file_level forever - so each retry attempt recreates a FRESH file (new name)
@@ -1904,7 +1904,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m namespace-budget-baseline");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             File.WriteAllText(fullPath,
                 "global using System.Text;\nnamespace NamespaceBudget42;\n" +
                 "public class HugeNamespaceBudget42 { }\n/*" + padding + "*/\n");
@@ -1958,7 +1958,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m owner-ancestor-baseline");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             File.Move(Path.Combine(root, oldPath.Replace('/', Path.DirectorySeparatorChar)),
                 Path.Combine(root, newPath.Replace('/', Path.DirectorySeparatorChar)));
             m.RequestRefresh(new[] { oldPath, newPath });
@@ -2008,7 +2008,7 @@ public class Batch42TestsPart2
             Git(root, "commit -q -m owner-reinclude-baseline");
 
             using var m = StartManager(root);
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             File.Move(Path.Combine(root, oldPath.Replace('/', Path.DirectorySeparatorChar)),
                 Path.Combine(root, newPath.Replace('/', Path.DirectorySeparatorChar)));
             m.RequestRefresh(new[] { oldPath, newPath });

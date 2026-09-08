@@ -43,7 +43,7 @@ public class Batch54ParallelLoadTests
             File.Delete(Path.Combine(proj, "F3.cs"));
 
             using var ws = new SemanticWorkspace(root, dbPath,
-                preparationConcurrency: 2);
+                preparationConcurrency: 2, enableRoslynPersistence: false);
             int activeReads = 0;
             int maximumReads = 0;
             var bothReadsEntered = new TaskCompletionSource<bool>(
@@ -80,7 +80,7 @@ public class Batch54ParallelLoadTests
             Assert.Equal(expected, docNames); // exact order AND nothing lost/duplicated
             Assert.True(maximumReads >= 2,
                 $"one-project source capture stayed serial (max={maximumReads})");
-            using var ws2 = new SemanticWorkspace(root, dbPath);
+            using var ws2 = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
             using var secondLoad = await ws2.EnsureLoadedAsync(
                 new[] { "P" }, CancellationToken.None);
             var solution2 = secondLoad.Solution;

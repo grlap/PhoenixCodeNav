@@ -165,7 +165,7 @@ public class Batch40Tests
             Assert.True(m.Health().PendingProcessed >= afterFirst, "pendingProcessed went backwards");
 
             // The pair reaches the wire: capabilities carries pendingProcessed beside pendingChanges.
-            var tools = new NavigationTools(m, new SemanticService(m));
+            var tools = new NavigationTools(m, new SemanticService(m, enableRoslynPersistence: false));
             var index = Parse(tools.ServerCapabilities()).GetProperty("index");
             Assert.True(index.GetProperty("pendingProcessed").GetInt64() >= afterFirst);
             Assert.True(index.TryGetProperty("pendingChanges", out _));

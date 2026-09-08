@@ -79,8 +79,8 @@ public sealed partial class SemanticWorkspace
     }
 
     internal SemanticWorkspace(string workspaceRoot, string dbPath, int preparationConcurrency,
-        Action<string>? log = null, bool poolIndexConnections = true)
-        : this(workspaceRoot, dbPath, log, poolIndexConnections)
+        Action<string>? log = null, bool poolIndexConnections = true, bool enableRoslynPersistence = true)
+        : this(workspaceRoot, dbPath, log, poolIndexConnections, enableRoslynPersistence)
     {
         _coldStartRuntime = new ColdStartRuntime(Math.Max(1, preparationConcurrency));
     }

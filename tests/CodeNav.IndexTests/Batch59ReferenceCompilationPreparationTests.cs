@@ -16,7 +16,7 @@ public sealed class Batch59ReferenceCompilationPreparationTests
         string root = Directory.CreateTempSubdirectory("codenav-59-cpu").FullName;
         using var roslyn = new AdhocWorkspace();
         using var semantic = new CodeNav.Core.Semantic.SemanticWorkspace(root,
-            Path.Combine(root, "unused.db"), preparationConcurrency: 1);
+            Path.Combine(root, "unused.db"), preparationConcurrency: 1, enableRoslynPersistence: false);
         using var listener = new TestSemanticPhaseListener();
         try
         {
@@ -74,7 +74,7 @@ public sealed class Batch59ReferenceCompilationPreparationTests
         string root = Directory.CreateTempSubdirectory("codenav-59-waves").FullName;
         using var roslyn = new AdhocWorkspace();
         using var semantic = new CodeNav.Core.Semantic.SemanticWorkspace(root,
-            Path.Combine(root, "unused.db"), preparationConcurrency: 2);
+            Path.Combine(root, "unused.db"), preparationConcurrency: 2, enableRoslynPersistence: false);
         try
         {
             (Solution solution, Dictionary<string, ProjectId> ids) = CreateDiamond(roslyn);
@@ -194,7 +194,7 @@ public sealed class Batch59ReferenceCompilationPreparationTests
         string root = Directory.CreateTempSubdirectory("codenav-59-cache").FullName;
         using var roslyn = new AdhocWorkspace();
         using var semantic = new CodeNav.Core.Semantic.SemanticWorkspace(root,
-            Path.Combine(root, "unused.db"), preparationConcurrency: 2);
+            Path.Combine(root, "unused.db"), preparationConcurrency: 2, enableRoslynPersistence: false);
         try
         {
             ProjectId id = ProjectId.CreateNewId("P");
@@ -227,7 +227,7 @@ public sealed class Batch59ReferenceCompilationPreparationTests
         string root = Directory.CreateTempSubdirectory("codenav-59-shared-limit").FullName;
         using var roslyn = new AdhocWorkspace();
         using var semantic = new CodeNav.Core.Semantic.SemanticWorkspace(root,
-            Path.Combine(root, "unused.db"), preparationConcurrency: 2);
+            Path.Combine(root, "unused.db"), preparationConcurrency: 2, enableRoslynPersistence: false);
         try
         {
             var ids = Enumerable.Range(0, 4).ToDictionary(i => $"P{i}",
@@ -288,9 +288,9 @@ public sealed class Batch59ReferenceCompilationPreparationTests
         using var firstRoslyn = new AdhocWorkspace();
         using var secondRoslyn = new AdhocWorkspace();
         using var firstSemantic = new CodeNav.Core.Semantic.SemanticWorkspace(firstRoot,
-            Path.Combine(firstRoot, "unused.db"));
+            Path.Combine(firstRoot, "unused.db"), enableRoslynPersistence: false);
         using var secondSemantic = new CodeNav.Core.Semantic.SemanticWorkspace(secondRoot,
-            Path.Combine(secondRoot, "unused.db"));
+            Path.Combine(secondRoot, "unused.db"), enableRoslynPersistence: false);
         int laneLimit = Math.Min(8, Math.Max(1, Environment.ProcessorCount));
         try
         {
@@ -361,7 +361,7 @@ public sealed class Batch59ReferenceCompilationPreparationTests
         string root = Directory.CreateTempSubdirectory("codenav-59-cancel").FullName;
         using var roslyn = new AdhocWorkspace();
         using var semantic = new CodeNav.Core.Semantic.SemanticWorkspace(root,
-            Path.Combine(root, "unused.db"), preparationConcurrency: 1);
+            Path.Combine(root, "unused.db"), preparationConcurrency: 1, enableRoslynPersistence: false);
         try
         {
             ProjectId id = ProjectId.CreateNewId("P");
@@ -419,7 +419,7 @@ public sealed class Batch59ReferenceCompilationPreparationTests
         string root = Directory.CreateTempSubdirectory("codenav-59-failure").FullName;
         using var roslyn = new AdhocWorkspace();
         using var semantic = new CodeNav.Core.Semantic.SemanticWorkspace(root,
-            Path.Combine(root, "unused.db"), preparationConcurrency: 1);
+            Path.Combine(root, "unused.db"), preparationConcurrency: 1, enableRoslynPersistence: false);
         try
         {
             ProjectId dependency = ProjectId.CreateNewId("Dependency");
