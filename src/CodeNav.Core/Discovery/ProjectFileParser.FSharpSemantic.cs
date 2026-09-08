@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
@@ -67,7 +66,6 @@ public static partial class ProjectFileParser
         string? PartialReason = null,
         string? Error = null);
 
-    private readonly record struct FSharpSemanticProperty(string Value, bool Complete);
     private readonly record struct FSharpSemanticReference(
         string ItemSpec, string SimpleName, string? HintPath);
 
@@ -115,10 +113,6 @@ public static partial class ProjectFileParser
             @"^[0-9]+(?:\.[0-9]+){0,2}\.\*$",
             RegexOptions.CultureInvariant);
 
-        private static readonly Regex ExistsCondition = new(
-            @"^Exists\s*\(\s*(?:'(?<path>[^'\r\n]*)'|""(?<path>[^""\r\n]*)"")\s*\)$",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
         private readonly string _projectPath;
         private readonly string _projectDir;
         private readonly string _selectedTargetFramework;
@@ -130,8 +124,9 @@ public static partial class ProjectFileParser
         private readonly string? _directoryPackagesPropsPath;
         private readonly CancellationToken _cancellationToken;
         private readonly FSharpSemanticEvaluationBudget _budget;
-        private readonly Dictionary<string, FSharpSemanticProperty> _properties =
+        private readonly Dictionary<string, BoundedMsBuildProperty> _properties =
             new(StringComparer.OrdinalIgnoreCase);
+        private readonly BoundedMsBuildExpressionEvaluator _expressions;
         private readonly List<string> _sources = [];
         private readonly HashSet<string> _sourceSet =
             new(WorkspacePaths.FileSystemPathComparer);
@@ -192,6 +187,16 @@ public static partial class ProjectFileParser
             _cancellationToken = cancellationToken;
             _budget = budget;
             _properties["TargetFramework"] = new(selectedTargetFramework, true);
+            _expressions = new BoundedMsBuildExpressionEvaluator(
+                _properties,
+                (input, documentPath) => TryExpandSupportedPropertyFunction(
+                    input, documentPath, out string output)
+                    ? new BoundedMsBuildExpansion(true, output)
+                    : new BoundedMsBuildExpansion(false, ""),
+                EvaluateExists,
+                cancellationToken,
+                MaxFSharpSemanticPropertyValueChars,
+                MaxFSharpSemanticConditionDepth);
         }
 
         private static string? NormalizeOptionalWorkspacePath(string? path) =>
@@ -231,7 +236,7 @@ public static partial class ProjectFileParser
             if (_error is not null) return Failure(_error);
 
             string assemblyName = Path.GetFileNameWithoutExtension(_projectPath);
-            if (_properties.TryGetValue("AssemblyName", out FSharpSemanticProperty assembly))
+            if (_properties.TryGetValue("AssemblyName", out BoundedMsBuildProperty assembly))
             {
                 if (!assembly.Complete || string.IsNullOrWhiteSpace(assembly.Value))
                     return Failure("fsharp_semantic_assembly_name_unavailable");
@@ -239,7 +244,7 @@ public static partial class ProjectFileParser
             }
 
             if (_properties.TryGetValue("EnableDefaultCompileItems",
-                    out FSharpSemanticProperty defaultItems) &&
+                    out BoundedMsBuildProperty defaultItems) &&
                 (!defaultItems.Complete ||
                  !defaultItems.Value.Trim().Equals("false",
                      StringComparison.OrdinalIgnoreCase)))
@@ -975,7 +980,7 @@ public static partial class ProjectFileParser
 
         private bool TryGetBooleanProperty(string name, bool defaultValue)
         {
-            if (!_properties.TryGetValue(name, out FSharpSemanticProperty property))
+            if (!_properties.TryGetValue(name, out BoundedMsBuildProperty property))
                 return defaultValue;
             if (!property.Complete || !bool.TryParse(property.Value.Trim(), out bool value))
             {
@@ -1349,7 +1354,7 @@ public static partial class ProjectFileParser
                     StringComparison.OrdinalIgnoreCase))
             {
                 if (!_properties.TryGetValue("FSharpTargetsPath",
-                        out FSharpSemanticProperty configuredTargets))
+                        out BoundedMsBuildProperty configuredTargets))
                 {
                     // The conventional legacy placeholder is itself a recognized terminal. An
                     // explicit project override is inspected below so a local targets file cannot
@@ -1692,202 +1697,38 @@ public static partial class ProjectFileParser
         private bool TryEvaluateCondition(string condition, string documentPath, out bool result,
             string? unsetSelfProperty = null, int depth = 0)
         {
-            CheckCancellation();
-            result = false;
-            if (depth > MaxFSharpSemanticConditionDepth)
-            {
-                _error = "fsharp_semantic_condition_depth_limit";
-                return false;
-            }
-            if (!TryExpandProperties(condition, documentPath, unsetSelfProperty,
-                    out string expanded, out bool complete))
-                return false;
-            if (!complete)
-            {
-                _error = "fsharp_semantic_condition_property_unresolved";
-                return false;
-            }
-            expanded = expanded.Trim();
-            if (expanded.Length == 0) return false;
-            if (!HasBalancedConditionDelimiters(expanded)) return false;
-            if (depth == 0 && !ValidateConditionSyntax(expanded, depth)) return false;
-
-            if (TrySplitLogical(expanded, "Or", out string left, out string right))
-            {
-                if (!TryEvaluateCondition(left, documentPath, out bool leftResult,
-                        unsetSelfProperty, depth + 1))
-                    return false;
-                if (leftResult)
-                {
-                    result = true;
-                    return true;
-                }
-                return TryEvaluateCondition(right, documentPath, out result,
-                    unsetSelfProperty, depth + 1);
-            }
-            if (TrySplitLogical(expanded, "And", out left, out right))
-            {
-                if (!TryEvaluateCondition(left, documentPath, out bool leftResult,
-                        unsetSelfProperty, depth + 1))
-                    return false;
-                if (!leftResult)
-                {
-                    result = false;
-                    return true;
-                }
-                return TryEvaluateCondition(right, documentPath, out result,
-                    unsetSelfProperty, depth + 1);
-            }
-
-            if (HasWrappingParentheses(expanded))
-                return TryEvaluateCondition(expanded[1..^1], documentPath, out result,
-                    unsetSelfProperty, depth + 1);
-            if (expanded[0] == '!')
-            {
-                if (!TryEvaluateCondition(expanded[1..], documentPath, out bool inner,
-                        unsetSelfProperty, depth + 1))
-                    return false;
-                result = !inner;
-                return true;
-            }
-
-            Match exists = ExistsCondition.Match(expanded);
-            if (exists.Success)
-            {
-                string rawPath = exists.Groups["path"].Value;
-                string documentDir = WorkspacePaths.ToGitPath(
-                    Path.GetDirectoryName(documentPath) ?? "");
-                if (!TryNormalizeSemanticRelative(documentDir, rawPath, out string path) ||
-                    !path.EndsWith(".props", StringComparison.OrdinalIgnoreCase))
-                    return false;
-                if (!TryResolveImport(path, out string? content)) return false;
-                result = content is not null;
-                return true;
-            }
-
-            if (TryParseConditionOperand(expanded, out string scalar) &&
-                bool.TryParse(scalar, out result)) return true;
-            if (!TryFindComparison(expanded, out left, out string op, out right)) return false;
-            if (!TryParseConditionOperand(left, out left) ||
-                !TryParseConditionOperand(right, out right)) return false;
-            switch (op)
-            {
-                case "==":
-                    result = left.Equals(right, StringComparison.OrdinalIgnoreCase);
-                    return true;
-                case "!=":
-                    result = !left.Equals(right, StringComparison.OrdinalIgnoreCase);
-                    return true;
-                default:
-                    if (!TryCompareOrdered(left, right, out int comparison)) return false;
-                    result = op switch
-                    {
-                        ">" => comparison > 0,
-                        ">=" => comparison >= 0,
-                        "<" => comparison < 0,
-                        "<=" => comparison <= 0,
-                        _ => false,
-                    };
-                    return true;
-            }
+            bool evaluated = _expressions.TryEvaluateCondition(condition, documentPath,
+                out result, out string? error, unsetSelfProperty, depth);
+            if (!evaluated && error is not null)
+                _error ??= FSharpExpressionError(error);
+            return evaluated;
         }
 
-        private bool ValidateConditionSyntax(string expression, int depth)
+        private BoundedMsBuildExistsResult EvaluateExists(string documentPath, string rawPath)
         {
-            CheckCancellation();
-            if (depth > MaxFSharpSemanticConditionDepth)
-            {
-                _error = "fsharp_semantic_condition_depth_limit";
-                return false;
-            }
-
-            expression = expression.Trim();
-            if (expression.Length == 0 || !HasBalancedConditionDelimiters(expression))
-                return false;
-            if (TrySplitLogical(expression, "Or", out string left, out string right) ||
-                TrySplitLogical(expression, "And", out left, out right))
-                return ValidateConditionSyntax(left, depth + 1) &&
-                       ValidateConditionSyntax(right, depth + 1);
-            if (HasWrappingParentheses(expression))
-                return ValidateConditionSyntax(expression[1..^1], depth + 1);
-            if (expression[0] == '!')
-                return ValidateConditionSyntax(expression[1..], depth + 1);
-            if (ExistsCondition.IsMatch(expression)) return true;
-            if (TryParseConditionOperand(expression, out string scalar) &&
-                bool.TryParse(scalar, out _)) return true;
-            return TryFindComparison(expression, out left, out _, out right) &&
-                   TryParseConditionOperand(left, out _) &&
-                   TryParseConditionOperand(right, out _);
+            string documentDir = WorkspacePaths.ToGitPath(
+                Path.GetDirectoryName(documentPath) ?? "");
+            if (!TryNormalizeSemanticRelative(documentDir, rawPath, out string path) ||
+                !path.EndsWith(".props", StringComparison.OrdinalIgnoreCase))
+                return new(false, false);
+            if (!TryResolveImport(path, out string? content))
+                return new(false, false, _error);
+            return new(true, content is not null);
         }
+
+        private static string FSharpExpressionError(string error) =>
+            error.StartsWith("fsharp_", StringComparison.Ordinal)
+                ? error
+                : "fsharp_semantic_" + error;
 
         private bool TryExpandProperties(string input, string documentPath, string? selfProperty,
             out string output, out bool complete, bool allowItemReferences = false)
         {
-            CheckCancellation();
-            output = "";
-            complete = false;
-            if (input.Length > MaxFSharpSemanticPropertyValueChars)
-            {
-                // Preserve the established cause for an input that cannot safely be inspected for
-                // unsupported functions or transforms.
-                _error = "fsharp_semantic_property_function_unsupported";
-                return false;
-            }
-            if (TryExpandSupportedPropertyFunction(input, documentPath, out output))
-            {
-                complete = true;
-                return true;
-            }
-            if (ContainsUnsupportedExpansion(input, allowItemReferences))
-            {
-                _error = "fsharp_semantic_property_function_unsupported";
-                return false;
-            }
-
-            var builder = new StringBuilder(input.Length);
-            int cursor = 0;
-            bool allComplete = true;
-            foreach (Match match in PropertyReference.Matches(input))
-            {
-                CheckCancellation();
-                builder.Append(input, cursor, match.Index - cursor);
-                string name = match.Groups["name"].Value;
-                if (_properties.TryGetValue(name, out FSharpSemanticProperty property))
-                {
-                    builder.Append(property.Value);
-                    allComplete &= property.Complete;
-                }
-                else if (name.Equals(selfProperty, StringComparison.OrdinalIgnoreCase))
-                {
-                    // Unset properties are empty only for a property's own value and the narrowly
-                    // recognized self-default condition. Other unknown condition properties may be
-                    // ambient/global build inputs, so treating them as proven empty would be false.
-                }
-                else
-                {
-                    builder.Append(match.Value);
-                    allComplete = false;
-                }
-                cursor = match.Index + match.Length;
-                if (builder.Length > MaxFSharpSemanticPropertyValueChars)
-                {
-                    _error = "fsharp_semantic_property_value_limit";
-                    return false;
-                }
-            }
-            builder.Append(input, cursor, input.Length - cursor);
-            if (builder.Length > MaxFSharpSemanticPropertyValueChars)
-            {
-                _error = "fsharp_semantic_property_value_limit";
-                return false;
-            }
-            output = builder.ToString();
-            complete = allComplete &&
-                       !output.Contains("$(", StringComparison.Ordinal) &&
-                       !output.Contains("%(", StringComparison.Ordinal) &&
-                       (allowItemReferences ||
-                        !output.Contains("@(", StringComparison.Ordinal));
-            return true;
+            bool expanded = _expressions.TryExpandProperties(input, documentPath, selfProperty,
+                out output, out complete, out string? error, allowItemReferences);
+            if (!expanded && error is not null)
+                _error ??= FSharpExpressionError(error);
+            return expanded;
         }
 
         private bool TryExpandSupportedPropertyFunction(string input, string documentPath,
@@ -1931,31 +1772,6 @@ public static partial class ProjectFileParser
             return string.Join(separator, relative) + separator;
         }
 
-        private bool ContainsUnsupportedExpansion(string input, bool allowItemReferences)
-        {
-            CheckCancellation();
-            if (!allowItemReferences && input.Contains("@(", StringComparison.Ordinal) ||
-                input.Contains("%(", StringComparison.Ordinal))
-                return true;
-
-            MatchCollection simpleProperties = PropertyReference.Matches(input);
-            int simpleIndex = 0;
-            int cursor = 0;
-            while ((cursor = input.IndexOf("$(", cursor, StringComparison.Ordinal)) >= 0)
-            {
-                CheckCancellation();
-                while (simpleIndex < simpleProperties.Count &&
-                       simpleProperties[simpleIndex].Index < cursor)
-                    simpleIndex++;
-                if (simpleIndex >= simpleProperties.Count ||
-                    simpleProperties[simpleIndex].Index != cursor)
-                    return true;
-                cursor += simpleProperties[simpleIndex].Length;
-                simpleIndex++;
-            }
-            return false;
-        }
-
         private static bool IsCanonicalUnsetSelfCondition(XElement element,
             string condition)
         {
@@ -1976,7 +1792,7 @@ public static partial class ProjectFileParser
         private bool TryCompilerProperty(string name, out string value)
         {
             value = "";
-            if (!_properties.TryGetValue(name, out FSharpSemanticProperty property)) return true;
+            if (!_properties.TryGetValue(name, out BoundedMsBuildProperty property)) return true;
             if (!property.Complete) return false;
             value = property.Value.Trim();
             return true;
@@ -2158,177 +1974,6 @@ public static partial class ProjectFileParser
              name.Equals("ReferencePathWithRefAssemblies", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("ResolvedCompileFileDefinitions", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("_ResolvedProjectReferencePaths", StringComparison.OrdinalIgnoreCase));
-
-        private bool TrySplitLogical(string expression, string word,
-            out string left, out string right)
-        {
-            CheckCancellation();
-            left = right = "";
-            char quote = '\0';
-            int depth = 0;
-            for (int i = 0; i <= expression.Length - word.Length; i++)
-            {
-                CheckCancellation();
-                char ch = expression[i];
-                if (quote != '\0')
-                {
-                    if (ch == quote) quote = '\0';
-                    continue;
-                }
-                if (ch is '\'' or '"')
-                {
-                    quote = ch;
-                    continue;
-                }
-                if (ch == '(') { depth++; continue; }
-                if (ch == ')') { depth--; continue; }
-                if (depth != 0 ||
-                    !expression.AsSpan(i, word.Length).Equals(word,
-                        StringComparison.OrdinalIgnoreCase)) continue;
-                bool before = i == 0 || char.IsWhiteSpace(expression[i - 1]) ||
-                              expression[i - 1] == ')';
-                int afterIndex = i + word.Length;
-                bool after = afterIndex == expression.Length ||
-                             char.IsWhiteSpace(expression[afterIndex]) ||
-                             expression[afterIndex] == '(';
-                if (!before || !after) continue;
-                left = expression[..i];
-                right = expression[afterIndex..];
-                return left.Trim().Length > 0 && right.Trim().Length > 0;
-            }
-            return false;
-        }
-
-        private bool HasBalancedConditionDelimiters(string expression)
-        {
-            CheckCancellation();
-            char quote = '\0';
-            int depth = 0;
-            foreach (char ch in expression)
-            {
-                CheckCancellation();
-                if (quote != '\0')
-                {
-                    if (ch == quote) quote = '\0';
-                    continue;
-                }
-                if (ch is '\'' or '"')
-                {
-                    quote = ch;
-                    continue;
-                }
-                if (ch == '(')
-                {
-                    depth++;
-                    continue;
-                }
-                if (ch == ')')
-                {
-                    if (depth == 0) return false;
-                    depth--;
-                }
-            }
-            return quote == '\0' && depth == 0;
-        }
-
-        private bool HasWrappingParentheses(string expression)
-        {
-            CheckCancellation();
-            if (expression.Length < 2 || expression[0] != '(' || expression[^1] != ')')
-                return false;
-            char quote = '\0';
-            int depth = 0;
-            for (int i = 0; i < expression.Length; i++)
-            {
-                CheckCancellation();
-                char ch = expression[i];
-                if (quote != '\0')
-                {
-                    if (ch == quote) quote = '\0';
-                    continue;
-                }
-                if (ch is '\'' or '"') { quote = ch; continue; }
-                if (ch == '(') depth++;
-                else if (ch == ')' && --depth == 0 && i != expression.Length - 1)
-                    return false;
-            }
-            return depth == 0;
-        }
-
-        private bool TryFindComparison(string expression, out string left,
-            out string op, out string right)
-        {
-            CheckCancellation();
-            left = op = right = "";
-            char quote = '\0';
-            int depth = 0;
-            for (int i = 0; i < expression.Length; i++)
-            {
-                CheckCancellation();
-                char ch = expression[i];
-                if (quote != '\0')
-                {
-                    if (ch == quote) quote = '\0';
-                    continue;
-                }
-                if (ch is '\'' or '"') { quote = ch; continue; }
-                if (ch == '(') { depth++; continue; }
-                if (ch == ')') { depth--; continue; }
-                if (depth != 0) continue;
-                foreach (string candidate in new[] { "==", "!=", ">=", "<=", ">", "<" })
-                {
-                    if (!expression.AsSpan(i).StartsWith(candidate,
-                            StringComparison.Ordinal)) continue;
-                    left = expression[..i];
-                    op = candidate;
-                    right = expression[(i + candidate.Length)..];
-                    return left.Trim().Length > 0 && right.Trim().Length > 0;
-                }
-            }
-            return false;
-        }
-
-        private bool TryParseConditionOperand(string operand, out string value)
-        {
-            CheckCancellation();
-            value = "";
-            operand = operand.Trim();
-            if (operand.Length == 0) return false;
-            if (operand[0] is '\'' or '"')
-            {
-                char quote = operand[0];
-                if (operand.Length < 2 || operand[^1] != quote) return false;
-                string inner = operand[1..^1];
-                if (inner.Contains(quote)) return false;
-                value = inner;
-                return true;
-            }
-            if (operand.Any(ch => char.IsWhiteSpace(ch) || ch is '\'' or '"' or
-                                  '(' or ')' or '=' or '<' or '>' or '!'))
-                return false;
-            value = operand;
-            return true;
-        }
-
-        private static bool TryCompareOrdered(string left, string right, out int comparison)
-        {
-            comparison = 0;
-            if (Version.TryParse(left, out Version? leftVersion) &&
-                Version.TryParse(right, out Version? rightVersion))
-            {
-                comparison = leftVersion.CompareTo(rightVersion);
-                return true;
-            }
-            if (decimal.TryParse(left, NumberStyles.Number, CultureInfo.InvariantCulture,
-                    out decimal leftNumber) &&
-                decimal.TryParse(right, NumberStyles.Number, CultureInfo.InvariantCulture,
-                    out decimal rightNumber))
-            {
-                comparison = leftNumber.CompareTo(rightNumber);
-                return true;
-            }
-            return false;
-        }
 
     }
 }
