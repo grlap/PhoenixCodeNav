@@ -91,6 +91,14 @@ public static partial class ProjectFileParser
             @"\$\((?<name>[A-Za-z_][A-Za-z0-9_.-]*)\)",
             RegexOptions.CultureInvariant);
 
+        private static readonly Regex MakeRelativeProjectToThisFile = new(
+            @"^\$\(\s*\[MSBuild\]::MakeRelative\(\s*" +
+            @"(?:'\$\(MSBuildProjectDirectory\)'|""\$\(MSBuildProjectDirectory\)""|\$\(MSBuildProjectDirectory\))" +
+            @"\s*,\s*" +
+            @"(?:'\$\(MSBuildThisFileDirectory\)'|""\$\(MSBuildThisFileDirectory\)""|\$\(MSBuildThisFileDirectory\))" +
+            @"\s*\)\s*\)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
         private static readonly Regex ItemReference = new(
             @"^@\((?<name>[A-Za-z_][A-Za-z0-9_.-]*)\)$",
             RegexOptions.CultureInvariant);
@@ -481,7 +489,7 @@ public static partial class ProjectFileParser
                     _error = "fsharp_semantic_property_value_limit";
                     return;
                 }
-                if (!TryExpandProperties(raw, name,
+                if (!TryExpandProperties(raw, documentPath, name,
                         out string value, out bool complete))
                     return;
                 if (value.Length > MaxFSharpSemanticPropertyValueChars)
@@ -573,7 +581,7 @@ public static partial class ProjectFileParser
 
                 if (itemName.Equals("Compile", StringComparison.OrdinalIgnoreCase))
                 {
-                    ProcessCompile(item);
+                    ProcessCompile(item, documentPath);
                 }
                 else if (itemName.Equals("Reference", StringComparison.OrdinalIgnoreCase))
                 {
@@ -615,7 +623,7 @@ public static partial class ProjectFileParser
                 return;
             }
             string raw = rawInclude ?? rawUpdate ?? rawRemove!;
-            if (!TryExpandItemSpecs(raw, out List<string> specs))
+            if (!TryExpandItemSpecs(raw, documentPath, out List<string> specs))
             {
                 _error ??= "fsharp_semantic_package_reference_unresolved";
                 return;
@@ -766,7 +774,7 @@ public static partial class ProjectFileParser
                 return;
             }
             if (activeReferenceOutputAssembly.Count == 1 &&
-                (!TryExpandProperties(activeReferenceOutputAssembly[0].Trim(), null,
+                (!TryExpandProperties(activeReferenceOutputAssembly[0].Trim(), documentPath, null,
                      out string expanded, out bool complete) || !complete ||
                  !bool.TryParse(expanded, out referenceOutputAssembly)))
             {
@@ -775,7 +783,7 @@ public static partial class ProjectFileParser
             }
             if (!referenceOutputAssembly) return;
 
-            if (!TryExpandItemSpecs(rawInclude, out List<string> specs))
+            if (!TryExpandItemSpecs(rawInclude, documentPath, out List<string> specs))
             {
                 if (_error == "fsharp_semantic_reference_unresolved")
                     _error = "fsharp_semantic_project_reference_metadata_unsupported";
@@ -851,7 +859,7 @@ public static partial class ProjectFileParser
             }
 
             string raw = rawInclude ?? rawUpdate ?? rawRemove!;
-            if (!TryExpandItemSpecs(raw, out List<string> specs) || specs.Count == 0)
+            if (!TryExpandItemSpecs(raw, documentPath, out List<string> specs) || specs.Count == 0)
             {
                 _error ??= "fsharp_semantic_central_package_management_unsupported";
                 return;
@@ -947,7 +955,7 @@ public static partial class ProjectFileParser
             }
             if (values.Count == 0) return true;
             versionOverrideUsed = foundVersionOverride;
-            if (!TryExpandProperties(values[0].Trim(), null,
+            if (!TryExpandProperties(values[0].Trim(), documentPath, null,
                     out string expanded, out bool complete))
                 return false;
             if (!complete || expanded.Length == 0)
@@ -1049,7 +1057,8 @@ public static partial class ProjectFileParser
 
                 if (remove?.Value is { } rawRemove)
                 {
-                    if (!TryExpandItemSpecs(rawRemove, out List<string> removeSpecs)) return;
+                    if (!TryExpandItemSpecs(rawRemove, documentPath,
+                            out List<string> removeSpecs)) return;
                     if (_itemLists.TryGetValue(name, out List<string>? current))
                     {
                         current.RemoveAll(existing => removeSpecs.Contains(existing,
@@ -1057,7 +1066,8 @@ public static partial class ProjectFileParser
                     }
                 }
                 if (include?.Value is not { } rawInclude) return;
-                if (!TryExpandItemSpecs(rawInclude, out List<string> includeSpecs)) return;
+                if (!TryExpandItemSpecs(rawInclude, documentPath,
+                        out List<string> includeSpecs)) return;
                 List<string> list = _itemLists.GetValueOrDefault(name) ?? [];
                 if (!_itemLists.ContainsKey(name)) _itemLists[name] = list;
                 foreach (string spec in includeSpecs)
@@ -1099,7 +1109,7 @@ public static partial class ProjectFileParser
             }
         }
 
-        private void ProcessCompile(XElement item)
+        private void ProcessCompile(XElement item, string documentPath)
         {
             string? raw = item.Attribute("Include")?.Value.Trim();
             if (raw is null || item.Attribute("Remove") is not null ||
@@ -1108,7 +1118,7 @@ public static partial class ProjectFileParser
                 _error = "fsharp_semantic_compile_order_unavailable";
                 return;
             }
-            if (!TryExpandProperties(raw, null,
+            if (!TryExpandProperties(raw, documentPath, null,
                     out string include, out bool complete)) return;
             if (!complete)
             {
@@ -1153,7 +1163,7 @@ public static partial class ProjectFileParser
 
             if (rawRemove is not null)
             {
-                if (item.HasElements || !TryExpandItemSpecs(rawRemove,
+                if (item.HasElements || !TryExpandItemSpecs(rawRemove, documentPath,
                         out List<string> removeSpecs))
                 {
                     _error ??= "fsharp_semantic_reference_unresolved";
@@ -1165,7 +1175,7 @@ public static partial class ProjectFileParser
                 return;
             }
 
-            if (!TryExpandItemSpecs(rawInclude!, out List<string> includes))
+            if (!TryExpandItemSpecs(rawInclude!, documentPath, out List<string> includes))
             {
                 _error ??= "fsharp_semantic_reference_unresolved";
                 return;
@@ -1206,7 +1216,7 @@ public static partial class ProjectFileParser
             }
 
             string rawHint = activeHints[0].Value.Trim();
-            if (!TryExpandProperties(rawHint, null,
+            if (!TryExpandProperties(rawHint, documentPath, null,
                     out string value, out bool complete)) return;
             if (!complete || value.Length == 0)
             {
@@ -1230,10 +1240,11 @@ public static partial class ProjectFileParser
             }
         }
 
-        private bool TryExpandItemSpecs(string raw, out List<string> specs)
+        private bool TryExpandItemSpecs(string raw, string documentPath,
+            out List<string> specs)
         {
             specs = [];
-            if (!TryExpandProperties(raw.Trim(), null,
+            if (!TryExpandProperties(raw.Trim(), documentPath, null,
                     out string expanded, out bool complete, allowItemReferences: true))
                 return false;
             if (!complete)
@@ -1359,7 +1370,7 @@ public static partial class ProjectFileParser
             // bounded framework/compiler inputs and never opens or executes the imported targets.
             if (AcceptKnownFSharpSemanticImport(rawProject)) return;
 
-            if (!TryExpandProperties(rawProject, null,
+            if (!TryExpandProperties(rawProject, documentPath, null,
                     out string expandedProject, out bool complete)) return;
             if (AcceptKnownFSharpSemanticImport(expandedProject)) return;
             if (!complete || expandedProject.Contains('*') || expandedProject.Contains('?') ||
@@ -1688,7 +1699,7 @@ public static partial class ProjectFileParser
                 _error = "fsharp_semantic_condition_depth_limit";
                 return false;
             }
-            if (!TryExpandProperties(condition, unsetSelfProperty,
+            if (!TryExpandProperties(condition, documentPath, unsetSelfProperty,
                     out string expanded, out bool complete))
                 return false;
             if (!complete)
@@ -1809,14 +1820,25 @@ public static partial class ProjectFileParser
                    TryParseConditionOperand(right, out _);
         }
 
-        private bool TryExpandProperties(string input, string? selfProperty,
+        private bool TryExpandProperties(string input, string documentPath, string? selfProperty,
             out string output, out bool complete, bool allowItemReferences = false)
         {
             CheckCancellation();
             output = "";
             complete = false;
-            if (input.Length > MaxFSharpSemanticPropertyValueChars ||
-                ContainsUnsupportedExpansion(input, allowItemReferences))
+            if (input.Length > MaxFSharpSemanticPropertyValueChars)
+            {
+                // Preserve the established cause for an input that cannot safely be inspected for
+                // unsupported functions or transforms.
+                _error = "fsharp_semantic_property_function_unsupported";
+                return false;
+            }
+            if (TryExpandSupportedPropertyFunction(input, documentPath, out output))
+            {
+                complete = true;
+                return true;
+            }
+            if (ContainsUnsupportedExpansion(input, allowItemReferences))
             {
                 _error = "fsharp_semantic_property_function_unsupported";
                 return false;
@@ -1866,6 +1888,47 @@ public static partial class ProjectFileParser
                        (allowItemReferences ||
                         !output.Contains("@(", StringComparison.Ordinal));
             return true;
+        }
+
+        private bool TryExpandSupportedPropertyFunction(string input, string documentPath,
+            out string output)
+        {
+            output = "";
+            if (!MakeRelativeProjectToThisFile.IsMatch(input)) return false;
+
+            // Both operands are reserved directory properties whose resolved targets are already
+            // workspace-contained. Parent segments in the returned value are expected: consumers
+            // resolve them from the project directory back to the current imported file's directory.
+            string thisFileDirectory = WorkspacePaths.ToGitPath(
+                Path.GetDirectoryName(documentPath) ?? "").Trim('/');
+            output = MakeRelativeDirectory(_projectDir, thisFileDirectory);
+            return true;
+        }
+
+        private static string MakeRelativeDirectory(string baseDirectory,
+            string targetDirectory)
+        {
+            string[] baseParts = baseDirectory.Split('/',
+                StringSplitOptions.RemoveEmptyEntries);
+            string[] targetParts = targetDirectory.Split('/',
+                StringSplitOptions.RemoveEmptyEntries);
+            int common = 0;
+            // These are canonical workspace-relative identities captured from the same index.
+            StringComparer pathComparer = WorkspacePaths.FileSystemPathComparer;
+            while (common < baseParts.Length && common < targetParts.Length &&
+                   pathComparer.Equals(baseParts[common], targetParts[common]))
+                common++;
+
+            if (common == baseParts.Length && common == targetParts.Length) return ".";
+            var relative = new List<string>(baseParts.Length - common +
+                                            targetParts.Length - common);
+            for (int index = common; index < baseParts.Length; index++) relative.Add("..");
+            for (int index = common; index < targetParts.Length; index++)
+                relative.Add(targetParts[index]);
+            // MSBuildThisFileDirectory is directory-valued and carries a trailing separator;
+            // MakeRelative preserves that separator and emits the host-native spelling.
+            char separator = Path.DirectorySeparatorChar;
+            return string.Join(separator, relative) + separator;
         }
 
         private bool ContainsUnsupportedExpansion(string input, bool allowItemReferences)

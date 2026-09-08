@@ -204,6 +204,21 @@ literal workspace-local `.props` imports with count/depth/aggregate-byte limits 
 Unique imported files, active import occurrences, condition depth, and evaluator nesting are bounded
 separately. Only the conventional self-default property idiom may treat an unset property as empty;
 other unresolved ambient/global condition inputs fail closed.
+The sole property-function exception is the exact path-only
+`$([MSBuild]::MakeRelative($(MSBuildProjectDirectory), $(MSBuildThisFileDirectory)))`
+shape (with optional matching single or double quotes around either reserved property). It is
+evaluated lexically without loading MSBuild: the first operand remains the selected project's
+directory, the second tracks the currently evaluated project or imported `.props` document, and
+the scalar result preserves current MSBuild behavior: `.` for the same directory, host-native
+separators, filesystem path identity, and the directory-valued second operand's trailing separator.
+Both operands are canonical workspace-contained identities captured from the pinned index;
+parent segments in the relative result are valid and are checked only when a consuming import,
+source, reference, or ProjectReference resolves them back against its contained base. Reversed
+operands, extra arguments, nested calls, arbitrary properties, and every other property function
+retain `fsharp_semantic_property_function_unsupported` rather than being approximated.
+Consumers normalize repeated separators, so repositories that spell an explicit separator after
+the property remain compatible with MSBuild releases whose trailing-separator behavior differed;
+Phoenix does not detect or host the repository's MSBuild version.
 The same projection discovers the nearest indexed ancestor `Directory.Build.props` and
 `Directory.Build.targets` independently, evaluates props before the project and targets afterward,
 and applies bounded metadata-free reference input lists plus top-level `Reference Include`/`Remove`.
@@ -286,7 +301,8 @@ Import paths are selected only from canonical paths in the pinned index using th
 ambiguous Windows case aliases fail closed, and semantic evaluation never walks the mutable live
 filesystem to resolve casing.
 Known compiler target imports are terminal boundaries. It never runs MSBuild, targets, or tasks and
-rejects property functions, compiler-item transforms/metadata outside restored PackageReference
+rejects property functions other than the exact bounded `MakeRelative` path intrinsic described
+above, compiler-item transforms/metadata outside restored PackageReference
 authority, imported compile items, and unsupported conditions
 with stable causes. Standard `Microsoft.NET.Sdk` and recognized toolchain implicit authority are
 partial, including unobservable build authority above the workspace root; custom/child/qualified SDK

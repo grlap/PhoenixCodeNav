@@ -399,6 +399,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("fsharp-semantic-confidence-authority", ids);
         Assert.Contains("fsharp-semantic-snapshot", ids);
         Assert.Contains("fsharp-semantic-bounded-project-evaluation", ids);
+        Assert.Contains("fsharp-semantic-makerelative-project-root", ids);
         Assert.Contains("fsharp-semantic-package-asset-closure", ids);
         Assert.Contains("csharp-semantic-central-package-management", ids);
         Assert.Contains("csharp-semantic-central-package-property-expansion", ids);
@@ -1350,6 +1351,10 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("v0.12.90", frameworkInputs);
         Assert.Contains("managed assemblies and facades", frameworkInputs);
         Assert.Contains("native DLLs and standalone netmodules", frameworkInputs);
+        string makeRelative = Summary("fsharp-semantic-makerelative-project-root");
+        Assert.Contains("v0.12.91", makeRelative);
+        Assert.Contains("MakeRelative", makeRelative);
+        Assert.Contains("other functions fail closed", makeRelative);
         string defaultBaseline = Summary("review-default-baseline-honesty");
         Assert.Contains("bounded git_index_baseline_unavailable", defaultBaseline);
         Assert.Contains("refresh_index", defaultBaseline);

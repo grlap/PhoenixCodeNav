@@ -1352,7 +1352,7 @@ public sealed partial class NavigationTools
             "fsharp_semantic_evaluation_order_unsupported" =>
                 "A property assignment appears after semantic items; the bounded F# semantic evaluator cannot reproduce MSBuild's property-before-item evaluation phases for this project.",
             "fsharp_semantic_property_function_unsupported" =>
-                "The selected project uses an MSBuild property function or item transform; the bounded F# semantic evaluator expands simple properties only.",
+                "The selected project uses an unsupported MSBuild property function or item transform; the bounded F# semantic evaluator supports simple properties and its declared MakeRelative project/import path intrinsic.",
             "fsharp_semantic_property_unsupported" or
                 "fsharp_semantic_property_unresolved" =>
                 "A compiler-affecting project property could not be resolved by the bounded F# semantic evaluator.",

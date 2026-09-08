@@ -718,6 +718,7 @@ public partial class FSharpSemanticStage2Tests
     [InlineData("<Import Project=\"../../Outside.props\" />", "fsharp_semantic_import_path_outside_workspace")]
     [InlineData("<Import Project=\"../Build/Missing.props\" />", "fsharp_semantic_import_unavailable")]
     [InlineData("<PropertyGroup><DefineConstants>$([System.String]::Copy('X'))</DefineConstants></PropertyGroup>", "fsharp_semantic_property_function_unsupported")]
+    [InlineData("<PropertyGroup><RootDir>$([MSBuild]::MakeRelative('$(MSBuildThisFileDirectory)', '$(MSBuildProjectDirectory)'))</RootDir></PropertyGroup>", "fsharp_semantic_property_function_unsupported")]
     [InlineData("<PropertyGroup Condition=\"'$(Flavor.ToUpper())' == 'X'\"><DefineConstants>X</DefineConstants></PropertyGroup>", "fsharp_semantic_property_function_unsupported")]
     [InlineData("<PropertyGroup Condition=\"HasTrailingSlash('x')\"><DefineConstants>X</DefineConstants></PropertyGroup>", "fsharp_semantic_condition_unsupported")]
     [InlineData("<PropertyGroup Condition=\"'x' == 'x')\"><DefineConstants>X</DefineConstants></PropertyGroup>", "fsharp_semantic_condition_unsupported")]
@@ -1604,6 +1605,154 @@ public partial class FSharpSemanticStage2Tests
         {
             Cleanup(root);
         }
+    }
+
+    [Fact]
+    public void DirectoryBuildMakeRelativeRootEnablesProjectClosureAndImplementations()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-makerelative").FullName;
+        try
+        {
+            WriteProject(root, "Directory.Build.props", """
+                <Project>
+                  <PropertyGroup>
+                    <RootDir>$([MSBuild]::MakeRelative('$(MSBuildProjectDirectory)', '$(MSBuildThisFileDirectory)'))</RootDir>
+                  </PropertyGroup>
+                </Project>
+                """);
+            WriteProject(root, "Build/Consumer.props", """
+                <Project>
+                  <PropertyGroup><DefineConstants>FROM_ROOT_IMPORT</DefineConstants></PropertyGroup>
+                </Project>
+                """);
+            WriteProject(root, "Contracts/Contracts.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="Contracts.fs" /></ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Contracts/Contracts.fs", """
+                namespace Contracts
+                type IWorker =
+                    abstract Run: unit -> int
+                """);
+            WriteProject(root, "Products/Consumer/Consumer.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <Import Project="$(RootDir)/Build/Consumer.props" />
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Consumer.fs" />
+                    <ProjectReference Include="$(RootDir)/Contracts/Contracts.fsproj" />
+                  </ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Products/Consumer/Consumer.fs", """
+                namespace Consumer
+                open Contracts
+                #if FROM_ROOT_IMPORT
+                type Worker() =
+                    interface IWorker with
+                        member _.Run() = 42
+                #endif
+                """);
+
+            using var fixture = Fixture.Create(root);
+            string raw = CallSemantic(() => fixture.Tools.Implementations(
+                path: "Contracts/Contracts.fs", line: 2, column: 7,
+                timeoutMs: 60_000));
+            JsonElement response = Parse(raw);
+
+            Assert.False(response.TryGetProperty("error", out _), raw);
+            Assert.True(response.GetProperty("coverage")
+                .GetProperty("workspaceComplete").GetBoolean(), raw);
+            JsonElement implementation = Assert.Single(
+                response.GetProperty("implementations").EnumerateArray());
+            Assert.Equal("Worker", implementation.GetProperty("symbol")
+                .GetProperty("name").GetString());
+            Assert.Equal("Products/Consumer/Consumer.fs", implementation.GetProperty("symbol")
+                .GetProperty("path").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void MakeRelativeUsesTheCurrentImportedFileDirectoryAndKeepsItsSeparator()
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directory.Build.props"] = """
+                <Project><Import Project="Build/Root.props" /></Project>
+                """,
+            ["Build/Root.props"] = """
+                <Project><PropertyGroup>
+                  <RelativeToImport>$([MSBuild]::MakeRelative('$(MSBuildProjectDirectory)', '$(MSBuildThisFileDirectory)'))</RelativeToImport>
+                </PropertyGroup></Project>
+                """,
+            ["Build/References.props"] = """
+                <Project><PropertyGroup><DefineConstants>FROM_NESTED_IMPORT</DefineConstants></PropertyGroup></Project>
+                """,
+        };
+
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject(
+            "<Import Project=\"$(RelativeToImport)References.props\" />",
+            imports, directoryBuildPropsPath: "Directory.Build.props");
+
+        Assert.Null(result.Error);
+        Assert.Contains("--define:FROM_NESTED_IMPORT", result.CommandLineArgs);
+    }
+
+    [Theory]
+    [InlineData("$([MSBuild]::MakeRelative('$(MSBuildProjectDirectory)', '$(MSBuildThisFileDirectory)'))")]
+    [InlineData("$([MSBuild]::MakeRelative($(MSBuildProjectDirectory), $(MSBuildThisFileDirectory)))")]
+    [InlineData("$([MSBuild]::MakeRelative(\"$(MSBuildProjectDirectory)\", \"$(MSBuildThisFileDirectory)\"))")]
+    public void MakeRelativePreservesScalarDotForIdenticalDirectories(string expression)
+    {
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Core/Directory.Build.props"] =
+                $"<Project><PropertyGroup><RootDir>{expression}</RootDir>" +
+                "<AssemblyName>Before$(RootDir)After</AssemblyName>" +
+                "<DefineConstants Condition=\"'$(RootDir)' == '.'\">SAME_DIRECTORY_DOT</DefineConstants>" +
+                "</PropertyGroup></Project>",
+        };
+
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("", imports,
+            directoryBuildPropsPath: "Core/Directory.Build.props");
+
+        Assert.Null(result.Error);
+        Assert.Equal("Before.After", result.AssemblyName);
+        Assert.Contains("--define:SAME_DIRECTORY_DOT", result.CommandLineArgs);
+    }
+
+    [Fact]
+    public void MakeRelativeUsesHostPathIdentityAndNativeSeparator()
+    {
+        char separator = Path.DirectorySeparatorChar;
+        string expected = OperatingSystem.IsWindows() ? "." : $"..{separator}core{separator}";
+        var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["core/Directory.Build.props"] =
+                "<Project><PropertyGroup>" +
+                "<RootDir>$([MSBuild]::MakeRelative('$(MSBuildProjectDirectory)', '$(MSBuildThisFileDirectory)'))</RootDir>" +
+                $"<DefineConstants Condition=\"'$(RootDir)' == '{expected}'\">MATCHED_HOST_VALUE</DefineConstants>" +
+                "</PropertyGroup></Project>",
+        };
+
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("", imports,
+            directoryBuildPropsPath: "core/Directory.Build.props");
+
+        Assert.Null(result.Error);
+        Assert.Contains("--define:MATCHED_HOST_VALUE", result.CommandLineArgs);
     }
 
     [Fact]
