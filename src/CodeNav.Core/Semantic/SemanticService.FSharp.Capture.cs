@@ -439,7 +439,17 @@ public sealed partial class SemanticService
             directoryBuildTargetsPath: directoryBuild.TargetsPath,
             cancellationToken: cancellationToken,
             hasAmbiguousDirectoryBuildAuthority: directoryBuild.HasAmbiguity,
-            hasAmbiguousDirectoryPackagesAuthority: directoryPackages.PathAmbiguous);
+            hasAmbiguousDirectoryPackagesAuthority: directoryPackages.PathAmbiguous,
+            existsResolver: path => ResolveIndexedFSharpExists(queries, path));
+    }
+
+    internal static bool? ResolveIndexedFSharpExists(IndexQueries queries, string path)
+    {
+        if (!WorkspaceScanner.IsIndexedFilePath(path)) return null;
+        // A row proves presence. Its absence cannot distinguish a missing path from a
+        // link/non-regular input the no-follow scanner deliberately skipped, so it is
+        // never promoted to a false compiler fact.
+        return queries.FileByPathForHost(path) is not null ? true : null;
     }
 
     private CapturedFSharpSemanticProject? CaptureFSharpSemanticProject(
@@ -965,7 +975,8 @@ public sealed partial class SemanticService
                     .ToList();
                 string fingerprint = FSharpSemanticFingerprint(owner.Path,
                     nodeTargetFramework, projectXml, options.CommandLineArgs,
-                    fullSourcePaths, sourceTexts, referenceIdentities);
+                    fullSourcePaths, sourceTexts, referenceIdentities,
+                    options.ExistsDependencies);
                 string outputPath = Path.Combine(Path.GetTempPath(),
                     "PhoenixCodeNav.FSharp", fingerprint, $"{options.AssemblyName}.dll");
                 var commandLineArgs = new List<string>
@@ -1519,14 +1530,15 @@ public sealed partial class SemanticService
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
-    private static string FSharpSemanticFingerprint(
+    internal static string FSharpSemanticFingerprint(
         string projectPath,
         string targetFramework,
         string projectXml,
         IReadOnlyList<string> optionArgs,
         IReadOnlyList<string> sourcePaths,
         IReadOnlyList<string> sourceTexts,
-        IReadOnlyList<string> referenceIdentities)
+        IReadOnlyList<string> referenceIdentities,
+        IReadOnlyDictionary<string, bool> existsDependencies)
     {
         using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(
             System.Security.Cryptography.HashAlgorithmName.SHA256);
@@ -1548,6 +1560,9 @@ public sealed partial class SemanticService
         foreach (string identity in referenceIdentities.OrderBy(value => value,
                      WorkspacePaths.FileSystemPathComparer))
             Add(identity);
+        foreach ((string path, bool exists) in existsDependencies.OrderBy(pair => pair.Key,
+                     WorkspacePaths.FileSystemPathComparer))
+            Add($"exists:{path}:{exists}");
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()[..24];
     }
 }

@@ -78,6 +78,8 @@ public sealed record FSharpSemanticOptionsSnapshot(
 {
     public List<FSharpProjectReferenceSnapshot> ProjectReferences { get; init; } = [];
     public bool ProjectReferencesTransitive { get; init; }
+    internal IReadOnlyDictionary<string, bool> ExistsDependencies { get; init; } =
+        new Dictionary<string, bool>(WorkspacePaths.FileSystemPathComparer);
 }
 
 /// <summary>
@@ -386,13 +388,14 @@ public static partial class ProjectFileParser
         string? directoryBuildTargetsPath = null,
         CancellationToken cancellationToken = default,
         bool hasAmbiguousDirectoryBuildAuthority = false,
-        bool hasAmbiguousDirectoryPackagesAuthority = false)
+        bool hasAmbiguousDirectoryPackagesAuthority = false,
+        Func<string, bool?>? existsResolver = null)
         => ParseFSharpSemanticOptionsSnapshotCore(relPath, projectXml,
             indexedTargetFrameworks, selectedTargetFramework, importResolver,
             importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
             directoryBuildTargetsPath, cancellationToken,
             hasAmbiguousDirectoryBuildAuthority, hasAmbiguousDirectoryPackagesAuthority,
-            new FSharpSemanticEvaluationBudget());
+            new FSharpSemanticEvaluationBudget(), existsResolver);
 
     internal static FSharpSemanticOptionsSnapshot ParseFSharpSemanticOptionsClosureSnapshot(
         FSharpSemanticEvaluationBudget budget,
@@ -405,13 +408,14 @@ public static partial class ProjectFileParser
         string? directoryBuildTargetsPath,
         CancellationToken cancellationToken,
         bool hasAmbiguousDirectoryBuildAuthority,
-        bool hasAmbiguousDirectoryPackagesAuthority)
+        bool hasAmbiguousDirectoryPackagesAuthority,
+        Func<string, bool?>? existsResolver = null)
         => ParseFSharpSemanticOptionsSnapshotCore(relPath, projectXml,
             indexedTargetFrameworks, selectedTargetFramework, importResolver,
             importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
             directoryBuildTargetsPath, cancellationToken,
             hasAmbiguousDirectoryBuildAuthority, hasAmbiguousDirectoryPackagesAuthority,
-            budget);
+            budget, existsResolver);
 
     private static FSharpSemanticOptionsSnapshot ParseFSharpSemanticOptionsSnapshotCore(
         string relPath, string projectXml, string indexedTargetFrameworks,
@@ -424,7 +428,8 @@ public static partial class ProjectFileParser
         CancellationToken cancellationToken,
         bool hasAmbiguousDirectoryBuildAuthority,
         bool hasAmbiguousDirectoryPackagesAuthority,
-        FSharpSemanticEvaluationBudget budget)
+        FSharpSemanticEvaluationBudget budget,
+        Func<string, bool?>? existsResolver)
     {
         cancellationToken.ThrowIfCancellationRequested();
         FSharpParsingOptionsSnapshot selection = ParseFSharpParsingOptionsSnapshot(
@@ -487,7 +492,7 @@ public static partial class ProjectFileParser
             selection.SelectedTargetFramework,
             selection.AvailableTargetFrameworks?.ToArray() ?? [], importResolver,
             importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
-            directoryBuildTargetsPath, cancellationToken, budget);
+            directoryBuildTargetsPath, cancellationToken, budget, existsResolver);
         FSharpSemanticEvaluation evaluation = evaluator.Evaluate(root);
         cancellationToken.ThrowIfCancellationRequested();
         if (evaluation.Error is not null)
@@ -500,6 +505,7 @@ public static partial class ProjectFileParser
             {
                 ProjectReferences = evaluation.ProjectReferences,
                 ProjectReferencesTransitive = evaluation.ProjectReferencesTransitive,
+                ExistsDependencies = evaluation.ExistsDependencies,
             };
         }
 
@@ -512,6 +518,7 @@ public static partial class ProjectFileParser
         {
             ProjectReferences = evaluation.ProjectReferences,
             ProjectReferencesTransitive = evaluation.ProjectReferencesTransitive,
+            ExistsDependencies = evaluation.ExistsDependencies,
         };
     }
 

@@ -201,6 +201,17 @@ deadline, diagnostics, contexts, and response bytes. The bounded evaluator delib
 ordered compile items and a bounded evaluation-lite project subset: simple property
 assignment/expansion before semantic items, comparisons and boolean/`Exists` conditions, `Choose`, and recursively loaded
 literal workspace-local `.props` imports with count/depth/aggregate-byte limits and cycle detection.
+`Exists` is distinct from import loading: it proves presence for ordinary files represented in the
+pinned workspace index (including `web.config`) and never reads the live filesystem. A missing row is
+not promoted to absence because it cannot be distinguished from a link or non-regular input skipped
+by the no-follow scanner; those paths, excluded directories, and unproven host aliases fail closed.
+The established `.props` import resolver continues to prove both presence and absence under its
+existing import budgets. Every decided normalized path participates in the FCS fingerprint. The
+probe set needs no separate cap: existing condition/expression budgets transitively bound it, and a
+decision that cannot enter the identity is incomplete. Import traversal remains restricted to the
+documented `.props`/`.targets` authority. This deliberate behavior extension invalidates the earlier
+byte-identical extraction parity baseline; it changes only query-time F# compiler inputs and writes
+nothing new to `index.db`, so the schema version is unchanged.
 Unique imported files, active import occurrences, condition depth, and evaluator nesting are bounded
 separately. Only the conventional self-default property idiom may treat an unset property as empty;
 other unresolved ambient/global condition inputs fail closed.

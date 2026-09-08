@@ -63,6 +63,7 @@ public static partial class ProjectFileParser
         List<FSharpProjectReferenceSnapshot> ProjectReferences,
         string AssemblyName,
         bool ProjectReferencesTransitive,
+        IReadOnlyDictionary<string, bool> ExistsDependencies,
         string? PartialReason = null,
         string? Error = null);
 
@@ -124,6 +125,7 @@ public static partial class ProjectFileParser
         private readonly string[] _targetFrameworks;
         private readonly Func<string, string?>? _importResolver;
         private readonly Func<string, long?>? _importSizeResolver;
+        private readonly Func<string, bool?>? _existsResolver;
         private readonly string? _directoryBuildPropsPath;
         private readonly string? _directoryBuildTargetsPath;
         private readonly string? _directoryPackagesPropsPath;
@@ -158,6 +160,8 @@ public static partial class ProjectFileParser
         private readonly Dictionary<string, XElement> _importRoots =
             new(WorkspacePaths.FileSystemPathComparer);
         private readonly SortedSet<string> _partialReasons = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, bool> _existsDependencies =
+            new(WorkspacePaths.FileSystemPathComparer);
 
         private bool _semanticItemPhaseStarted;
         private bool _directSemanticItemPhaseStarted;
@@ -173,7 +177,8 @@ public static partial class ProjectFileParser
             string? directoryBuildPropsPath,
             string? directoryBuildTargetsPath,
             CancellationToken cancellationToken,
-            FSharpSemanticEvaluationBudget budget)
+            FSharpSemanticEvaluationBudget budget,
+            Func<string, bool?>? existsResolver)
             : base(cancellationToken, MaxFSharpSemanticEvaluationDepth,
                 MaxFSharpSemanticImportDepth)
         {
@@ -184,6 +189,7 @@ public static partial class ProjectFileParser
             _targetFrameworks = targetFrameworks;
             _importResolver = importResolver;
             _importSizeResolver = importSizeResolver;
+            _existsResolver = existsResolver;
             _directoryPackagesPropsPath = NormalizeOptionalWorkspacePath(
                 directoryPackagesPropsPath);
             _directoryBuildPropsPath = NormalizeOptionalWorkspacePath(directoryBuildPropsPath);
@@ -310,7 +316,8 @@ public static partial class ProjectFileParser
                     .Select(reference => new FSharpPackageReferenceSnapshot(
                         reference.Key, reference.Value)).ToList(),
                 _projectReferences,
-                assemblyName, projectReferencesTransitive, parsing.PartialReason);
+                assemblyName, projectReferencesTransitive, _existsDependencies,
+                parsing.PartialReason);
         }
 
         private void CheckCancellation() =>
@@ -449,7 +456,7 @@ public static partial class ProjectFileParser
                         reference.Key, reference.Value)).ToList(),
                 _projectReferences,
                 assemblyName ?? Path.GetFileNameWithoutExtension(_projectPath),
-                false,
+                false, _existsDependencies,
                 _partialReasons.Count == 0 ? null : string.Join(';', _partialReasons), error);
 
         private void ProcessContainer(XElement container, string documentPath,
@@ -1621,12 +1628,29 @@ public static partial class ProjectFileParser
         {
             string documentDir = WorkspacePaths.ToGitPath(
                 Path.GetDirectoryName(documentPath) ?? "");
-            if (!TryNormalizeSemanticRelative(documentDir, rawPath, out string path) ||
-                !path.EndsWith(".props", StringComparison.OrdinalIgnoreCase))
+            if (!TryNormalizeSemanticRelative(documentDir, rawPath, out string path))
                 return new(false, false);
-            if (!TryResolveImport(path, out string? content))
-                return new(false, false, _error);
-            return new(true, content is not null);
+            // Preserve the existing import authority and its existing budgets for .props probes.
+            // Generic indexed-file probes below add no limit: the condition/expression budgets
+            // already bound how many distinct paths one evaluation can ask about.
+            if (path.EndsWith(".props", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryResolveImport(path, out string? content))
+                    return new(false, false, _error);
+                bool exists = content is not null;
+                _existsDependencies[path] = exists;
+                return new(true, exists);
+            }
+            if (_existsDependencies.TryGetValue(path, out bool recorded))
+                return new(true, recorded);
+            if (_existsResolver is not null)
+            {
+                bool? indexed = _existsResolver(path);
+                if (!indexed.HasValue) return new(false, false);
+                _existsDependencies[path] = indexed.Value;
+                return new(true, indexed.Value);
+            }
+            return new(false, false);
         }
 
         private static string FSharpExpressionError(string error) =>

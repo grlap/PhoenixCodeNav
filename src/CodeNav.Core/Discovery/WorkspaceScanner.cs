@@ -46,6 +46,32 @@ public static class WorkspaceScanner
         "app.config", "web.config",
     };
 
+    /// <summary>Whether a workspace-relative path is an ordinary, non-excluded file kind the
+    /// scanner can represent. A matching kind does not by itself prove absence from the index:
+    /// no-follow and regular-file checks may still reject the concrete entry.</summary>
+    internal static bool IsIndexedFilePath(string relPath)
+    {
+        if (IsExcludedPath(relPath)) return false;
+        string fileName = Path.GetFileName(relPath);
+        string extension = Path.GetExtension(fileName);
+        return extension.Equals(".cs", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".fs", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".fsi", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".fsx", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".md", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".sql", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".fsproj", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".sln", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".slnf", StringComparison.OrdinalIgnoreCase) ||
+               ConfigFileNames.Contains(fileName) ||
+               extension.Equals(".props", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".targets", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".json", StringComparison.OrdinalIgnoreCase) &&
+               fileName.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static ScanResult Scan(string root)
     {
         root = Path.GetFullPath(root);

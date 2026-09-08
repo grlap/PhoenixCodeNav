@@ -160,6 +160,92 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Fact]
+    public void ExistsUsesIndexedNonImportFilesAndCapturesBothPresenceStates()
+    {
+        var probes = new List<string>();
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("""
+            <PropertyGroup Condition="Exists('web.config') And Exists('web.config') And !Exists('../Missing/Missing.props')">
+              <DefineConstants>INDEXED_EXISTS</DefineConstants>
+            </PropertyGroup>
+            """, existsResolver: path =>
+            {
+                probes.Add(path);
+                if (path.Equals("Core/web.config", StringComparison.OrdinalIgnoreCase)) return true;
+                return null;
+            });
+
+        Assert.Null(result.Error);
+        Assert.Contains("--define:INDEXED_EXISTS", result.CommandLineArgs);
+        Assert.Equal(["Core/web.config"], probes);
+        Assert.True(result.ExistsDependencies["Core/web.config"]);
+        Assert.False(result.ExistsDependencies["Missing/Missing.props"]);
+
+        FSharpSemanticOptionsSnapshot unavailable = EvaluateBoundedProject(
+            "<PropertyGroup Condition=\"Exists('unindexed.txt')\"><DefineConstants>WRONG</DefineConstants></PropertyGroup>",
+            existsResolver: _ => null);
+        Assert.Equal("fsharp_semantic_condition_unsupported", unavailable.Error);
+        Assert.Empty(unavailable.ExistsDependencies);
+    }
+
+    [Fact]
+    public void IndexedExistsRejectsExcludedInputsAndUnprovenWindowsAliases()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-exists-authority").FullName;
+        try
+        {
+            WriteProject(root, "Core/web.config", "<configuration />");
+            WriteProject(root, "Core/obj/web.config", "<configuration />");
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using var queries = new IndexQueries(db);
+            bool? Resolve(string path) => SemanticService.ResolveIndexedFSharpExists(queries, path);
+
+            Assert.True(WorkspaceScanner.IsIndexedFilePath("Core/web.config"));
+            Assert.False(WorkspaceScanner.IsIndexedFilePath("Core/obj/web.config"));
+            Assert.False(WorkspaceScanner.IsIndexedFilePath("Core/notes.txt"));
+            Assert.True(Resolve("Core/web.config") is true);
+            Assert.Null(Resolve("Core/obj/web.config"));
+            FSharpSemanticOptionsSnapshot excluded = EvaluateBoundedProject(
+                "<PropertyGroup Condition=\"!Exists('obj/web.config')\"><DefineConstants>WRONG_ABSENCE</DefineConstants></PropertyGroup>",
+                existsResolver: Resolve);
+            Assert.Equal("fsharp_semantic_condition_unsupported", excluded.Error);
+            Assert.DoesNotContain("--define:WRONG_ABSENCE", excluded.CommandLineArgs);
+
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.Null(Resolve("Core./web.config"));
+                FSharpSemanticOptionsSnapshot alias = EvaluateBoundedProject(
+                    "<PropertyGroup Condition=\"!Exists('../Core./web.config')\"><DefineConstants>WRONG_ALIAS_ABSENCE</DefineConstants></PropertyGroup>",
+                    existsResolver: Resolve);
+                Assert.Equal("fsharp_semantic_condition_unsupported", alias.Error);
+                Assert.DoesNotContain("--define:WRONG_ALIAS_ABSENCE", alias.CommandLineArgs);
+            }
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Fact]
+    public void ExistsDependenciesIndependentlyChangeTheFSharpSemanticFingerprint()
+    {
+        static string Fingerprint(bool exists) => SemanticService.FSharpSemanticFingerprint(
+            "Core/Core.fsproj", "net10.0", "<Project />", ["--target:library"],
+            ["Core/Core.fs"], ["module Core\nlet value = 1\n"], [],
+            new Dictionary<string, bool>(StringComparer.Ordinal)
+            {
+                ["Core/web.config"] = exists,
+            });
+
+        string present = Fingerprint(true);
+        string absent = Fingerprint(false);
+        Assert.NotEqual(present, absent);
+        Assert.Equal(present, Fingerprint(true));
+    }
+
+    [Fact]
     public void ImportGroupsPreserveOrderHonorConditionsAndRejectNonImports()
     {
         var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -2372,6 +2458,75 @@ public partial class FSharpSemanticStage2Tests
         }
     }
 
+    [Fact]
+    public async Task IndexedWebConfigAppearanceChangesTheFcsView()
+    {
+        string root = Directory.CreateTempSubdirectory(
+            "codenav-fsharp-semantic-exists-refresh").FullName;
+        try
+        {
+            WriteProject(root, "Core/Core.fs", """
+                module Core
+                let withoutConfig = 1
+                let withConfig = 2
+                """);
+            WriteProject(root, "Core/Use.fs", """
+                module Use
+                let result =
+                #if HAS_WEB_CONFIG
+                    Core.withConfig
+                #else
+                    Core.withoutConfig
+                #endif
+                """);
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+                    <DefineConstants Condition="Exists('web.config')">HAS_WEB_CONFIG</DefineConstants>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <Compile Include="Core.fs" />
+                    <Compile Include="Use.fs" />
+                  </ItemGroup>
+                </Project>
+                """);
+
+            using var fixture = Fixture.Create(root);
+            string beforeRaw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 6, 15, timeoutMs: 60_000));
+            JsonElement before = Parse(beforeRaw);
+            Assert.Equal("fsharp_semantic_condition_unsupported",
+                before.GetProperty("error").GetString());
+
+            WriteProject(root, "Core/web.config", "<configuration />");
+            Assert.True(fixture.Manager.RequestRefreshForTest(
+                ["Core/web.config"], out Task refreshed));
+            await refreshed.WaitAsync(TimeSpan.FromSeconds(20));
+
+            string afterRaw = CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 4, 15, timeoutMs: 60_000));
+            JsonElement after = Parse(afterRaw);
+            Assert.True(after.TryGetProperty("symbol", out JsonElement afterSymbol), afterRaw);
+            Assert.Equal("withConfig",
+                afterSymbol.GetProperty("name").GetString());
+
+            File.Delete(Path.Combine(root, "Core", "web.config"));
+            Assert.True(fixture.Manager.RequestRefreshForTest(
+                ["Core/web.config"], out Task removed));
+            await removed.WaitAsync(TimeSpan.FromSeconds(20));
+            JsonElement afterRemoval = Parse(CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 6, 15, timeoutMs: 60_000)));
+            Assert.Equal("fsharp_semantic_condition_unsupported",
+                afterRemoval.GetProperty("error").GetString());
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
     private static FSharpSemanticOptionsSnapshot EvaluateBoundedProject(
         string body,
         IReadOnlyDictionary<string, string>? imports = null,
@@ -2380,7 +2535,8 @@ public partial class FSharpSemanticStage2Tests
         string? directoryBuildPropsPath = null,
         string? directoryBuildTargetsPath = null,
         bool hasAmbiguousDirectoryBuildAuthority = false,
-        bool hasAmbiguousDirectoryPackagesAuthority = false)
+        bool hasAmbiguousDirectoryPackagesAuthority = false,
+        Func<string, bool?>? existsResolver = null)
     {
         string project = $$"""
             <Project>
@@ -2400,7 +2556,8 @@ public partial class FSharpSemanticStage2Tests
             cancellationToken: cancellationToken,
             hasAmbiguousDirectoryBuildAuthority: hasAmbiguousDirectoryBuildAuthority,
             hasAmbiguousDirectoryPackagesAuthority:
-                hasAmbiguousDirectoryPackagesAuthority);
+                hasAmbiguousDirectoryPackagesAuthority,
+            existsResolver: existsResolver);
     }
 
     private static FSharpSemanticOptionsSnapshot EvaluateImportCount(int count)
