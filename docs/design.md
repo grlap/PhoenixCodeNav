@@ -226,8 +226,15 @@ byte-identical extraction parity baseline. Schema v32 persists owning-project-to
 their nullable presence state in `msbuild_exists_inputs`, requiring an index rebuild. Existing
 numeric limits are unchanged.
 Unique imported files, active import occurrences, condition depth, and evaluator nesting are bounded
-separately. Only the conventional self-default property idiom may treat an unset property as empty;
-other unresolved ambient/global condition inputs fail closed.
+separately. Only the conventional self-default property idiom may treat an unset property as empty.
+Since v0.12.95, a property's own empty-equality guard can be combined with `And`, `Or`, `!`, and
+parentheses, including a target-framework guard. Every occurrence of that self property must be
+an exact equality operand against an empty quoted scalar (either operand order and quote style).
+Literal whitespace is not empty. Existing complete or incomplete property values remain authoritative;
+other unresolved ambient/global inputs still fail closed, including in short-circuited branches
+because property expansion precedes boolean evaluation. Group-level conditions receive no self exemption.
+Schema v33 forces a rebuild because these newly accepted conditions can expose additional persisted
+`Exists` probes; no numeric limit changes accompany this extension.
 The declared property-function allowlist contains two exact shapes. The path-only
 `$([MSBuild]::MakeRelative($(MSBuildProjectDirectory), $(MSBuildThisFileDirectory)))`
 shape allows optional matching single or double quotes around either reserved property. It is

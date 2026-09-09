@@ -156,6 +156,46 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         }
     }
 
+    public bool IsSelfDefaultCondition(string condition, string propertyName)
+    {
+        // The expansion exemption applies to the whole condition. Every occurrence of the
+        // missing self property must therefore be an exact empty-equality operand, not merely
+        // one occurrence somewhere in a larger expression. Other properties gain no exemption.
+        return Visit(condition, 0, out bool hasSelf) && hasSelf;
+
+        bool Visit(string expression, int depth, out bool hasSelf)
+        {
+            CheckCancellation();
+            hasSelf = false;
+            if (depth > _maxConditionDepth) return false;
+            expression = expression.Trim();
+            if (expression.Length == 0) return false;
+            if (TrySplitLogical(expression, "Or", out string left, out string right) ||
+                TrySplitLogical(expression, "And", out left, out right))
+            {
+                bool leftValid = Visit(left, depth + 1, out bool leftSelf);
+                bool rightValid = Visit(right, depth + 1, out bool rightSelf);
+                hasSelf = leftSelf || rightSelf;
+                return leftValid && rightValid;
+            }
+            if (HasWrappingParentheses(expression))
+                return Visit(expression[1..^1], depth + 1, out hasSelf);
+            if (expression[0] == '!')
+                return Visit(expression[1..], depth + 1, out hasSelf);
+
+            hasSelf = ReferencedPropertyNames(expression).Any(name =>
+                name.Equals(propertyName, StringComparison.OrdinalIgnoreCase));
+            if (!hasSelf) return true; // Normal evaluation still validates syntax/completeness.
+            if (!TryFindComparison(expression, out left, out string op, out right) ||
+                op != "==" || !TryParseConditionOperand(left, out string leftValue) ||
+                !TryParseConditionOperand(right, out string rightValue))
+                return false;
+            string self = "$(" + propertyName + ")";
+            return leftValue.Equals(self, StringComparison.OrdinalIgnoreCase) && rightValue.Length == 0 ||
+                   rightValue.Equals(self, StringComparison.OrdinalIgnoreCase) && leftValue.Length == 0;
+        }
+    }
+
     public bool TryExpandProperties(string input, string documentPath, string? selfProperty,
         out string output, out bool complete, out string? error,
         bool allowItemReferences = false,

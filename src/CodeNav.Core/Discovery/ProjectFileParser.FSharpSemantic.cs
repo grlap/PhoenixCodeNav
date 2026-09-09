@@ -91,10 +91,6 @@ public static partial class ProjectFileParser
     private sealed class FSharpSemanticProjectEvaluator :
         BoundedMsBuildProjectEvaluator<FSharpSemanticDocumentRole, FSharpChooseState>
     {
-        private static readonly Regex PropertyReference = new(
-            @"\$\((?<name>[A-Za-z_][A-Za-z0-9_.-]*)\)",
-            RegexOptions.CultureInvariant);
-
         private static readonly Regex MakeRelativeProjectToThisFile = new(
             @"^\$\(\s*\[MSBuild\]::MakeRelative\(\s*" +
             @"(?:'\$\(MSBuildProjectDirectory\)'|""\$\(MSBuildProjectDirectory\)""|\$\(MSBuildProjectDirectory\))" +
@@ -1711,21 +1707,11 @@ public static partial class ProjectFileParser
             return string.Join(separator, relative) + separator;
         }
 
-        private static bool IsCanonicalUnsetSelfCondition(XElement element,
+        private bool IsCanonicalUnsetSelfCondition(XElement element,
             string condition)
         {
-            if (element.Parent?.Name.LocalName != "PropertyGroup") return false;
-            MatchCollection references = PropertyReference.Matches(condition);
-            if (references.Count != 1 ||
-                !references[0].Groups["name"].Value.Equals(element.Name.LocalName,
-                    StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            string withoutReference = condition.Remove(references[0].Index,
-                references[0].Length);
-            string normalized = string.Concat(withoutReference.Where(character =>
-                !char.IsWhiteSpace(character))).Replace('"', '\'');
-            return normalized == "''==''";
+            return element.Parent?.Name.LocalName == "PropertyGroup" &&
+                   _expressions.IsSelfDefaultCondition(condition, element.Name.LocalName);
         }
 
         private bool TryCompilerProperty(string name, out string value)

@@ -288,7 +288,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("32", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("33", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -403,6 +403,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("fsharp-semantic-indexed-file-exists", ids);
         Assert.Contains("fsharp-semantic-literal-file-exists", ids);
         Assert.Contains("fsharp-semantic-property-startswith", ids);
+        Assert.Contains("fsharp-semantic-compound-self-defaults", ids);
         Assert.Contains("fsharp-semantic-package-asset-closure", ids);
         Assert.Contains("csharp-semantic-central-package-management", ids);
         Assert.Contains("csharp-semantic-central-package-property-expansion", ids);
@@ -1378,6 +1379,17 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("F#", startsWith);
         Assert.Contains("ordinal/case-sensitive", startsWith);
         Assert.Contains("other string methods fail closed", startsWith);
+        string selfDefaults = Summary("fsharp-semantic-compound-self-defaults");
+        Assert.Contains("v0.12.95", selfDefaults);
+        Assert.Contains("And/Or/!", selfDefaults);
+        Assert.Contains("unrelated unknowns fail closed", selfDefaults);
+        string directoryBuild = Summary("fsharp-semantic-directory-build-reference-evaluation");
+        Assert.Contains("nearest indexed ancestor Directory.Build.props/targets", directoryBuild);
+        Assert.Contains("bounded property-before-item conditions", directoryBuild);
+        Assert.Contains("Reference Include/Remove item lists", directoryBuild);
+        Assert.Contains("v0.12.83 active item-phase ProjectReference", directoryBuild);
+        Assert.Contains("irrelevant chained targets ignored", directoryBuild);
+        Assert.Contains("reference-affecting targets/tasks fail closed", directoryBuild);
         string defaultBaseline = Summary("review-default-baseline-honesty");
         Assert.Contains("bounded git_index_baseline_unavailable", defaultBaseline);
         Assert.Contains("refresh_index", defaultBaseline);

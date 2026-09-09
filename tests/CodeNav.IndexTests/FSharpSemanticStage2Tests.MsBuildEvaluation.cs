@@ -1859,6 +1859,145 @@ public partial class FSharpSemanticStage2Tests
         Assert.Contains("--define:DEBUG", canonicalDefault.CommandLineArgs);
     }
 
+    [Theory]
+    [InlineData("net8.0", null, "true")]
+    [InlineData("net10.0", null, "UNCHANGED")]
+    [InlineData("net8.0", "false", "false")]
+    public void CompoundSelfDefaultHonorsTargetFrameworkAndExistingValue(
+        string targetFramework, string? existingValue, string expectedAssemblyName)
+    {
+        string initialValue = existingValue is null ? "" :
+            $"<EnableReplaceBindingRedirects>{existingValue}</EnableReplaceBindingRedirects>";
+        string xml = $$"""
+            <Project>
+              <PropertyGroup>
+                <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+                <AssemblyName>UNCHANGED</AssemblyName>
+                {{initialValue}}
+                <EnableReplaceBindingRedirects Condition="'$(EnableReplaceBindingRedirects)' == '' and '$(TargetFramework)' == 'net8.0'">true</EnableReplaceBindingRedirects>
+                <AssemblyName Condition="'$(TargetFramework)' == 'net8.0'">$(EnableReplaceBindingRedirects)</AssemblyName>
+              </PropertyGroup>
+              <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
+            </Project>
+            """;
+        FSharpSemanticOptionsSnapshot result = ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(
+            "Core/Core.fsproj", xml, "net8.0;net10.0", targetFramework);
+
+        Assert.Null(result.Error);
+        Assert.Equal(expectedAssemblyName, result.AssemblyName);
+        Assert.Equal(["Core/Core.fs"], result.SourceFiles);
+    }
+
+    [Theory]
+    [InlineData("('$(AssemblyName)' == '') and ('$(TargetFramework)' == 'net10.0')", "SELECTED")]
+    [InlineData("'$(TargetFramework)' == 'net10.0' AND '' == '$(AssemblyName)'", "SELECTED")]
+    [InlineData("&quot;$(AssemblyName)&quot; == &quot;&quot; and true", "SELECTED")]
+    [InlineData("('$(AssemblyName)' == '' and false) Or true", "SELECTED")]
+    [InlineData("false Or ('$(AssemblyName)' == '' and true)", "SELECTED")]
+    [InlineData("!('$(AssemblyName)' == '') and true", "Core")]
+    [InlineData("'$(AssemblyName)' == '' and '$(AssemblyName)' == ''", "SELECTED")]
+    [InlineData("'$(AssemblyName)' == '' and false", "Core")]
+    public void CompoundSelfDefaultsPreserveBooleanStructure(string condition, string expected)
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject($"""
+            <PropertyGroup>
+              <AssemblyName Condition="{condition}">SELECTED</AssemblyName>
+            </PropertyGroup>
+            """);
+        Assert.Null(result.Error);
+        Assert.Equal(expected, result.AssemblyName);
+    }
+
+    [Theory]
+    [InlineData("'$(AssemblyName)' == '' and '$(Unknown)' == ''")]
+    [InlineData("'$(AssemblyName)' == '' Or '$(Unknown)' == ''")]
+    [InlineData("'$(AssemblyName)' == '' and '$(AssemblyName)' != 'other'")]
+    [InlineData("'$(AssemblyName)' == '' Or $(AssemblyName.StartsWith('x'))")]
+    [InlineData("'$(AssemblyName) ' == '' and true")]
+    [InlineData("'$(AssemblyName)' == ' ' and true")]
+    public void CompoundSelfDefaultsDoNotGrantUnrelatedOrNoncanonicalEmptyValues(string condition)
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject($"""
+            <PropertyGroup>
+              <AssemblyName Condition="{condition}">WRONG</AssemblyName>
+            </PropertyGroup>
+            """);
+        Assert.Equal("fsharp_semantic_condition_property_unresolved", result.Error);
+        Assert.Empty(result.SourceFiles);
+    }
+
+    [Fact]
+    public void CompoundSelfDefaultsKeepIncompleteValuesAndGroupConditionsUnresolved()
+    {
+        FSharpSemanticOptionsSnapshot incomplete = EvaluateBoundedProject("""
+            <PropertyGroup>
+              <AssemblyName>$(Unknown)</AssemblyName>
+              <AssemblyName Condition="'$(AssemblyName)' == '' and true">WRONG</AssemblyName>
+            </PropertyGroup>
+            """);
+        Assert.Equal("fsharp_semantic_condition_property_unresolved", incomplete.Error);
+        FSharpSemanticOptionsSnapshot group = EvaluateBoundedProject("""
+            <PropertyGroup Condition="'$(AssemblyName)' == '' and true">
+              <AssemblyName>WRONG</AssemblyName>
+            </PropertyGroup>
+            """);
+        Assert.Equal("fsharp_semantic_condition_property_unresolved", group.Error);
+    }
+
+    [Fact]
+    public void CompoundSelfDefaultsRespectExistingDepthAndSyntaxValidation()
+    {
+        string Nested(int depth) => new string('(', depth) + "'$(AssemblyName)' == ''" +
+                                    new string(')', depth);
+        FSharpSemanticOptionsSnapshot Evaluate(string condition) => EvaluateBoundedProject($"""
+            <PropertyGroup><AssemblyName Condition="{condition}">SELECTED</AssemblyName></PropertyGroup>
+            """);
+        FSharpSemanticOptionsSnapshot atLimit = Evaluate(Nested(ProjectFileParser.MaxFSharpSemanticConditionDepth));
+        Assert.Null(atLimit.Error);
+        Assert.Equal("SELECTED", atLimit.AssemblyName);
+        FSharpSemanticOptionsSnapshot overLimit = Evaluate(Nested(ProjectFileParser.MaxFSharpSemanticConditionDepth + 1));
+        Assert.NotNull(overLimit.Error);
+        Assert.Empty(overLimit.SourceFiles);
+        FSharpSemanticOptionsSnapshot malformed = Evaluate("'$(AssemblyName)' == '' and (true");
+        Assert.Equal("fsharp_semantic_condition_unsupported", malformed.Error);
+        Assert.Empty(malformed.SourceFiles);
+    }
+
+    [Fact]
+    public void CompoundSelfDefaultInImportedPropsEnablesPersistedExistsCapture()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-compound-default").FullName;
+        try
+        {
+            WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project>
+                  <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+                  <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Directory.Build.props", """
+                <Project>
+                  <PropertyGroup>
+                    <EnableReplaceBindingRedirects Condition="'$(EnableReplaceBindingRedirects)' == '' and '$(TargetFramework)' == 'net8.0'">true</EnableReplaceBindingRedirects>
+                  </PropertyGroup>
+                  <PropertyGroup Condition="'$(EnableReplaceBindingRedirects)' == 'true' And Exists('Web.config')">
+                    <DefineConstants>HAS_WEB_CONFIG</DefineConstants>
+                  </PropertyGroup>
+                </Project>
+                """);
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using var queries = new IndexQueries(db);
+            Assert.True(queries.TryGetCapturedMsBuildFilePresence("Core/Web.config", out bool? presence));
+            Assert.Equal(false, presence);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
     [Fact]
     public void UnknownConditionsOnIrrelevantTargetsDoNotBlockSemanticEvaluation()
     {
