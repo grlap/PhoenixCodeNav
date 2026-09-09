@@ -158,7 +158,12 @@ internal sealed class BoundedMsBuildExpressionEvaluator
 
     public bool TryExpandProperties(string input, string documentPath, string? selfProperty,
         out string output, out bool complete, out string? error,
-        bool allowItemReferences = false)
+        bool allowItemReferences = false,
+        bool allowPropertyStringFunctions = true,
+        bool preserveOpaqueItemAndMetadataReferences = false,
+        bool stopOnUnresolvedProperty = false,
+        Func<string, bool>? tryReservePropertyExpansion = null,
+        Func<int, bool>? tryReserveExpandedValue = null)
     {
         CheckCancellation();
         output = "";
@@ -177,14 +182,19 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             complete = true;
             return true;
         }
-        if (ContainsUnsupportedExpansion(input, allowItemReferences))
+        if (ContainsUnsupportedExpansion(input, allowItemReferences,
+                allowPropertyStringFunctions, preserveOpaqueItemAndMetadataReferences))
         {
             error = "property_function_unsupported";
             return false;
         }
 
-        if (!TryExpandPropertyStringFunctions(input, out string scalarInput,
-                out bool functionsComplete, out error))
+        string scalarInput = input;
+        bool functionsComplete = true;
+        if (allowPropertyStringFunctions &&
+            !TryExpandPropertyStringFunctions(input, out scalarInput,
+                out functionsComplete, out error, stopOnUnresolvedProperty,
+                tryReservePropertyExpansion))
             return false;
 
         var builder = new StringBuilder(scalarInput.Length);
@@ -197,6 +207,13 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             string name = match.Groups["name"].Value;
             if (_properties.TryGetValue(name, out BoundedMsBuildProperty property))
             {
+                if (stopOnUnresolvedProperty && !property.Complete) return false;
+                if (tryReservePropertyExpansion is not null &&
+                    !tryReservePropertyExpansion(name))
+                {
+                    error = "property_value_limit";
+                    return false;
+                }
                 builder.Append(property.Value);
                 allComplete &= property.Complete;
             }
@@ -206,6 +223,7 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             }
             else
             {
+                if (stopOnUnresolvedProperty) return false;
                 builder.Append(match.Value);
                 allComplete = false;
             }
@@ -225,8 +243,16 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         output = builder.ToString();
         complete = allComplete &&
                    !output.Contains("$(", StringComparison.Ordinal) &&
-                   !output.Contains("%(", StringComparison.Ordinal) &&
-                   (allowItemReferences || !output.Contains("@(", StringComparison.Ordinal));
+                   (preserveOpaqueItemAndMetadataReferences ||
+                    !output.Contains("%(", StringComparison.Ordinal)) &&
+                   (preserveOpaqueItemAndMetadataReferences || allowItemReferences ||
+                    !output.Contains("@(", StringComparison.Ordinal));
+        if (complete && tryReserveExpandedValue is not null &&
+            !tryReserveExpandedValue(output.Length))
+        {
+            error = "property_value_limit";
+            return false;
+        }
         return true;
     }
 
@@ -237,7 +263,8 @@ internal sealed class BoundedMsBuildExpressionEvaluator
     }
 
     private bool TryExpandPropertyStringFunctions(string input, out string output,
-        out bool complete, out string? error)
+        out bool complete, out string? error, bool stopOnUnresolvedProperty,
+        Func<string, bool>? tryReservePropertyExpansion)
     {
         CheckCancellation();
         error = null;
@@ -261,6 +288,14 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             {
                 if (property.Complete)
                 {
+                    if (tryReservePropertyExpansion is not null &&
+                        !tryReservePropertyExpansion(name))
+                    {
+                        output = "";
+                        complete = false;
+                        error = "property_value_limit";
+                        return false;
+                    }
                     string receiver = UnescapeMsBuildScalar(property.Value);
                     string argument = UnescapeMsBuildScalar(match.Groups["argument"].Value);
                     bool startsWith = receiver.StartsWith(argument, StringComparison.Ordinal);
@@ -268,12 +303,24 @@ internal sealed class BoundedMsBuildExpressionEvaluator
                 }
                 else
                 {
+                    if (stopOnUnresolvedProperty)
+                    {
+                        output = "";
+                        complete = false;
+                        return false;
+                    }
                     builder.Append(match.Value);
                     allComplete = false;
                 }
             }
             else
             {
+                if (stopOnUnresolvedProperty)
+                {
+                    output = "";
+                    complete = false;
+                    return false;
+                }
                 builder.Append(match.Value);
                 allComplete = false;
             }
@@ -327,12 +374,14 @@ internal sealed class BoundedMsBuildExpressionEvaluator
                TryParseConditionOperand(left, out _) && TryParseConditionOperand(right, out _);
     }
 
-    private bool ContainsUnsupportedExpansion(string input, bool allowItemReferences)
+    private bool ContainsUnsupportedExpansion(string input, bool allowItemReferences,
+        bool allowPropertyStringFunctions, bool preserveOpaqueItemAndMetadataReferences)
     {
         CheckCancellation();
-        if (!allowItemReferences && input.Contains("@(", StringComparison.Ordinal) ||
-            input.Contains("%(", StringComparison.Ordinal)) return true;
-        Match[] supported = SupportedPropertyMatches(input);
+        if (!preserveOpaqueItemAndMetadataReferences &&
+            (!allowItemReferences && input.Contains("@(", StringComparison.Ordinal) ||
+             input.Contains("%(", StringComparison.Ordinal))) return true;
+        Match[] supported = SupportedPropertyMatches(input, allowPropertyStringFunctions);
         int supportedIndex = 0;
         int cursor = 0;
         while ((cursor = input.IndexOf("$(", cursor, StringComparison.Ordinal)) >= 0)
@@ -348,9 +397,12 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         return false;
     }
 
-    private static Match[] SupportedPropertyMatches(string input) =>
+    private static Match[] SupportedPropertyMatches(string input,
+        bool includePropertyStringFunctions = true) =>
         PropertyReference.Matches(input).Cast<Match>()
-            .Concat(PropertyStartsWith.Matches(input).Cast<Match>())
+            .Concat(includePropertyStringFunctions
+                ? PropertyStartsWith.Matches(input).Cast<Match>()
+                : [])
             .OrderBy(match => match.Index)
             .ThenByDescending(match => match.Length)
             .ToArray();

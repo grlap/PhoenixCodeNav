@@ -14,6 +14,7 @@ public sealed class Batch67DeferredSecondaryIndexTests
     [
         "idx_compile_items_file",
         "idx_files_path_nocase",
+        "idx_msbuild_exists_path",
         "idx_package_refs_project",
         "idx_project_refs_to",
         "idx_projects_name",

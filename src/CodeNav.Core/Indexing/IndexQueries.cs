@@ -201,6 +201,7 @@ public sealed partial class IndexQueries : IDisposable
     private const int DeclarationOffsetPerFileByteLimit = 2 * 1024 * 1024;
     private const int DeclarationOffsetCumulativeByteLimit = 8 * 1024 * 1024;
     private readonly SqliteConnection _conn;
+    private readonly bool _ownsConnection = true;
     private readonly SqliteTransaction? _readSnapshot;
     private readonly Action<string>? _afterQueryForTest;
     private readonly Action<string>? _beforeQueryForTest;
@@ -3409,6 +3410,26 @@ public sealed partial class IndexQueries : IDisposable
         return matches.Length == 1 ? matches[0] : null;
     }
 
+    /// <summary>A synchronous query view over the writer's current transaction. The caller owns
+    /// its lifetime; this view never opens, commits, rolls back or disposes that transaction.</summary>
+    internal IndexQueries(SqliteTransaction transaction)
+    {
+        _conn = transaction.Connection ?? throw new ArgumentException(
+            "The writer transaction must still be active.", nameof(transaction));
+        _readSnapshot = transaction;
+        _ownsConnection = false;
+    }
+
+    internal bool TryGetCapturedMsBuildFilePresence(string filePath, out bool? presence)
+    {
+        // Exact spelling only: every decided absence must have its own writer observation.
+        // Disagreement (or an unsafe observation) is unknown, never an arbitrary first row.
+        var states = Query("SELECT DISTINCT presence FROM msbuild_exists_inputs WHERE path=$p",
+            r => r.IsDBNull(0) ? (bool?)null : r.GetInt32(0) != 0, ("$p", filePath));
+        presence = states.Count == 1 ? states[0] : null;
+        return states.Count != 0;
+    }
+
     public string? ContentByPathBounded(string filePath, int maxChars)
         => ContentByPathBounded(filePath, maxChars, CancellationToken.None);
 
@@ -4005,6 +4026,7 @@ public sealed partial class IndexQueries : IDisposable
 
     public void Dispose()
     {
+        if (!_ownsConnection) return;
         try
         {
             try { _readSnapshot?.Dispose(); }

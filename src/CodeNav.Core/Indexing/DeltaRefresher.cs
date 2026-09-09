@@ -337,7 +337,9 @@ public static class DeltaRefresher
                     store.ReplaceFSharpParseCoverage(tx, indexedFile.Id, coverage);
                 }
             }
-            if (added + changed + deleted > 0)
+            bool existsChanged = MsBuildExistsCapture.Refresh(store, tx, workspaceRoot,
+                detectAll ? null : candidates);
+            if (added + changed + deleted > 0 || existsChanged)
             {
                 refreshedAtUtc = DateTime.UtcNow.ToString("O");
                 store.SetMeta(tx, "last_refresh_utc", refreshedAtUtc);

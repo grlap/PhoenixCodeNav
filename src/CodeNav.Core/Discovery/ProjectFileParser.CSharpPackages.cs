@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
@@ -129,16 +128,14 @@ public static partial class ProjectFileParser
 
         bool usesProperties = centralVersions.Any(entry =>
             entry.RawVersion.Contains("$(", StringComparison.Ordinal));
-        int propertyExpansions = 0;
-        int expandedPropertyChars = 0;
-        Dictionary<string, string> properties;
+        var expansionBudget = new CSharpCentralPropertyExpansionBudget();
+        Dictionary<string, BoundedMsBuildProperty> properties;
         var projectPropertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (usesProperties)
         {
             if (hasPotentialLateProjectPropertyAuthority ||
                 project.Root.Descendants().Any(element => NameEquals(element, "Import")) ||
-                !TryEvaluateCSharpCentralProperties(central,
-                    ref propertyExpansions, ref expandedPropertyChars, out properties))
+                !TryEvaluateCSharpCentralProperties(central, expansionBudget, out properties))
             {
                 return direct;
             }
@@ -157,7 +154,8 @@ public static partial class ProjectFileParser
         }
         else
         {
-            properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            properties = new Dictionary<string, BoundedMsBuildProperty>(
+                StringComparer.OrdinalIgnoreCase);
         }
 
         var versions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -166,8 +164,7 @@ public static partial class ProjectFileParser
             var referencedProperties = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             string expandedVersion = rawVersion;
             if (usesProperties && !TryExpandCSharpCentralPropertyValue(rawVersion, properties,
-                    referencedProperties, ref propertyExpansions, ref expandedPropertyChars,
-                    out expandedVersion))
+                    referencedProperties, expansionBudget, out expandedVersion))
             {
                 return direct;
             }
@@ -196,10 +193,11 @@ public static partial class ProjectFileParser
     }
 
     private static bool TryEvaluateCSharpCentralProperties(XDocument central,
-        ref int propertyExpansions, ref int expandedPropertyChars,
-        out Dictionary<string, string> properties)
+        CSharpCentralPropertyExpansionBudget expansionBudget,
+        out Dictionary<string, BoundedMsBuildProperty> properties)
     {
-        properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        properties = new Dictionary<string, BoundedMsBuildProperty>(
+            StringComparer.OrdinalIgnoreCase);
         int propertyCount = 0;
         foreach (XElement group in central.Root!.Descendants().Where(element =>
                      NameEquals(element, "PropertyGroup")))
@@ -219,65 +217,73 @@ public static partial class ProjectFileParser
                 }
 
                 if (!TryExpandCSharpCentralPropertyValue(property.Value.Trim(), properties,
-                        referencedProperties: null, ref propertyExpansions,
-                        ref expandedPropertyChars, out string expanded))
+                        referencedProperties: null, expansionBudget, out string expanded))
                 {
                     properties.Remove(name);
                     continue;
                 }
-                properties[name] = expanded;
+                properties[name] = new BoundedMsBuildProperty(expanded, Complete: true);
             }
         }
         return true;
     }
 
     private static bool TryExpandCSharpCentralPropertyValue(string? value,
-        IReadOnlyDictionary<string, string> properties,
+        IReadOnlyDictionary<string, BoundedMsBuildProperty> properties,
         HashSet<string>? referencedProperties,
-        ref int propertyExpansions,
-        ref int expandedPropertyChars,
+        CSharpCentralPropertyExpansionBudget expansionBudget,
         out string expanded)
     {
         expanded = "";
-        if (value is null || value.Length > MaxCSharpCentralPackagePropertyValueChars)
-            return false;
-
-        var builder = new StringBuilder(value.Length);
-        int offset = 0;
-        while (offset < value.Length)
+        if (value is null) return false;
+        if (!value.Contains("$(", StringComparison.Ordinal))
         {
-            int expression = value.IndexOf("$(", offset, StringComparison.Ordinal);
-            if (expression < 0)
-            {
-                builder.Append(value, offset, value.Length - offset);
-                break;
-            }
-            builder.Append(value, offset, expression - offset);
-            int close = value.IndexOf(')', expression + 2);
-            if (close < 0) return false;
-
-            string name = value[(expression + 2)..close];
-            if (!CSharpCentralPropertyName.IsMatch(name) ||
-                !properties.TryGetValue(name, out string? replacement) ||
-                ++propertyExpansions > MaxCSharpCentralPackagePropertyExpansions)
-            {
-                return false;
-            }
-            referencedProperties?.Add(name);
-            builder.Append(replacement);
-            if (builder.Length > MaxCSharpCentralPackagePropertyValueChars)
-                return false;
-            offset = close + 1;
+            if (value.Length > MaxCSharpCentralPackagePropertyValueChars ||
+                !expansionBudget.TryReserveExpandedValue(value.Length)) return false;
+            expanded = value;
+            return true;
         }
 
-        if (builder.Length > MaxCSharpCentralPackagePropertyValueChars ||
-            expandedPropertyChars > MaxCSharpCentralPackageExpandedPropertyChars - builder.Length)
+        var evaluator = new BoundedMsBuildExpressionEvaluator(
+            properties,
+            static (_, _) => new BoundedMsBuildExpansion(false, ""),
+            static (_, _) => new BoundedMsBuildExistsResult(false, false),
+            CancellationToken.None,
+            MaxCSharpCentralPackagePropertyValueChars,
+            // The enclosing C# projection still rejects every Condition before scalar expansion.
+            maxConditionDepth: 0);
+        return evaluator.TryExpandProperties(value, documentPath: "", selfProperty: null,
+                   out expanded, out bool complete, out _,
+                   allowPropertyStringFunctions: false,
+                   // The legacy C# expander preserved these markers as opaque text; the final
+                   // package-version grammar rejects them if they reach a consumed value.
+                   preserveOpaqueItemAndMetadataReferences: true,
+                   stopOnUnresolvedProperty: true,
+                   tryReservePropertyExpansion: name =>
+                   {
+                       if (!expansionBudget.TryReservePropertyExpansion()) return false;
+                       referencedProperties?.Add(name);
+                       return true;
+                   },
+                   tryReserveExpandedValue: expansionBudget.TryReserveExpandedValue) &&
+               complete;
+    }
+
+    private sealed class CSharpCentralPropertyExpansionBudget
+    {
+        private int _propertyExpansions;
+        private int _expandedPropertyChars;
+
+        public bool TryReservePropertyExpansion() =>
+            ++_propertyExpansions <= MaxCSharpCentralPackagePropertyExpansions;
+
+        public bool TryReserveExpandedValue(int length)
         {
-            return false;
+            if (_expandedPropertyChars > MaxCSharpCentralPackageExpandedPropertyChars - length)
+                return false;
+            _expandedPropertyChars += length;
+            return true;
         }
-        expandedPropertyChars += builder.Length;
-        expanded = builder.ToString();
-        return true;
     }
 
     private static bool TryNormalizeCSharpCentralPackageVersion(string? version,

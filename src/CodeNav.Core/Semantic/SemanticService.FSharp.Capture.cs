@@ -446,6 +446,7 @@ public sealed partial class SemanticService
     internal static bool? ResolveIndexedFSharpExists(IndexQueries queries, string path)
     {
         if (!WorkspaceScanner.IsIndexedFilePath(path)) return null;
+        if (queries.TryGetCapturedMsBuildFilePresence(path, out bool? captured)) return captured;
         // A row proves presence. Its absence cannot distinguish a missing path from a
         // link/non-regular input the no-follow scanner deliberately skipped, so it is
         // never promoted to a false compiler fact.

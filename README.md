@@ -113,7 +113,8 @@ compatibility fallback from multi-target children, and `netstandard1.x` compile 
 **unsupported** rather than returning an empty or falsely exact answer. Explicit target-framework
 selection and exact matches for multi-target projects are supported. Phoenix never executes MSBuild targets or tasks: it
 evaluates a documented subset of project files (simple properties, `StartsWith` and boolean conditions, `Choose`, literal workspace-local
-`.props`, indexed-file `Exists` probes including `web.config`, and the nearest ancestor
+`.props`, indexed-file `Exists` probes including `web.config` (literal paths capture presence and
+absence during indexing), and the nearest ancestor
 `Directory.Build.props`/`.targets`). Unsupported authority either
 fails closed with a stable cause or continues only with an explicit partial cause; partial
 continuation is limited to standard `Microsoft.NET.Sdk` / recognized compiler-toolchain implicit

@@ -317,6 +317,249 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Fact]
+    public void LiteralExistsCapturesAbsenceAndKeepsPinnedSnapshotsAcrossRefresh()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-exists-snapshot").FullName;
+        try
+        {
+            WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                <PropertyGroup Condition="!Exists('Web.config')"><DefineConstants>ABSENT</DefineConstants></PropertyGroup>
+                <ItemGroup><Compile Include="Core.fs" /></ItemGroup></Project>
+                """);
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using var store = new IndexStore(db, createNew: false);
+            using var pinned = new IndexQueries(db, pinReadSnapshot: true);
+            bool? Resolve(IndexQueries q) => SemanticService.ResolveIndexedFSharpExists(q, "Core/Web.config");
+            Assert.Equal(false, Resolve(pinned));
+            FSharpSemanticOptionsSnapshot absent = EvaluateBoundedProject(
+                "<PropertyGroup Condition=\"!Exists('Web.config')\"><DefineConstants>ABSENT</DefineConstants></PropertyGroup>",
+                existsResolver: path => SemanticService.ResolveIndexedFSharpExists(pinned, path));
+            Assert.Null(absent.Error);
+            Assert.Contains("--define:ABSENT", absent.CommandLineArgs);
+
+            WriteProject(root, "Core/Web.config", "<configuration />");
+            using (var beforeRefresh = new IndexQueries(db)) Assert.Equal(false, Resolve(beforeRefresh));
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            Assert.Equal(false, Resolve(pinned));
+            using (var refreshed = new IndexQueries(db)) Assert.Equal(true, Resolve(refreshed));
+
+            File.Delete(Path.Combine(root, "Core", "Web.config"));
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            using (var removed = new IndexQueries(db)) Assert.Equal(false, Resolve(removed));
+
+            // A source edit changes the dependency set even though neither target is indexed.
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project>
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <Import Project="Local.props" />
+                  <PropertyGroup Condition="Exists('Other.config')"><AssemblyName>Other</AssemblyName></PropertyGroup>
+                  <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
+                </Project>
+                """);
+            // app.config is a watched/indexed kind; arbitrary Other.config is deliberately not.
+            WriteProject(root, "Core/Local.props", "<Project><PropertyGroup Condition=\"Exists('app.config')\" /></Project>");
+            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj", "Core/Local.props"]);
+            using var updated = new IndexQueries(db);
+            Assert.Null(Resolve(updated));
+            Assert.Equal(false, SemanticService.ResolveIndexedFSharpExists(updated, "Core/app.config"));
+            Assert.Null(SemanticService.ResolveIndexedFSharpExists(updated, "Core/Other.config"));
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedExistsUsesProjectDirectoryAcrossAppearanceAndRemoval(bool caseVariedImport)
+    {
+        if (caseVariedImport && !OperatingSystem.IsWindows()) return;
+        string root = Directory.CreateTempSubdirectory("codenav-exists-import-base").FullName;
+        try
+        {
+            string importPath = caseVariedImport ? "Build/Shared.props" : "Directory.Build.props";
+            WriteProject(root, importPath, """
+                <Project><PropertyGroup>
+                  <Flavor Condition="Exists('Web.config')">Present</Flavor>
+                  <Flavor Condition="!Exists('Web.config')">Absent</Flavor>
+                </PropertyGroup></Project>
+                """);
+            WriteProject(root, "Core/Core.fsproj", $$"""
+                <Project>
+                  {{(caseVariedImport ? "<Import Project=\"../build/shared.props\" />" : "")}}
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework><AssemblyName>$(Flavor)</AssemblyName></PropertyGroup>
+                  <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
+                </Project>
+                """);
+            WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using var store = new IndexStore(db, createNew: false);
+            FSharpSemanticOptionsSnapshot Evaluate()
+            {
+                using var queries = new IndexQueries(db, pinReadSnapshot: true);
+                string? Import(string path) => queries.FileByPathForHost(path) is { } file
+                    ? queries.ContentByPathBounded(file.Path, ProjectFileParser.MaxFSharpSemanticImportBytes) : null;
+                return ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj",
+                    queries.ContentByPathBounded("Core/Core.fsproj", IndexBuilder.MaxStructuralFileBytes)!,
+                    "net10.0", "net10.0", Import,
+                    path => queries.FileByPathForHost(path)?.Size,
+                    directoryBuildPropsPath: caseVariedImport ? null : "Directory.Build.props",
+                    existsResolver: path => SemanticService.ResolveIndexedFSharpExists(queries, path));
+            }
+            FSharpSemanticOptionsSnapshot absent = Evaluate();
+            Assert.Null(absent.Error);
+            Assert.Equal("Absent", absent.AssemblyName);
+            WriteProject(root, "Core/Web.config", "<configuration />");
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            FSharpSemanticOptionsSnapshot present = Evaluate();
+            Assert.Null(present.Error);
+            Assert.Equal("Present", present.AssemblyName);
+            File.Delete(Path.Combine(root, "Core", "Web.config"));
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            FSharpSemanticOptionsSnapshot removed = Evaluate();
+            Assert.Null(removed.Error);
+            Assert.Equal("Absent", removed.AssemblyName);
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void CapturedExistsReevaluatesNewBranchesAcrossTfmsAndSeesImportedEditsInTheWriterTransaction()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-exists-branches").FullName;
+        try
+        {
+            WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
+            WriteProject(root, "Core/Core.fsproj", """
+                <Project><PropertyGroup>
+                  <TargetFrameworks>net9.0;net10.0</TargetFrameworks><ProbeFile>Web.config</ProbeFile>
+                </PropertyGroup><Import Project="../Build/Shared.props" />
+                <ItemGroup><Compile Include="Core.fs" /></ItemGroup></Project>
+                """);
+            WriteProject(root, "Build/Shared.props", """
+                <Project>
+                  <PropertyGroup Condition="'$(TargetFramework)' == 'net9.0' And Exists('app.config')" />
+                  <Import Project="Optional.props" Condition="'$(TargetFramework)' == 'net10.0' And Exists('$(ProbeFile)')" />
+                </Project>
+                """);
+            WriteProject(root, "Build/Optional.props", "<Project><PropertyGroup Condition=\"Exists('nested/Web.config')\" /></Project>");
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using var store = new IndexStore(db, createNew: false);
+            bool? Resolve(string path)
+            {
+                using var queries = new IndexQueries(db);
+                return SemanticService.ResolveIndexedFSharpExists(queries, path);
+            }
+            Assert.Equal(false, Resolve("Core/app.config"));
+            Assert.Equal(false, Resolve("Core/Web.config"));
+            Assert.Null(Resolve("Core/nested/Web.config"));
+
+            WriteProject(root, "Core/Web.config", "<configuration />");
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            Assert.Equal(true, Resolve("Core/Web.config"));
+            Assert.Equal(false, Resolve("Core/app.config"));
+            Assert.Equal(false, Resolve("Core/nested/Web.config"));
+
+            WriteProject(root, "Build/Optional.props", "<Project><PropertyGroup Condition=\"Exists('changed/Web.config')\" /></Project>");
+            DeltaRefresher.Refresh(store, root, ["Build/Optional.props"]);
+            Assert.Null(Resolve("Core/nested/Web.config"));
+            Assert.Equal(false, Resolve("Core/changed/Web.config"));
+
+            File.Delete(Path.Combine(root, "Core", "Web.config"));
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            Assert.Equal(false, Resolve("Core/Web.config"));
+            Assert.Null(Resolve("Core/changed/Web.config"));
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void LiteralExistsRefreshesNativeAliasesWithDifferentWatcherSpellings()
+    {
+        if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS()) return;
+        string root = Directory.CreateTempSubdirectory("codenav-exists-alias").FullName;
+        try
+        {
+            string probe = OperatingSystem.IsWindows() ? "Core./Web.config" : "Core/Web.config";
+            WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
+            WriteProject(root, "Local.props", $"<Project><PropertyGroup Condition=\"Exists('{probe}')\" /></Project>");
+            WriteProject(root, "Root.fsproj", """
+                <Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                <Import Project="Local.props" /><ItemGroup><Compile Include="Core/Core.fs" /></ItemGroup></Project>
+                """);
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using var store = new IndexStore(db, createNew: false);
+            using (var initial = new IndexQueries(db))
+                Assert.Equal(false, SemanticService.ResolveIndexedFSharpExists(initial, probe));
+            WriteProject(root, "Core/web.config", "<configuration />");
+            // The watcher reports the physical spelling, not the spelling in the condition.
+            DeltaRefresher.Refresh(store, root, ["Core/web.config"]);
+            bool nativePresence = File.Exists(Path.Combine(root, probe.Replace('/', Path.DirectorySeparatorChar)));
+            using (var present = new IndexQueries(db))
+                Assert.Equal(nativePresence, SemanticService.ResolveIndexedFSharpExists(present, probe));
+            File.Delete(Path.Combine(root, "Core", "web.config"));
+            DeltaRefresher.Refresh(store, root, ["Core/web.config"]);
+            using var removed = new IndexQueries(db);
+            Assert.Equal(false, SemanticService.ResolveIndexedFSharpExists(removed, probe));
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
+    public void LiteralExistsKeepsExcludedAndNonRegularPathsUnknownAndRefreshesProbeOnlyChanges()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-exists-unsafe").FullName;
+        try
+        {
+            WriteProject(root, "Core/obj/Web.config", "<configuration />");
+            Directory.CreateDirectory(Path.Combine(root, "Core", "app.config"));
+            WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
+            foreach (var (name, probe) in new[] { ("Excluded", "obj/Web.config"),
+                         ("NonRegular", "app.config"), ("Link", "linked/Web.config"),
+                         ("Missing", "missing/Web.config") })
+                WriteProject(root, $"Core/{name}.fsproj", $$"""
+                    <Project><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                    <PropertyGroup Condition="Exists('{{probe}}')" />
+                    <ItemGroup><Compile Include="Core.fs" /></ItemGroup></Project>
+                    """);
+            WriteProject(root, "Target/Web.config", "<configuration />");
+            Assert.True(TestWorkspaceCleanup.TryCreateDirectoryLink(
+                Path.Combine(root, "Core", "linked"), Path.Combine(root, "Target"), out string? failure,
+                forceWindowsJunctionFallback: OperatingSystem.IsWindows()), failure);
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using var store = new IndexStore(db, createNew: false);
+            using (var queries = new IndexQueries(db))
+            {
+                Assert.Null(SemanticService.ResolveIndexedFSharpExists(queries, "Core/obj/Web.config"));
+                Assert.Null(SemanticService.ResolveIndexedFSharpExists(queries, "Core/app.config"));
+                Assert.Null(SemanticService.ResolveIndexedFSharpExists(queries, "Core/linked/Web.config"));
+                Assert.Equal(false, SemanticService.ResolveIndexedFSharpExists(queries, "Core/missing/Web.config"));
+            }
+            Directory.Delete(Path.Combine(root, "Core", "app.config"));
+            var result = DeltaRefresher.Refresh(store, root, ["Core/app.config"]);
+            Assert.Equal(0, result.AddedFiles + result.ChangedFiles + result.DeletedFiles);
+            Assert.NotNull(result.RefreshedAtUtc);
+            using (var changed = new IndexQueries(db))
+                Assert.Equal(false, SemanticService.ResolveIndexedFSharpExists(changed, "Core/app.config"));
+
+            // A formerly absent ancestor can become a skipped link without creating a files row.
+            Assert.True(TestWorkspaceCleanup.TryCreateDirectoryLink(
+                Path.Combine(root, "Core", "missing"), Path.Combine(root, "Target"), out failure,
+                forceWindowsJunctionFallback: OperatingSystem.IsWindows()), failure);
+            DeltaRefresher.Refresh(store, root, null);
+            using var swept = new IndexQueries(db);
+            Assert.Null(SemanticService.ResolveIndexedFSharpExists(swept, "Core/missing/Web.config"));
+        }
+        finally { Cleanup(root); }
+    }
+
+    [Fact]
     public void ExistsDependenciesIndependentlyChangeTheFSharpSemanticFingerprint()
     {
         static string Fingerprint(bool exists) => SemanticService.FSharpSemanticFingerprint(
@@ -2587,8 +2830,8 @@ public partial class FSharpSemanticStage2Tests
             string beforeRaw = CallSemantic(() => fixture.Tools.SymbolAt(
                 "Core/Use.fs", 6, 15, timeoutMs: 60_000));
             JsonElement before = Parse(beforeRaw);
-            Assert.Equal("fsharp_semantic_condition_unsupported",
-                before.GetProperty("error").GetString());
+            Assert.True(before.TryGetProperty("symbol", out JsonElement beforeSymbol), beforeRaw);
+            Assert.Equal("withoutConfig", beforeSymbol.GetProperty("name").GetString());
 
             WriteProject(root, "Core/web.config", "<configuration />");
             Assert.True(fixture.Manager.RequestRefreshForTest(
@@ -2608,8 +2851,9 @@ public partial class FSharpSemanticStage2Tests
             await removed.WaitAsync(TimeSpan.FromSeconds(20));
             JsonElement afterRemoval = Parse(CallSemantic(() => fixture.Tools.SymbolAt(
                 "Core/Use.fs", 6, 15, timeoutMs: 60_000)));
-            Assert.Equal("fsharp_semantic_condition_unsupported",
-                afterRemoval.GetProperty("error").GetString());
+            Assert.True(afterRemoval.TryGetProperty("symbol", out JsonElement removedSymbol),
+                afterRemoval.GetRawText());
+            Assert.Equal("withoutConfig", removedSymbol.GetProperty("name").GetString());
         }
         finally
         {

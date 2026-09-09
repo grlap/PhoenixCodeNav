@@ -1628,9 +1628,9 @@ public static partial class ProjectFileParser
 
         private BoundedMsBuildExistsResult EvaluateExists(string documentPath, string rawPath)
         {
-            string documentDir = WorkspacePaths.ToGitPath(
-                Path.GetDirectoryName(documentPath) ?? "");
-            if (!TryNormalizeSemanticRelative(documentDir, rawPath, out string path))
+            // MSBuild evaluates relative Exists operands from the owning project directory,
+            // including conditions in imported documents (unlike Import Project paths).
+            if (!TryNormalizeSemanticRelative(_projectDir, rawPath, out string path))
                 return new(false, false);
             // Preserve the existing import authority and its existing budgets for .props probes.
             // Generic indexed-file probes below add no limit: the condition/expression budgets

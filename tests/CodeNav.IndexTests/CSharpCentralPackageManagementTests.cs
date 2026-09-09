@@ -423,8 +423,11 @@ public sealed class CSharpCentralPackageManagementTests
     [InlineData("conditioned-property")]
     [InlineData("conditioned-property-group")]
     [InlineData("property-function")]
+    [InlineData("startswith-property-function")]
     [InlineData("forward-property-reference")]
     [InlineData("cyclic-property-reference")]
+    [InlineData("item-reference")]
+    [InlineData("metadata-reference")]
     [InlineData("project-property-override")]
     [InlineData("project-import")]
     [InlineData("valid-then-conditioned-reassignment")]
@@ -446,10 +449,17 @@ public sealed class CSharpCentralPackageManagementTests
                     StringComparison.Ordinal),
             "property-function" => CentralXml("$(NetLibVersion)", extraProperty:
                 "<NetLibVersion>$([System.String]::Copy('10.0.2'))</NetLibVersion>"),
+            "startswith-property-function" =>
+                CentralXml("1.0.0-$(Prefix.StartsWith('10.'))", extraProperty:
+                    "<Prefix>10.</Prefix>"),
             "forward-property-reference" => CentralXml("$(NetLibVersion)", extraProperty:
                 "<NetLibVersion>$(LaterVersion)</NetLibVersion><LaterVersion>10.0.2</LaterVersion>"),
             "cyclic-property-reference" => CentralXml("$(NetLibVersion)", extraProperty:
                 "<NetLibVersion>$(OtherVersion)</NetLibVersion><OtherVersion>$(NetLibVersion)</OtherVersion>"),
+            "item-reference" => CentralXml("$(NetLibVersion)", extraProperty:
+                "<NetLibVersion>1.0.@(Items)</NetLibVersion>"),
+            "metadata-reference" => CentralXml("$(NetLibVersion)", extraProperty:
+                "<NetLibVersion>1.0.%(Identity)</NetLibVersion>"),
             "project-property-override" => CentralXml("$(NetLibVersion)", extraProperty:
                 "<NetLibVersion>10.0.2</NetLibVersion>"),
             "project-import" => CentralXml("$(NetLibVersion)", extraProperty:
@@ -542,6 +552,29 @@ public sealed class CSharpCentralPackageManagementTests
             ProjectFileParser.MaxCSharpCentralPackagePropertyExpansions));
         AssertCentralPropertyAuthorityFallsBack(CentralXml("$(NetLibVersion)",
             extraProperty: $"<P>1</P><NetLibVersion>{expressions}</NetLibVersion>"));
+    }
+
+    [Fact]
+    public void UnresolvedAssignmentsDoNotChargeLaterCentralPropertySubstitutions()
+    {
+        string suffix = string.Concat(Enumerable.Repeat("$(P)",
+            ProjectFileParser.MaxCSharpCentralPackagePropertyExpansions / 4));
+        var assignments = new StringBuilder("<P>1</P>");
+        for (int index = 0; index < 4; index++)
+        {
+            assignments.Append("<Unused").Append(index).Append(">$(Missing)")
+                .Append(suffix).Append("</Unused").Append(index).Append('>');
+        }
+        assignments.Append("<NetLibVersion>1.2.3</NetLibVersion>");
+
+        CSharpPackageReferenceSnapshot reference = Assert.Single(
+            ProjectFileParser.EvaluateCSharpPackageReferencesSnapshot(
+                Encoding.UTF8.GetBytes(ProjectXml()), [(PackageId, "")],
+                CentralXml("$(NetLibVersion)", extraProperty: assignments.ToString()),
+                hasAmbiguousDirectoryPackagesAuthority: false));
+
+        Assert.Equal("1.2.3", reference.Version);
+        Assert.True(reference.CentrallyManaged);
     }
 
     [Fact]

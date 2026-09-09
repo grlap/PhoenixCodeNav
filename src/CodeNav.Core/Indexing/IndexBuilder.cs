@@ -137,8 +137,10 @@ public static class IndexBuilder
     /// v30: stored F# parse coverage distinguishes compile owners with no retained context from
     /// owners with some but not all contexts retained under the unchanged 64-context budget.
     /// v31: F# parse contexts include the SDK-compatible cumulative NETSTANDARD*_OR_GREATER
-    /// defines, changing which conditional declarations are persisted for netstandard targets.</summary>
-    public const string SchemaVersion = "31";
+    /// defines, changing which conditional declarations are persisted for netstandard targets.
+    /// v32: project-context Exists probes persist nullable presence facts and owning F# project
+    /// dependencies, so decided absence is read from the same snapshot as compiler inputs.</summary>
+    public const string SchemaVersion = "32";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }
@@ -1045,6 +1047,8 @@ public static class IndexBuilder
             // finalization transaction so the classification queries below use production indexes
             // and schema_version can never advertise a partial schema.
             store.CompleteBulkLoad(tx);
+            // Probe updates use their query-facing path index, avoiding repeated table scans.
+            MsBuildExistsCapture.Refresh(store, tx, workspaceRoot);
             // isTest R3 (custom-resolve-proof): compiled test attributes + graph-leaf promotion —
             // must run after BOTH compile attribution and ref insertion (leaf check).
             int promoted = store.PromoteTestProjectsByCompiledAttributes(tx);

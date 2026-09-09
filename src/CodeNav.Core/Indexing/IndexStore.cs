@@ -19,7 +19,7 @@ internal readonly record struct BulkFileRow(
 /// read API used by tools and benchmarks. WAL mode allows concurrent readers.
 /// Does not own: parsing (SyntaxIndexer/ProjectFileParser) or orchestration (IndexBuilder).
 /// </summary>
-public sealed class IndexStore : IDisposable
+public sealed partial class IndexStore : IDisposable
 {
     private const string BulkFinalizationMarker = "__phoenix_bulk_finalization";
     internal static Action<string>? AfterOpenBeforeCreateSchemaForTest { get; set; }
@@ -244,6 +244,13 @@ public sealed class IndexStore : IDisposable
               stale INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE msbuild_exists_inputs(
+              source_file_id INTEGER NOT NULL,
+              path TEXT NOT NULL,
+              presence INTEGER CHECK(presence IN (0, 1)),
+              PRIMARY KEY(source_file_id, path)
+            );
+
             CREATE TABLE fsharp_parse_coverage(
               file_id INTEGER PRIMARY KEY,
               total_contexts INTEGER NOT NULL CHECK(total_contexts >= 0),
@@ -417,6 +424,7 @@ public sealed class IndexStore : IDisposable
             CREATE INDEX idx_project_refs_to ON project_refs(to_id);
             CREATE INDEX idx_package_refs_project ON package_refs(project_id);
             CREATE INDEX idx_compile_items_file ON compile_items(file_id);
+            CREATE INDEX idx_msbuild_exists_path ON msbuild_exists_inputs(path);
             """);
         _tSymbolIndexes += TimedSchemaExec(tx, """
             CREATE INDEX idx_symbols_file ON symbols(file_id, start_line);
@@ -1310,6 +1318,7 @@ public sealed class IndexStore : IDisposable
                 ("$id", fileId), ("$old", oldContent));
         }
         ExecTx(tx, "DELETE FROM file_contents WHERE file_id=$id", ("$id", fileId));
+        ExecTx(tx, "DELETE FROM msbuild_exists_inputs WHERE source_file_id=$id", ("$id", fileId));
         ExecTx(tx, "DELETE FROM fsharp_parse_coverage WHERE file_id=$id", ("$id", fileId));
         DeleteSymbolsForFile(tx, fileId);
         ExecTx(tx, "DELETE FROM compile_items WHERE file_id=$id", ("$id", fileId));

@@ -288,7 +288,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("31", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("32", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -401,6 +401,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("fsharp-semantic-bounded-project-evaluation", ids);
         Assert.Contains("fsharp-semantic-makerelative-project-root", ids);
         Assert.Contains("fsharp-semantic-indexed-file-exists", ids);
+        Assert.Contains("fsharp-semantic-literal-file-exists", ids);
         Assert.Contains("fsharp-semantic-property-startswith", ids);
         Assert.Contains("fsharp-semantic-package-asset-closure", ids);
         Assert.Contains("csharp-semantic-central-package-management", ids);
@@ -1362,6 +1363,16 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("indexed-file presence", indexedExists);
         Assert.Contains("web.config", indexedExists);
         Assert.Contains("unproven paths fail closed", indexedExists);
+        string literalExists = Summary("fsharp-semantic-literal-file-exists");
+        Assert.Contains("v0.12.94 F# literal/expanded Exists", literalExists);
+        Assert.Contains("project-relative", literalExists);
+        Assert.Contains("pinned presence/absence", literalExists);
+        Assert.Contains("excluded/unsafe paths stay unknown", literalExists);
+        string assemblyEdges = Summary("assembly-ref-edges");
+        Assert.Contains("IN-WORKSPACE", assemblyEdges);
+        Assert.Contains("source-over-binary", assemblyEdges);
+        Assert.Contains("name-level edges", assemblyEdges);
+        Assert.Contains("meta.indexSchema", assemblyEdges);
         string startsWith = Summary("fsharp-semantic-property-startswith");
         Assert.Contains("v0.12.93", startsWith);
         Assert.Contains("F#", startsWith);
