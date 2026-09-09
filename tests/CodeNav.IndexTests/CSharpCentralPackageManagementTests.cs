@@ -80,6 +80,61 @@ public sealed class CSharpCentralPackageManagementTests
         }
     }
 
+    [Theory]
+    [InlineData("UsingMicrosoftNETSdk", "sdk", "5.6.0-true")]
+    [InlineData("UsingNETSdkDefaults", "sdk", "5.6.0-true")]
+    [InlineData("UsingMicrosoftNETSdk", "early-override", null)]
+    [InlineData("UsingNETSdkDefaults", "early-override", null)]
+    [InlineData("UsingMicrosoftNETSdk", "literal", "5.6.0-true")]
+    [InlineData("UsingNETSdkDefaults", "literal", "5.6.0-true")]
+    [InlineData("UsingMicrosoftNETSdk", "central-override", "5.6.0-false")]
+    [InlineData("UsingNETSdkDefaults", "central-override", "5.6.0-false")]
+    public async Task SdkPackageVersionsRespectEarlyDirectoryBuildPropertyAuthority(
+        string property, string scenario, string? expectedVersion)
+    {
+        _ = ReferenceAssemblyLocator.Net472References(out _);
+        string sandbox = Directory.CreateTempSubdirectory("codenav-sdk-cpm").FullName;
+        string root = Path.Combine(sandbox, "workspace");
+        string packagesRoot = Path.Combine(sandbox, "packages");
+        string? priorPackagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        try
+        {
+            Directory.CreateDirectory(root);
+            // Both candidate versions exist, so an unjustified seed loads the wrong DLL
+            // instead of merely degrading because its guessed version is unavailable.
+            WritePackageFixture(packagesRoot, PackageId, "5.6.0-true");
+            WritePackageFixture(packagesRoot, PackageId, "5.6.0-false");
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", packagesRoot);
+            WriteWorkspace(root, "5.6.0-true");
+            if (scenario != "sdk")
+                File.WriteAllText(Path.Combine(root, "Directory.Build.props"),
+                    $"<Project><PropertyGroup><{property}>false</{property}></PropertyGroup></Project>");
+            string version = scenario == "literal" ? "5.6.0-true" : $"5.6.0-$({property})";
+            File.WriteAllText(Path.Combine(root, "Directory.Packages.props"), CentralXml(version,
+                extraProperty: scenario == "central-override" ? $"<{property}>false</{property}>" : null));
+            string dbPath = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, dbPath);
+
+            using var workspace = new SemanticWorkspace(root, dbPath, enableRoslynPersistence: false);
+            using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(
+                ["Cpm.Consumer"], CancellationToken.None);
+            Project project = Assert.Single(lease.Solution.Projects);
+            Assert.Empty(lease.Coverage.FailedProjects);
+            if (expectedVersion is null)
+                Assert.DoesNotContain(project.MetadataReferences.OfType<PortableExecutableReference>(),
+                    IsPackageReference);
+            else
+                Assert.Equal(Path.Combine(packagesRoot, PackageId.ToLowerInvariant(), expectedVersion,
+                    "lib", "netstandard2.0", "Microsoft.CodeAnalysis.CSharp.dll"), PackageReferencePath(project),
+                    WorkspacePaths.FileSystemPathComparer);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", priorPackagesRoot);
+            TestWorkspaceCleanup.DeleteWorkspace(sandbox);
+        }
+    }
+
     [Fact]
     public async Task LateDirectoryBuildTargetsPropertyAuthorityPreservesDirectReference()
     {

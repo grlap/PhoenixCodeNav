@@ -220,10 +220,10 @@ public static partial class ProjectFileParser
             if (root.Name.LocalName != "Project")
                 return Failure("fsharp_project_options_unavailable");
 
-            if (!ValidateSdkAuthority(root, allowStandardSdk: true))
+            if (!ValidateSdkAuthority(root, allowStandardSdk: true, out BoundedMsBuildSdkContext sdkContext))
                 return Failure("fsharp_semantic_sdk_unsupported");
-            bool isSdkStyle = root.Attributes().Any(attribute =>
-                attribute.Name.LocalName.Equals("Sdk", StringComparison.OrdinalIgnoreCase));
+            sdkContext.SeedProperties(_properties);
+            bool isSdkStyle = sdkContext.UsesMicrosoftNetSdk;
             RegisterDirectoryBuildDependencies(root);
             if (_error is not null) return Failure(_error);
             if (_directoryBuildTargetsPath is not null &&
@@ -383,7 +383,7 @@ public static partial class ProjectFileParser
 
         protected override bool ValidateImportedRoot(XElement root)
         {
-            if (ValidateSdkAuthority(root, allowStandardSdk: false)) return true;
+            if (ValidateSdkAuthority(root, allowStandardSdk: false, out _)) return true;
             _error = "fsharp_semantic_sdk_unsupported";
             return false;
         }
@@ -419,30 +419,14 @@ public static partial class ProjectFileParser
                 FSharpSemanticDocumentRole.DirectoryBuildProps or
                 FSharpSemanticDocumentRole.DirectoryBuildTargets;
 
-        private bool ValidateSdkAuthority(XElement root, bool allowStandardSdk)
+        private bool ValidateSdkAuthority(XElement root, bool allowStandardSdk,
+            out BoundedMsBuildSdkContext sdkContext)
         {
-            CheckCancellation();
-            XAttribute[] sdkAttributes = root.Attributes()
-                .Where(attribute => attribute.Name.LocalName.Equals("Sdk",
-                    StringComparison.OrdinalIgnoreCase))
-                .ToArray();
-            if (sdkAttributes.Length > 1) return false;
-            if (sdkAttributes.Length == 1)
+            if (!BoundedMsBuildSdkContext.TryRead(root, _cancellationToken, out sdkContext)) return false;
+            if (sdkContext.UsesMicrosoftNetSdk)
             {
-                string sdk = sdkAttributes[0].Value.Trim();
-                const string knownSdk = "Microsoft.NET.Sdk";
-                if (!allowStandardSdk ||
-                    !sdk.Equals(knownSdk, StringComparison.OrdinalIgnoreCase)) return false;
+                if (!allowStandardSdk) return false;
                 _partialReasons.Add("fsharp_semantic_sdk_implicit_authority");
-            }
-
-            // Child SDK declarations can add implicit props/targets from arbitrary resolvers.
-            // Stage 2A.1 does not resolve that authority, even for a familiar SDK name.
-            foreach (XElement element in root.Elements())
-            {
-                CheckCancellation();
-                if (element.Name.LocalName.Equals("Sdk", StringComparison.OrdinalIgnoreCase))
-                    return false;
             }
             return true;
         }

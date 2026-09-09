@@ -18,8 +18,9 @@ public static partial class ProjectFileParser
         @"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
 
     /// <summary>Projects the standard unconditional CPM shape needed by the existing C# semantic
-    /// package loader, including bounded simple local-property expansion. Authority comes only from
-    /// the pinned indexed Directory.Packages.props snapshot. Shapes that require broader MSBuild
+    /// package loader, including bounded simple local-property expansion. Authority comes from
+    /// the pinned indexed Directory.Packages.props snapshot and unshadowed root SDK context.
+    /// Shapes that require broader MSBuild
     /// evaluation retain the established unresolved-reference behavior instead of guessing a package
     /// version; once selected, a central version never falls back to another cache directory.</summary>
     internal static List<CSharpPackageReferenceSnapshot> EvaluateCSharpPackageReferencesSnapshot(
@@ -27,7 +28,8 @@ public static partial class ProjectFileParser
         IReadOnlyList<(string Package, string Version)> packageReferences,
         string? directoryPackagesXml,
         bool hasAmbiguousDirectoryPackagesAuthority,
-        bool hasPotentialLateProjectPropertyAuthority = false)
+        bool hasPotentialLateProjectPropertyAuthority = false,
+        bool hasPotentialImportedSdkPropertyAuthority = false)
     {
         var direct = packageReferences.Select(reference =>
             new CSharpPackageReferenceSnapshot(reference.Package, reference.Version)).ToList();
@@ -82,13 +84,21 @@ public static partial class ProjectFileParser
             item.Elements().Any(e => (NameEquals(e, "Version") || NameEquals(e, "VersionOverride")) &&
                 e.Value.Contains("$(", StringComparison.Ordinal)));
         var expansionBudget = new CSharpCentralPropertyExpansionBudget();
+        // SDK flags precede Directory.Build.props, which this C# adapter does not evaluate.
+        // Withhold those seeds when imported authority may shadow them; explicit central
+        // assignments still run afterward. Literal package versions do not need the seeds.
+        // Unsupported SDK forms likewise confer no context. F# uses the same root reader
+        // but evaluates early imports itself, so it can retain their actual assignments.
+        BoundedMsBuildSdkContext sdkContext = default;
+        if (!hasPotentialImportedSdkPropertyAuthority)
+            _ = BoundedMsBuildSdkContext.TryRead(project.Root, CancellationToken.None, out sdkContext);
         Dictionary<string, BoundedMsBuildProperty> properties;
         var projectPropertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (usesProperties)
         {
             if (hasPotentialLateProjectPropertyAuthority ||
                 project.Descendants().Any(e => NameEquals(e, "Import")) ||
-                !TryEvaluateCSharpCentralProperties(central, expansionBudget, out properties))
+                !TryEvaluateCSharpCentralProperties(central, expansionBudget, sdkContext, out properties))
                 return direct;
             int projectPropertyCount = 0;
             foreach (XElement property in project.Descendants().Where(e => NameEquals(e, "PropertyGroup"))
@@ -101,6 +111,7 @@ public static partial class ProjectFileParser
         else
         {
             properties = new(StringComparer.OrdinalIgnoreCase);
+            sdkContext.SeedProperties(properties);
         }
         foreach (var flag in flags) properties[flag.Key] = flag.Value;
 
@@ -146,10 +157,12 @@ public static partial class ProjectFileParser
 
     private static bool TryEvaluateCSharpCentralProperties(XDocument central,
         CSharpCentralPropertyExpansionBudget expansionBudget,
+        BoundedMsBuildSdkContext sdkContext,
         out Dictionary<string, BoundedMsBuildProperty> properties)
     {
         properties = new Dictionary<string, BoundedMsBuildProperty>(
             StringComparer.OrdinalIgnoreCase);
+        sdkContext.SeedProperties(properties);
         int propertyCount = 0;
         foreach (XElement group in central.Root!.Descendants().Where(element =>
                      NameEquals(element, "PropertyGroup")))

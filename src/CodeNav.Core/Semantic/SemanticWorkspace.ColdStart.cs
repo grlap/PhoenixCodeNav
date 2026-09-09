@@ -1488,7 +1488,10 @@ public sealed partial class SemanticWorkspace
                             projectBytes, parsed.PackageRefs,
                             plan.DirectoryPackagesAuthority.Content,
                             plan.DirectoryPackagesAuthority.PathAmbiguous,
-                            plan.HasDirectoryBuildTargetsAuthority);
+                            plan.HasDirectoryBuildTargetsAuthority,
+                            // Aggregate props/targets authority is conservative for SDK seeds;
+                            // targets already refuse property-dependent versions via the prior flag.
+                            hasPotentialImportedSdkPropertyAuthority: plan.HasDirectoryBuildAuthority);
                     parsed = parsed with
                     {
                         PackageRefs = packageReferences

@@ -251,6 +251,26 @@ within that disclosed context; it does not claim agreement with the user's actua
 No caller configuration/platform override is exposed yet, and these defaults do not themselves
 add `DEBUG`/`TRACE` constants or set `PlatformTarget`. Schema v35 rebuilds the index to re-harvest
 `Exists` dependencies under the same defaults used by semantic queries; numeric limits are unchanged.
+Since v0.12.99, a shared Core SDK-context reader derives `UsingMicrosoftNETSdk=true` and
+`UsingNETSdkDefaults=true` from the admitted single literal root `Sdk="Microsoft.NET.Sdk"`
+declaration (trimmed, case-insensitive). F# seeds both properties before `Directory.Build.props`,
+`Directory.Packages.props`, and the project body, matching the flags' placement in `Sdk.props`
+before `Microsoft.Common.props`. These are SDK-derived values, not universal analysis defaults:
+neither a `.csproj`/`.fsproj` suffix nor a target framework confers SDK authority. Ordinary later
+assignments remain authoritative, including false, empty, and incomplete values. The existing
+`fsharp_semantic_sdk_implicit_authority` disclosure still records the bounded SDK model.
+C# consumes the same context only within its already admitted unconditional CPM scalar-property
+expansion; this does not admit new conditioned or imported C# inputs. Because that adapter does
+not evaluate early `Directory.Build.props`, indexed Directory.Build authority withholds its implicit
+SDK seeds: an unproven SDK-dependent version stays unresolved, while literal versions and explicit
+central assignments remain supported. The existing separate late-targets guard still rejects
+property-dependent versions under late authority. F# evaluates early imports and retains their
+actual overrides. A root SDK plus a child `Sdk` declaration is refused without claiming
+`fsharp_semantic_sdk_implicit_authority`, since the combined declaration was not admitted.
+SDK-less projects receive
+no inferred flags; unknown, derived, version-qualified, child, and explicit-import SDK forms do
+not gain new support. Schema v37 rebuilds persisted F# `Exists` dependencies because SDK-conditioned
+probes are now reachable during indexing as well as queries. Existing numeric limits are unchanged.
 The declared property-function allowlist contains two exact shapes. The path-only
 `$([MSBuild]::MakeRelative($(MSBuildProjectDirectory), $(MSBuildThisFileDirectory)))`
 shape allows optional matching single or double quotes around either reserved property. It is

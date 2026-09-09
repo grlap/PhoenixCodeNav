@@ -288,7 +288,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("36", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("37", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -638,6 +638,12 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("VersionOverride", sharedPackages);
         Assert.Contains("GlobalPackageReference is restore-only, not compile", sharedPackages);
         Assert.Contains("caller authority/budgets retained", sharedPackages);
+        string sharedSdkContext = Assert.Single(json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == "shared-semantic-sdk-context")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("v0.12.99 C#/F# root Microsoft.NET.Sdk", sharedSdkContext);
+        Assert.Contains("UsingMicrosoftNETSdk/UsingNETSdkDefaults=true before imports", sharedSdkContext);
+        Assert.Contains("mutable; existing caller authority retained", sharedSdkContext);
         string csharpCentralPackageProperties = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -997,15 +1003,20 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("serialized HEAD snapshot acquisition", gitAwareness);
         Assert.Contains("ordered recovery publication", gitAwareness);
         Assert.Contains("rebuild-generation retirement", gitAwareness);
-        Assert.Contains("rapid inverse transitions preserve final rows",
+        Assert.Contains("preserve final rows/attachment through same-commit attachment changes and rapid inverse transitions",
             gitAwareness);
-        Assert.Contains("unavailable recovery snapshots force older queued Git tuples to revalidate",
+        Assert.Contains("Unavailable recovery snapshots force older queued Git tuples to revalidate",
             gitAwareness);
-        Assert.Contains("at or after the latest unavailable sample allowed to publish ready",
+        Assert.Contains("ready requires resolved generation at/after latest unavailable sample",
             gitAwareness);
         Assert.Contains(
-            "full rebuilds reject ordered recovery publications sampled for the replaced database",
+            "Full rebuilds reject ordered recovery samples from replaced DB",
             gitAwareness);
+        Assert.Contains("Detached HEAD clears indexed branch", gitAwareness);
+        Assert.Contains("repo_overview.git: indexed vs HEAD, commit match", gitAwareness);
+        Assert.Contains(".cmd/.bat Git: cmd + hex-gated args", gitAwareness);
+        Assert.Contains("commit-less repos: reflog watch attaches on .git/logs creation", gitAwareness);
+        Assert.Contains("unresolved Git logged", gitAwareness);
         string refreshInputRetry = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
