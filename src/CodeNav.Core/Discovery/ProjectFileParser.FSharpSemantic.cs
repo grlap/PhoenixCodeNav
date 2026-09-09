@@ -187,6 +187,7 @@ public static partial class ProjectFileParser
             _directoryBuildTargetsPath = NormalizeOptionalWorkspacePath(directoryBuildTargetsPath);
             _cancellationToken = cancellationToken;
             _budget = budget;
+            BoundedMsBuildProjectContext.SeedProperties(_projectPath, _properties);
             _properties["TargetFramework"] = new(selectedTargetFramework, true);
             // Phoenix's initial analysis context, available even to early props. These are
             // mutable defaults, not detected IDE state or immutable MSBuild global properties.
@@ -459,6 +460,7 @@ public static partial class ProjectFileParser
             bool filterToReferenceInputs =
                 role == FSharpSemanticDocumentRole.DirectoryBuildTargets;
             bool hasReferenceInputProperties = group.Elements().Any(property =>
+                    BoundedMsBuildProjectContext.IsReservedProperty(property.Name.LocalName) ||
                     IsSemanticPropertyName(property.Name.LocalName) ||
                     _directoryReferenceProperties.Contains(property.Name.LocalName));
             bool hasCompilerSchedulingProperties = group.Elements().Any(property =>
@@ -491,11 +493,17 @@ public static partial class ProjectFileParser
             {
                 CheckCancellation();
                 if (filterToReferenceInputs &&
+                    !BoundedMsBuildProjectContext.IsReservedProperty(property.Name.LocalName) &&
                     !IsSemanticPropertyName(property.Name.LocalName) &&
                     !_directoryReferenceProperties.Contains(property.Name.LocalName))
                     continue;
                 if (!ShouldProcess(property, documentPath, out process)) return;
                 if (!process) continue;
+                if (BoundedMsBuildProjectContext.IsReservedProperty(property.Name.LocalName))
+                {
+                    _error = "fsharp_semantic_property_unsupported";
+                    return;
+                }
                 if (property.HasElements || !_budget.TryReservePropertyAssignment())
                 {
                     _error = property.HasElements

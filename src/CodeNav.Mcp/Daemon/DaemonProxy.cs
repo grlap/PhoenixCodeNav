@@ -45,19 +45,20 @@ internal sealed class DaemonProxy
         _legacyEndpoints = DaemonEndpoint.LegacyUnixCandidates(endpoint);
     }
 
-    internal async Task<int> RunAsync(CancellationToken cancellationToken = default)
+    internal async Task<int> RunAsync(CancellationToken cancellationToken = default,
+        Stream? input = null, Stream? output = null)
     {
         PhoenixRuntimeMode.Set(PhoenixProcessMode.Proxy);
+        Stream daemon;
         try
         {
-            await using Stream daemon = await ConnectOrStartAsync(cancellationToken)
+            daemon = await ConnectOrStartAsync(cancellationToken)
                 .ConfigureAwait(false);
-            await RelayAsync(daemon, cancellationToken).ConfigureAwait(false);
-            return 0;
         }
         catch (DaemonProxyFailureException failure)
         {
-            return await UnavailableMcpShim.RunAsync(failure.Failure, cancellationToken)
+            return await UnavailableMcpShim.RunAsync(failure.Failure, cancellationToken,
+                failure.Failure.Retryable ? ConnectExistingAsync : null)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -71,8 +72,45 @@ internal sealed class DaemonProxy
                     "daemon_proxy_failed",
                     $"Phoenix daemon proxy failed before MCP relay ({ex.GetType().Name}).",
                     "Retry the MCP connection and inspect Phoenix daemon discovery state.",
-                    Retryable: true),
+                    Retryable: false),
                 cancellationToken).ConfigureAwait(false);
+        }
+        // Once relay starts, stdio may already contain an initialized MCP conversation.
+        // Never replace it with a new unavailable server on that same stream.
+        try
+        {
+            await using (daemon)
+                await RelayAsync(daemon, input ?? Console.OpenStandardInput(),
+                    output ?? Console.OpenStandardOutput(), cancellationToken).ConfigureAwait(false);
+            return 0;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return 0; }
+        catch (IOException) { return 4; }
+    }
+
+    internal async Task<Stream> ConnectExistingAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ConnectAcceptedAsync(_endpoint, cancellationToken, recoveryOnly: true)
+                .ConfigureAwait(false);
+        }
+        catch (DaemonEndpointUnavailableException)
+        {
+            foreach (DaemonEndpoint legacy in _legacyEndpoints)
+            {
+                try
+                {
+                    return await ConnectAcceptedAsync(legacy, cancellationToken, recoveryOnly: true)
+                        .ConfigureAwait(false);
+                }
+                catch (DaemonEndpointUnavailableException) { }
+            }
+            // A missing endpoint says less than an exact live startup report. Preserve
+            // that diagnosis, but only after trying to reach a now-ready daemon first.
+            DaemonUnavailableFailure? cached = DaemonStartupStatus.TryReadLiveFailure(_endpoint, _rebuild);
+            if (cached is not null) throw Failure(SharedCachedFailure(cached));
+            throw;
         }
     }
 
@@ -108,7 +146,8 @@ internal sealed class DaemonProxy
 
     internal async Task<Stream> ConnectAcceptedAsync(
         DaemonEndpoint endpoint,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool recoveryOnly = false)
     {
         Stream stream;
         try
@@ -129,7 +168,7 @@ internal sealed class DaemonProxy
         try
         {
             DaemonHandshakeRequest request = DaemonProtocol.CreateRequest(
-                endpoint, _clientName, _rebuild);
+                endpoint, _clientName, _rebuild && !recoveryOnly);
             using var handshake = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             handshake.CancelAfter(DaemonProtocol.HandshakeTimeout);
             DaemonHandshakeResponse? response;
@@ -147,7 +186,7 @@ internal sealed class DaemonProxy
                 throw Failure(
                     "daemon_handshake_timeout",
                     "Phoenix connected to the shared daemon endpoint, but the authority handshake did not complete before the protocol deadline.",
-                    "Retry the MCP connection; if this repeats, close and restart active Phoenix sessions for this workspace.",
+                    "Retry a tool call in this MCP session after the daemon is ready; the session can reconnect without restarting it.",
                     retryable: true,
                     ex);
             }
@@ -164,7 +203,7 @@ internal sealed class DaemonProxy
                 response.Cause == "daemon_index_destination_mismatch" &&
                 DaemonProtocol.IsOlderToolVersion(
                     response.ToolVersion, BuildInfo.Version);
-            if (response.Cause == "daemon_older_than_client" || olderDestinationIdentity)
+            if (!recoveryOnly && (response.Cause == "daemon_older_than_client" || olderDestinationIdentity))
             {
                 await RetireOlderDaemonAsync(
                     endpoint,
@@ -379,8 +418,10 @@ internal sealed class DaemonProxy
     private static DaemonUnavailableFailure SharedCachedFailure(
         DaemonUnavailableFailure failure) => failure with
         {
+            Detail = "The live startup owner last reported: " + failure.Detail,
             Recovery = failure.Recovery +
-                " If the condition has already cleared, close the Phoenix session that first reported this startup failure, then reconnect."
+                " If no daemon is running after the condition clears, close the Phoenix session that first reported this startup failure, then reconnect. " +
+                "If an existing daemon is ready, retry a tool call in this MCP session; recovery does not start another daemon."
         };
 
     private void TryPublishStartupFailure(DaemonUnavailableFailure failure)
@@ -479,33 +520,35 @@ internal sealed class DaemonProxy
         }
     }
 
-    private static async Task RelayAsync(Stream daemon, CancellationToken cancellationToken)
+    private static async Task RelayAsync(Stream daemon, Stream input, Stream output, CancellationToken cancellationToken)
     {
-        Stream input = Console.OpenStandardInput();
-        Stream output = Console.OpenStandardOutput();
         using var relay = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Task upstream = input.CopyToAsync(daemon, 64 * 1024, relay.Token);
         Task downstream = daemon.CopyToAsync(output, 64 * 1024, relay.Token);
         Task completed = await Task.WhenAny(upstream, downstream).ConfigureAwait(false);
-        if (completed == downstream)
-            await output.FlushAsync(cancellationToken).ConfigureAwait(false);
-        relay.Cancel();
-        try { await completed.ConfigureAwait(false); }
-        catch (OperationCanceledException) { }
-        catch (IOException) { }
-
-        Task pending = completed == upstream ? downstream : upstream;
         try
         {
-            await pending.WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+            if (completed == downstream)
+                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+            try { await completed.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            catch (IOException) { }
         }
-        catch (Exception ex) when (ex is OperationCanceledException or IOException or TimeoutException)
+        finally
         {
-            _ = pending.ContinueWith(
-                task => _ = task.Exception,
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+            // Flush can fail too. Always stop the other copy and observe both tasks.
+            relay.Cancel();
+            _ = completed.Exception;
+            Task pending = completed == upstream ? downstream : upstream;
+            try { await pending.WaitAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is OperationCanceledException or IOException or TimeoutException)
+            {
+                _ = pending.ContinueWith(
+                    task => _ = task.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
         }
     }
 

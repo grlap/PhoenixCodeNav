@@ -288,7 +288,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("37", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("38", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -409,6 +409,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("csharp-semantic-central-package-management", ids);
         Assert.Contains("csharp-semantic-central-package-property-expansion", ids);
         Assert.Contains("shared-mcp-daemon", ids);
+        Assert.Contains("shared-daemon-session-recovery", ids);
+        Assert.Contains("shared-semantic-project-extension", ids);
         Assert.Contains("shared-mcp-daemon-default", ids);
         Assert.Contains("workspace-msbuild-config-indexing", ids);
         Assert.Contains("hierarchy-ranking", ids);
@@ -644,6 +646,16 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("v0.12.99 C#/F# root Microsoft.NET.Sdk", sharedSdkContext);
         Assert.Contains("UsingMicrosoftNETSdk/UsingNETSdkDefaults=true before imports", sharedSdkContext);
         Assert.Contains("mutable; existing caller authority retained", sharedSdkContext);
+        string projectExtension = Assert.Single(json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == "shared-semantic-project-extension")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("MSBuildProjectExtension from root project path before imports", projectExtension);
+        Assert.Contains("reserved, SDK-independent", projectExtension);
+        string sessionRecovery = Assert.Single(json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == "shared-daemon-session-recovery")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("same MCP session to an existing daemon", sessionRecovery);
+        Assert.Contains("no spawning or dispatched-call replay", sessionRecovery);
         string csharpCentralPackageProperties = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

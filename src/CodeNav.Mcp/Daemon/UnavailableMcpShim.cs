@@ -19,9 +19,11 @@ internal static class UnavailableMcpShim
 
     internal static async Task<int> RunAsync(
         DaemonUnavailableFailure failure,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<CancellationToken, Task<Stream>>? reconnect = null)
     {
         PhoenixRuntimeMode.Set(PhoenixProcessMode.UnavailableShim);
+        await using var recovery = reconnect is null ? null : new DaemonSessionRecovery(failure, reconnect, cancellationToken);
         HostApplicationBuilder builder = Host.CreateApplicationBuilder();
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
@@ -31,15 +33,18 @@ internal static class UnavailableMcpShim
             {
                 options.ServerInfo = new()
                 {
-                    Name = "phoenix-codenav-unavailable",
+                    Name = recovery is null ? "phoenix-codenav-unavailable" : "phoenix-codenav",
                     Version = BuildInfo.Version,
                 };
-                options.ServerInstructions =
-                    "Phoenix shared daemon is unavailable. Tool calls return one typed cause and recovery action.";
+                options.ServerInstructions = recovery is null
+                    ? "Phoenix shared daemon is unavailable. Tool calls return one typed cause and recovery action."
+                    : "Phoenix tools reconnect to the existing shared daemon on demand after a transient startup failure. " +
+                      "Inspect server_capabilities for current availability. Recovery retains this MCP session; " +
+                      "calls already dispatched are never replayed.";
             })
             .WithStdioServerTransport()
             .WithTools(ValidatedMcpToolRegistration.CreateNavigationTools()
-                .Select(tool => (McpServerTool)new UnavailableMcpServerTool(tool, failure))
+                .Select(tool => (McpServerTool)new UnavailableMcpServerTool(tool, failure, recovery))
                 .ToArray());
         using IHost host = builder.Build();
         await host.RunAsync(cancellationToken).ConfigureAwait(false);
@@ -48,7 +53,8 @@ internal static class UnavailableMcpShim
 
     internal static JsonElement CreatePayload(
         DaemonUnavailableFailure failure,
-        string toolName)
+        string toolName,
+        bool sessionRecoveryAvailable = false)
     {
         bool capabilities = string.Equals(
             toolName, "server_capabilities", StringComparison.Ordinal);
@@ -83,7 +89,9 @@ internal static class UnavailableMcpShim
                         id = "shared-mcp-daemon-default",
                         summary = "Phoenix's default shared-daemon topology is present but unavailable for this session.",
                     },
-                },
+                }.Concat(sessionRecoveryAvailable
+                    ? [new { id = "shared-daemon-session-recovery", summary = "This MCP session can reconnect to an existing daemon on later tool calls; dispatched calls are not replayed." }]
+                    : []).ToArray(),
             }
             : new
             {
@@ -102,25 +110,34 @@ internal static class UnavailableMcpShim
 internal sealed class UnavailableMcpServerTool : DelegatingMcpServerTool
 {
     private readonly DaemonUnavailableFailure _failure;
+    private readonly DaemonSessionRecovery? _recovery;
 
     internal UnavailableMcpServerTool(
         McpServerTool inner,
-        DaemonUnavailableFailure failure)
-        : base(inner) => _failure = failure;
+        DaemonUnavailableFailure failure,
+        DaemonSessionRecovery? recovery = null)
+        : base(inner) => (_failure, _recovery) = (failure, recovery);
 
     public override ValueTask<CallToolResult> InvokeAsync(
         RequestContext<CallToolRequestParams> request,
         CancellationToken cancellationToken = default)
     {
+        if (_recovery is not null) return _recovery.InvokeAsync(request, cancellationToken);
+        return ValueTask.FromResult(FailureResult(_failure, ProtocolTool.Name));
+    }
+
+    internal static CallToolResult FailureResult(DaemonUnavailableFailure failure, string toolName,
+        bool sessionRecoveryAvailable = false)
+    {
         bool capabilities = string.Equals(
-            ProtocolTool.Name, "server_capabilities", StringComparison.Ordinal);
+            toolName, "server_capabilities", StringComparison.Ordinal);
         JsonElement structured = UnavailableMcpShim.CreatePayload(
-            _failure, ProtocolTool.Name);
-        return ValueTask.FromResult(new CallToolResult
+            failure, toolName, sessionRecoveryAvailable);
+        return new CallToolResult
         {
             IsError = capabilities ? null : true,
             StructuredContent = structured,
             Content = [new TextContentBlock { Text = structured.GetRawText() }],
-        });
+        };
     }
 }

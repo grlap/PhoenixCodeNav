@@ -23,6 +23,43 @@ public sealed class CSharpCentralPackageManagementTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task ProjectExtensionSuppliesCSharpCompilerReferenceThroughProductionCaller(bool earlyProps)
+    {
+        _ = ReferenceAssemblyLocator.Net472References(out _);
+        string sandbox = Directory.CreateTempSubdirectory("codenav-ext-cpm").FullName;
+        string root = Path.Combine(sandbox, "workspace");
+        string packagesRoot = Path.Combine(sandbox, "packages");
+        string? priorPackagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        try
+        {
+            Directory.CreateDirectory(root);
+            WritePackageFixture(packagesRoot, PackageId, "5.6.0-kind.csproj");
+            WritePackageFixture(packagesRoot, PackageId, "5.6.0-kind.props");
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", packagesRoot);
+            WriteWorkspace(root, "5.6.0-kind.csproj");
+            if (earlyProps)
+                File.WriteAllText(Path.Combine(root, "Directory.Build.props"), "<Project />");
+            File.WriteAllText(Path.Combine(root, "Directory.Packages.props"),
+                CentralXml("5.6.0-kind$(MSBuildProjectExtension)"));
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using var workspace = new SemanticWorkspace(root, db, enableRoslynPersistence: false);
+            using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(["Cpm.Consumer"], CancellationToken.None);
+            Assert.Empty(lease.Coverage.FailedProjects);
+            Assert.Equal(Path.Combine(packagesRoot, PackageId.ToLowerInvariant(), "5.6.0-kind.csproj",
+                "lib", "netstandard2.0", "Microsoft.CodeAnalysis.CSharp.dll"),
+                PackageReferencePath(Assert.Single(lease.Solution.Projects)), WorkspacePaths.FileSystemPathComparer);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", priorPackagesRoot);
+            TestWorkspaceCleanup.DeleteWorkspace(sandbox);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task CentralPackageVersionSuppliesCSharpCompilerReference(bool centralReference)
     {
         string root = Directory.CreateTempSubdirectory("codenav-csharp-cpm").FullName;

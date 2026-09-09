@@ -271,6 +271,16 @@ SDK-less projects receive
 no inferred flags; unknown, derived, version-qualified, child, and explicit-import SDK forms do
 not gain new support. Schema v37 rebuilds persisted F# `Exists` dependencies because SDK-conditioned
 probes are now reachable during indexing as well as queries. Existing numeric limits are unchanged.
+Since v0.12.100, both language adapters derive the reserved `MSBuildProjectExtension` from the
+root project path, independently of SDK admission: `.fsproj` for an F# project, `.csproj` for a
+C# project. Imported `.props` or `.targets` files keep that project value, not their own extension.
+F# makes it available before early imports; C# uses it within its existing CPM scalar authority,
+including under early Directory.Build authority because the value is reserved, not overridable.
+An admitted assignment to this reserved property fails closed (F# `fsharp_semantic_property_unsupported`,
+C# unresolved-reference fallback). A missing project path confers no guessed extension, and this
+does not infer SDK flags or add general `MSBuildProject*`/`MSBuildThisFile*` support.
+Schema v38 rebuilds extension-dependent persisted F# `Exists` probes; cold and delta capture use
+the same root context as semantic queries.
 The declared property-function allowlist contains two exact shapes. The path-only
 `$([MSBuild]::MakeRelative($(MSBuildProjectDirectory), $(MSBuildThisFileDirectory)))`
 shape allows optional matching single or double quotes around either reserved property. It is
@@ -1344,8 +1354,8 @@ The daemon stays alive for a 15-minute linger after its last client disconnects 
 restarts retain the watcher and semantic estate. Another connection cancels the idle shutdown. A
 keep-alive option supports build servers. At final shutdown the daemon stops accepting connections,
 drains admitted work, disposes semantic/index services, removes only its own verified descriptor and
-endpoint, and releases the workspace lease. An initialized MCP session ends if its daemon dies: MCP
-does not permit replacing the server transport without a new `initialize` exchange. The MCP host then
+endpoint, and releases the workspace lease. An initialized raw-relay MCP session ends if its daemon
+dies; the proxy does not replace its transport under the existing protocol session. The MCP host then
 restarts its stdio proxy; replacement proxies use the same bounded autostart election, so one starts
 the successor while peers wait. Negotiation failures before initialization remain visible through the
 typed unavailable shim rather than silently opening the database.
@@ -1359,6 +1369,30 @@ reports `meta.indexMode: "unavailable"` plus the stable refusal id and actionabl
 other advertised tool returns the same typed unavailable cause. Hosts therefore see messages such as
 "daemon is newer; restart/update this agent" or "takeover timed out" rather than an unexplained dead
 stdio server.
+
+Since v0.12.100 a retryable pre-relay failure starts a recovery-capable MCP server
+named `phoenix-codenav`, with the same tool schemas. Each later tool call can retry
+the authority handshake against the existing daemon; concurrent callers share an
+in-flight attempt. Recovery never launches or replaces a daemon, repeats `--rebuild`, raises a deadline,
+or switches an initialized stdio conversation to a raw stream. The proxy initializes
+an upstream MCP client and forwards complete tool parameters/results, progress and
+logging notifications, and cancellation. A cancelled waiter does not cancel a peer's
+connection attempt; session shutdown cancels and disposes the owned connection.
+After recovery, `server_capabilities` comes from the daemon, not a cached failure.
+Before recovery, the unavailable manifest already advertises `shared-daemon-session-recovery`;
+terminal shims do not advertise it.
+When no endpoint responds, recovery rereads an exact live-owner startup report if present;
+its typed cause is retained as the owner's last-reported diagnosis, not proof that the original
+condition still holds. A successful connection takes precedence over any retained refusal record.
+Permanent authority refusals remain unavailable. Lost or unreadable dispatched results are never
+replayed and report `daemon_request_outcome_unknown` with `retryable:false`, because
+the operation may have executed. Later calls can reconnect. A received JSON-RPC tool rejection
+remains a protocol error and retains the connection; an initialization rejection leaves no usable
+client and may be retried on a later call. Normal raw-relay sessions
+still disconnect on transport loss; they never start a second MCP server on consumed
+stdio. Relay shutdown cancellation exits successfully; a failed output flush returns the
+controlled failure exit code without bypassing copy-task cleanup.
+Non-recovery shims retain `phoenix-codenav-unavailable`.
 
 ### Security boundary
 

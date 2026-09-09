@@ -29,7 +29,8 @@ public static partial class ProjectFileParser
         string? directoryPackagesXml,
         bool hasAmbiguousDirectoryPackagesAuthority,
         bool hasPotentialLateProjectPropertyAuthority = false,
-        bool hasPotentialImportedSdkPropertyAuthority = false)
+        bool hasPotentialImportedSdkPropertyAuthority = false,
+        string? projectPath = null)
     {
         var direct = packageReferences.Select(reference =>
             new CSharpPackageReferenceSnapshot(reference.Package, reference.Version)).ToList();
@@ -51,6 +52,11 @@ public static partial class ProjectFileParser
             central.Root.Attributes().Any(a => a.Name.LocalName.Equals("Sdk", StringComparison.OrdinalIgnoreCase)) ||
             central.Descendants().Any(e => NameEquals(e, "Sdk") || NameEquals(e, "Import")))
             return direct;
+
+        if (new[] { project, central }.Any(document => document.Descendants().Any(element =>
+                element.Parent is { } parent && NameEquals(parent, "PropertyGroup") &&
+                BoundedMsBuildProjectContext.IsReservedProperty(element.Name.LocalName))))
+            return direct; // MSBuild refuses attempts to assign a reserved project property.
 
         // C# still admits only pinned unconditional XML. Item semantics below are shared with F#;
         // this adapter does not acquire imported property/condition authority on its caller's behalf.
@@ -98,7 +104,7 @@ public static partial class ProjectFileParser
         {
             if (hasPotentialLateProjectPropertyAuthority ||
                 project.Descendants().Any(e => NameEquals(e, "Import")) ||
-                !TryEvaluateCSharpCentralProperties(central, expansionBudget, sdkContext, out properties))
+                !TryEvaluateCSharpCentralProperties(central, expansionBudget, sdkContext, projectPath, out properties))
                 return direct;
             int projectPropertyCount = 0;
             foreach (XElement property in project.Descendants().Where(e => NameEquals(e, "PropertyGroup"))
@@ -111,6 +117,7 @@ public static partial class ProjectFileParser
         else
         {
             properties = new(StringComparer.OrdinalIgnoreCase);
+            BoundedMsBuildProjectContext.SeedProperties(projectPath, properties);
             sdkContext.SeedProperties(properties);
         }
         foreach (var flag in flags) properties[flag.Key] = flag.Value;
@@ -158,10 +165,12 @@ public static partial class ProjectFileParser
     private static bool TryEvaluateCSharpCentralProperties(XDocument central,
         CSharpCentralPropertyExpansionBudget expansionBudget,
         BoundedMsBuildSdkContext sdkContext,
+        string? projectPath,
         out Dictionary<string, BoundedMsBuildProperty> properties)
     {
         properties = new Dictionary<string, BoundedMsBuildProperty>(
             StringComparer.OrdinalIgnoreCase);
+        BoundedMsBuildProjectContext.SeedProperties(projectPath, properties);
         sdkContext.SeedProperties(properties);
         int propertyCount = 0;
         foreach (XElement group in central.Root!.Descendants().Where(element =>

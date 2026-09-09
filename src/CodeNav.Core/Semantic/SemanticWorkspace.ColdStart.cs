@@ -1491,7 +1491,8 @@ public sealed partial class SemanticWorkspace
                             plan.HasDirectoryBuildTargetsAuthority,
                             // Aggregate props/targets authority is conservative for SDK seeds;
                             // targets already refuse property-dependent versions via the prior flag.
-                            hasPotentialImportedSdkPropertyAuthority: plan.HasDirectoryBuildAuthority);
+                            hasPotentialImportedSdkPropertyAuthority: plan.HasDirectoryBuildAuthority,
+                            projectPath: plan.Row.Path);
                     parsed = parsed with
                     {
                         PackageRefs = packageReferences

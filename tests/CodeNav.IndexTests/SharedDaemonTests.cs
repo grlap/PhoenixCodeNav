@@ -18,7 +18,7 @@ namespace CodeNav.Tests;
 public sealed class SharedDaemonProcessCollection;
 
 [Collection("Shared daemon MCP process isolation")]
-public sealed class SharedDaemonTests
+public sealed partial class SharedDaemonTests
 {
     // Shared with TestGit and ProcessHeavyTestIsolation: this is the approved outer
     // process-exit ceiling for test orchestration, not a Phoenix product timeout.
@@ -1506,7 +1506,7 @@ public sealed class SharedDaemonTests
             Assert.Equal("daemon_handshake_timeout", failure.Failure.Cause);
             Assert.True(failure.Failure.Retryable);
             Assert.Contains("authority handshake", failure.Failure.Detail);
-            Assert.Contains("close and restart active Phoenix sessions",
+            Assert.Contains("Retry a tool call in this MCP session",
                 failure.Failure.Recovery);
         }
         finally
