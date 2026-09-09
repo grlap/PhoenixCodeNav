@@ -233,8 +233,14 @@ public static partial class ProjectFileParser
                 ProcessResolvedImport(_directoryPackagesPropsPath,
                     FSharpSemanticDocumentRole.DirectoryPackagesProps, depth: 0);
             if (_error is null)
+            {
+                // Early props run before these defaults. Preserve values supplied by imports,
+                // including explicit empty/incomplete values; later ordinary assignments may override.
+                _properties.TryAdd("Configuration", new("Debug", true));
+                _properties.TryAdd("Platform", new("AnyCPU", true));
                 ProcessContainer(root, _projectPath,
                     FSharpSemanticDocumentRole.Project, depth: 0);
+            }
             if (_error is null && _directoryBuildTargetsPath is not null)
                 ProcessResolvedImport(_directoryBuildTargetsPath,
                     FSharpSemanticDocumentRole.DirectoryBuildTargets, depth: 0);

@@ -288,7 +288,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("33", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("34", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -404,6 +404,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("fsharp-semantic-literal-file-exists", ids);
         Assert.Contains("fsharp-semantic-property-startswith", ids);
         Assert.Contains("fsharp-semantic-compound-self-defaults", ids);
+        Assert.Contains("fsharp-semantic-default-configuration-platform", ids);
         Assert.Contains("fsharp-semantic-package-asset-closure", ids);
         Assert.Contains("csharp-semantic-central-package-management", ids);
         Assert.Contains("csharp-semantic-central-package-property-expansion", ids);
@@ -625,6 +626,9 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("PackageVersion", csharpCentralPackages);
         Assert.Contains("exact global-cache directories", csharpCentralPackages);
         Assert.Contains("warm model identity", csharpCentralPackages);
+        Assert.Contains("unconditional literal PackageVersion", csharpCentralPackages);
+        Assert.Contains("nearest indexed Directory.Packages.props", csharpCentralPackages);
+        Assert.Contains("MSBuild-dependent shapes stay unresolved", csharpCentralPackages);
         Assert.Contains("without guessing or executing restore", csharpCentralPackages);
         string csharpCentralPackageProperties = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
@@ -1380,6 +1384,10 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("ordinal/case-sensitive", startsWith);
         Assert.Contains("other string methods fail closed", startsWith);
         string selfDefaults = Summary("fsharp-semantic-compound-self-defaults");
+        string defaultContext = Summary("fsharp-semantic-default-configuration-platform");
+        Assert.Contains("v0.12.96", defaultContext);
+        Assert.Contains("Debug|AnyCPU", defaultContext);
+        Assert.Contains("project/import assignments override", defaultContext);
         Assert.Contains("v0.12.95", selfDefaults);
         Assert.Contains("And/Or/!", selfDefaults);
         Assert.Contains("unrelated unknowns fail closed", selfDefaults);

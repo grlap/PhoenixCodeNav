@@ -235,6 +235,17 @@ other unresolved ambient/global inputs still fail closed, including in short-cir
 because property expansion precedes boolean evaluation. Group-level conditions receive no self exemption.
 Schema v33 forces a rebuild because these newly accepted conditions can expose additional persisted
 `Exists` probes; no numeric limit changes accompany this extension.
+Since v0.12.96, F# semantic evaluation fills missing `Configuration=Debug` and `Platform=AnyCPU`
+after the early `Directory.Build.props` / `Directory.Packages.props` phase, before the project body.
+Early imports can supply their own self-defaults; other unresolved import-phase reads still fail closed.
+These are Phoenix defaults, not detected IDE state or immutable command-line global properties.
+Values supplied by early imports remain authoritative, including empty or incomplete values;
+ordinary later project/import assignments can replace defaults. A conditional assignment guarded
+by an empty value does not replace an already populated default. Only the caller-selected
+`TargetFramework` remains immutable.
+No caller configuration/platform override is exposed yet, and these defaults do not themselves
+add `DEBUG`/`TRACE` constants or set `PlatformTarget`. Schema v34 rebuilds the index to re-harvest
+`Exists` dependencies under the same defaults used by semantic queries; numeric limits are unchanged.
 The declared property-function allowlist contains two exact shapes. The path-only
 `$([MSBuild]::MakeRelative($(MSBuildProjectDirectory), $(MSBuildThisFileDirectory)))`
 shape allows optional matching single or double quotes around either reserved property. It is

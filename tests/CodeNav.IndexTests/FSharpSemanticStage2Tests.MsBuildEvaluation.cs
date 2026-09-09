@@ -1860,6 +1860,183 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Theory]
+    [InlineData("net8.0", "", "Debug|AnyCPU", true)]
+    [InlineData("net10.0", "", "Debug|AnyCPU", false)]
+    [InlineData("net8.0", "<Configuration>Release</Configuration>", "Release|AnyCPU", false)]
+    [InlineData("net8.0", "<Platform>x64</Platform>", "Debug|x64", false)]
+    [InlineData("net8.0", "<Configuration></Configuration><Platform></Platform>", "|", false)]
+    [InlineData("net8.0", "<Configuration>Custom</Configuration><Platform>x86</Platform>", "Custom|x86", false)]
+    [InlineData("net8.0", "<Configuration Condition=\"'$(Configuration)' == ''\">Release</Configuration><Platform Condition=\"'$(Platform)' == ''\">x64</Platform>", "Debug|AnyCPU", true)]
+    public void DefaultConfigurationAndPlatformHonorProjectOverrides(
+        string targetFramework, string properties, string expectedContext, bool expectedMatch)
+    {
+        string xml = $$"""
+            <Project>
+              <PropertyGroup>
+                <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+                {{properties}}
+                <AssemblyName>$(Configuration)|$(Platform)</AssemblyName>
+              </PropertyGroup>
+              <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0' and '$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+                <DefineConstants>MATCHED_CONTEXT</DefineConstants>
+              </PropertyGroup>
+              <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
+            </Project>
+            """;
+        FSharpSemanticOptionsSnapshot result = ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(
+            "Core/Core.fsproj", xml, "net8.0;net10.0", targetFramework);
+        Assert.Null(result.Error);
+        Assert.Equal(expectedContext, result.AssemblyName);
+        Assert.Equal(expectedMatch, result.CommandLineArgs.Contains("--define:MATCHED_CONTEXT"));
+        Assert.Equal(["Core/Core.fs"], result.SourceFiles);
+    }
+
+    [Theory]
+    [InlineData("Configuration")]
+    [InlineData("Platform")]
+    public void DefaultConfigurationAndPlatformDoNotReplaceIncompleteAssignments(string property)
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject($"""
+            <PropertyGroup><{property}>$(Unknown)</{property}></PropertyGroup>
+            <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+              <DefineConstants>WRONG_DEFAULT</DefineConstants>
+            </PropertyGroup>
+            """);
+        Assert.Equal("fsharp_semantic_condition_property_unresolved", result.Error);
+        Assert.DoesNotContain("--define:WRONG_DEFAULT", result.CommandLineArgs);
+    }
+
+    [Fact]
+    public void DefaultConfigurationAndPlatformPreserveImportDefaultsAndCaptureExists()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-default-context").FullName;
+        try
+        {
+            WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
+            string xml = """
+                <Project>
+                  <PropertyGroup>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <Platform>x64</Platform>
+                    <AssemblyName>$(Configuration)|$(Platform)</AssemblyName>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
+                </Project>
+                """;
+            string props = """
+                <Project>
+                  <PropertyGroup>
+                    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+                    <Platform Condition="'$(Platform)' == ''">x86</Platform>
+                  </PropertyGroup>
+                  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0' and '$(Configuration)|$(Platform)' == 'Release|x86'">
+                    <DefineConstants Condition="!Exists('Web.config')">IMPORT_CONTEXT</DefineConstants>
+                  </PropertyGroup>
+                </Project>
+                """;
+            WriteProject(root, "Core/Core.fsproj", xml);
+            WriteProject(root, "Directory.Build.props", props);
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using var queries = new IndexQueries(db);
+            Assert.True(queries.TryGetCapturedMsBuildFilePresence("Core/Web.config", out bool? presence));
+            Assert.Equal(false, presence);
+            FSharpSemanticOptionsSnapshot result = ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(
+                "Core/Core.fsproj", xml, "net8.0", "net8.0",
+                importResolver: path => path == "Directory.Build.props" ? props : null,
+                directoryBuildPropsPath: "Directory.Build.props",
+                existsResolver: path => SemanticService.ResolveIndexedFSharpExists(queries, path));
+            Assert.Null(result.Error);
+            Assert.Equal("Release|x64", result.AssemblyName);
+            Assert.Contains("--define:IMPORT_CONTEXT", result.CommandLineArgs);
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("Directory.Build.props", "Configuration")]
+    [InlineData("Directory.Build.props", "Platform")]
+    [InlineData("Directory.Packages.props", "Configuration")]
+    [InlineData("Directory.Packages.props", "Platform")]
+    public void DefaultConfigurationAndPlatformDoNotAssumeValuesInEarlyImports(string importPath, string property)
+    {
+        string props = $"""
+            <Project>
+              <PropertyGroup Condition="'$({property})' != ''">
+                <DefineConstants>WRONG_EARLY_CONTEXT</DefineConstants>
+              </PropertyGroup>
+            </Project>
+            """;
+        FSharpSemanticOptionsSnapshot result = ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(
+            "Core/Core.fsproj", "<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><Compile Include=\"Core.fs\" /></ItemGroup></Project>",
+            "net8.0", "net8.0", importResolver: path => path == importPath ? props : null,
+            directoryBuildPropsPath: importPath == "Directory.Build.props" ? importPath : null,
+            directoryPackagesPropsPath: importPath == "Directory.Packages.props" ? importPath : null);
+        Assert.Equal("fsharp_semantic_condition_property_unresolved", result.Error);
+        Assert.DoesNotContain("--define:WRONG_EARLY_CONTEXT", result.CommandLineArgs);
+        Assert.Empty(result.SourceFiles);
+    }
+
+    [Theory]
+    [InlineData("<Configuration>Release</Configuration>", "Release|AnyCPU", null)]
+    [InlineData("<Platform>x86</Platform>", "Debug|x86", null)]
+    [InlineData("<Configuration></Configuration><Platform></Platform>", "|", null)]
+    [InlineData("<Configuration>$(Unknown)</Configuration>", null, "fsharp_semantic_assembly_name_unavailable")]
+    public void DefaultConfigurationAndPlatformOnlyFillMissingImportValues(string properties, string? expected, string? error)
+    {
+        string props = $"<Project><PropertyGroup>{properties}</PropertyGroup></Project>";
+        FSharpSemanticOptionsSnapshot result = ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(
+            "Core/Core.fsproj", "<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework><AssemblyName>$(Configuration)|$(Platform)</AssemblyName></PropertyGroup><ItemGroup><Compile Include=\"Core.fs\" /></ItemGroup></Project>",
+            "net8.0", "net8.0", importResolver: path => path == "Directory.Build.props" ? props : null,
+            directoryBuildPropsPath: "Directory.Build.props");
+        Assert.Equal(error, result.Error);
+        if (error is null) Assert.Equal(expected, result.AssemblyName);
+    }
+
+    [Fact]
+    public void DefaultConfigurationAndPlatformCaptureConvergesAfterProjectOverride()
+    {
+        string root = Directory.CreateTempSubdirectory("codenav-context-refresh").FullName;
+        try
+        {
+            WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
+            string Project(string properties) => $$"""
+                <Project>
+                  <PropertyGroup><TargetFramework>net8.0</TargetFramework>{{properties}}</PropertyGroup>
+                  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|AnyCPU' And Exists('Web.config')" />
+                  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64' And Exists('app.config')" />
+                  <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
+                </Project>
+                """;
+            WriteProject(root, "Core/Core.fsproj", Project(""));
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using var store = new IndexStore(db, createNew: false);
+            bool? Captured(string path)
+            {
+                using var queries = new IndexQueries(db);
+                return queries.TryGetCapturedMsBuildFilePresence(path, out bool? presence) ? presence : null;
+            }
+            Assert.Equal(false, Captured("Core/Web.config"));
+            Assert.Null(Captured("Core/app.config"));
+            WriteProject(root, "Core/Web.config", "<configuration />");
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            Assert.Equal(true, Captured("Core/Web.config"));
+            WriteProject(root, "Core/Core.fsproj", Project("<Configuration>Release</Configuration><Platform>x64</Platform>"));
+            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj"]);
+            Assert.Null(Captured("Core/Web.config"));
+            Assert.Equal(false, Captured("Core/app.config"));
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
+
+    [Theory]
     [InlineData("net8.0", null, "true")]
     [InlineData("net10.0", null, "UNCHANGED")]
     [InlineData("net8.0", "false", "false")]

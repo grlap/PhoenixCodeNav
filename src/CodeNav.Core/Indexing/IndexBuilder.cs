@@ -141,8 +141,10 @@ public static class IndexBuilder
     /// v32: project-context Exists probes persist nullable presence facts and owning F# project
     /// dependencies, so decided absence is read from the same snapshot as compiler inputs.
     /// v33: compound self-default conditions can expose additional persisted Exists probes;
-    /// rebuilding re-harvests those project inputs instead of retaining incomplete v32 probe sets.</summary>
-    public const string SchemaVersion = "33";
+    /// rebuilding re-harvests those project inputs instead of retaining incomplete v32 probe sets.
+    /// v34: default Configuration/Platform values can activate additional persisted Exists probes;
+    /// rebuilding captures the default analysis context consistently with semantic queries.</summary>
+    public const string SchemaVersion = "34";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }
