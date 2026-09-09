@@ -145,8 +145,10 @@ public static class IndexBuilder
     /// v34: default Configuration/Platform values can activate additional persisted Exists probes;
     /// rebuilding captures the default analysis context consistently with semantic queries.
     /// v35: the disclosed initial Configuration/Platform analysis context is available before
-    /// early imports, changing reachable persisted Exists probes and requiring re-harvesting.</summary>
-    public const string SchemaVersion = "35";
+    /// early imports, changing reachable persisted Exists probes and requiring re-harvesting.
+    /// v36: shared package evaluation defers F# package conditions until the final property phase,
+    /// changing reached persisted Exists probes; rebuild to recapture the same model used by queries.</summary>
+    public const string SchemaVersion = "36";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }

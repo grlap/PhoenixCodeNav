@@ -1497,13 +1497,21 @@ public partial class FSharpSemanticStage2Tests
             result.PackageReferences);
     }
 
-    [Fact]
-    public void GlobalPackageReferenceFailsClosedAsUnsupportedCentralAuthority()
+    [Theory]
+    [InlineData("false", "true", false)]
+    [InlineData("true", "false", false)]
+    [InlineData("true", "true", true)]
+    public void GlobalPackageReferencesFollowNuGetProjectionFlags(string centrallyManaged,
+        string globalsEnabled, bool expected)
     {
         var imports = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Directory.Packages.props"] = """
+            ["Directory.Packages.props"] = $$"""
                 <Project>
+                  <PropertyGroup>
+                    <ManagePackageVersionsCentrally>{{centrallyManaged}}</ManagePackageVersionsCentrally>
+                    <RestoreEnableGlobalPackageReference>{{globalsEnabled}}</RestoreEnableGlobalPackageReference>
+                  </PropertyGroup>
                   <ItemGroup>
                     <GlobalPackageReference Include="Global.Tool" Version="1.2.3" />
                   </ItemGroup>
@@ -1514,8 +1522,11 @@ public partial class FSharpSemanticStage2Tests
         FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("",
             imports, directoryPackagesPropsPath: "Directory.Packages.props");
 
-        Assert.Equal("fsharp_semantic_central_package_management_unsupported",
-            result.Error);
+        Assert.Null(result.Error);
+        Assert.Equal(expected
+                ? [new FSharpPackageReferenceSnapshot("Global.Tool", "1.2.3", IncludeCompileAssets: false)]
+                : Array.Empty<FSharpPackageReferenceSnapshot>(),
+            result.PackageReferences);
     }
 
     [Fact]

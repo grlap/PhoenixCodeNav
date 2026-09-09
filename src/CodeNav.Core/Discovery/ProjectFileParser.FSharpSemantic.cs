@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
@@ -107,14 +108,6 @@ public static partial class ProjectFileParser
             @"@\((?<name>[A-Za-z_][A-Za-z0-9_.-]*)\)",
             RegexOptions.CultureInvariant);
 
-        private static readonly Regex SimplePackageVersion = new(
-            @"^[0-9]+(?:\.[0-9]+){0,3}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$",
-            RegexOptions.CultureInvariant);
-
-        private static readonly Regex FloatingPackageVersion = new(
-            @"^[0-9]+(?:\.[0-9]+){0,2}\.\*$",
-            RegexOptions.CultureInvariant);
-
         private readonly string _projectPath;
         private readonly string _projectDir;
         private readonly string _selectedTargetFramework;
@@ -134,17 +127,19 @@ public static partial class ProjectFileParser
         private readonly HashSet<string> _sourceSet =
             new(WorkspacePaths.FileSystemPathComparer);
         private readonly List<FSharpSemanticReference> _references = [];
-        private readonly Dictionary<string, string?> _packageReferences =
-            new(StringComparer.OrdinalIgnoreCase);
+        private readonly BoundedMsBuildPackageEvaluator _packages;
         private readonly List<FSharpProjectReferenceSnapshot> _projectReferences = [];
         private readonly HashSet<string> _projectReferenceSet =
             new(WorkspacePaths.FileSystemPathComparer);
-        private readonly Dictionary<string, string> _packageVersions =
-            new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, List<string>> _itemLists =
-            new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, string> _incompleteItemListErrors =
-            new(StringComparer.OrdinalIgnoreCase);
+        private ImmutableDictionary<string, ImmutableList<string>> _itemLists =
+            ImmutableDictionary.Create<string, ImmutableList<string>>(StringComparer.OrdinalIgnoreCase);
+        private ImmutableDictionary<string, string> _incompleteItemListErrors =
+            ImmutableDictionary.Create<string, string>(StringComparer.OrdinalIgnoreCase);
+        // A positional snapshot contains helper state only. Properties are deliberately absent:
+        // deferred package expressions must still consume the final evaluated property state.
+        private readonly record struct ItemListSnapshot(
+            ImmutableDictionary<string, ImmutableList<string>> Items,
+            ImmutableDictionary<string, string> Errors);
         private readonly HashSet<string> _directoryReferenceProperties =
             new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _directoryReferenceItemLists =
@@ -208,6 +203,10 @@ public static partial class ProjectFileParser
                 cancellationToken,
                 MaxFSharpSemanticPropertyValueChars,
                 MaxFSharpSemanticConditionDepth);
+            _packages = new(_properties,
+                (string value, string document, out string expanded) =>
+                    TryExpandProperties(value, document, null, out expanded, out bool complete) && complete,
+                TryExpandItemSpecs, ShouldProcess, _budget.TryReserveItemListEntry, cancellationToken);
         }
 
         private static string? NormalizeOptionalWorkspacePath(string? path) =>
@@ -247,6 +246,9 @@ public static partial class ProjectFileParser
                     FSharpSemanticDocumentRole.DirectoryBuildTargets, depth: 0);
             CheckCancellation();
             if (_error is not null) return Failure(_error);
+
+            if (!_packages.Evaluate())
+                return Failure(_error ?? "fsharp_semantic_" + (_packages.Error ?? "package_reference_unresolved"));
 
             string assemblyName = Path.GetFileNameWithoutExtension(_projectPath);
             if (_properties.TryGetValue("AssemblyName", out BoundedMsBuildProperty assembly))
@@ -314,10 +316,10 @@ public static partial class ProjectFileParser
                 _references.Where(reference => reference.HintPath is null)
                     .Select(reference => reference.SimpleName)
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
-                _packageReferences.OrderBy(reference => reference.Key,
+                _packages.RestoreReferences.OrderBy(reference => reference.Id,
                         StringComparer.OrdinalIgnoreCase)
                     .Select(reference => new FSharpPackageReferenceSnapshot(
-                        reference.Key, reference.Value)).ToList(),
+                        reference.Id, reference.RequestedVersion, reference.IncludeCompileAssets)).ToList(),
                 _projectReferences,
                 assemblyName, projectReferencesTransitive, _existsDependencies,
                 parsing.PartialReason);
@@ -453,10 +455,10 @@ public static partial class ProjectFileParser
                 _references.Where(reference => reference.HintPath is null)
                     .Select(reference => reference.SimpleName)
                     .Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
-                _packageReferences.OrderBy(reference => reference.Key,
+                _packages.RestoreReferences.OrderBy(reference => reference.Id,
                         StringComparer.OrdinalIgnoreCase)
                     .Select(reference => new FSharpPackageReferenceSnapshot(
-                        reference.Key, reference.Value)).ToList(),
+                        reference.Id, reference.RequestedVersion, reference.IncludeCompileAssets)).ToList(),
                 _projectReferences,
                 assemblyName ?? Path.GetFileNameWithoutExtension(_projectPath),
                 false, _existsDependencies,
@@ -546,16 +548,13 @@ public static partial class ProjectFileParser
         {
             CheckCancellation();
             bool hasSemanticItems = group.Elements().Any(item =>
-                IsSemanticItemName(item.Name.LocalName));
-            bool hasNonPackageVersionSemanticItems = group.Elements().Any(item =>
                 IsSemanticItemName(item.Name.LocalName) &&
-                !item.Name.LocalName.Equals("PackageVersion",
-                    StringComparison.OrdinalIgnoreCase));
+                !BoundedMsBuildPackageEvaluator.IsPackageItem(item.Name.LocalName));
             bool groupProcess = true;
             if (hasSemanticItems)
             {
                 if (!ShouldProcess(group, documentPath, out groupProcess)) return;
-                if (!groupProcess && hasNonPackageVersionSemanticItems &&
+                if (!groupProcess &&
                     ConditionMayDependOnProperties(group))
                 {
                     _semanticItemPhaseStarted = true;
@@ -567,6 +566,16 @@ public static partial class ProjectFileParser
             {
                 CheckCancellation();
                 string itemName = item.Name.LocalName;
+                if (BoundedMsBuildPackageEvaluator.IsPackageItem(itemName))
+                {
+                    // Capture at the item's position, including within this ItemGroup. Persistent
+                    // collections share unchanged state instead of copying every helper per item.
+                    var snapshot = new ItemListSnapshot(_itemLists, _incompleteItemListErrors);
+                    _packages.Add(group, item, documentPath,
+                        (string raw, string document, out List<string> specs) =>
+                            TryExpandItemSpecs(raw, document, snapshot, out specs));
+                    continue;
+                }
                 if (!IsSemanticItemName(itemName))
                 {
                     ProcessReferenceInputItem(group, item, documentPath);
@@ -576,19 +585,11 @@ public static partial class ProjectFileParser
                 if (!ShouldProcess(item, documentPath, out bool process)) return;
                 if (!process)
                 {
-                    if (!itemName.Equals("PackageVersion",
-                            StringComparison.OrdinalIgnoreCase) &&
-                        ConditionMayDependOnProperties(item))
+                    if (ConditionMayDependOnProperties(item))
                     {
                         _semanticItemPhaseStarted = true;
                         _directSemanticItemPhaseStarted = true;
                     }
-                    continue;
-                }
-                if (itemName.Equals("PackageVersion", StringComparison.OrdinalIgnoreCase))
-                {
-                    ProcessPackageVersion(item, documentPath);
-                    if (_error is not null) return;
                     continue;
                 }
                 _semanticItemPhaseStarted = true;
@@ -601,8 +602,6 @@ public static partial class ProjectFileParser
                 if (role == FSharpSemanticDocumentRole.ExplicitImport)
                 {
                     _error = itemName.Equals("ProjectReference",
-                                     StringComparison.OrdinalIgnoreCase) ||
-                                 itemName.Equals("PackageReference",
                                      StringComparison.OrdinalIgnoreCase)
                         ? null
                         : "fsharp_semantic_import_items_unsupported";
@@ -628,128 +627,11 @@ public static partial class ProjectFileParser
                 {
                     ProcessProjectReference(item, documentPath);
                 }
-                else if (itemName.Equals("PackageReference",
-                             StringComparison.OrdinalIgnoreCase))
-                {
-                    ProcessPackageReference(item, documentPath);
-                }
-                else if (itemName.Equals("GlobalPackageReference",
-                             StringComparison.OrdinalIgnoreCase))
-                {
-                    _error = "fsharp_semantic_central_package_management_unsupported";
-                }
                 else
                 {
                     _error = "fsharp_semantic_reference_unresolved";
                 }
                 if (_error is not null) return;
-            }
-        }
-
-        private void ProcessPackageReference(XElement item, string documentPath)
-        {
-            string? rawInclude = item.Attribute("Include")?.Value.Trim();
-            string? rawUpdate = item.Attribute("Update")?.Value.Trim();
-            string? rawRemove = item.Attribute("Remove")?.Value.Trim();
-            int operations = (rawInclude is null ? 0 : 1) + (rawUpdate is null ? 0 : 1) +
-                             (rawRemove is null ? 0 : 1);
-            if (operations != 1 || item.Attribute("Exclude") is not null)
-            {
-                _error = "fsharp_semantic_package_reference_unresolved";
-                return;
-            }
-            string raw = rawInclude ?? rawUpdate ?? rawRemove!;
-            if (!TryExpandItemSpecs(raw, documentPath, out List<string> specs))
-            {
-                _error ??= "fsharp_semantic_package_reference_unresolved";
-                return;
-            }
-            if (specs.Count == 0)
-            {
-                _error = "fsharp_semantic_package_reference_unresolved";
-                return;
-            }
-
-            var ids = new List<string>(specs.Count);
-            foreach (string spec in specs)
-            {
-                if (!_budget.TryReserveItemListEntry())
-                {
-                    _error = "fsharp_semantic_item_list_limit";
-                    return;
-                }
-                string id = spec.Trim();
-                if (!IsValidPackageId(id))
-                {
-                    _error = "fsharp_semantic_package_reference_unresolved";
-                    return;
-                }
-                ids.Add(id);
-            }
-            if (rawUpdate is not null && ids.All(id =>
-                    !_packageReferences.ContainsKey(id)))
-                return;
-            if (rawRemove is null &&
-                !PackageReferenceCompilerMetadataIsSupported(item, documentPath))
-                return;
-
-            string? requestedVersion = null;
-            bool versionOverrideUsed = false;
-            if (rawRemove is null && !TryGetPackageVersion(item, documentPath,
-                    allowVersionOverride: true,
-                    failureCause: "fsharp_semantic_package_reference_unresolved",
-                    out requestedVersion,
-                    out versionOverrideUsed))
-                return;
-            if (requestedVersion is not null &&
-                !IsSupportedPackageVersionExpression(requestedVersion))
-            {
-                _error = "fsharp_semantic_package_reference_unresolved";
-                return;
-            }
-
-            bool centrallyManaged = IsCentralPackageManagementEnabled();
-            if (_error is not null) return;
-            if (centrallyManaged && requestedVersion is not null &&
-                !versionOverrideUsed)
-            {
-                _error = "fsharp_semantic_package_reference_unresolved";
-                return;
-            }
-            bool versionOverrideEnabled = !versionOverrideUsed ||
-                                          IsCentralPackageVersionOverrideEnabled();
-            if (_error is not null) return;
-            if (versionOverrideUsed &&
-                (!centrallyManaged || !versionOverrideEnabled ||
-                 requestedVersion is null ||
-                 !SimplePackageVersion.IsMatch(requestedVersion)))
-            {
-                _error = "fsharp_semantic_package_reference_unresolved";
-                return;
-            }
-
-            foreach (string id in ids)
-            {
-                if (rawRemove is not null)
-                    _packageReferences.Remove(id);
-                else if (rawUpdate is not null)
-                {
-                    if (!_packageReferences.ContainsKey(id)) continue;
-                    if (requestedVersion is null) continue;
-                    _packageReferences[id] = requestedVersion;
-                }
-                else
-                {
-                    string? effectiveVersion = requestedVersion;
-                    if (effectiveVersion is null &&
-                        (!centrallyManaged || !_packageVersions.TryGetValue(id,
-                            out effectiveVersion)))
-                    {
-                        _error = "fsharp_semantic_package_reference_unresolved";
-                        return;
-                    }
-                    _packageReferences[id] = effectiveVersion;
-                }
             }
         }
 
@@ -855,200 +737,6 @@ public static partial class ProjectFileParser
             }
         }
 
-        private bool PackageReferenceCompilerMetadataIsSupported(XElement item,
-            string documentPath)
-        {
-            static bool ChangesCompilerReferenceShape(string name) =>
-                name.Equals("ExcludeAssets", StringComparison.OrdinalIgnoreCase) ||
-                name.Equals("IncludeAssets", StringComparison.OrdinalIgnoreCase) ||
-                name.Equals("Aliases", StringComparison.OrdinalIgnoreCase);
-
-            if (item.Attributes().Any(attribute =>
-                    ChangesCompilerReferenceShape(attribute.Name.LocalName)))
-            {
-                _error = "fsharp_semantic_package_reference_metadata_unsupported";
-                return false;
-            }
-
-            foreach (XElement metadata in item.Elements().Where(element =>
-                         ChangesCompilerReferenceShape(element.Name.LocalName)))
-            {
-                if (!ShouldProcess(metadata, documentPath, out bool process)) return false;
-                if (!process) continue;
-                _error = "fsharp_semantic_package_reference_metadata_unsupported";
-                return false;
-            }
-            return true;
-        }
-
-        private void ProcessPackageVersion(XElement item, string documentPath)
-        {
-            string? rawInclude = item.Attribute("Include")?.Value.Trim();
-            string? rawUpdate = item.Attribute("Update")?.Value.Trim();
-            string? rawRemove = item.Attribute("Remove")?.Value.Trim();
-            int operations = (rawInclude is null ? 0 : 1) + (rawUpdate is null ? 0 : 1) +
-                             (rawRemove is null ? 0 : 1);
-            if (operations != 1 || item.Attribute("Exclude") is not null)
-            {
-                _error = "fsharp_semantic_central_package_management_unsupported";
-                return;
-            }
-
-            string raw = rawInclude ?? rawUpdate ?? rawRemove!;
-            if (!TryExpandItemSpecs(raw, documentPath, out List<string> specs) || specs.Count == 0)
-            {
-                _error ??= "fsharp_semantic_central_package_management_unsupported";
-                return;
-            }
-
-            string? version = null;
-            if (rawRemove is null && !TryGetPackageVersion(item, documentPath,
-                    allowVersionOverride: false,
-                    failureCause: "fsharp_semantic_central_package_management_unsupported",
-                    out version, out _))
-                return;
-            if (rawInclude is not null && version is null)
-            {
-                _error = "fsharp_semantic_central_package_management_unsupported";
-                return;
-            }
-            if (version is not null && !SimplePackageVersion.IsMatch(version))
-            {
-                _error = "fsharp_semantic_central_package_management_unsupported";
-                return;
-            }
-
-            foreach (string spec in specs)
-            {
-                if (!_budget.TryReserveItemListEntry())
-                {
-                    _error = "fsharp_semantic_item_list_limit";
-                    return;
-                }
-                string id = spec.Trim();
-                if (!IsValidPackageId(id))
-                {
-                    _error = "fsharp_semantic_central_package_management_unsupported";
-                    return;
-                }
-                if (rawRemove is not null)
-                    _packageVersions.Remove(id);
-                else if (rawInclude is not null && _packageVersions.ContainsKey(id))
-                {
-                    _error = "fsharp_semantic_central_package_management_unsupported";
-                    return;
-                }
-                else if (rawUpdate is not null && !_packageVersions.ContainsKey(id))
-                {
-                    _error = "fsharp_semantic_central_package_management_unsupported";
-                    return;
-                }
-                else if (version is not null)
-                    _packageVersions[id] = version;
-                else if (!_packageVersions.ContainsKey(id))
-                {
-                    _error = "fsharp_semantic_central_package_management_unsupported";
-                    return;
-                }
-            }
-        }
-
-        private bool TryGetPackageVersion(XElement item, string documentPath,
-            bool allowVersionOverride, string failureCause, out string? requestedVersion,
-            out bool versionOverrideUsed)
-        {
-            requestedVersion = null;
-            versionOverrideUsed = false;
-            var values = new List<string>();
-            bool foundVersionOverride = false;
-            foreach (string attributeName in allowVersionOverride
-                         ? new[] { "VersionOverride", "Version" }
-                         : new[] { "Version" })
-            {
-                if (item.Attribute(attributeName)?.Value is { } attributeValue)
-                {
-                    values.Add(attributeValue);
-                    foundVersionOverride |= attributeName.Equals("VersionOverride",
-                        StringComparison.OrdinalIgnoreCase);
-                }
-                foreach (XElement metadata in item.Elements().Where(element =>
-                             element.Name.LocalName.Equals(attributeName,
-                                 StringComparison.OrdinalIgnoreCase)))
-                {
-                    if (!ShouldProcess(metadata, documentPath, out bool process)) return false;
-                    if (process)
-                    {
-                        values.Add(metadata.Value);
-                        foundVersionOverride |= attributeName.Equals("VersionOverride",
-                            StringComparison.OrdinalIgnoreCase);
-                    }
-                }
-            }
-            if (values.Count > 1)
-            {
-                _error = failureCause;
-                return false;
-            }
-            if (values.Count == 0) return true;
-            versionOverrideUsed = foundVersionOverride;
-            if (!TryExpandProperties(values[0].Trim(), documentPath, null,
-                    out string expanded, out bool complete))
-                return false;
-            if (!complete || expanded.Length == 0)
-            {
-                _error = failureCause;
-                return false;
-            }
-            requestedVersion = expanded;
-            return true;
-        }
-
-        private bool IsCentralPackageManagementEnabled() =>
-            TryGetBooleanProperty("ManagePackageVersionsCentrally", defaultValue: false);
-
-        private bool IsCentralPackageVersionOverrideEnabled() =>
-            TryGetBooleanProperty("CentralPackageVersionOverrideEnabled", defaultValue: true);
-
-        private bool TryGetBooleanProperty(string name, bool defaultValue)
-        {
-            if (!_properties.TryGetValue(name, out BoundedMsBuildProperty property))
-                return defaultValue;
-            if (!property.Complete || !bool.TryParse(property.Value.Trim(), out bool value))
-            {
-                _error = "fsharp_semantic_central_package_management_unsupported";
-                return false;
-            }
-            return value;
-        }
-
-        private static bool IsValidPackageId(string id) =>
-            id.Length > 0 && !id.Contains('/') && !id.Contains('\\');
-
-        private static bool IsSupportedPackageVersionExpression(string expression)
-        {
-            string value = expression.Trim();
-            if (SimplePackageVersion.IsMatch(value) ||
-                FloatingPackageVersion.IsMatch(value))
-                return true;
-            if (value.Length >= 3 && value[0] == '[' && value[^1] == ']' &&
-                !value.Contains(','))
-                return SimplePackageVersion.IsMatch(value[1..^1].Trim());
-            if (value.Length < 3 || value[0] is not ('[' or '(') ||
-                value[^1] is not (']' or ')'))
-                return false;
-            string body = value[1..^1];
-            int comma = body.IndexOf(',');
-            if (comma < 0 || comma != body.LastIndexOf(',')) return false;
-            string lower = body[..comma].Trim();
-            string upper = body[(comma + 1)..].Trim();
-            if (lower.Length == 0 && value[0] != '(' ||
-                upper.Length == 0 && value[^1] != ')' ||
-                lower.Length == 0 && upper.Length == 0)
-                return false;
-            return (lower.Length == 0 || SimplePackageVersion.IsMatch(lower)) &&
-                   (upper.Length == 0 || SimplePackageVersion.IsMatch(upper));
-        }
-
         private void ProcessReferenceInputItem(XElement group, XElement item,
             string documentPath)
         {
@@ -1068,13 +756,13 @@ public static partial class ProjectFileParser
                 if (!ShouldProcess(group, documentPath, out bool processGroup)) return;
                 if (!processGroup)
                 {
-                    _itemLists.TryAdd(name, []);
+                    EnsureItemList(name);
                     return;
                 }
                 if (!ShouldProcess(item, documentPath, out bool processItem)) return;
                 if (!processItem)
                 {
-                    _itemLists.TryAdd(name, []);
+                    EnsureItemList(name);
                     return;
                 }
                 XAttribute? include = item.Attribute("Include");
@@ -1089,23 +777,22 @@ public static partial class ProjectFileParser
                     return;
                 }
 
-                _itemLists.TryAdd(name, []);
+                EnsureItemList(name);
 
                 if (remove?.Value is { } rawRemove)
                 {
                     if (!TryExpandItemSpecs(rawRemove, documentPath,
                             out List<string> removeSpecs)) return;
-                    if (_itemLists.TryGetValue(name, out List<string>? current))
+                    if (_itemLists.TryGetValue(name, out ImmutableList<string>? current))
                     {
-                        current.RemoveAll(existing => removeSpecs.Contains(existing,
-                            StringComparer.OrdinalIgnoreCase));
+                        _itemLists = _itemLists.SetItem(name, current.RemoveAll(existing =>
+                            removeSpecs.Contains(existing, StringComparer.OrdinalIgnoreCase)));
                     }
                 }
                 if (include?.Value is not { } rawInclude) return;
                 if (!TryExpandItemSpecs(rawInclude, documentPath,
                         out List<string> includeSpecs)) return;
-                List<string> list = _itemLists.GetValueOrDefault(name) ?? [];
-                if (!_itemLists.ContainsKey(name)) _itemLists[name] = list;
+                var list = _itemLists[name].ToBuilder();
                 foreach (string spec in includeSpecs)
                 {
                     if (!_budget.TryReserveItemListEntry())
@@ -1115,12 +802,19 @@ public static partial class ProjectFileParser
                     }
                     list.Add(spec);
                 }
+                _itemLists = _itemLists.SetItem(name, list.ToImmutable());
             }
             finally
             {
-                if (_error is not null) _incompleteItemListErrors[name] = _error;
+                if (_error is not null)
+                    _incompleteItemListErrors = _incompleteItemListErrors.SetItem(name, _error);
                 _error = priorError;
             }
+        }
+
+        private void EnsureItemList(string name)
+        {
+            if (!_itemLists.ContainsKey(name)) _itemLists = _itemLists.Add(name, []);
         }
 
         private static bool ConditionMayDependOnProperties(XElement element) =>
@@ -1278,7 +972,11 @@ public static partial class ProjectFileParser
         }
 
         private bool TryExpandItemSpecs(string raw, string documentPath,
-            out List<string> specs)
+            out List<string> specs) => TryExpandItemSpecs(raw, documentPath,
+            new ItemListSnapshot(_itemLists, _incompleteItemListErrors), out specs);
+
+        private bool TryExpandItemSpecs(string raw, string documentPath,
+            ItemListSnapshot snapshot, out List<string> specs)
         {
             specs = [];
             if (!TryExpandProperties(raw.Trim(), documentPath, null,
@@ -1312,12 +1010,12 @@ public static partial class ProjectFileParser
                 }
 
                 string name = itemReference.Groups["name"].Value;
-                if (_incompleteItemListErrors.TryGetValue(name, out string? itemListError))
+                if (snapshot.Errors.TryGetValue(name, out string? itemListError))
                 {
                     _error = itemListError;
                     return false;
                 }
-                if (!_itemLists.TryGetValue(name, out List<string>? itemSpecs))
+                if (!snapshot.Items.TryGetValue(name, out ImmutableList<string>? itemSpecs))
                 {
                     _error = "fsharp_semantic_reference_unresolved";
                     return false;
@@ -1892,6 +1590,7 @@ public static partial class ProjectFileParser
              name.Equals("EnableDefaultCompileItems", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("ManagePackageVersionsCentrally",
                  StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("RestoreEnableGlobalPackageReference", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("CentralPackageVersionOverrideEnabled",
                  StringComparison.OrdinalIgnoreCase));
 

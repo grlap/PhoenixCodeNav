@@ -843,8 +843,16 @@ public partial class FSharpSemanticStage2Tests
         }
     }
 
-    [Fact]
-    public void CentralPackageManagementEnablesFSharpSemanticResolution()
+    [Theory]
+    [InlineData(false, "none", "none")]
+    [InlineData(true, "none", "none")]
+    [InlineData(true, "global", "none")]
+    [InlineData(true, "stale-mask", "none")]
+    [InlineData(false, "none", "append")]
+    [InlineData(false, "none", "remove")]
+    [InlineData(false, "none", "paired-remove")]
+    public void CentralPackageManagementEnablesFSharpSemanticResolution(
+        bool centralReference, string globalScenario, string mutation)
     {
         string root = Directory.CreateTempSubdirectory(
             "codenav-fsharp-semantic-central-package").FullName;
@@ -860,25 +868,38 @@ public partial class FSharpSemanticStage2Tests
             Assert.True(File.Exists(Path.Combine(packagesRoot, packageId.ToLowerInvariant(),
                 packageVersion, "lib", "net10.0", "System.IO.Hashing.dll")));
 
-            WriteProject(root, "Directory.Packages.props", """
+            WriteProject(root, "Directory.Packages.props", $$"""
                 <Project>
                   <PropertyGroup>
                     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
                   </PropertyGroup>
                   <ItemGroup>
                     <PackageVersion Include="System.IO.Hashing" Version="10.0.10" />
+                    {{(mutation != "none" ? "<PackageVersion Include=\"Later.Package\" Version=\"1.2.3\" />" : "")}}
+                    {{(centralReference ? "<PackageReference Include=\"System.IO.Hashing\" />" : "")}}
+                    {{(globalScenario != "none" ? "<GlobalPackageReference Include=\"Build.Tool\" Version=\"3.0.0\" />" : "")}}
                   </ItemGroup>
                 </Project>
                 """);
-            WriteProject(root, "Core/Core.fsproj", """
+            string references = centralReference ? "" : "<PackageReference Include=\"System.IO.Hashing\" />";
+            if (mutation is "append" or "remove")
+            {
+                references = "<Ids Include=\"System.IO.Hashing\" /><PackageReference Include=\"@(Ids)\" />" +
+                    (mutation == "append" ? "<Ids Include=\"Later.Package\" />" : "<Ids Remove=\"System.IO.Hashing\" />");
+            }
+            else if (mutation == "paired-remove")
+            {
+                references += "<PackageReference Include=\"Later.Package\" /><PackageVersion Remove=\"Later.Package\" /><PackageReference Remove=\"Later.Package\" />";
+            }
+            WriteProject(root, "Core/Core.fsproj", $$"""
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup>
                     <TargetFramework>net10.0</TargetFramework>
                     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
                   </PropertyGroup>
                   <ItemGroup>
+                    {{references}}
                     <Compile Include="Use.fs" />
-                    <PackageReference Include="System.IO.Hashing" />
                   </ItemGroup>
                 </Project>
                 """);
@@ -891,10 +912,30 @@ public partial class FSharpSemanticStage2Tests
             WritePackageAssets(root, "Core/Core.fsproj", "net10.0", packageId,
                 packageVersion, packagesRoot, "lib/net10.0/System.IO.Hashing.dll");
 
+            if (globalScenario != "none")
+            {
+                // A fake compile DLL is deliberately absent: global references must never try to read it.
+                WritePackageAssetsCore(root, "Core/Core.fsproj", "net10.0", packageId,
+                    packageVersion, [packagesRoot], "lib/net10.0/System.IO.Hashing.dll", "net10.0",
+                    "[10.0.10, )", [("Build.Tool", "3.0.0", "lib/net10.0/MustNotCompile.dll")], [],
+                    extraDirectPackages: [("Build.Tool", "[3.0.0, )", null)]);
+                string assetsPath = Path.Combine(root, "Core", "obj", "project.assets.json");
+                var assets = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(assetsPath))!;
+                assets["project"]!["frameworks"]!["net10.0"]!["dependencies"]!["Build.Tool"]!["include"] =
+                    globalScenario == "stale-mask" ? "All" : "Runtime, Build, Native, ContentFiles, Analyzers";
+                File.WriteAllText(assetsPath, assets.ToJsonString());
+            }
+
             using var fixture = Fixture.Create(root);
             string raw = CallSemantic(() => fixture.Tools.SymbolAt(
                 "Core/Use.fs", 4, 19, timeoutMs: 60_000));
             JsonElement response = Parse(raw);
+            if (globalScenario == "stale-mask")
+            {
+                Assert.Equal("fsharp_semantic_package_assets_stale", response.GetProperty("error").GetString());
+                Assert.False(response.TryGetProperty("found", out var found) && found.GetBoolean());
+                return;
+            }
             Assert.False(response.TryGetProperty("error", out _), raw);
             Assert.True(response.GetProperty("found").GetBoolean(), raw);
             Assert.Equal("XxHash64",

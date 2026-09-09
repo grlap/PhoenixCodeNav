@@ -46,6 +46,12 @@ Plus structural facts parsed directly from every `.csproj` and `.fsproj` (`proje
 `impact`, `related_tests`). Solution files may be inventoried for editor context, but they
 never select projects or contribute build, ownership, dependency, or symbol-resolution authority.
 
+**C# and F# share central package-item evaluation.** `PackageReference` entries in
+`Directory.Packages.props`, final `PackageVersion` updates, and enabled `VersionOverride` use common
+rules. Neither language feeds standard global package references to the compiler; F# additionally
+validates them against the restored assets.
+Each language retains its existing document authority and assembly-loading model.
+
 **C# semantic loading supports standard central package management.** A versionless
 `PackageReference` can take its unconditional simple version from the nearest indexed
 `Directory.Packages.props`. A `PackageVersion` may use bounded `$(Name)` expansion from local,

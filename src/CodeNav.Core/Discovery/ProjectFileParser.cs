@@ -52,7 +52,8 @@ public sealed record FSharpParsingOptionsSnapshot(
     string? SelectedTargetFramework = null,
     List<string>? AvailableTargetFrameworks = null);
 
-public sealed record FSharpPackageReferenceSnapshot(string Id, string? RequestedVersion);
+public sealed record FSharpPackageReferenceSnapshot(string Id, string? RequestedVersion,
+    bool IncludeCompileAssets = true);
 
 public sealed record FSharpProjectReferenceSnapshot(string ProjectPath);
 

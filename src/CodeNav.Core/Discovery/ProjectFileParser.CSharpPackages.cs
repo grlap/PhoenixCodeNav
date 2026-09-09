@@ -17,11 +17,6 @@ public static partial class ProjectFileParser
     private static readonly Regex CSharpCentralPropertyName = new(
         @"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
 
-    private static readonly Regex CSharpCentralPackageVersion = new(
-        @"^[0-9]+(?:\.[0-9]+){0,3}(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?" +
-        @"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$",
-        RegexOptions.CultureInvariant);
-
     /// <summary>Projects the standard unconditional CPM shape needed by the existing C# semantic
     /// package loader, including bounded simple local-property expansion. Authority comes only from
     /// the pinned indexed Directory.Packages.props snapshot. Shapes that require broader MSBuild
@@ -36,11 +31,7 @@ public static partial class ProjectFileParser
     {
         var direct = packageReferences.Select(reference =>
             new CSharpPackageReferenceSnapshot(reference.Package, reference.Version)).ToList();
-        if (direct.All(reference => !string.IsNullOrWhiteSpace(reference.Version)))
-            return direct;
-        if (hasAmbiguousDirectoryPackagesAuthority)
-            return direct;
-        if (directoryPackagesXml is null)
+        if (hasAmbiguousDirectoryPackagesAuthority || directoryPackagesXml is null)
             return direct;
 
         XDocument project;
@@ -54,141 +45,102 @@ public static partial class ProjectFileParser
         {
             return direct;
         }
-        if (project.Root is null || central.Root is null)
-            return direct;
-        if (central.Root.Attributes().Any(attribute =>
-                attribute.Name.LocalName.Equals("Sdk", StringComparison.OrdinalIgnoreCase)) ||
-            central.Root.Descendants().Any(element => NameEquals(element, "Sdk")))
-        {
-            return direct;
-        }
-        if (project.Root.Descendants().Any(element =>
-                NameEquals(element, "PackageReference") &&
-                (element.Parent is not { } group || !NameEquals(group, "ItemGroup") ||
-                 group.Parent != project.Root || HasCondition(element) || HasCondition(group) ||
-                 AttributeValue(element, "VersionOverride") is not null ||
-                 element.Elements().Any(child => NameEquals(child, "VersionOverride")))))
-        {
-            return direct;
-        }
-
-        if (central.Root.Descendants().Any(element =>
-                NameEquals(element, "Import") || NameEquals(element, "GlobalPackageReference")))
-        {
-            return direct;
-        }
-
-        bool centrallyManaged = false;
-        foreach (XDocument document in new[] { central, project })
-        {
-            foreach (XElement property in document.Descendants().Where(element =>
-                         NameEquals(element, "ManagePackageVersionsCentrally")))
-            {
-                if (property.Parent is not { } group || !NameEquals(group, "PropertyGroup") ||
-                    group.Parent != document.Root || HasCondition(property) ||
-                    HasCondition(group) ||
-                    !bool.TryParse(property.Value.Trim(), out centrallyManaged))
-                {
-                    return direct;
-                }
-            }
-        }
-        if (!centrallyManaged)
+        if (project.Root is null || central.Root is null ||
+            central.Root.Attributes().Any(a => a.Name.LocalName.Equals("Sdk", StringComparison.OrdinalIgnoreCase)) ||
+            central.Descendants().Any(e => NameEquals(e, "Sdk") || NameEquals(e, "Import")))
             return direct;
 
-        var centralVersions = new List<(string Id, string RawVersion)>();
-        var centralVersionIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (XElement item in central.Descendants().Where(element =>
-                     NameEquals(element, "PackageVersion")))
+        // C# still admits only pinned unconditional XML. Item semantics below are shared with F#;
+        // this adapter does not acquire imported property/condition authority on its caller's behalf.
+        XElement[] items = new[] { central, project }.SelectMany(document =>
+            document.Descendants().Where(e => BoundedMsBuildPackageEvaluator.IsPackageItem(e.Name.LocalName))).ToArray();
+        if (items.Any(item => item.Parent is not { } group || !NameEquals(group, "ItemGroup") ||
+                group.Parent != item.Document?.Root || HasCondition(item) || HasCondition(group) ||
+                item.Elements().Any(HasCondition)))
+            return direct;
+
+        var flags = new Dictionary<string, BoundedMsBuildProperty>(StringComparer.OrdinalIgnoreCase);
+        foreach (XElement property in new[] { central, project }.SelectMany(document =>
+                     document.Descendants().Where(e => NameEquals(e, "ManagePackageVersionsCentrally") ||
+                         NameEquals(e, "CentralPackageVersionOverrideEnabled") ||
+                         NameEquals(e, "RestoreEnableGlobalPackageReference"))))
         {
-            if (item.Parent is not { } group || !NameEquals(group, "ItemGroup") ||
-                group.Parent != central.Root || HasCondition(item) || HasCondition(group) ||
-                AttributeValue(item, "Update") is not null ||
-                AttributeValue(item, "Remove") is not null)
-            {
+            if (property.Parent is not { } group || !NameEquals(group, "PropertyGroup") ||
+                group.Parent != property.Document?.Root || HasCondition(property) || HasCondition(group) ||
+                !bool.TryParse(property.Value.Trim(), out bool value))
                 return direct;
-            }
-
-            string? id = AttributeValue(item, "Include")?.Trim();
-            string? attributeVersion = AttributeValue(item, "Version")?.Trim();
-            string[] childVersions = item.Elements().Where(element =>
-                    NameEquals(element, "Version"))
-                .Select(element => element.Value.Trim()).ToArray();
-            if (string.IsNullOrWhiteSpace(id) || !CSharpCentralPackageId.IsMatch(id) ||
-                attributeVersion is not null && childVersions.Length > 0 ||
-                childVersions.Length > 1)
-            {
-                return direct;
-            }
-
-            string version = attributeVersion ?? childVersions.SingleOrDefault() ?? "";
-            if (!centralVersionIds.Add(id)) return direct;
-            centralVersions.Add((id, version.Trim()));
+            flags[property.Name.LocalName] = new(value.ToString(), true);
         }
+        if (!flags.TryGetValue("ManagePackageVersionsCentrally", out var management) ||
+            !management.Value.Equals("True", StringComparison.OrdinalIgnoreCase))
+            return direct;
 
-        bool usesProperties = centralVersions.Any(entry =>
-            entry.RawVersion.Contains("$(", StringComparison.Ordinal));
+        bool usesProperties = items.Any(item =>
+            item.Attributes().Any(a => (a.Name.LocalName.Equals("Version", StringComparison.OrdinalIgnoreCase) ||
+                a.Name.LocalName.Equals("VersionOverride", StringComparison.OrdinalIgnoreCase)) &&
+                a.Value.Contains("$(", StringComparison.Ordinal)) ||
+            item.Elements().Any(e => (NameEquals(e, "Version") || NameEquals(e, "VersionOverride")) &&
+                e.Value.Contains("$(", StringComparison.Ordinal)));
         var expansionBudget = new CSharpCentralPropertyExpansionBudget();
         Dictionary<string, BoundedMsBuildProperty> properties;
         var projectPropertyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (usesProperties)
         {
             if (hasPotentialLateProjectPropertyAuthority ||
-                project.Root.Descendants().Any(element => NameEquals(element, "Import")) ||
+                project.Descendants().Any(e => NameEquals(e, "Import")) ||
                 !TryEvaluateCSharpCentralProperties(central, expansionBudget, out properties))
-            {
                 return direct;
-            }
-
             int projectPropertyCount = 0;
-            foreach (XElement group in project.Root.Descendants().Where(element =>
-                         NameEquals(element, "PropertyGroup")))
+            foreach (XElement property in project.Descendants().Where(e => NameEquals(e, "PropertyGroup"))
+                         .SelectMany(group => group.Elements()))
             {
-                foreach (XElement property in group.Elements())
-                {
-                    if (++projectPropertyCount > MaxCSharpCentralPackageProperties)
-                        return direct;
-                    projectPropertyNames.Add(property.Name.LocalName);
-                }
+                if (++projectPropertyCount > MaxCSharpCentralPackageProperties) return direct;
+                projectPropertyNames.Add(property.Name.LocalName);
             }
         }
         else
         {
-            properties = new Dictionary<string, BoundedMsBuildProperty>(
-                StringComparer.OrdinalIgnoreCase);
+            properties = new(StringComparer.OrdinalIgnoreCase);
         }
+        foreach (var flag in flags) properties[flag.Key] = flag.Value;
 
-        var versions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach ((string id, string rawVersion) in centralVersions)
+        bool Expand(string value, string document, out string expanded)
         {
+            expanded = value;
+            if (!usesProperties) return !value.Contains("$(", StringComparison.Ordinal);
             var referencedProperties = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            string expandedVersion = rawVersion;
-            if (usesProperties && !TryExpandCSharpCentralPropertyValue(rawVersion, properties,
-                    referencedProperties, expansionBudget, out expandedVersion))
-            {
-                return direct;
-            }
-            if (referencedProperties.Overlaps(projectPropertyNames) ||
-                !TryNormalizeCSharpCentralPackageVersion(expandedVersion,
-                    out string normalizedVersion) ||
-                !versions.TryAdd(id, normalizedVersion))
-            {
-                return direct;
-            }
+            return TryExpandCSharpCentralPropertyValue(value, properties, referencedProperties,
+                       expansionBudget, out expanded) &&
+                   !referencedProperties.Overlaps(projectPropertyNames);
         }
-
-        var resolved = new List<CSharpPackageReferenceSnapshot>(direct.Count);
-        foreach (CSharpPackageReferenceSnapshot reference in direct)
+        static bool ExpandItems(string value, string document, out List<string> ids)
         {
-            if (!string.IsNullOrWhiteSpace(reference.Version))
-            {
-                resolved.Add(reference);
-                continue;
-            }
-            if (!versions.TryGetValue(reference.Id, out string? version))
-                return direct;
-            resolved.Add(reference with { Version = version, CentrallyManaged = true });
+            ids = [value.Trim()];
+            return CSharpCentralPackageId.IsMatch(ids[0]);
         }
+        static bool Unconditional(XElement element, string document, out bool process)
+        {
+            process = !HasCondition(element);
+            return process;
+        }
+        var evaluator = new BoundedMsBuildPackageEvaluator(properties, Expand, ExpandItems,
+            Unconditional, static () => true, CancellationToken.None);
+        foreach (XElement item in items) evaluator.Add(item.Parent!, item, "");
+        if (!evaluator.Evaluate()) return direct;
+
+        var resolved = new List<CSharpPackageReferenceSnapshot>();
+        foreach (var reference in evaluator.CompileReferences)
+        {
+            if (!TryNormalizeCSharpCentralPackageVersion(reference.RequestedVersion, out string version))
+                return direct; // Exact-cache loading cannot select a version range or floating version.
+            resolved.Add(new(reference.Id, version,
+                reference.CentrallyManaged));
+        }
+        // packages.config inputs do not occur as PackageReference XML and retain their established path.
+        var declaredIds = new HashSet<string>(items.Where(e => NameEquals(e, "PackageReference"))
+            .Select(e => (AttributeValue(e, "Include") ?? "").Trim()), StringComparer.OrdinalIgnoreCase);
+        var restoreIds = evaluator.RestoreReferences.Select(r => r.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        resolved.AddRange(direct.Where(r => !declaredIds.Contains(r.Id) && !restoreIds.Contains(r.Id)));
         return resolved;
     }
 
@@ -291,7 +243,7 @@ public static partial class ProjectFileParser
     {
         normalized = "";
         if (string.IsNullOrWhiteSpace(version) ||
-            !CSharpCentralPackageVersion.IsMatch(version)) return false;
+            !BoundedMsBuildPackageEvaluator.IsSimpleVersion(version)) return false;
 
         string versionWithoutMetadata = version.Split('+', 2)[0];
         string[] releaseSplit = versionWithoutMetadata.Split('-', 2);

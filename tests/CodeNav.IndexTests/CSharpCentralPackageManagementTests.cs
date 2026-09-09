@@ -20,13 +20,23 @@ public sealed class CSharpCentralPackageManagementTests
 {
     private const string PackageId = "Microsoft.CodeAnalysis.CSharp";
 
-    [Fact]
-    public async Task CentralPackageVersionSuppliesCSharpCompilerReference()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CentralPackageVersionSuppliesCSharpCompilerReference(bool centralReference)
     {
         string root = Directory.CreateTempSubdirectory("codenav-csharp-cpm").FullName;
         try
         {
             WriteWorkspace(root, "5.6");
+            if (centralReference)
+            {
+                File.WriteAllText(Path.Combine(root, "Directory.Packages.props"), CentralXml("5.6",
+                    extraItem: $"<PackageReference Include=\"{PackageId}\" />"));
+                string projectPath = Path.Combine(root, "src", "Cpm.csproj");
+                File.WriteAllText(projectPath, File.ReadAllText(projectPath).Replace(
+                    $"<PackageReference Include=\"{PackageId}\" />", "", StringComparison.Ordinal));
+            }
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
 
@@ -351,10 +361,7 @@ public sealed class CSharpCentralPackageManagementTests
     }
 
     [Theory]
-    [InlineData("version-override")]
-    [InlineData("global-package-reference")]
     [InlineData("duplicate-package-version")]
-    [InlineData("update-package-version")]
     [InlineData("remove-package-version")]
     [InlineData("range-version")]
     [InlineData("floating-version")]
@@ -378,6 +385,21 @@ public sealed class CSharpCentralPackageManagementTests
         Assert.Equal(PackageId, reference.Id);
         Assert.Equal("", reference.Version);
         Assert.False(reference.CentrallyManaged);
+    }
+
+    [Theory]
+    [InlineData("version-override", "5.6.0")]
+    [InlineData("global-package-reference", "5.6.0")]
+    [InlineData("update-package-version", "5.7.0")]
+    public void SharedPackageOperationsSupplyTheExactCSharpVersion(string scenario, string expected)
+    {
+        (string project, string central, bool ambiguous) = EvaluatorScenario(scenario);
+        var result = ProjectFileParser.EvaluateCSharpPackageReferencesSnapshot(
+            Encoding.UTF8.GetBytes(project), [(PackageId, "")], central, ambiguous);
+        var reference = Assert.Single(result);
+        Assert.Equal(PackageId, reference.Id);
+        Assert.Equal(expected, reference.Version);
+        Assert.True(reference.CentrallyManaged);
     }
 
     [Theory]

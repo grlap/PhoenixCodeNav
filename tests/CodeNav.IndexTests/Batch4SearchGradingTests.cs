@@ -288,7 +288,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("35", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("36", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -630,6 +630,14 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("nearest indexed Directory.Packages.props", csharpCentralPackages);
         Assert.Contains("MSBuild-dependent shapes stay unresolved", csharpCentralPackages);
         Assert.Contains("without guessing or executing restore", csharpCentralPackages);
+        string sharedPackages = Assert.Single(json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == "shared-semantic-package-evaluation")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("C#/F# share", sharedPackages);
+        Assert.Contains("PackageReference/PackageVersion", sharedPackages);
+        Assert.Contains("VersionOverride", sharedPackages);
+        Assert.Contains("GlobalPackageReference is restore-only, not compile", sharedPackages);
+        Assert.Contains("caller authority/budgets retained", sharedPackages);
         string csharpCentralPackageProperties = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()

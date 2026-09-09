@@ -182,13 +182,17 @@ public sealed partial class SemanticService
                 }
             }
 
-            var pendingPackages = new Queue<string>(packageReferences.Select(reference =>
+            var pendingPackages = new Queue<string>(packageReferences.Where(reference =>
+                reference.IncludeCompileAssets).Select(reference =>
                 reference.Id));
+            var nonCompilePackages = packageReferences.Where(reference => !reference.IncludeCompileAssets)
+                .Select(reference => reference.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var visitedPackages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var assets = new List<FSharpPackageCompileAsset>();
             while (pendingPackages.TryDequeue(out string? packageId))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (nonCompilePackages.Contains(packageId)) continue;
                 if (!visitedPackages.Add(packageId)) continue;
                 if (!packageTargets.TryGetValue(packageId,
                         out (string LibraryKey, string ExpectedLibraryPath,
@@ -423,6 +427,14 @@ public sealed partial class SemanticService
                     out JsonElement dependency))
                 return false;
 
+            // NuGet materializes global references with an explicit non-compile include mask.
+            // A stale restore with default/all assets must not be accepted under that model.
+            if (!reference.IncludeCompileAssets &&
+                (!dependency.TryGetProperty("include", out JsonElement include) ||
+                 include.ValueKind != JsonValueKind.String ||
+                 !IsNonCompilePackageInclude(include.GetString()!)))
+                return false;
+
             if (!TryParseFSharpPackageVersionConstraint(reference.RequestedVersion,
                     out FSharpPackageVersionConstraint? requestedConstraint) ||
                 !dependency.TryGetProperty("version", out JsonElement restoredVersion) ||
@@ -437,6 +449,18 @@ public sealed partial class SemanticService
                 return false;
         }
         return true;
+    }
+
+    private static bool IsNonCompilePackageInclude(string include)
+    {
+        string[] assets = include.Split([',', ';'], StringSplitOptions.TrimEntries |
+            StringSplitOptions.RemoveEmptyEntries);
+        return assets.Length > 0 && assets.All(asset =>
+            asset.Equals("Runtime", StringComparison.OrdinalIgnoreCase) ||
+            asset.Equals("Build", StringComparison.OrdinalIgnoreCase) ||
+            asset.Equals("Native", StringComparison.OrdinalIgnoreCase) ||
+            asset.Equals("ContentFiles", StringComparison.OrdinalIgnoreCase) ||
+            asset.Equals("Analyzers", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool TryGetSelectedFSharpPackageVersion(JsonElement selectedTarget,

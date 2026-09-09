@@ -185,8 +185,8 @@ semantic model identity, so an indexed central-property or version change reload
 project while unrelated config changes do not. Centrally selected packages resolve only from the
 exact global-cache version directory;
 missing versions never fall back to the newest installed version, while an existing analyzer-only
-or target-incompatible package keeps the established unresolved-reference degradation. Imports, conditions, duplicate or
-mutating `PackageVersion` items, `GlobalPackageReference`, invalid versions, missing authority, and
+or target-incompatible package keeps the established unresolved-reference degradation. Imports, conditions, duplicate
+`PackageVersion` declarations, invalid versions, missing authority, and
 Windows path ambiguity are not projected and retain established unresolved-reference behavior. A
 selected exact version whose cache directory is absent fails with the stable
 `csharp_semantic_central_package_asset_unavailable` cause. Direct-version
@@ -278,14 +278,39 @@ logic is ignored, but a target or task that can mutate compile/reference/compile
 hard boundary.
 For central package management, the nearest indexed ancestor `Directory.Packages.props` is evaluated
 after `Directory.Build.props` and before the project with the same bounded property/condition/import
-machinery. Conditional simple-version `PackageVersion` Include/Update/Remove items may depend on the
-selected TFM and supported earlier property authority; dependence on a property first defined later in
-the project fails closed as unresolved rather than being guessed. Versionless
+machinery. Since v0.12.98, C# and F# use one shared package-item evaluator for `PackageReference`,
+`PackageVersion` Include/Update/Remove, and enabled `VersionOverride`. C# retains its unconditional
+indexed-XML admission and existing local-property budgets; F# retains bounded import/condition authority.
+F# package-only item groups do not start the ordinary semantic-item phase: their group, item and
+metadata conditions and expansions run after property evaluation, using final project properties.
+Helper `@(ItemList)` expansion instead uses the state at each package item's document position,
+including within one ItemGroup and across imports. Immutable helper/error snapshots share unchanged
+state without copying every list per package; they contain no property state. The existing conservative
+ordering guard still applies to `Choose`, non-package semantic items, and later assignments to properties
+consumed by helper items. Unknown or incomplete positional helpers remain unresolved.
+Reference Include/Update/Remove operations finish before surviving references consume the final
+central-version item set; transient removed references need no version. Global identity collisions
+are rejected before this resolution, so a global version cannot heal an ordinary colliding reference.
+Unmatched Update/Remove items do not create
+references. A `PackageReference` declared in the central file contributes to either language's result,
+including when the project has no direct package references. Versionless
 `PackageReference` items must resolve through that authority, direct Version metadata is rejected
 under CPM, and disabled VersionOverride authority fails closed. Ambiguous Windows host-case matches
-and unsupported central constructs, including `GlobalPackageReference`, remain explicit. Active `ExcludeAssets`, `IncludeAssets`, or
+and unsupported central constructs remain explicit. Active `ExcludeAssets`, `IncludeAssets`, or
 `Aliases` metadata fails closed because the bounded evaluator does not model package compile-asset
 filtering or reference aliases.
+
+`GlobalPackageReference` has one fixed, fenced exception to that asset-filtering refusal: with CPM
+enabled and `RestoreEnableGlobalPackageReference` not disabled, NuGet projects simple Include/Version
+global items after ordinary items with `IncludeAssets=Runtime;Build;Native;contentFiles;Analyzers` and
+`PrivateAssets=All`. **Compile is absent from that include mask**; PrivateAssets alone does not remove
+this project's compiler references. The shared engine exposes distinct compile and restore projections:
+C# consumes the former, while F# validates global identities/versions and a non-compile restored include
+mask, but excludes them from compile-asset traversal. Disabled globals are ignored; unknown flags,
+duplicate ordinary/global identities, extra global metadata and unsupported versions fail closed.
+This does not execute or model package build targets/analyzers. Each declared global retains one item
+budget charge; existing numeric limits are unchanged. Schema v36 recaptures persisted F# `Exists`
+dependencies reached by the deferred package conditions in both cold build and delta refresh.
 An explicit `CODENAV_NET472_REFS` directory is likewise authoritative for net472 compiler metadata:
 Phoenix does not fall through to installed targeting packs or package caches when that override is
 missing or unusable, and availability remains false unless valid assemblies with the expected
