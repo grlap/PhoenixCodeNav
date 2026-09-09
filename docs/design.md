@@ -281,6 +281,30 @@ C# unresolved-reference fallback). A missing project path confers no guessed ext
 does not infer SDK flags or add general `MSBuildProject*`/`MSBuildThisFile*` support.
 Schema v38 rebuilds extension-dependent persisted F# `Exists` probes; cold and delta capture use
 the same root context as semantic queries.
+Since v0.12.101, a shared bounded condition proof prevents permanently inactive semantic items
+from starting the F# ordering guard. For example, a shared props group guarded by
+`'$(MSBuildProjectExtension)' == '.csproj' And '$(IsNet8OrGreater)' == 'true'` cannot contribute
+items to an `.fsproj`, regardless of later changes to `IsNet8OrGreater`. After ordinary condition
+evaluation succeeds with false, F# applies the proof to skipped item groups and individual items.
+The existing skipped-Choose callback also uses it defensively, but MSBuild rejects a `Condition`
+attribute on `Choose`; this is not an advertised valid-project shape. Completed Choose scheduling
+and potentially live items retain their conservative guards. This does not provide general
+property-before-item evaluation.
+The proof uses the existing quote-aware raw boolean grammar (`And`, `Or`, `!`, parentheses)
+and three-valued reasoning: only proven false suppresses the guard. Its leaves admit literal
+booleans and equality/inequality between literals or single complete invariant properties.
+The invariant predicate is shared with the reserved root context, currently only
+`MSBuildProjectExtension`; soundness depends on refusing assignments to those reserved values.
+Mutable properties, including SDK flags, and unsupported proof atoms remain unknown. Values are
+compared as scalars, never reparsed as condition syntax; the proof performs no intrinsic expansion
+or `Exists` probes. Ordinary condition evaluation shares that raw grammar and expands scalar
+operands (including quoted comparisons, booleans, admitted string functions and `Exists` paths)
+without letting their values introduce operators or delimiters. Whole-condition expansion
+admission, completeness and size checks still run even for skipped operands; an arbitrary
+property value containing a boolean expression is not itself condition syntax. C# does not use
+this F# ordering guard and this change does not broaden its
+existing imported-item/condition evaluation. Schema v39 re-harvests newly reachable persisted F#
+`Exists` probes through the same cold/delta evaluator. Existing limits are unchanged.
 The declared property-function allowlist contains two exact shapes. The path-only
 `$([MSBuild]::MakeRelative($(MSBuildProjectDirectory), $(MSBuildThisFileDirectory)))`
 shape allows optional matching single or double quotes around either reserved property. It is

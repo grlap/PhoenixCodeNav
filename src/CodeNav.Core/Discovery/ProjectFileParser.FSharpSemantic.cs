@@ -809,8 +809,13 @@ public static partial class ProjectFileParser
             if (!_itemLists.ContainsKey(name)) _itemLists = _itemLists.Add(name, []);
         }
 
-        private static bool ConditionMayDependOnProperties(XElement element) =>
-            element.Attribute("Condition")?.Value.Contains("$(", StringComparison.Ordinal) == true;
+        private bool ConditionMayDependOnProperties(XElement element) =>
+            element.Attribute("Condition") is { } condition &&
+            condition.Value.Contains("$(", StringComparison.Ordinal) &&
+            // Reserved root-context assignments are refused above; only those values can prove
+            // a skipped semantic group/item permanently inactive across later property groups.
+            !_expressions.IsConditionInvariantFalse(condition.Value,
+                BoundedMsBuildProjectContext.IsReservedProperty);
 
         private void RegisterReferenceInputPropertyDependencies(XElement item, XElement boundary)
         {

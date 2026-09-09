@@ -288,7 +288,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("38", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("39", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -411,6 +411,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("shared-mcp-daemon", ids);
         Assert.Contains("shared-daemon-session-recovery", ids);
         Assert.Contains("shared-semantic-project-extension", ids);
+        Assert.Contains("shared-semantic-invariant-conditions", ids);
         Assert.Contains("shared-mcp-daemon-default", ids);
         Assert.Contains("workspace-msbuild-config-indexing", ids);
         Assert.Contains("hierarchy-ranking", ids);
@@ -646,6 +647,12 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("v0.12.99 C#/F# root Microsoft.NET.Sdk", sharedSdkContext);
         Assert.Contains("UsingMicrosoftNETSdk/UsingNETSdkDefaults=true before imports", sharedSdkContext);
         Assert.Contains("mutable; existing caller authority retained", sharedSdkContext);
+        string invariantConditions = Assert.Single(json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == "shared-semantic-invariant-conditions")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("v0.12.101 shared scalar conditions", invariantConditions);
+        Assert.Contains("invariant-false F# items allow later properties", invariantConditions);
+        Assert.Contains("mutable guards kept", invariantConditions);
         string projectExtension = Assert.Single(json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString() == "shared-semantic-project-extension")
             .GetProperty("summary").GetString()!;
@@ -1473,6 +1480,17 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
 
         string reviewPack = Summary("review-pack");
         Assert.Contains("ONE budget-bounded call", reviewPack);
+        foreach (string retained in new[]
+                 {
+                     "(validated-base Git diff + working-tree dirt) or explicit paths",
+                     "hunk-mapped symbols/per-symbol impact digests", "symbolId handle", "owner",
+                     "directDependentProjects (+viaHintPathOnly)", "transitive count", "publicApi",
+                     "related_tests signal", "indexed reference candidates", "deterministic risks",
+                     "Deleted .cs: read-only base blob", "danglingCandidates per former top-level type",
+                     "DELETION honesty", "All disclose INDEXED confidence", "stable note ids", "no semantic resolution",
+                     "references(symbolId, mode:'semantic')", "baseRef: sha or strict-charset ref name",
+                 })
+            Assert.Contains(retained, reviewPack);
         foreach (var (token, owner) in new[]
                  {
                      ("cat-file --batch-check", "review-git-stdin-transport"),

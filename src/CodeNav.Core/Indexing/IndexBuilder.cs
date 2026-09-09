@@ -151,8 +151,10 @@ public static class IndexBuilder
     /// v37: admitted root Microsoft.NET.Sdk flags now precede early imports, making SDK-conditioned
     /// Exists probes reachable; rebuild to recapture their project dependencies.
     /// v38: reserved root MSBuildProjectExtension reaches additional F# Exists conditions;
-    /// rebuild to harvest the same project context used by semantic queries.</summary>
-    public const string SchemaVersion = "38";
+    /// rebuild to harvest the same project context used by semantic queries.
+    /// v39: immutable-false semantic items no longer block later F# property/Exists evaluation;
+    /// rebuild to recapture probes with the query-time proof and scalar-preserving conditions.</summary>
+    public const string SchemaVersion = "39";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }

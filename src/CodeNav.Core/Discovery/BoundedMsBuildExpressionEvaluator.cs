@@ -27,10 +27,6 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         @"(?:'(?<argument>[^'\r\n$]*)'|""(?<argument>[^""\r\n$]*)"")\s*\)\s*\)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
-    private static readonly Regex ExistsCondition = new(
-        @"^Exists\s*\(\s*(?:'(?<path>[^'\r\n]*)'|""(?<path>[^""\r\n]*)"")\s*\)$",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
     private readonly IReadOnlyDictionary<string, BoundedMsBuildProperty> _properties;
     private readonly Func<string, string, BoundedMsBuildExpansion> _expandIntrinsic;
     private readonly Func<string, string, BoundedMsBuildExistsResult> _exists;
@@ -65,20 +61,22 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             error = "condition_depth_limit";
             return false;
         }
+        // Retain whole-condition admission, completeness and expansion-size checks, including
+        // skipped operands. The expanded text is never parsed: values cannot supply operators.
         if (!TryExpandProperties(condition, documentPath, unsetSelfProperty,
-                out string expanded, out bool complete, out error))
+                out _, out bool complete, out error))
             return false;
         if (!complete)
         {
             error = "condition_property_unresolved";
             return false;
         }
-        expanded = expanded.Trim();
-        if (expanded.Length == 0) return false;
-        if (!HasBalancedConditionDelimiters(expanded)) return false;
-        if (depth == 0 && !ValidateConditionSyntax(expanded, depth, out error)) return false;
+        condition = condition.Trim();
+        if (condition.Length == 0) return false;
+        if (!HasBalancedConditionDelimiters(condition)) return false;
+        if (depth == 0 && !ValidateConditionSyntax(condition, depth, out error)) return false;
 
-        if (TrySplitLogical(expanded, "Or", out string left, out string right))
+        if (TrySplitLogical(condition, "Or", out string left, out string right))
         {
             if (!TryEvaluateCondition(left, documentPath, out bool leftResult, out error,
                     unsetSelfProperty, depth + 1))
@@ -91,7 +89,7 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             return TryEvaluateCondition(right, documentPath, out result, out error,
                 unsetSelfProperty, depth + 1);
         }
-        if (TrySplitLogical(expanded, "And", out left, out right))
+        if (TrySplitLogical(condition, "And", out left, out right))
         {
             if (!TryEvaluateCondition(left, documentPath, out bool leftResult, out error,
                     unsetSelfProperty, depth + 1))
@@ -105,21 +103,23 @@ internal sealed class BoundedMsBuildExpressionEvaluator
                 unsetSelfProperty, depth + 1);
         }
 
-        if (HasWrappingParentheses(expanded))
-            return TryEvaluateCondition(expanded[1..^1], documentPath, out result, out error,
+        if (HasWrappingParentheses(condition))
+            return TryEvaluateCondition(condition[1..^1], documentPath, out result, out error,
                 unsetSelfProperty, depth + 1);
-        if (expanded[0] == '!')
+        if (condition[0] == '!')
         {
-            if (!TryEvaluateCondition(expanded[1..], documentPath, out bool inner, out error,
+            if (!TryEvaluateCondition(condition[1..], documentPath, out bool inner, out error,
                     unsetSelfProperty, depth + 1))
                 return false;
             result = !inner;
             return true;
         }
 
-        if (TryParseExists(expanded, out string rawPath))
+        if (TryParseExists(condition, out string rawPath))
         {
-            BoundedMsBuildExistsResult exists = _exists(documentPath, rawPath);
+            if (!TryExpandConditionScalar(rawPath, documentPath, unsetSelfProperty,
+                    out string path, out error)) return false;
+            BoundedMsBuildExistsResult exists = _exists(documentPath, path);
             if (!exists.Complete)
             {
                 error = exists.Error;
@@ -129,11 +129,14 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             return true;
         }
 
-        if (TryParseConditionOperand(expanded, out string scalar) &&
-            bool.TryParse(scalar, out result)) return true;
-        if (!TryFindComparison(expanded, out left, out string op, out right)) return false;
+        if (TryParseConditionOperand(condition, out string scalar))
+            return TryExpandConditionScalar(scalar, documentPath, unsetSelfProperty,
+                out scalar, out error) && bool.TryParse(scalar, out result);
+        if (!TryFindComparison(condition, out left, out string op, out right)) return false;
         if (!TryParseConditionOperand(left, out left) ||
             !TryParseConditionOperand(right, out right)) return false;
+        if (!TryExpandConditionScalar(left, documentPath, unsetSelfProperty, out left, out error) ||
+            !TryExpandConditionScalar(right, documentPath, unsetSelfProperty, out right, out error)) return false;
         switch (op)
         {
             case "==":
@@ -153,6 +156,79 @@ internal sealed class BoundedMsBuildExpressionEvaluator
                     _ => false,
                 };
                 return true;
+        }
+    }
+
+    private bool TryExpandConditionScalar(string input, string documentPath, string? unsetSelfProperty,
+        out string value, out string? error)
+    {
+        if (!TryExpandProperties(input, documentPath, unsetSelfProperty,
+                out value, out bool complete, out error)) return false;
+        if (!complete) error = "condition_property_unresolved";
+        return complete;
+    }
+
+    /// <summary>
+    /// Proves a condition false independently of mutable properties. The caller must only admit
+    /// properties whose assignments it prohibits. Unknown atoms retain the ordering guard.
+    /// This reads raw syntax and compares scalar values, never reparsing a property's contents as
+    /// condition syntax, and never invokes intrinsic expansion or Exists (including its capture).
+    /// </summary>
+    public bool IsConditionInvariantFalse(string condition, Func<string, bool> isInvariantProperty)
+    {
+        CheckCancellation();
+        // The F# caller's ShouldProcess already enforces its stricter raw condition-character
+        // bound. This shared guard retains the expansion bound; it does not replace that admission.
+        if (condition.Length > _maxPropertyValueChars ||
+            !ValidateConditionSyntax(condition, 0, out _)) return false;
+        return Visit(condition, 0) == false;
+
+        bool? Visit(string expression, int depth)
+        {
+            CheckCancellation();
+            if (depth > _maxConditionDepth) return null;
+            expression = expression.Trim();
+            if (TrySplitLogical(expression, "Or", out string left, out string right))
+            {
+                bool? a = Visit(left, depth + 1);
+                bool? b = Visit(right, depth + 1);
+                return a == true || b == true ? true : a == false && b == false ? false : null;
+            }
+            if (TrySplitLogical(expression, "And", out left, out right))
+            {
+                bool? a = Visit(left, depth + 1);
+                bool? b = Visit(right, depth + 1);
+                return a == false || b == false ? false : a == true && b == true ? true : null;
+            }
+            if (HasWrappingParentheses(expression))
+                return Visit(expression[1..^1], depth + 1);
+            if (expression[0] == '!') return !Visit(expression[1..], depth + 1);
+            if (TryReadOperand(expression, out string scalar) && bool.TryParse(scalar, out bool value))
+                return value;
+            if (!TryFindComparison(expression, out left, out string op, out right) ||
+                op is not ("==" or "!=") ||
+                !TryReadOperand(left, out left) || !TryReadOperand(right, out right)) return null;
+            bool equal = left.Equals(right, StringComparison.OrdinalIgnoreCase);
+            return op == "==" ? equal : !equal;
+        }
+
+        bool TryReadOperand(string operand, out string value)
+        {
+            value = "";
+            if (!TryParseConditionOperand(operand, out string raw)) return false;
+            Match match = PropertyReference.Match(raw);
+            if (match.Success && match.Index == 0 && match.Length == raw.Length)
+            {
+                string name = match.Groups["name"].Value;
+                if (!isInvariantProperty(name) || !_properties.TryGetValue(name, out var property) ||
+                    !property.Complete) return false;
+                value = property.Value;
+                return true;
+            }
+            // Concatenation, functions, escaping and item/metadata references are not proof atoms.
+            if (raw.IndexOfAny(['$', '@', '%']) >= 0) return false;
+            value = raw;
+            return true;
         }
     }
 
@@ -409,7 +485,7 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             return ValidateConditionSyntax(expression[1..], depth + 1, out error);
         if (TryParseExists(expression, out _)) return true;
         if (TryParseConditionOperand(expression, out string scalar) &&
-            bool.TryParse(scalar, out _)) return true;
+            (bool.TryParse(scalar, out _) || SupportedPropertyMatches(scalar).Length > 0)) return true;
         return TryFindComparison(expression, out left, out _, out right) &&
                TryParseConditionOperand(left, out _) && TryParseConditionOperand(right, out _);
     }
@@ -473,11 +549,25 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         return builder.ToString();
     }
 
-    private static bool TryParseExists(string expression, out string path)
+    private bool TryParseExists(string expression, out string path)
     {
-        Match match = ExistsCondition.Match(expression);
-        path = match.Success ? match.Groups["path"].Value : "";
-        return match.Success;
+        path = "";
+        int open = expression.IndexOf('(');
+        if (open < 0 || !expression[..open].TrimEnd().Equals("Exists", StringComparison.OrdinalIgnoreCase) ||
+            expression[^1] != ')') return false;
+        string operand = expression[(open + 1)..^1].Trim();
+        return operand.Length > 0 && operand[0] is '\'' or '"' &&
+            !operand.Contains('\r') && !operand.Contains('\n') && TryParseConditionOperand(operand, out path);
+    }
+
+    private static int PropertyExpansionLengthAt(string expression, int index)
+    {
+        if (expression[index] != '$' || index + 1 >= expression.Length || expression[index + 1] != '(')
+            return 0;
+        Match match = PropertyReference.Match(expression, index);
+        if (match.Success && match.Index == index) return match.Length;
+        match = PropertyStartsWith.Match(expression, index);
+        return match.Success && match.Index == index ? match.Length : 0;
     }
 
     private bool TrySplitLogical(string expression, string word, out string left,
@@ -490,6 +580,8 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         for (int i = 0; i <= expression.Length - word.Length; i++)
         {
             CheckCancellation();
+            int expansionLength = PropertyExpansionLengthAt(expression, i);
+            if (expansionLength > 0) { i += expansionLength - 1; continue; }
             char ch = expression[i];
             if (quote != '\0')
             {
@@ -520,9 +612,12 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         CheckCancellation();
         char quote = '\0';
         int depth = 0;
-        foreach (char ch in expression)
+        for (int i = 0; i < expression.Length; i++)
         {
             CheckCancellation();
+            int expansionLength = PropertyExpansionLengthAt(expression, i);
+            if (expansionLength > 0) { i += expansionLength - 1; continue; }
+            char ch = expression[i];
             if (quote != '\0')
             {
                 if (ch == quote) quote = '\0';
@@ -549,6 +644,8 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         for (int i = 0; i < expression.Length; i++)
         {
             CheckCancellation();
+            int expansionLength = PropertyExpansionLengthAt(expression, i);
+            if (expansionLength > 0) { i += expansionLength - 1; continue; }
             char ch = expression[i];
             if (quote != '\0')
             {
@@ -572,6 +669,8 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         for (int i = 0; i < expression.Length; i++)
         {
             CheckCancellation();
+            int expansionLength = PropertyExpansionLengthAt(expression, i);
+            if (expansionLength > 0) { i += expansionLength - 1; continue; }
             char ch = expression[i];
             if (quote != '\0')
             {
@@ -606,12 +705,24 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             char quote = operand[0];
             if (operand.Length < 2 || operand[^1] != quote) return false;
             string inner = operand[1..^1];
-            if (inner.Contains(quote)) return false;
+            for (int i = 0; i < inner.Length; i++)
+            {
+                CheckCancellation();
+                int expansionLength = PropertyExpansionLengthAt(inner, i);
+                if (expansionLength > 0) { i += expansionLength - 1; continue; }
+                if (inner[i] == quote) return false;
+            }
             value = inner;
             return true;
         }
-        if (operand.Any(ch => char.IsWhiteSpace(ch) || ch is '\'' or '"' or
-                              '(' or ')' or '=' or '<' or '>' or '!')) return false;
+        for (int i = 0; i < operand.Length; i++)
+        {
+            CheckCancellation();
+            int expansionLength = PropertyExpansionLengthAt(operand, i);
+            if (expansionLength > 0) { i += expansionLength - 1; continue; }
+            if (char.IsWhiteSpace(operand[i]) || operand[i] is '\'' or '"' or
+                '(' or ')' or '=' or '<' or '>' or '!') return false;
+        }
         value = operand;
         return true;
     }
