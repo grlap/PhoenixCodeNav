@@ -143,8 +143,10 @@ public static class IndexBuilder
     /// v33: compound self-default conditions can expose additional persisted Exists probes;
     /// rebuilding re-harvests those project inputs instead of retaining incomplete v32 probe sets.
     /// v34: default Configuration/Platform values can activate additional persisted Exists probes;
-    /// rebuilding captures the default analysis context consistently with semantic queries.</summary>
-    public const string SchemaVersion = "34";
+    /// rebuilding captures the default analysis context consistently with semantic queries.
+    /// v35: the disclosed initial Configuration/Platform analysis context is available before
+    /// early imports, changing reachable persisted Exists probes and requiring re-harvesting.</summary>
+    public const string SchemaVersion = "35";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }

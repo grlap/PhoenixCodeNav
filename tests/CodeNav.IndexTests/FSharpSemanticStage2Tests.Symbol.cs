@@ -46,6 +46,8 @@ public partial class FSharpSemanticStage2Tests
                 .GetProperty("targetFramework").GetString());
             Assert.Equal("semantic", at.GetProperty("meta").GetProperty("navigationLayer").GetString());
             Assert.True(at.GetProperty("partial").GetBoolean());
+            Assert.Contains("fsharp_semantic_default_context_assumed",
+                at.GetProperty("partialReason").GetString());
             Assert.Contains("fsharp_semantic_sdk_implicit_authority",
                 at.GetProperty("partialReason").GetString());
             Assert.Contains("fsharp_core_reference_defaulted",
@@ -830,6 +832,7 @@ public partial class FSharpSemanticStage2Tests
         Assert.Equal("exact", NavigationTools.FSharpSemanticConfidence(null));
         Assert.Equal("exact", NavigationTools.FSharpSemanticConfidence(string.Join(';',
             "fsharp_semantic_sdk_implicit_authority",
+            "fsharp_semantic_default_context_assumed",
             "fsharp_semantic_toolchain_implicit_authority",
             "fsharp_core_reference_defaulted",
             "fsharp_binary_references_snapshotted",
@@ -848,6 +851,8 @@ public partial class FSharpSemanticStage2Tests
             "fsharp_semantic_diagnostics_present"));
         Assert.Equal("indexed", NavigationTools.FSharpSemanticConfidence(
             "fsharp_core_reference_defaulted;fsharp_core_reference_host_fallback"));
+        Assert.Equal("indexed", NavigationTools.FSharpSemanticConfidence(
+            "fsharp_semantic_default_context_assumed;fsharp_core_reference_host_fallback"));
         Assert.Equal("indexed", NavigationTools.FSharpSemanticConfidence(
             "fsharp_future_authority_cause"));
     }

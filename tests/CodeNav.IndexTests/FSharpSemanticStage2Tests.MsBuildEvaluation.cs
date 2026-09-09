@@ -1851,12 +1851,84 @@ public partial class FSharpSemanticStage2Tests
 
         FSharpSemanticOptionsSnapshot canonicalDefault = EvaluateBoundedProject("""
             <PropertyGroup>
-              <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
-              <DefineConstants Condition="'$(Configuration)' == 'Debug'">DEBUG</DefineConstants>
+              <LocalFlavor Condition="'$(LocalFlavor)' == ''">Debug</LocalFlavor>
+              <DefineConstants Condition="'$(LocalFlavor)' == 'Debug'">DEBUG</DefineConstants>
             </PropertyGroup>
             """);
         Assert.Null(canonicalDefault.Error);
         Assert.Contains("--define:DEBUG", canonicalDefault.CommandLineArgs);
+    }
+
+    [Theory]
+    [InlineData("Directory.Build.props", false)]
+    [InlineData("Directory.Packages.props", false)]
+    [InlineData("Directory.Build.props", true)]
+    [InlineData("Directory.Packages.props", true)]
+    public void AnalysisContextIsCompleteBeforeEarlyImportedConditions(string importPath, bool selfDefaults)
+    {
+        string assignments = selfDefaults ? """
+            <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+            <Platform Condition="'$(Platform)' == ''">x86</Platform>
+            """ : "";
+        string props = $$"""
+            <Project>
+              <PropertyGroup>
+                {{assignments}}
+                <AssemblyName>$(Configuration)|$(Platform)</AssemblyName>
+              </PropertyGroup>
+              <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0' and '$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+                <DefineConstants>MATCHED_EARLY_CONTEXT</DefineConstants>
+              </PropertyGroup>
+            </Project>
+            """;
+        FSharpSemanticOptionsSnapshot result = ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(
+            "Core/Core.fsproj", "<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><Compile Include=\"Core.fs\" /></ItemGroup></Project>",
+            "net8.0", "net8.0", importResolver: path => path == importPath ? props : null,
+            directoryBuildPropsPath: importPath == "Directory.Build.props" ? importPath : null,
+            directoryPackagesPropsPath: importPath == "Directory.Packages.props" ? importPath : null);
+        Assert.Null(result.Error);
+        Assert.Equal("Debug|AnyCPU", result.AssemblyName);
+        Assert.Contains("--define:MATCHED_EARLY_CONTEXT", result.CommandLineArgs);
+        Assert.Contains("fsharp_semantic_default_context_assumed", result.PartialReason);
+        Assert.Equal(["Core/Core.fs"], result.SourceFiles);
+    }
+
+    [Fact]
+    public void AnalysisContextDoesNotSynthesizeCompilerDefinesOrPlatformTarget()
+    {
+        FSharpSemanticOptionsSnapshot result = EvaluateBoundedProject("""
+            <PropertyGroup><AssemblyName>$(Configuration)|$(Platform)</AssemblyName></PropertyGroup>
+            """);
+        Assert.Null(result.Error);
+        Assert.Equal("Debug|AnyCPU", result.AssemblyName);
+        Assert.DoesNotContain("--define:DEBUG", result.CommandLineArgs);
+        Assert.DoesNotContain("--define:TRACE", result.CommandLineArgs);
+        Assert.DoesNotContain(result.CommandLineArgs, arg => arg.StartsWith("--platform:", StringComparison.Ordinal));
+        Assert.Contains("fsharp_semantic_default_context_assumed", result.PartialReason);
+        FSharpSemanticOptionsSnapshot unused = EvaluateBoundedProject("");
+        Assert.Null(unused.Error);
+        Assert.Contains("fsharp_semantic_default_context_assumed", unused.PartialReason);
+    }
+
+    [Fact]
+    public void CompleteAnalysisContextExpandsTheExactCompoundConditionCompletely()
+    {
+        var properties = new Dictionary<string, BoundedMsBuildProperty>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TargetFramework"] = new("net8.0", true),
+            ["Configuration"] = new("Debug", true),
+            ["Platform"] = new("AnyCPU", true),
+        };
+        var expressions = new BoundedMsBuildExpressionEvaluator(properties,
+            (_, _) => new(false, ""), (_, _) => new(false, false), CancellationToken.None,
+            ProjectFileParser.MaxFSharpSemanticPropertyValueChars,
+            ProjectFileParser.MaxFSharpSemanticConditionDepth);
+        Assert.True(expressions.TryExpandProperties(
+            "'$(TargetFramework)' == 'net8.0' and '$(Configuration)|$(Platform)' == 'Debug|AnyCPU'",
+            "Directory.Build.props", null, out string output, out bool complete, out string? error));
+        Assert.True(complete);
+        Assert.Null(error);
+        Assert.Equal("'net8.0' == 'net8.0' and 'Debug|AnyCPU' == 'Debug|AnyCPU'", output);
     }
 
     [Theory]
@@ -1887,6 +1959,7 @@ public partial class FSharpSemanticStage2Tests
             "Core/Core.fsproj", xml, "net8.0;net10.0", targetFramework);
         Assert.Null(result.Error);
         Assert.Equal(expectedContext, result.AssemblyName);
+        Assert.Contains("fsharp_semantic_default_context_assumed", result.PartialReason);
         Assert.Equal(expectedMatch, result.CommandLineArgs.Contains("--define:MATCHED_CONTEXT"));
         Assert.Equal(["Core/Core.fs"], result.SourceFiles);
     }
@@ -1907,7 +1980,7 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Fact]
-    public void DefaultConfigurationAndPlatformPreserveImportDefaultsAndCaptureExists()
+    public void DefaultConfigurationAndPlatformPreserveImportOverridesAndCaptureExists()
     {
         string root = Directory.CreateTempSubdirectory("codenav-default-context").FullName;
         try
@@ -1926,8 +1999,8 @@ public partial class FSharpSemanticStage2Tests
             string props = """
                 <Project>
                   <PropertyGroup>
-                    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
-                    <Platform Condition="'$(Platform)' == ''">x86</Platform>
+                    <Configuration>Release</Configuration>
+                    <Platform>x86</Platform>
                   </PropertyGroup>
                   <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0' and '$(Configuration)|$(Platform)' == 'Release|x86'">
                     <DefineConstants Condition="!Exists('Web.config')">IMPORT_CONTEXT</DefineConstants>
@@ -1957,11 +2030,11 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Theory]
-    [InlineData("Directory.Build.props", "Configuration")]
-    [InlineData("Directory.Build.props", "Platform")]
-    [InlineData("Directory.Packages.props", "Configuration")]
-    [InlineData("Directory.Packages.props", "Platform")]
-    public void DefaultConfigurationAndPlatformDoNotAssumeValuesInEarlyImports(string importPath, string property)
+    [InlineData("Directory.Build.props", "AmbientConfiguration")]
+    [InlineData("Directory.Build.props", "AmbientPlatform")]
+    [InlineData("Directory.Packages.props", "AmbientConfiguration")]
+    [InlineData("Directory.Packages.props", "AmbientPlatform")]
+    public void AnalysisContextDoesNotResolveOtherAmbientPropertiesInEarlyImports(string importPath, string property)
     {
         string props = $"""
             <Project>
@@ -1985,7 +2058,7 @@ public partial class FSharpSemanticStage2Tests
     [InlineData("<Platform>x86</Platform>", "Debug|x86", null)]
     [InlineData("<Configuration></Configuration><Platform></Platform>", "|", null)]
     [InlineData("<Configuration>$(Unknown)</Configuration>", null, "fsharp_semantic_assembly_name_unavailable")]
-    public void DefaultConfigurationAndPlatformOnlyFillMissingImportValues(string properties, string? expected, string? error)
+    public void DefaultConfigurationAndPlatformHonorEarlyImportAssignments(string properties, string? expected, string? error)
     {
         string props = $"<Project><PropertyGroup>{properties}</PropertyGroup></Project>";
         FSharpSemanticOptionsSnapshot result = ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(
@@ -1996,8 +2069,10 @@ public partial class FSharpSemanticStage2Tests
         if (error is null) Assert.Equal(expected, result.AssemblyName);
     }
 
-    [Fact]
-    public void DefaultConfigurationAndPlatformCaptureConvergesAfterProjectOverride()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DefaultConfigurationAndPlatformCaptureConvergesAfterOverride(bool earlyImport)
     {
         string root = Directory.CreateTempSubdirectory("codenav-context-refresh").FullName;
         try
@@ -2011,7 +2086,13 @@ public partial class FSharpSemanticStage2Tests
                   <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
                 </Project>
                 """;
-            WriteProject(root, "Core/Core.fsproj", Project(""));
+            string owner = earlyImport ? "Directory.Build.props" : "Core/Core.fsproj";
+            if (earlyImport)
+                WriteProject(root, "Core/Core.fsproj", "<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><Compile Include=\"Core.fs\" /></ItemGroup></Project>");
+            string Input(string properties) => earlyImport
+                ? Project(properties).Replace("<ItemGroup><Compile Include=\"Core.fs\" /></ItemGroup>", "", StringComparison.Ordinal)
+                : Project(properties);
+            WriteProject(root, owner, Input(""));
             string db = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, db);
             using var store = new IndexStore(db, createNew: false);
@@ -2025,8 +2106,8 @@ public partial class FSharpSemanticStage2Tests
             WriteProject(root, "Core/Web.config", "<configuration />");
             DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
             Assert.Equal(true, Captured("Core/Web.config"));
-            WriteProject(root, "Core/Core.fsproj", Project("<Configuration>Release</Configuration><Platform>x64</Platform>"));
-            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj"]);
+            WriteProject(root, owner, Input("<Configuration>Release</Configuration><Platform>x64</Platform>"));
+            DeltaRefresher.Refresh(store, root, [owner]);
             Assert.Null(Captured("Core/Web.config"));
             Assert.Equal(false, Captured("Core/app.config"));
         }

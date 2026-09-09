@@ -235,16 +235,21 @@ other unresolved ambient/global inputs still fail closed, including in short-cir
 because property expansion precedes boolean evaluation. Group-level conditions receive no self exemption.
 Schema v33 forces a rebuild because these newly accepted conditions can expose additional persisted
 `Exists` probes; no numeric limit changes accompany this extension.
-Since v0.12.96, F# semantic evaluation fills missing `Configuration=Debug` and `Platform=AnyCPU`
-after the early `Directory.Build.props` / `Directory.Packages.props` phase, before the project body.
-Early imports can supply their own self-defaults; other unresolved import-phase reads still fail closed.
-These are Phoenix defaults, not detected IDE state or immutable command-line global properties.
-Values supplied by early imports remain authoritative, including empty or incomplete values;
-ordinary later project/import assignments can replace defaults. A conditional assignment guarded
-by an empty value does not replace an already populated default. Only the caller-selected
-`TargetFramework` remains immutable.
+Since v0.12.97, F# semantic evaluation starts with an analysis context of `Configuration=Debug`
+and `Platform=AnyCPU`, available before every import, including `Directory.Build.props` and
+`Directory.Packages.props`. This replaces v0.12.96's late SDK-default timing: Phoenix deliberately
+selects an initial analysis context rather than emulating an unconfigured MSBuild invocation.
+These are mutable Phoenix defaults, not detected IDE state or immutable command-line global
+properties. Ordinary project/import assignments can replace them, including explicit empty or
+incomplete values. A self-empty guard does not replace an already populated default, including
+inside early imports. Only the caller-selected `TargetFramework` remains immutable; other
+unresolved properties still fail closed.
+Every such evaluation discloses `fsharp_semantic_default_context_assumed` through `partialReason`,
+even if the initial values are unused or later overwritten. This records the starting context,
+not a claim that a particular condition consumed a default. Semantic confidence can remain exact
+within that disclosed context; it does not claim agreement with the user's actual build context.
 No caller configuration/platform override is exposed yet, and these defaults do not themselves
-add `DEBUG`/`TRACE` constants or set `PlatformTarget`. Schema v34 rebuilds the index to re-harvest
+add `DEBUG`/`TRACE` constants or set `PlatformTarget`. Schema v35 rebuilds the index to re-harvest
 `Exists` dependencies under the same defaults used by semantic queries; numeric limits are unchanged.
 The declared property-function allowlist contains two exact shapes. The path-only
 `$([MSBuild]::MakeRelative($(MSBuildProjectDirectory), $(MSBuildThisFileDirectory)))`
@@ -419,6 +424,7 @@ from the context. `partial:true` and `partialReason` remain visible independentl
 | F# semantic partial reason | Confidence | Authority meaning |
 | --- | --- | --- |
 | `fsharp_semantic_sdk_implicit_authority` | exact | The selected standard SDK supplied disclosed implicit authority. |
+| `fsharp_semantic_default_context_assumed` | exact | Evaluation started with Phoenix's mutable Debug/AnyCPU analysis context before imports, not a detected build/IDE context; the reason persists after overrides or unused defaults. |
 | `fsharp_semantic_toolchain_implicit_authority` | exact | The selected recognized compiler toolchain supplied disclosed implicit authority. |
 | `fsharp_core_reference_defaulted` | exact | The selected context used the expected `FSharp.Core` default without host fallback. |
 | `fsharp_binary_references_snapshotted` | exact | Binary inputs were copied and verified as immutable request evidence. |

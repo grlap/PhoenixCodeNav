@@ -288,7 +288,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("34", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("35", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -1385,9 +1385,11 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("other string methods fail closed", startsWith);
         string selfDefaults = Summary("fsharp-semantic-compound-self-defaults");
         string defaultContext = Summary("fsharp-semantic-default-configuration-platform");
-        Assert.Contains("v0.12.96", defaultContext);
+        Assert.Contains("v0.12.97", defaultContext);
         Assert.Contains("Debug|AnyCPU", defaultContext);
-        Assert.Contains("project/import assignments override", defaultContext);
+        Assert.Contains("before imports", defaultContext);
+        Assert.Contains("mutable", defaultContext);
+        Assert.Contains("disclosed", defaultContext);
         Assert.Contains("v0.12.95", selfDefaults);
         Assert.Contains("And/Or/!", selfDefaults);
         Assert.Contains("unrelated unknowns fail closed", selfDefaults);

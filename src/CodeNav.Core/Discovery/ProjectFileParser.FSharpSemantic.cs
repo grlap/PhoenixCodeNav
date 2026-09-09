@@ -193,6 +193,11 @@ public static partial class ProjectFileParser
             _cancellationToken = cancellationToken;
             _budget = budget;
             _properties["TargetFramework"] = new(selectedTargetFramework, true);
+            // Phoenix's initial analysis context, available even to early props. These are
+            // mutable defaults, not detected IDE state or immutable MSBuild global properties.
+            _properties["Configuration"] = new("Debug", true);
+            _properties["Platform"] = new("AnyCPU", true);
+            _partialReasons.Add("fsharp_semantic_default_context_assumed");
             _expressions = new BoundedMsBuildExpressionEvaluator(
                 _properties,
                 (input, documentPath) => TryExpandSupportedPropertyFunction(
@@ -234,10 +239,6 @@ public static partial class ProjectFileParser
                     FSharpSemanticDocumentRole.DirectoryPackagesProps, depth: 0);
             if (_error is null)
             {
-                // Early props run before these defaults. Preserve values supplied by imports,
-                // including explicit empty/incomplete values; later ordinary assignments may override.
-                _properties.TryAdd("Configuration", new("Debug", true));
-                _properties.TryAdd("Platform", new("AnyCPU", true));
                 ProcessContainer(root, _projectPath,
                     FSharpSemanticDocumentRole.Project, depth: 0);
             }

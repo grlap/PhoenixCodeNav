@@ -181,6 +181,7 @@ public sealed partial class NavigationTools
                 // These disclose input provenance or result scope; they neither remove
                 // selected-context authority nor substitute a target-incompatible input.
                 case "fsharp_semantic_sdk_implicit_authority":
+                case "fsharp_semantic_default_context_assumed":
                 case "fsharp_semantic_toolchain_implicit_authority":
                 case "fsharp_core_reference_defaulted":
                 case "fsharp_binary_references_snapshotted":
