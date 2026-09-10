@@ -229,13 +229,16 @@ public sealed class IndexManager : IDisposable
     private bool _ownedResourcesReleased;
     private int _serverInfoEmitted;
 
+    public Semantic.ProjectModelMode SelectedFSharpProjectModel { get; }
+
     public IndexManager(string workspaceRoot, string? dbPath = null, Action<string>? log = null,
-        string? telemetryPipeName = null)
+        string? telemetryPipeName = null, Semantic.ProjectModelMode? fsharpProjectModel = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _dbPath = Path.GetFullPath(dbPath ?? IndexBuilder.DefaultDbPath(_workspaceRoot));
         _databaseIoPath = _dbPath;
         _log = log ?? (_ => { });
+        SelectedFSharpProjectModel = Semantic.FSharpProjectModelConfiguration.Select(fsharpProjectModel, _log);
         // epuc.1: one bounded telemetry stream per manager (== per workspace per process).
         // Lazy-free by design: the writer task parks on an empty channel until first Emit.
         Telemetry = new Diagnostics.TelemetryLog(_workspaceRoot, _log);
@@ -576,7 +579,7 @@ public sealed class IndexManager : IDisposable
             return new WorktreeIndexResult("snapshot_failed",
                 "the source index destination is no longer safe", 0, 0, 0, 0, null, false);
         return WorktreeIndexer.Ensure(
-            _workspaceRoot, _databaseIoPath, worktreePath, mode, log);
+            _workspaceRoot, _databaseIoPath, worktreePath, mode, SelectedFSharpProjectModel, log);
     }
 
     private bool TryGetSafeDatabaseStatus(out IndexLeaseIdentity? current, out long dbBytes)
@@ -1042,7 +1045,7 @@ public sealed class IndexManager : IDisposable
                                     string stagePath = anchored.CreateStagePath();
                                     FullRebuildPrivateStageReadyForTest?.Invoke(stagePath);
                                     buildResult = IndexBuilder.BuildOwned(
-                                        anchored.WorkspaceReadPath, stagePath, _log,
+                                        anchored.WorkspaceReadPath, stagePath, SelectedFSharpProjectModel, _log,
                                         startupBuildProgress, reservedPrivateStage: true,
                                         publishedWorkspaceRoot: _workspaceRoot);
                                     FullRebuildPrivateStageCompletedForTest?.Invoke();
@@ -1089,7 +1092,7 @@ public sealed class IndexManager : IDisposable
                                 FullRebuildAfterTelemetryStartedForTest?.Invoke();
                                 FullRebuildDestructiveBoundaryForTest?.Invoke(0);
                                 buildResult = IndexBuilder.BuildOwned(_workspaceRoot,
-                                    _databaseIoPath, _log, startupBuildProgress,
+                                    _databaseIoPath, SelectedFSharpProjectModel, _log, startupBuildProgress,
                                     waitingForReaders: () =>
                                     {
                                         _error = "startup rebuild is waiting for existing index readers to drain";
@@ -1910,10 +1913,12 @@ public sealed class IndexManager : IDisposable
                         ? DeltaRefresher.RefreshWithReaderForTest(_store, _workspaceRoot,
                             req.Paths, reader, _log, recordCommit: req.RecordCommit,
                             recordBranch: req.RecordBranch,
-                            recordBranchKnown: req.RecordBranchKnown)
+                            recordBranchKnown: req.RecordBranchKnown,
+                            fsharpProjectModel: SelectedFSharpProjectModel)
                         : DeltaRefresher.Refresh(_store, _workspaceRoot, req.Paths, _log,
                             recordCommit: req.RecordCommit, recordBranch: req.RecordBranch,
-                            recordBranchKnown: req.RecordBranchKnown);
+                            recordBranchKnown: req.RecordBranchKnown,
+                            fsharpProjectModel: SelectedFSharpProjectModel);
                     // z4c: count what was ACTUALLY applied (the refresh result), not what was
                     // requested — a sweep request has no path count, and hash-identical paths are
                     // rightly skipped without being "processed".
@@ -2275,7 +2280,7 @@ public sealed class IndexManager : IDisposable
             FullRebuildAfterTelemetryStartedForTest?.Invoke();
             FullRebuildPrivateStageReadyForTest?.Invoke(stagePath);
             BuildResult result = IndexBuilder.BuildOwned(
-                destination.WorkspaceReadPath, stagePath, _log,
+                destination.WorkspaceReadPath, stagePath, SelectedFSharpProjectModel, _log,
                 rebuildProgress, reservedPrivateStage: true,
                 publishedWorkspaceRoot: _workspaceRoot);
             _log($"Private full rebuild ready: {result.CsFiles} C# + {result.FsFiles} F# files, " +
@@ -2451,7 +2456,7 @@ public sealed class IndexManager : IDisposable
             _buildProgress = rebuildProgress;
             (buildId, progressTimer) = BeginBuildTelemetry("explicit_full", rebuildProgress); // x5ls.1.2
             FullRebuildAfterTelemetryStartedForTest?.Invoke();
-            var result = IndexBuilder.BuildOwned(_workspaceRoot, _databaseIoPath, _log,
+            var result = IndexBuilder.BuildOwned(_workspaceRoot, _databaseIoPath, SelectedFSharpProjectModel, _log,
                 rebuildProgress, waitingForReaders: () =>
                 {
                     _error = "full rebuild is waiting for existing index readers to drain";

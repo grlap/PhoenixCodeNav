@@ -153,7 +153,7 @@ public partial class FSharpSemanticStage2Tests
                 """);
             WriteProject(root, "Dependency/Dependency.cs", "public class Dependency { }");
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var workspace = new SemanticWorkspace(root, db, enableRoslynPersistence: false);
             // EnsureLoadedAsync takes an already-planned project set; the normal semantic
             // service expands the dependency closure before calling this workspace API.
@@ -351,7 +351,7 @@ public partial class FSharpSemanticStage2Tests
                 """));
             WriteProject(root, "Core/Core.fs", "module Core\nlet value = 42\n");
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             using var pinned = new IndexQueries(db, pinReadSnapshot: true);
             bool? Captured()
@@ -363,16 +363,16 @@ public partial class FSharpSemanticStage2Tests
             Assert.True(pinned.TryGetCapturedMsBuildFilePresence("Core/web.config", out bool? prior));
             Assert.Equal(false, prior);
             WriteProject(root, "Core/web.config", "present");
-            DeltaRefresher.Refresh(store, root, ["Core/web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Captured());
             Assert.True(pinned.TryGetCapturedMsBuildFilePresence("Core/web.config", out bool? stillPrior));
             Assert.Equal(false, stillPrior);
             WriteProject(root, "Directory.Build.props", props.Replace("<Project>",
                 "<Project><PropertyGroup><OptionalRoot>$(Unknown)</OptionalRoot></PropertyGroup>", StringComparison.Ordinal));
-            DeltaRefresher.Refresh(store, root, ["Directory.Build.props"]);
+            DeltaRefresher.Refresh(store, root, ["Directory.Build.props"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Null(Captured());
             WriteProject(root, "Directory.Build.props", props);
-            DeltaRefresher.Refresh(store, root, ["Directory.Build.props"]);
+            DeltaRefresher.Refresh(store, root, ["Directory.Build.props"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Captured());
         }
         finally { Cleanup(root); }

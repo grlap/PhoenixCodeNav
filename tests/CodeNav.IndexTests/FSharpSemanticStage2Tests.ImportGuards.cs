@@ -317,7 +317,7 @@ public partial class FSharpSemanticStage2Tests
                 """;
             WriteProject(root, "Build/First.targets", imported);
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             using var pinned = new IndexQueries(db, pinReadSnapshot: true);
             bool? Captured()
@@ -329,15 +329,15 @@ public partial class FSharpSemanticStage2Tests
             Assert.True(pinned.TryGetCapturedMsBuildFilePresence("Core/web.config", out bool? prior));
             Assert.Equal(false, prior);
             WriteProject(root, "Core/web.config", "present");
-            DeltaRefresher.Refresh(store, root, ["Core/web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Captured());
             Assert.True(pinned.TryGetCapturedMsBuildFilePresence("Core/web.config", out bool? stillPrior));
             Assert.Equal(false, stillPrior);
             WriteProject(root, "Build/First.targets", imported.Replace("<Imported>true</Imported>", "<Other>true</Other>", StringComparison.Ordinal));
-            DeltaRefresher.Refresh(store, root, ["Build/First.targets"]);
+            DeltaRefresher.Refresh(store, root, ["Build/First.targets"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Null(Captured());
             WriteProject(root, "Build/First.targets", imported);
-            DeltaRefresher.Refresh(store, root, ["Build/First.targets"]);
+            DeltaRefresher.Refresh(store, root, ["Build/First.targets"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Captured());
         }
         finally { Cleanup(root); }

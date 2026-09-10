@@ -122,7 +122,13 @@ public static class WorktreeIndexer
     /// index of ONE sibling worktree. Mode: 'auto' (create when missing or schema-stale, else
     /// refresh), 'create' (recreate from a fresh seed), 'refresh' (existing only).</summary>
     public static WorktreeIndexResult Ensure(
-        string mainRoot, string mainDbPath, string worktreePath, string mode, Action<string> log)
+        string mainRoot, string mainDbPath, string worktreePath, string mode, Action<string> log) =>
+        Ensure(mainRoot, mainDbPath, worktreePath, mode,
+            Semantic.FSharpProjectModelConfiguration.Select(null, log), log);
+
+    internal static WorktreeIndexResult Ensure(
+        string mainRoot, string mainDbPath, string worktreePath, string mode,
+        Semantic.ProjectModelMode fsharpProjectModel, Action<string> log)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         if (PlatformPolicy == WorktreeIndexPlatformPolicy.Unsupported)
@@ -246,7 +252,7 @@ public static class WorktreeIndexer
                     // handle-relative install. Existing bounded readers drain naturally; every
                     // new follower open observes B and refuses to barge.
                     return EnsureOwned(mainDbPath, mode, log, sw, target, dbPath,
-                        destination!);
+                        destination!, fsharpProjectModel);
                 }
             }
         }
@@ -255,7 +261,7 @@ public static class WorktreeIndexer
     private static WorktreeIndexResult EnsureOwned(
         string mainDbPath, string mode, Action<string> log,
         System.Diagnostics.Stopwatch sw, WorkspaceWorktree target, string dbPath,
-        AnchoredIndexDestination destination)
+        AnchoredIndexDestination destination, Semantic.ProjectModelMode fsharpProjectModel)
     {
         bool exists = destination.DatabaseExists;
 
@@ -266,13 +272,13 @@ public static class WorktreeIndexer
                 "no index in this worktree; use mode 'create' (or 'auto')", sw);
         }
         return ReconcileStaged(mainDbPath, log, sw, target, dbPath, create,
-            destination);
+            destination, fsharpProjectModel);
     }
 
     private static WorktreeIndexResult ReconcileStaged(
         string mainDbPath, Action<string> log, System.Diagnostics.Stopwatch sw,
         WorkspaceWorktree target, string dbPath, bool create,
-        AnchoredIndexDestination destination)
+        AnchoredIndexDestination destination, Semantic.ProjectModelMode fsharpProjectModel)
     {
         string stagedDb;
         try
@@ -345,7 +351,7 @@ public static class WorktreeIndexer
                     }
                 }
                 var result = RefreshWithTransientRetries(store, readRoot,
-                    sweep ? null : paths, target.WorkspacePath, log);
+                    sweep ? null : paths, target.WorkspacePath, fsharpProjectModel, log);
                 added = result.AddedFiles;
                 changed = result.ChangedFiles;
                 deleted = result.DeletedFiles;
@@ -423,7 +429,7 @@ public static class WorktreeIndexer
 
     private static RefreshResult RefreshWithTransientRetries(
         IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? paths,
-        string publishedWorkspaceRoot, Action<string> log)
+        string publishedWorkspaceRoot, Semantic.ProjectModelMode fsharpProjectModel, Action<string> log)
     {
         int retry = 0;
         while (true)
@@ -431,7 +437,7 @@ public static class WorktreeIndexer
             try
             {
                 return DeltaRefresher.RefreshForPublication(store, workspaceRoot, paths,
-                    publishedWorkspaceRoot, log);
+                    publishedWorkspaceRoot, fsharpProjectModel, log);
             }
             catch (RefreshInputUnavailableException ex)
                 when (retry < DeltaRefresher.RefreshInputRetryDelays.Length)

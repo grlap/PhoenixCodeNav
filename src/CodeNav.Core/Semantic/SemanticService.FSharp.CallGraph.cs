@@ -270,7 +270,7 @@ public sealed partial class SemanticService
                     "fsharp_workspace_dependents_not_scanned");
                 var externalCoverage = new FSharpReferencesCoverage(
                     null, 0, 0, 0, null, false, [], [],
-                    ApproximateModel: SelectedFSharpProjectModel == FSharpProjectModel.Simple);
+                    ApproximateModel: SelectedFSharpProjectModel == ProjectModelMode.Simple);
                 return BuildResult(externalCoverage, partialReason);
             }
 
@@ -521,9 +521,10 @@ public sealed partial class SemanticService
             bool incompleteExcluded = excluded.Any(entry =>
                 !entry.Reason.Equals("inactive_project_reference", StringComparison.Ordinal) &&
                 !entry.Reason.Equals("test_project", StringComparison.Ordinal));
-            bool workspaceComplete = candidateSetKnown && !deadlineExhausted &&
+            bool scansComplete = discoveryFailed.Count == 0 &&
+                                 potentialConsumersEvaluated == potentialConsumers && !deadlineExhausted &&
                                      declaringProjectComplete && failed.Count == 0 &&
-                                     pending == 0 && !incompleteExcluded &&
+                                     candidates.Count == scanned + excluded.Count + failed.Count && !incompleteExcluded &&
                                      !quotationBodiesExcluded && !traitCallsUnresolved;
             if (deadlineExhausted)
                 partialReason = AppendPartialReason(partialReason,
@@ -553,13 +554,13 @@ public sealed partial class SemanticService
             var coverage = new FSharpReferencesCoverage(
                 candidateSetKnown ? candidates.Count : null,
                 scanned, excluded.Count, failed.Count, pending,
-                workspaceComplete, excluded, failed,
+                ScansComplete: scansComplete, Excluded: excluded, Failed: failed,
                 potentialConsumers, potentialConsumersEvaluated,
                 Math.Max(0, potentialConsumers - potentialConsumersEvaluated),
                 discoveryFailed, declaringProject, declaringProjectStatus,
                 declaringProjectReason,
                 declaringProject is null ? [] : [declaringProject],
-                ApproximateModel: SelectedFSharpProjectModel == FSharpProjectModel.Simple);
+                ApproximateModel: SelectedFSharpProjectModel == ProjectModelMode.Simple);
             return BuildResult(coverage, partialReason);
 
             FSharpCallersResult BuildResult(FSharpReferencesCoverage coverageValue,
@@ -778,7 +779,7 @@ public sealed partial class SemanticService
                 .ToList();
             var coverage = new FSharpCalleesCoverage(complete,
                 check.QuotationBodiesExcluded, check.TraitCallsUnresolved,
-                ApproximateModel: SelectedFSharpProjectModel == FSharpProjectModel.Simple);
+                ApproximateModel: SelectedFSharpProjectModel == ProjectModelMode.Simple);
             return new(MapFSharpCallSymbol(check.Symbol, captured), callees.Count,
                 accepted.Count, callees, null, captured.SelectedContext,
                 captured.AvailableContexts, captured.SelectedProjectIsTest,

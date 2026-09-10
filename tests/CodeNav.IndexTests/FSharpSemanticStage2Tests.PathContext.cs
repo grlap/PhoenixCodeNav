@@ -128,13 +128,13 @@ public partial class FSharpSemanticStage2Tests
             WriteProject(root, "Core/Core.fsproj", SdkContextProject(body));
             WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             using var pinned = new IndexQueries(db, pinReadSnapshot: true);
             Assert.True(pinned.TryGetCapturedMsBuildFilePresence("Core/web.config", out bool? oldPresence));
             Assert.Equal(false, oldPresence);
             WriteProject(root, "Core/web.config", "present");
-            DeltaRefresher.Refresh(store, root, ["Core/web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using (var fresh = new IndexQueries(db))
             {
                 Assert.True(fresh.TryGetCapturedMsBuildFilePresence("Core/web.config", out bool? presence));
@@ -143,7 +143,7 @@ public partial class FSharpSemanticStage2Tests
             Assert.True(pinned.TryGetCapturedMsBuildFilePresence("Core/web.config", out oldPresence));
             Assert.Equal(false, oldPresence);
             WriteProject(root, "Core/Core.fsproj", SdkContextProject(body.Replace("Exists('$(Alias)')", "false", StringComparison.Ordinal)));
-            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var retracted = new IndexQueries(db);
             Assert.False(retracted.TryGetCapturedMsBuildFilePresence("Core/web.config", out _));
         }
@@ -425,7 +425,8 @@ public partial class FSharpSemanticStage2Tests
             WriteProject(physical, "Core/Core.fs", "module Core\nlet value = 1\n");
             WriteProject(physical, "Build/Shared.props", props);
             string db = IndexBuilder.DefaultDbPath(physical);
-            IndexBuilder.BuildOwned(physical, db, publishedWorkspaceRoot: logical);
+            IndexBuilder.BuildOwned(physical, db, publishedWorkspaceRoot: logical,
+                fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             using var pinned = new IndexQueries(db, pinReadSnapshot: true);
             Assert.Equal(logical, pinned.ReadMetadata().WorkspaceRoot);
@@ -436,7 +437,7 @@ public partial class FSharpSemanticStage2Tests
             Assert.Null(oldOptions.Error);
             Assert.DoesNotContain("--define:PUBLISHED_PATH", oldOptions.CommandLineArgs);
             WriteProject(physical, "Build/web.config", "present");
-            DeltaRefresher.Refresh(store, physical, ["Build/web.config"]);
+            DeltaRefresher.Refresh(store, physical, ["Build/web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using (var fresh = new IndexQueries(db))
             {
                 Assert.True(fresh.TryGetCapturedMsBuildFilePresence("Build/web.config", out bool? after));
@@ -445,7 +446,7 @@ public partial class FSharpSemanticStage2Tests
             }
             Assert.DoesNotContain("--define:PUBLISHED_PATH", Evaluate(pinned).CommandLineArgs);
             WriteProject(physical, "Build/Shared.props", props.Replace(" == ", " != ", StringComparison.Ordinal));
-            DeltaRefresher.Refresh(store, physical, ["Build/Shared.props"]);
+            DeltaRefresher.Refresh(store, physical, ["Build/Shared.props"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var retracted = new IndexQueries(db);
             Assert.False(retracted.TryGetCapturedMsBuildFilePresence("Build/web.config", out _));
             AssertDerivedIdentitiesRemainRelative(db, physical, logical);
@@ -513,7 +514,7 @@ public partial class FSharpSemanticStage2Tests
             string condition = rootSensitive ? $"'$(MSBuildProjectDirectory)' == '{expectedRoot}'" : "'$(MSBuildProjectName)' == 'Core'";
             WriteProject(beforeRoot, "Core/Core.fsproj", SdkContextProject($"<PropertyGroup Condition=\"{condition}\"><DefineConstants>ORIGINAL_CONTEXT</DefineConstants></PropertyGroup>"));
             WriteProject(beforeRoot, "Core/Core.fs", "module Core\nlet value = 42\n");
-            IndexBuilder.Build(beforeRoot);
+            IndexBuilder.Build(beforeRoot, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Contains("--define:ORIGINAL_CONTEXT", ReadOptions(beforeRoot).CommandLineArgs);
             IndexQueries.ClearPoolsFor(IndexBuilder.DefaultDbPath(beforeRoot));
             Directory.Move(beforeRoot, afterRoot);

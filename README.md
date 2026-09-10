@@ -28,38 +28,60 @@ repo's `CLAUDE.md` / `AGENTS.md` ·
 [`docs/agent-experience-roadmap.md`](docs/agent-experience-roadmap.md) — the prioritized product
 contract for the MCP's agent experience.
 
-## Simple F# navigation pilot
+## F# project models
 
-To try the C#-like project model, start the Phoenix workspace daemon with
-`PHOENIX_FSHARP_PROJECT_MODEL=simple`. The usual `evaluated` model remains the default;
-unset the variable or use `evaluated` to switch back. Set it in the MCP server launch
-environment before starting Phoenix: proxy/bootstrap children inherit it, but an existing
-daemon must be restarted. `server_capabilities.semantic.fsharpProjectModel` confirms the
-model actually selected. The constructor's explicit model takes precedence over the environment.
+F# now defaults to the same simple raw-project construction used for C#:
+`SimpleProjectModelBuilder`. No environment setting is needed. Roslyn and FCS remain
+separate compiler adapters; F# retains authored Compile order, explicit .fsi signatures
+and literal parser options. Imports and build conditions are not evaluated by this model.
+Glob/default expansions use sorted paths; default F# items contain .fs, not implicit .fsi.
+Literal includes, globs, excludes and removes use the host filesystem's case policy.
 
-The pilot bypasses MSBuild import/condition evaluation for F# navigation and dependent discovery.
-It uses shared raw project parsing, indexed source membership, authored literal Compile order
-(glob/default expansions are alphabetical), literal parser options, and available references.
-Imports are **not evaluated**; conditioned includes can be over-included, and imported sources,
-references or defines can be missing. Results carry `fsharp_semantic_simple_project_model` and
-`indexed` confidence, even when FCS resolves a symbol. Counts describe this approximate model,
-not a proven reproduction of the build. Successful navigation does not prove import correctness.
-References, callers, callees and implementations expose `totalIsApproximate: true` and
-`countScope: "approximate_project_model"`. Their coverage has `approximateModel: true` and
-cannot claim workspace/body completeness. Counts can be too high or too low relative to the
-build, so they are not labelled `totalIsLowerBound`. Scan statuses and consumer-evaluation
-counters describe work performed within the selected model, not proof of build coverage.
+To use the previous advanced implementation, set `PHOENIX_FSHARP_PROJECT_MODEL=evaluated`
+in the MCP launch environment **before starting the workspace daemon**. Proxy/bootstrap
+children inherit it; an already-running daemon must be restarted. Unset the variable or use
+`simple` to return to the default. The manager captures this selection once, and semantic
+services inherit it unless explicitly overridden. `server_capabilities.semantic.fsharpProjectModel`
+reports the selected query model. There is no automatic fallback between builders.
+The shared enum is `ProjectModelMode.Simple` / `ProjectModelMode.Evaluated`; the setting
+remains F#-scoped because evaluated C# construction is not implemented. Internal build,
+refresh and sibling-worktree publication paths require the already-selected model explicitly.
 
-Package lookup reuses C#'s direct global-cache heuristic rather than requiring a verified restore
-closure; `fsharp_semantic_simple_package_heuristic` discloses its use. It can choose a different
-version (lexical directory ordering, not semantic version ordering), uses a fixed net472-ish
-framework preference even for modern targets, and does not close transitive package dependencies.
-Missing bare/binary references and non-F# project references may be omitted. Physical source and
-binary snapshot checks, FCS execution, and remaining closure/framework limits still apply.
+A successful FCS binding can report `exact`, just as Roslyn can with raw C# project inputs.
+`fsharp_semantic_simple_project_model`, its package-heuristic provenance and the imported-input
+advisory alone no longer force `indexed`. Errors, diagnostics, actual omitted references and
+unclassified partial reasons still degrade confidence; their reasons remain visible.
+This is compiler binding within the selected model, **not proof of a reproduced build**.
+Ignored conditions can over-include sources; imports can supply inputs the model omits.
+Your deployment-only imports can work well with this model without establishing that guarantee
+for arbitrary projects.
 
-C# behavior and index-time MSBuild Exists capture are unchanged. This pilot compares navigation
-latency and usefulness; it does not speed up cold indexing. No index rebuild is needed to change
-the navigation model. Measure with MSBuild diagnostic logging disabled.
+References, callers, callees and implementations expose `totalIsApproximate: true`,
+`countScope: "approximate_project_model"` and `coverage.approximateModel: true`, even with
+exact binding confidence. They never claim real-workspace/body completeness or a real-build
+`totalIsLowerBound`: totals can be too high or too low. `scanIncomplete` separately reports
+unfinished scanning **within** the approximate model; retries may find more model results.
+Consumer-evaluation counters describe actual projections, not proof of import coverage.
+
+Package lookup reuses C#'s direct global-cache heuristic, disclosed by
+`fsharp_semantic_simple_package_heuristic`. It may choose a lexically highest cached version
+rather than semantic-version order, uses a fixed net472-ish framework preference even for modern
+targets, and does not close transitive package dependencies. Missing projects, unsupported-language
+project references, unresolved bare references, unreadable HintPath binaries and missing package
+assets have distinct `fsharp_simple_*` reasons. Actual HintPath and package copies retain separate
+snapshot-provenance reasons. Physical source/binary checks, FCS execution and existing
+closure/framework limits remain.
+
+Simple cold builds and delta refreshes do **not** run the advanced F# Exists evaluator.
+Schema 42 establishes this stored-input policy through the normal one-time migration rebuild.
+Switching to simple discards evaluated Exists facts; switching back prepares them through a full
+rediscovery in the existing index writer transaction, including an empty-diff startup. This first
+evaluated refresh can be slow and hold the writer longer; startup logs announce the work.
+Readiness and facts publish atomically and queries read both from one pinned snapshot.
+An evaluated query without prepared facts returns `fsharp_evaluated_inputs_not_ready`:
+restart the daemon in evaluated mode and let its startup sweep complete. A service override
+does not reconfigure the index writer. Mode toggles do not otherwise require a full index rebuild.
+C# composition is unchanged. No monolith latency measurement or general import-parity claim is made.
 
 ## MSBuild evaluation diagnostics
 
@@ -169,7 +191,7 @@ and callers scan proven workspace contexts; callees resolve the selected callabl
 F# project-reference closure. F# type hierarchy, semantic navigation through C# project references,
 compatibility fallback from multi-target children, and `netstandard1.x` compile inputs remain
 **unsupported** rather than returning an empty or falsely exact answer. Explicit target-framework
-selection and exact matches for multi-target projects are supported. Phoenix never executes MSBuild targets or tasks: it
+selection and exact matches for multi-target projects are supported. Phoenix never executes MSBuild targets or tasks. In the opt-in evaluated F# model it
 evaluates a documented subset of project files (simple properties, `StartsWith` and boolean conditions, `Choose`, literal workspace-local
 `.props`, indexed-file `Exists` probes including `web.config` (literal paths capture presence and
 absence during indexing), and the nearest ancestor

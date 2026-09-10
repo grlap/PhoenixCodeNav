@@ -410,8 +410,11 @@ public sealed partial class SemanticService
             WorkspacePaths.FileSystemPathComparer);
         evaluatedAuthorityInputs = authorityInputs;
         if (projectXml is null) return null;
-        if (SelectedFSharpProjectModel == FSharpProjectModel.Simple)
+        if (SelectedFSharpProjectModel == ProjectModelMode.Simple)
             return SimpleFSharpSemanticOptions(queries, owner, projectXml, targetFramework, cancellationToken);
+        if (!queries.EvaluatedFSharpInputsReady(cancellationToken))
+            return new([], [], [], owner.Name, targetFramework,
+                Error: "fsharp_evaluated_inputs_not_ready");
 
         DirectoryBuildAuthorityPaths directoryBuild =
             queries.ApplicableDirectoryBuildAuthority(owner.Path);
@@ -746,11 +749,11 @@ public sealed partial class SemanticService
                 List<FSharpPackageReferenceSnapshot> packageReferences =
                     options.PackageReferences ?? [];
                 FSharpPackageAssetsSnapshot? packageAssets;
-                if (SelectedFSharpProjectModel == FSharpProjectModel.Simple)
+                if (SelectedFSharpProjectModel == ProjectModelMode.Simple)
                 {
                     if (packageReferences.Count > 0)
                         nodeReasons.Add("fsharp_semantic_simple_package_heuristic");
-                    packageAssets = SimpleFSharpPackageAssets(packageReferences, cancellationToken);
+                    packageAssets = SimpleFSharpPackageAssets(packageReferences, cancellationToken, nodeReasons);
                 }
                 else if (!TryResolveFSharpPackageAssets(owner.Path, projectXml,
                         nodeTargetFramework, packageReferences, evaluatedAuthorityInputs,
@@ -796,14 +799,22 @@ public sealed partial class SemanticService
                         projectReference.ProjectPath);
                     if (child is null)
                     {
-                        if (SelectedFSharpProjectModel == FSharpProjectModel.Simple) continue;
+                        if (SelectedFSharpProjectModel == ProjectModelMode.Simple)
+                        {
+                            nodeReasons.Add("fsharp_simple_project_reference_missing");
+                            continue;
+                        }
                         capturedFailure = NodeFailure(
                             "fsharp_semantic_project_reference_unavailable");
                         return null;
                     }
                     if (!child.Language.Equals("fs", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (SelectedFSharpProjectModel == FSharpProjectModel.Simple) continue;
+                        if (SelectedFSharpProjectModel == ProjectModelMode.Simple)
+                        {
+                            nodeReasons.Add("fsharp_simple_project_reference_language_unsupported");
+                            continue;
+                        }
                         capturedFailure = NodeFailure(
                             "fsharp_semantic_project_references_unsupported");
                         return null;
@@ -870,7 +881,11 @@ public sealed partial class SemanticService
                             StringComparison.OrdinalIgnoreCase) &&
                         !frameworkAssemblyNames.Contains(bareReference))
                     {
-                        if (SelectedFSharpProjectModel == FSharpProjectModel.Simple) continue;
+                        if (SelectedFSharpProjectModel == ProjectModelMode.Simple)
+                        {
+                            nodeReasons.Add("fsharp_simple_bare_reference_unresolved");
+                            continue;
+                        }
                         capturedFailure = NodeFailure("fsharp_semantic_reference_unresolved",
                             options.PartialReason);
                         return null;
@@ -905,7 +920,7 @@ public sealed partial class SemanticService
                     if (!exactTargetAsset)
                         nodeReasons.Add("fsharp_core_reference_host_fallback");
                 }
-                if (SelectedFSharpProjectModel != FSharpProjectModel.Simple)
+                if (SelectedFSharpProjectModel != ProjectModelMode.Simple)
                 {
                     if (options.HintPathReferences.Count > 0)
                         nodeReasons.Add("fsharp_binary_references_snapshotted");
@@ -930,7 +945,11 @@ public sealed partial class SemanticService
                         out bool bytesExceeded);
                     if (binary is null)
                     {
-                        if (SelectedFSharpProjectModel == FSharpProjectModel.Simple && !bytesExceeded) continue;
+                        if (SelectedFSharpProjectModel == ProjectModelMode.Simple && !bytesExceeded)
+                        {
+                            nodeReasons.Add("fsharp_simple_hint_reference_unavailable");
+                            continue;
+                        }
                         capturedFailure = NodeFailure(bytesExceeded
                                 ? "fsharp_semantic_reference_bytes_limit"
                                 : "fsharp_semantic_reference_unavailable",
@@ -949,6 +968,8 @@ public sealed partial class SemanticService
                     referenceIdentities.Add(
                         $"{binary.SourceIdentity}|{binary.Length}|{binary.Sha256}");
                 }
+                if (SelectedFSharpProjectModel == ProjectModelMode.Simple && nodeBinaryReferences.Count > 0)
+                    nodeReasons.Add("fsharp_binary_references_snapshotted");
                 foreach (FSharpPackageCompileAsset packageAsset in
                          resolvedPackageAssets.CompileAssets)
                 {
@@ -979,10 +1000,9 @@ public sealed partial class SemanticService
                     referenceIdentities.Add(
                         $"{binary.SourceIdentity}|{binary.Length}|{binary.Sha256}");
                 }
-                // The simple model may omit unavailable inputs. Only actual copies earn a
-                // snapshot reason; heuristic packages never claim restored-package authority.
-                if (SelectedFSharpProjectModel == FSharpProjectModel.Simple && nodeBinaryReferences.Count > 0)
-                    nodeReasons.Add("fsharp_binary_references_snapshotted");
+                if (SelectedFSharpProjectModel == ProjectModelMode.Simple &&
+                    resolvedPackageAssets.CompileAssets.Count > 0)
+                    nodeReasons.Add("fsharp_package_references_snapshotted");
                 if (resolvedPackageAssets.Identity.Length > 0)
                     referenceIdentities.Add(resolvedPackageAssets.Identity);
                 foreach (PreparedFSharpSemanticNode child in childNodes)

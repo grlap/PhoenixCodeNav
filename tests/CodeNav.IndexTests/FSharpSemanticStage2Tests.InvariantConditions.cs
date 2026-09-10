@@ -283,7 +283,7 @@ public partial class FSharpSemanticStage2Tests
                 """, sdk: null));
             WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             bool? Captured()
             {
@@ -292,13 +292,13 @@ public partial class FSharpSemanticStage2Tests
             }
             Assert.Equal(false, Captured());
             WriteProject(root, "Core/web.config", "present");
-            DeltaRefresher.Refresh(store, root, ["Core/web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Captured());
             WriteProject(root, "Directory.Build.props", props.Replace("== '.csproj'", "== '.fsproj'", StringComparison.Ordinal));
-            DeltaRefresher.Refresh(store, root, ["Directory.Build.props"]);
+            DeltaRefresher.Refresh(store, root, ["Directory.Build.props"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Null(Captured());
             WriteProject(root, "Directory.Build.props", props);
-            DeltaRefresher.Refresh(store, root, ["Directory.Build.props"]);
+            DeltaRefresher.Refresh(store, root, ["Directory.Build.props"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Captured());
         }
         finally { Cleanup(root); }
@@ -320,7 +320,7 @@ public partial class FSharpSemanticStage2Tests
             WriteProject(root, "Core/Consumer.cs", "public class Consumer { public int Value => 42; }");
             WriteProject(root, "SharedFiles/Net8BinaryFormatterInitializer.cs", "internal class SharedInitializer { }");
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var workspace = new SemanticWorkspace(root, db, enableRoslynPersistence: false);
             using var lease = await workspace.EnsureLoadedAsync(["Consumer"], CancellationToken.None);
             Assert.Empty(lease.Coverage.FailedProjects);

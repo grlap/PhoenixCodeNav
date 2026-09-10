@@ -391,7 +391,7 @@ public sealed partial class SemanticService
                 partialReason = AppendPartialReason(partialReason,
                     "fsharp_workspace_dependents_not_scanned");
                 var externalCoverage = new FSharpReferencesCoverage(null, 0, 0, 0, null,
-                    false, [], [], ApproximateModel: SelectedFSharpProjectModel == FSharpProjectModel.Simple);
+                    false, [], [], ApproximateModel: SelectedFSharpProjectModel == ProjectModelMode.Simple);
                 return new(symbol, totalReferences, groups.SelectMany(group => group.Samples).ToList(),
                     null, captured.SelectedContext, captured.AvailableContexts,
                     captured.SelectedProjectIsTest, partialReason, check.DiagnosticCount,
@@ -528,9 +528,10 @@ public sealed partial class SemanticService
             bool incompleteExcluded = excluded.Any(entry =>
                 !entry.Reason.Equals("inactive_project_reference", StringComparison.Ordinal) &&
                 !entry.Reason.Equals("test_project", StringComparison.Ordinal));
-            bool workspaceComplete = candidateSetKnown && !deadlineExhausted &&
+            bool scansComplete = discoveryFailed.Count == 0 &&
+                                 potentialConsumersEvaluated == potentialConsumers && !deadlineExhausted &&
                                      declaringProjectComplete && failed.Count == 0 &&
-                                     pending == 0 && !incompleteExcluded;
+                                     candidates.Count == scanned + excluded.Count + failed.Count && !incompleteExcluded;
             if (deadlineExhausted)
                 partialReason = AppendPartialReason(partialReason,
                     "fsharp_workspace_deadline");
@@ -551,11 +552,11 @@ public sealed partial class SemanticService
                     "fsharp_workspace_binary_dependents_not_scanned");
             var coverage = new FSharpReferencesCoverage(candidateSetKnown ? candidates.Count : null,
                 scanned,
-                excluded.Count, failed.Count, pending, workspaceComplete, excluded, failed,
+                excluded.Count, failed.Count, pending, ScansComplete: scansComplete, Excluded: excluded, Failed: failed,
                 potentialConsumers, potentialConsumersEvaluated,
                 Math.Max(0, potentialConsumers - potentialConsumersEvaluated),
                 discoveryFailed, declaringProject, declaringProjectStatus,
-                declaringProjectReason, ApproximateModel: SelectedFSharpProjectModel == FSharpProjectModel.Simple);
+                declaringProjectReason, ApproximateModel: SelectedFSharpProjectModel == ProjectModelMode.Simple);
             int diagnosticCount = check.DiagnosticCount + additionalDiagnosticCount;
             List<FSharpReferenceSample> samples = groups.SelectMany(group => group.Samples).ToList();
             return new(symbol, totalReferences, samples, null,

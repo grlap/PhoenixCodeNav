@@ -35,11 +35,14 @@ public partial class FSharpSemanticStage2Tests
                 <Project><ItemGroup><ProjectReference Include="../Dependency/Dependency.fsproj" /></ItemGroup></Project>
                 """);
             WriteProject(root, "Consumer/Consumer.fs", "module Consumer\nlet result = Dependency.value\n");
-            using var fixture = Fixture.Create(root, FSharpProjectModel.Simple);
-            JsonElement simple = ReadReferences(fixture.Tools, "Dependency/Dependency.fs", 2, 6);
+            using var fixture = Fixture.Create(root, ProjectModelMode.Evaluated);
+            using var simpleService = new SemanticService(fixture.Manager, enableRoslynPersistence: false,
+                fsharpProjectModel: ProjectModelMode.Simple);
+            var simpleTools = new NavigationTools(fixture.Manager, simpleService);
+            JsonElement simple = ReadReferences(simpleTools, "Dependency/Dependency.fs", 2, 6);
             Assert.Equal(0, simple.GetProperty("totalReferences").GetInt32());
             using var evaluated = new SemanticService(fixture.Manager, enableRoslynPersistence: false,
-                fsharpProjectModel: FSharpProjectModel.Evaluated);
+                fsharpProjectModel: ProjectModelMode.Evaluated);
             JsonElement baseline = ReadReferences(new NavigationTools(fixture.Manager, evaluated),
                 "Dependency/Dependency.fs", 2, 6);
             Assert.Equal(1, baseline.GetProperty("totalReferences").GetInt32());
@@ -63,11 +66,14 @@ public partial class FSharpSemanticStage2Tests
                 """));
             WriteProject(root, "Core/Core.fs", "module Core\nlet value = 42\n");
             WriteProject(root, "Core/Extra.fs", "module Extra\nlet result = Core.value\n");
-            using var fixture = Fixture.Create(root, FSharpProjectModel.Simple);
-            JsonElement simple = ReadReferences(fixture.Tools, "Core/Core.fs", 2, 6);
+            using var fixture = Fixture.Create(root, ProjectModelMode.Evaluated);
+            using var simpleService = new SemanticService(fixture.Manager, enableRoslynPersistence: false,
+                fsharpProjectModel: ProjectModelMode.Simple);
+            var simpleTools = new NavigationTools(fixture.Manager, simpleService);
+            JsonElement simple = ReadReferences(simpleTools, "Core/Core.fs", 2, 6);
             Assert.Equal(1, simple.GetProperty("totalReferences").GetInt32());
             using var evaluated = new SemanticService(fixture.Manager, enableRoslynPersistence: false,
-                fsharpProjectModel: FSharpProjectModel.Evaluated);
+                fsharpProjectModel: ProjectModelMode.Evaluated);
             JsonElement baseline = ReadReferences(new NavigationTools(fixture.Manager, evaluated), "Core/Core.fs", 2, 6);
             Assert.Equal(0, baseline.GetProperty("totalReferences").GetInt32());
             AssertApproximateCountScope(simple);
@@ -96,14 +102,17 @@ public partial class FSharpSemanticStage2Tests
                 let target () = 42
                 let caller () = target ()
                 """);
-            using var fixture = Fixture.Create(root, FSharpProjectModel.Simple);
+            using var fixture = Fixture.Create(root, ProjectModelMode.Evaluated);
+            using var simpleService = new SemanticService(fixture.Manager, enableRoslynPersistence: false,
+                fsharpProjectModel: ProjectModelMode.Simple);
+            var simpleTools = new NavigationTools(fixture.Manager, simpleService);
             string raw = CallSemantic(() => operation switch
             {
-                "references" => fixture.Tools.References(path: "Core/Core.fs", line: 7, column: 6,
+                "references" => simpleTools.References(path: "Core/Core.fs", line: 7, column: 6,
                     mode: "semantic", timeoutMs: 60_000),
-                "callers" => fixture.Tools.Callers(path: "Core/Core.fs", line: 7, column: 6, timeoutMs: 60_000),
-                "callees" => fixture.Tools.Callees(path: "Core/Core.fs", line: 8, column: 6, timeoutMs: 60_000),
-                _ => fixture.Tools.Implementations(path: "Core/Core.fs", line: 2, column: 7, timeoutMs: 60_000),
+                "callers" => simpleTools.Callers(path: "Core/Core.fs", line: 7, column: 6, timeoutMs: 60_000),
+                "callees" => simpleTools.Callees(path: "Core/Core.fs", line: 8, column: 6, timeoutMs: 60_000),
+                _ => simpleTools.Implementations(path: "Core/Core.fs", line: 2, column: 7, timeoutMs: 60_000),
             });
             JsonElement response = Parse(raw);
             Assert.False(response.TryGetProperty("error", out _), raw);
@@ -117,7 +126,7 @@ public partial class FSharpSemanticStage2Tests
             Assert.Equal(1, response.GetProperty(total).GetInt32());
             AssertApproximateCountScope(response, bodyLocal: operation == "callees");
             using var evaluated = new SemanticService(fixture.Manager, enableRoslynPersistence: false,
-                fsharpProjectModel: FSharpProjectModel.Evaluated);
+                fsharpProjectModel: ProjectModelMode.Evaluated);
             var evaluatedTools = new NavigationTools(fixture.Manager, evaluated);
             JsonElement baseline = Parse(CallSemantic(() => operation switch
             {
@@ -132,6 +141,8 @@ public partial class FSharpSemanticStage2Tests
             Assert.StartsWith("Exactly", baseline.GetProperty("summary").GetString());
             Assert.False(baseline.TryGetProperty("totalIsApproximate", out _));
             Assert.False(baseline.TryGetProperty("countScope", out _));
+            Assert.False(baseline.TryGetProperty("scanIncomplete", out _));
+            Assert.False(response.GetProperty("scanIncomplete").GetBoolean());
             Assert.False(baseline.GetProperty("coverage").TryGetProperty("approximateModel", out _));
         }
         finally { Cleanup(root); }
@@ -147,7 +158,7 @@ public partial class FSharpSemanticStage2Tests
 
     private static void AssertApproximateCountScope(JsonElement response, bool bodyLocal = false)
     {
-        Assert.Equal("indexed", response.GetProperty("meta").GetProperty("confidence").GetString());
+        Assert.Equal("exact", response.GetProperty("meta").GetProperty("confidence").GetString());
         Assert.True(response.TryGetProperty("totalIsApproximate", out JsonElement approximate), response.ToString());
         Assert.True(approximate.GetBoolean());
         Assert.Equal("approximate_project_model", response.GetProperty("countScope").GetString());

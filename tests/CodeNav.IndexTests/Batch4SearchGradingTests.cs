@@ -244,7 +244,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.DoesNotContain("search_symbol", semantic.GetProperty("fsharpSemanticTools")
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.False(semantic.TryGetProperty("fsharpIndexedTools", out _));
-        Assert.Equal("evaluated", semantic.GetProperty("fsharpProjectModel").GetString());
+        Assert.Equal("simple", semantic.GetProperty("fsharpProjectModel").GetString());
         Assert.Contains("search_symbol", semantic.GetProperty("fsharpSyntaxIndexedTools")
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.Contains("compiler-checked", semantic.GetProperty("note").GetString());
@@ -254,7 +254,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("unclassified partial reason is indexed",
             semantic.GetProperty("note").GetString());
         Assert.Contains("workspace lower bound", semantic.GetProperty("note").GetString());
-        Assert.Contains("Simple F#: approximate inputs, always indexed", semantic.GetProperty("note").GetString());
+        Assert.Contains("Simple default: exact binding; totalIsApproximate/countScope, scanIncomplete", semantic.GetProperty("note").GetString());
         Assert.Contains("Both F# modes: explicit multi-target project/TFM, exact child-TFM",
             semantic.GetProperty("note").GetString());
         Assert.Contains("syntax-indexed", semantic.GetProperty("fsharpSyntaxNote").GetString());
@@ -293,7 +293,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("41", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("42", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -438,6 +438,9 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("indexed-base-type-edges", ids);
         Assert.Contains("references-stage-attribution", ids);
         Assert.Contains("references-deterministic-samples", ids);
+        foreach (string id in new[] { "fsharp-shared-simple-default", "fsharp-simple-binding-confidence",
+                     "fsharp-simple-input-omissions", "fsharp-approximate-scan-progress" })
+            Assert.Contains(id, ids);
         Assert.Contains("references-parallel-compilation-preparation", ids);
         Assert.Contains("references-document-scoped-search", ids);
         Assert.Contains("semantic-persistent-syntax-indexes", ids);
@@ -886,11 +889,11 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
             .GetProperty("summary")
             .GetString()!;
         Assert.Contains("timing.semanticColdStart", coldStartTiming);
-        Assert.Contains("present only when the call enters the C# semantic pipeline",
+        Assert.Contains("Omitted for F# and calls ending before the C# pipeline",
             coldStartTiming);
-        Assert.Contains("F# semantic navigation", coldStartTiming);
-        Assert.Contains("omit the field", coldStartTiming);
-        Assert.Contains("integer-millisecond", coldStartTiming);
+        Assert.Contains("Omitted for F#", coldStartTiming);
+        Assert.Contains("calls ending before the C# pipeline", coldStartTiming);
+        Assert.Contains("integer-ms", coldStartTiming);
         Assert.Contains("semanticOp", coldStartTiming);
         string gcPauseAttribution = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
@@ -1251,26 +1254,32 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("retain their distinct usage classification", foreachConversionKind);
 
         string deterministicSamples = Summary("references-deterministic-samples");
-        Assert.Contains("unique by path, line, and usage kind", deterministicSamples);
-        Assert.Contains("multiple source spans with the same path/line/kind share one sample",
+        Assert.Contains("unique by path/line/usage kind", deterministicSamples);
+        Assert.Contains("Same-path/line/kind spans share a sample; totals count every span",
             deterministicSamples);
         Assert.Contains("canonical per-group project spelling", deterministicSamples);
         Assert.Contains("sampleCoverage", deterministicSamples);
         Assert.Contains("post-response-budget", deterministicSamples);
-        Assert.Contains("separate deadline, other text-loss, or byte-budget causes",
+        Assert.Contains("distinct deadline/text-loss/byte-budget causes",
             deterministicSamples);
         Assert.Contains("v0.12.68", deterministicSamples);
         Assert.Contains("completed reference scans", deterministicSamples);
-        Assert.Contains("ordinal path, line, and usage-kind order", deterministicSamples);
-        Assert.Contains("equal-count project groups in ordinal project order",
+        Assert.Contains("ordinally ordered by that tuple", deterministicSamples);
+        Assert.Contains("equal-count groups in ordinal project order",
             deterministicSamples);
-        Assert.Contains("read source text only for that final bounded set", deterministicSamples);
+        Assert.Contains("Read text only for final samples", deterministicSamples);
         Assert.Contains("queryStages.samplesRead meaning", deterministicSamples);
-        Assert.Contains("public sample cap remain unchanged", deterministicSamples);
+        Assert.Contains("public sample cap unchanged", deterministicSamples);
 
         string stableNoteIds = Summary("stable-note-ids");
+        foreach (string clause in new[] { "ids, not prose", "review_pack notes={id,text}",
+                     "references.noteId=zero_loading_gap", "impact.transitiveNoteId=transitive_single_count",
+                     "type_hierarchy.noteId=heuristic_fallback",
+                     "search_text.noteId=did_you_mean|elsewhere_matches|absent_everywhere",
+                     "Additive retrofits", "one id per cause", "one cause per id", "Prose may change; ids may not" })
+            Assert.Contains(clause, stableNoteIds);
         Assert.Contains("references.sampleCoverage.reasons[].noteId", stableNoteIds);
-        Assert.Contains("samples_deadline | samples_trimmed | samples_byte_budget",
+        Assert.Contains("samples_deadline|samples_trimmed|samples_byte_budget",
             stableNoteIds);
 
         string deadlineHonesty = Summary("deadline-honesty");

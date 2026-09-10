@@ -706,7 +706,8 @@ function Get-ReferenceContractSignature($Payload, [switch]$IgnoreResidentSolutio
     } | ConvertTo-Json -Compress -Depth 20)
 }
 
-function Start-McpClient([string]$Label, [string]$WorkspaceRoot, [string]$DatabasePath) {
+function Start-McpClient([string]$Label, [string]$WorkspaceRoot, [string]$DatabasePath,
+    [string]$FSharpProjectModel) {
     $mcpDll = Join-Path $repoRoot "src\CodeNav.Mcp\bin\Release\net10.0\PhoenixCodeNav.Mcp.dll"
     if (-not (Test-Path -LiteralPath $mcpDll -PathType Leaf)) {
         throw "Release MCP binary is missing. Run: dotnet build PhoenixCodeNav.sln -c Release --no-restore"
@@ -722,6 +723,11 @@ function Start-McpClient([string]$Label, [string]$WorkspaceRoot, [string]$Databa
     $start.RedirectStandardError = $true
     $start.CreateNoWindow = $true
     $start.EnvironmentVariables["PHOENIX_TELEMETRY_IPC"] = "0"
+    # Unset means the real product default, independent of the harness parent's environment.
+    $start.EnvironmentVariables.Remove("PHOENIX_FSHARP_PROJECT_MODEL")
+    if (-not [string]::IsNullOrWhiteSpace($FSharpProjectModel)) {
+        $start.EnvironmentVariables["PHOENIX_FSHARP_PROJECT_MODEL"] = $FSharpProjectModel
+    }
     Assert-True (-not [string]::IsNullOrWhiteSpace($script:isolatedPackagesRoot)) `
         "Isolated integration package root is unavailable"
     $start.EnvironmentVariables["NUGET_PACKAGES"] = $script:isolatedPackagesRoot
@@ -1217,24 +1223,27 @@ function Initialize-FreshIndexPath([string]$Label, [string]$DatabasePath) {
 
 $defaultDatabasePaths = New-Object System.Collections.Generic.List[string]
 try {
-    if ($usesDefaultRoslynIndex -or $usesDefaultFSharpIndex) {
-        $freshRun = New-FreshIndexRun $repoRoot $externalIntegrationRoot $freshRunLeasePath
-        $freshIndexRoot = [string]$freshRun.Root
-        $freshRunLease = $freshRun.Lease
-        if ($usesDefaultRoslynIndex) {
-            $IndexDb = Join-Path $freshIndexRoot "roslyn-index.db"
-            $defaultDatabasePaths.Add($IndexDb)
-        }
-        if ($usesDefaultFSharpIndex) {
-            $FSharpIndexDb = Join-Path $freshIndexRoot "fsharp-index.db"
-            $defaultDatabasePaths.Add($FSharpIndexDb)
-        }
+    # Both F# models get fresh subjects. This adds a second F# cold index to each gate;
+    # it does not change the pinned baseline or reuse/repair a prior run's index.
+    $freshRun = New-FreshIndexRun $repoRoot $externalIntegrationRoot $freshRunLeasePath
+    $freshIndexRoot = [string]$freshRun.Root
+    $freshRunLease = $freshRun.Lease
+    if ($usesDefaultRoslynIndex) {
+        $IndexDb = Join-Path $freshIndexRoot "roslyn-index.db"
+        $defaultDatabasePaths.Add($IndexDb)
     }
+    if ($usesDefaultFSharpIndex) {
+        $FSharpIndexDb = Join-Path $freshIndexRoot "fsharp-index.db"
+        $defaultDatabasePaths.Add($FSharpIndexDb)
+    }
+    $fsharpSimpleIndexDb = Join-Path $freshIndexRoot "simple-fs.db"
+    $defaultDatabasePaths.Add($fsharpSimpleIndexDb)
     $IndexDb = [IO.Path]::GetFullPath($IndexDb)
     $FSharpIndexDb = [IO.Path]::GetFullPath($FSharpIndexDb)
 
     Initialize-FreshIndexPath "Roslyn" $IndexDb
     Initialize-FreshIndexPath "FSharp" $FSharpIndexDb
+    Initialize-FreshIndexPath "FSharp Simple" $fsharpSimpleIndexDb
     $isolatedPackagesRoot = New-IsolatedPackagesRoot $repoRoot $externalIntegrationRoot
 } catch {
     $setupFailure = $_.Exception
@@ -1350,6 +1359,7 @@ function Test-IntegrationCase([string]$Name, [scriptblock]$Body) {
 $writer = $null
 $secondClient = $null
 $fsharpWriter = $null
+$fsharpSimpleWriter = $null
 try {
     $writer = Start-McpClient "writer" $Workspace $IndexDb
     $writerSession = Initialize-McpClient $writer "writer"
@@ -1797,7 +1807,8 @@ try {
         Assert-Equal ([string]$implementations.meta.indexVersion) ([string]$repeat.meta.indexVersion) "Warm repeat crossed index epochs"
     }
 
-    $fsharpWriter = Start-McpClient "fsharp-writer" $FSharpWorkspace $FSharpIndexDb
+    # The historical baseline exercises evaluated mode explicitly; simple is the product default.
+    $fsharpWriter = Start-McpClient "fsharp-writer" $FSharpWorkspace $FSharpIndexDb "evaluated"
     $fsharpSession = Initialize-McpClient $fsharpWriter "writer"
     $fsharpCapabilities = $fsharpSession.Capabilities
     $fsharpOverview = Invoke-McpTool $fsharpWriter "repo_overview" ([hashtable]::new())
@@ -1820,6 +1831,7 @@ try {
     }
 
     Test-IntegrationCase "current server uses the fresh pinned FSharp index" {
+        Assert-Equal "evaluated" ([string]$fsharpCapabilities.semantic.fsharpProjectModel) "Historical FSharp boundary must exercise evaluated mode"
         Assert-True (-not [string]::IsNullOrWhiteSpace([string]$fsharpSession.Initialize.serverInfo.version)) "FSharp MCP omitted its runtime version"
         Assert-True (@($fsharpSession.Tools.tools).Count -gt 0) "FSharp MCP advertised no tools"
         Assert-Equal ([string]$fsharpBaseline.fsharpCommit) ([string]$fsharpOverview.git.indexedCommit) "FSharp indexed commit changed"
@@ -1940,6 +1952,52 @@ try {
             "Official FSharp implementations remained behind the unsupported-language gate"
     }
 
+    # One workspace owner at a time, including daemon retirement, before the other model starts.
+    Stop-McpClient $fsharpWriter
+    Request-McpDaemonRetirement $fsharpWriter
+    $fsharpWriter = $null
+    $fsharpSimpleWriter = Start-McpClient "fsharp-simple" $FSharpWorkspace $fsharpSimpleIndexDb
+    $fsharpSimpleSession = Initialize-McpClient $fsharpSimpleWriter "writer"
+    $fsharpSimpleCapabilities = $fsharpSimpleSession.Capabilities
+    $fsharpSimpleOverview = Invoke-McpTool $fsharpSimpleWriter "repo_overview" ([hashtable]::new())
+    $simplePayloads = [ordered]@{}
+    foreach ($operation in @("symbol_at", "definition", "implementations")) {
+        $simplePayloads[$operation] = Invoke-McpTool $fsharpSimpleWriter $operation @{
+            path = [string]$fsharpBaseline.target.sourcePath
+            line = [int]$fsharpBaseline.target.line
+            column = [int]$fsharpBaseline.target.column
+            timeoutMs = 30000
+        }
+    }
+    $evidence.results.fsharpSimple = [ordered]@{
+        indexDb = $fsharpSimpleIndexDb
+        capabilities = $fsharpSimpleCapabilities
+        overview = $fsharpSimpleOverview
+        semantic = $simplePayloads
+    }
+    Test-IntegrationCase "official FSharp default simple model has a fresh index and explicit input boundary" {
+        Assert-Equal "simple" ([string]$fsharpSimpleCapabilities.semantic.fsharpProjectModel) "Unset model did not select simple"
+        Assert-Equal "startup_missing" ([string]$fsharpSimpleCapabilities.index.startupBuildReason) "Simple FSharp index was not freshly built"
+        Assert-Equal ([string]$fsharpBaseline.fsharpCommit) ([string]$fsharpSimpleOverview.git.indexedCommit) "Simple FSharp indexed the wrong commit"
+        $simpleCounts = Get-FSharpOverviewCounts $fsharpSimpleOverview
+        foreach ($count in $fsharpBaseline.counts.PSObject.Properties) {
+            Assert-Equal ([int]$count.Value) ([int]$simpleCounts[$count.Name]) "Simple FSharp $($count.Name) count changed"
+        }
+        # This fixture selects literal netstandard2.0, not an unresolved TFM. The isolated
+        # package root contains no NETStandard.Library references; unlike evaluated mode,
+        # simple reaches that missing compiler input instead of rejecting deployment imports.
+        Assert-Equal "netstandard2.0" ([string]$fsharpBaseline.target.targetFramework) "Revisit simple boundary assertions if the pinned target framework changes"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $isolatedPackagesRoot "netstandard.library"))) "Simple boundary fixture unexpectedly has NETStandard.Library package references"
+        foreach ($payload in $simplePayloads.Values) {
+            Assert-Equal "fsharp_framework_references_unavailable" ([string]$payload.error) "Simple netstandard2.0 input boundary changed; inspect reference-pack availability, do not learn a new baseline"
+            Assert-True ([bool]$payload.partial) "Simple missing framework references must remain partial"
+            Assert-Equal "indexed" ([string]$payload.meta.confidence) "Missing Simple compiler inputs must not claim exact binding"
+            Assert-Equal ([string]$fsharpBaseline.target.outlinePartialReason + ";fsharp_semantic_simple_project_model") ([string]$payload.partialReason) "Simple boundary provenance changed"
+            Assert-Equal ([string]$fsharpBaseline.target.projectPath) ([string]$payload.selectedFSharpTypeCheckContext.project) "Simple selected the wrong project"
+            Assert-Equal ([string]$fsharpBaseline.target.targetFramework) ([string]$payload.selectedFSharpTypeCheckContext.targetFramework) "Simple selected the wrong target framework"
+        }
+    }
+
     $secondClient = Start-McpClient "second-client" $Workspace $IndexDb
     $secondSession = Initialize-McpClient $secondClient "writer"
     $evidence.results.secondClientCapabilities = $secondSession.Capabilities
@@ -1981,9 +2039,11 @@ try {
     }
 } finally {
     $stopErrors = New-Object System.Collections.Generic.List[string]
+    try { Stop-McpClient $fsharpSimpleWriter } catch { $stopErrors.Add($_.Exception.Message) }
     try { Stop-McpClient $fsharpWriter } catch { $stopErrors.Add($_.Exception.Message) }
     try { Stop-McpClient $secondClient } catch { $stopErrors.Add($_.Exception.Message) }
     try { Stop-McpClient $writer } catch { $stopErrors.Add($_.Exception.Message) }
+    try { Request-McpDaemonRetirement $fsharpSimpleWriter } catch { $stopErrors.Add($_.Exception.Message) }
     foreach ($client in @($fsharpWriter, $secondClient, $writer)) {
         try { Request-McpDaemonRetirement $client } catch { $stopErrors.Add($_.Exception.Message) }
     }

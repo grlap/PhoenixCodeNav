@@ -178,6 +178,13 @@ public sealed partial class NavigationTools
         {
             switch (reason)
             {
+                // Like Roslyn's raw project model, successful FCS binding can be exact within
+                // these inputs. This says nothing about real-build or workspace completeness.
+                case "fsharp_semantic_simple_project_model":
+                case "fsharp_semantic_simple_package_heuristic":
+                    continue;
+                case "fsharp_project_options_imported" when HasSimpleFSharpModelReason(partialReason):
+                    continue;
                 // These disclose input provenance or result scope; they neither remove
                 // selected-context authority nor substitute a target-incompatible input.
                 case "fsharp_semantic_sdk_implicit_authority":
@@ -327,12 +334,15 @@ public sealed partial class NavigationTools
                          result.TotalCallSites is not null;
         bool approximateModel = result.Coverage?.ApproximateModel == true ||
             HasSimpleFSharpModelReason(result.PartialReason);
+        bool scanIncomplete = succeeded && approximateModel && result.Coverage?.ScansComplete != true;
         bool workspaceComplete = !approximateModel && result.Coverage?.WorkspaceComplete == true;
         bool totalIsLowerBound = succeeded && !approximateModel && !workspaceComplete;
         string? detail = result.Error switch
         {
             "fsharp_semantic_position_invalid" =>
                 "F# callers requires line >= 1 and a 1-based column.",
+            "fsharp_evaluated_inputs_not_ready" =>
+                "Restart the workspace daemon with PHOENIX_FSHARP_PROJECT_MODEL=evaluated and wait for its startup refresh; this snapshot has no prepared evaluated inputs. A query-service override does not reconfigure the writer.",
             "fsharp_type_check_context_required" =>
                 "Select one physical F# project and target framework using projectPath + targetFramework.",
             "fsharp_type_check_context_not_found" =>
@@ -351,7 +361,7 @@ public sealed partial class NavigationTools
         string? summary = !succeeded
             ? null
             : approximateModel
-                ? $"{result.TotalCallers} direct callers at {result.TotalCallSites} call sites in the approximate F# project model; not a proven workspace total or lower bound."
+                ? $"{result.TotalCallers} direct callers at {result.TotalCallSites} call sites in the approximate F# project model; not a proven real-workspace total or bound.{(scanIncomplete ? " Scan incomplete; additional model results may be missing." : "")}"
             : workspaceComplete
                 ? $"Exactly {result.TotalCallers} compiler-bound direct callers at {result.TotalCallSites} call sites across the selected F# project, distinct declaring project, and every proven workspace dependent."
                 : $"At least {result.TotalCallers} compiler-bound direct callers at {result.TotalCallSites} call sites were proven in completed F# groups; inspect coverage before treating this as the workspace total.";
@@ -378,6 +388,7 @@ public sealed partial class NavigationTools
                     totalCallSites = result.TotalCallSites,
                     totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
                     totalIsApproximate = succeeded && approximateModel ? true : (bool?)null,
+                    scanIncomplete = approximateModel && succeeded ? scanIncomplete : (bool?)null,
                     countScope = succeeded && approximateModel ? "approximate_project_model" : null,
                     callers = items.Select(caller => new
                     {
@@ -520,12 +531,15 @@ public sealed partial class NavigationTools
                          result.TotalCallSites is not null;
         bool approximateModel = result.Coverage?.ApproximateModel == true ||
             HasSimpleFSharpModelReason(result.PartialReason);
+        bool scanIncomplete = succeeded && approximateModel && result.Coverage?.ScanComplete != true;
         bool complete = !approximateModel && result.Coverage?.Complete == true;
         bool totalIsLowerBound = succeeded && !approximateModel && !complete;
         string? detail = result.Error switch
         {
             "fsharp_semantic_position_invalid" =>
                 "F# callees requires line >= 1 and a 1-based column.",
+            "fsharp_evaluated_inputs_not_ready" =>
+                "Restart the workspace daemon with PHOENIX_FSHARP_PROJECT_MODEL=evaluated and wait for its startup refresh; this snapshot has no prepared evaluated inputs. A query-service override does not reconfigure the writer.",
             "fsharp_type_check_context_required" =>
                 "Select one physical F# project and target framework using projectPath + targetFramework.",
             "fsharp_type_check_context_not_found" =>
@@ -542,7 +556,7 @@ public sealed partial class NavigationTools
         string? summary = !succeeded
             ? null
             : approximateModel
-                ? $"{result.TotalCallees} callees at {result.TotalCallSites} call sites in the selected body of the approximate F# project model; not a proven build total or lower bound."
+                ? $"{result.TotalCallees} callees at {result.TotalCallSites} call sites in the selected body of the approximate F# project model; not a proven real-build total or bound.{(scanIncomplete ? " Scan incomplete; additional model results may be missing." : "")}"
             : complete
                 ? $"Exactly {result.TotalCallees} compiler-bound callees at {result.TotalCallSites} call sites in the selected F# body."
                 : $"At least {result.TotalCallees} compiler-bound callees at {result.TotalCallSites} call sites were proven in the selected F# body; inspect coverage before treating this as complete.";
@@ -566,6 +580,7 @@ public sealed partial class NavigationTools
                     totalCallSites = result.TotalCallSites,
                     totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
                     totalIsApproximate = succeeded && approximateModel ? true : (bool?)null,
+                    scanIncomplete = approximateModel && succeeded ? scanIncomplete : (bool?)null,
                     countScope = succeeded && approximateModel ? "approximate_project_model" : null,
                     callees = items.Select(callee => new
                     {
@@ -703,6 +718,7 @@ public sealed partial class NavigationTools
                          result.TotalImplementations is not null;
         bool approximateModel = result.Coverage?.ApproximateModel == true ||
             HasSimpleFSharpModelReason(result.PartialReason);
+        bool scanIncomplete = succeeded && approximateModel && result.Coverage?.ScansComplete != true;
         bool workspaceComplete = !approximateModel && result.Coverage?.WorkspaceComplete == true;
         bool totalIsLowerBound = succeeded && !approximateModel && !workspaceComplete;
         int concreteCount = result.Implementations.Count(item => !item.IsAbstract);
@@ -710,6 +726,8 @@ public sealed partial class NavigationTools
         {
             "fsharp_semantic_position_invalid" =>
                 "F# implementations requires line >= 1 and a 1-based column.",
+            "fsharp_evaluated_inputs_not_ready" =>
+                "Restart the workspace daemon with PHOENIX_FSHARP_PROJECT_MODEL=evaluated and wait for its startup refresh; this snapshot has no prepared evaluated inputs. A query-service override does not reconfigure the writer.",
             "fsharp_type_check_context_required" =>
                 "Select one physical F# project and target framework using projectPath + targetFramework.",
             "fsharp_type_check_context_not_found" =>
@@ -799,7 +817,7 @@ public sealed partial class NavigationTools
                         : null,
                     summary = succeeded
                         ? approximateModel
-                            ? $"{result.TotalImplementations} implementations in the approximate F# project model; not a proven workspace total or lower bound."
+                            ? $"{result.TotalImplementations} implementations in the approximate F# project model; not a proven real-workspace total or bound.{(scanIncomplete ? " Scan incomplete; additional model results may be missing." : "")}"
                         : workspaceComplete
                             ? $"Exactly {result.TotalImplementations} compiler-bound implementations across every completely scanned F# project/TFM context in the proven workspace scope." +
                               (!includeTests ? " Test projects were excluded before counting." : "") +
@@ -824,6 +842,7 @@ public sealed partial class NavigationTools
                     totalImplementations = succeeded ? result.TotalImplementations : null,
                     totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
                     totalIsApproximate = succeeded && approximateModel ? true : (bool?)null,
+                    scanIncomplete = approximateModel && succeeded ? scanIncomplete : (bool?)null,
                     countScope = succeeded && approximateModel ? "approximate_project_model" : null,
                     concreteCount = succeeded ? concreteCount : (int?)null,
                     likelyImplementation = likely,
@@ -994,12 +1013,15 @@ public sealed partial class NavigationTools
             .Select((group, groupIndex) => (groupIndex, group)).ToList();
         bool approximateModel = result.Coverage?.ApproximateModel == true ||
             HasSimpleFSharpModelReason(result.PartialReason);
+        bool scanIncomplete = succeeded && approximateModel && result.Coverage?.ScansComplete != true;
         bool workspaceComplete = !approximateModel && result.Coverage?.WorkspaceComplete == true;
         bool totalIsLowerBound = succeeded && !approximateModel && !workspaceComplete;
         string? detail = result.Error switch
         {
             "fsharp_semantic_position_invalid" =>
                 "F# semantic positions require line >= 1 and column >= 0 (0 means line-only).",
+            "fsharp_evaluated_inputs_not_ready" =>
+                "Restart the workspace daemon with PHOENIX_FSHARP_PROJECT_MODEL=evaluated and wait for its startup refresh; this snapshot has no prepared evaluated inputs. A query-service override does not reconfigure the writer.",
             "fsharp_type_check_context_required" =>
                 "Select one physical F# project and target framework using projectPath + targetFramework.",
             "fsharp_type_check_context_not_found" =>
@@ -1089,7 +1111,7 @@ public sealed partial class NavigationTools
                     symbol,
                     summary = succeeded
                     ? approximateModel
-                        ? $"{result.TotalReferences} non-definition references in the approximate F# project model; not a proven workspace total or lower bound."
+                        ? $"{result.TotalReferences} non-definition references in the approximate F# project model; not a proven real-workspace total or bound.{(scanIncomplete ? " Scan incomplete; additional model results may be missing." : "")}"
                     : workspaceComplete
                         ? $"Exactly {result.TotalReferences} compiler-bound non-definition references across every completely scanned F# project/TFM context in the proven workspace scope." +
                           (!includeTests ? " Test projects were excluded before counting." : "") +
@@ -1099,6 +1121,7 @@ public sealed partial class NavigationTools
                     totalReferences = succeeded ? result.TotalReferences : null,
                     totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
                     totalIsApproximate = succeeded && approximateModel ? true : (bool?)null,
+                    scanIncomplete = approximateModel && succeeded ? scanIncomplete : (bool?)null,
                     countScope = succeeded && approximateModel ? "approximate_project_model" : null,
                     groupBy = succeeded ? "project" : null,
                     groups = succeeded
@@ -1305,6 +1328,8 @@ public sealed partial class NavigationTools
         string? error = result.Error;
         string? detail = error switch
         {
+            "fsharp_evaluated_inputs_not_ready" =>
+                "Restart the workspace daemon with PHOENIX_FSHARP_PROJECT_MODEL=evaluated and wait for its startup refresh; this snapshot has no prepared evaluated inputs. A query-service override does not reconfigure the writer.",
             "fsharp_type_check_context_required" =>
                 "Select one physical F# project and target framework using projectPath + targetFramework.",
             "fsharp_type_check_context_not_found" =>

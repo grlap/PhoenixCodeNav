@@ -134,7 +134,7 @@ public partial class FSharpSemanticStage2Tests
                 """);
 
             string dbPath = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, dbPath);
+            IndexBuilder.Build(root, dbPath, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var fixture = Fixture.Start(root, dbPath);
             var sourceReads = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             fixture.Semantic.BeforeFSharpSemanticSourceReadForTest = path =>
@@ -968,7 +968,7 @@ public partial class FSharpSemanticStage2Tests
                 """);
 
             string dbPath = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, dbPath);
+            IndexBuilder.Build(root, dbPath, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var fixture = Fixture.Start(root, dbPath);
             fixture.Semantic.FSharpSemanticSnapshotCapturedForTest = () =>
                 WriteProject(root, "Core/Use.fs", """
@@ -1023,7 +1023,7 @@ public partial class FSharpSemanticStage2Tests
                 """);
 
             string dbPath = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, dbPath);
+            IndexBuilder.Build(root, dbPath, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var fixture = Fixture.Start(root, dbPath);
             int dependentCaptures = 0;
             fixture.Semantic.FSharpSemanticProjectCapturedForTest = (project, _) =>

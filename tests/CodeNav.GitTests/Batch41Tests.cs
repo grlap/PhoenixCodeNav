@@ -57,17 +57,22 @@ public class Batch41Tests
             Assert.Equal(GitInfo.HeadCommit(root), GitInfo.HeadCommit(wt));
             Assert.Empty(GitInfo.DirtyFiles(wt)!);
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: ProjectModelMode.Evaluated);
             using (var store = new IndexStore(db, createNew: false))
                 store.SetMeta("indexed_commit", GitInfo.HeadCommit(root)!);
+            using var manager = new IndexManager(root, db, fsharpProjectModel: ProjectModelMode.Evaluated);
+            manager.Start();
+            Assert.True(WaitUntil(() => manager.State == "ready", 30000));
             using var main = new IndexQueries(db, pinReadSnapshot: true);
+            Assert.True(main.EvaluatedFSharpInputsReady());
             Assert.True(main.TryGetCapturedMsBuildFilePresence("Core/seed/web.config", out bool? seed));
             Assert.Equal(false, seed);
             Assert.False(main.TryGetCapturedMsBuildFilePresence("Core/target/web.config", out _));
-            var result = WorktreeIndexer.Ensure(root, db, wt, "auto", _ => { });
+            var result = manager.EnsureWorktreeIndex(wt, "auto", _ => { });
             Assert.Equal("created", result.Action);
             if (OperatingSystem.IsWindows()) Assert.False(result.UsedFullSweep);
             using var sibling = new IndexQueries(IndexBuilder.DefaultDbPath(wt));
+            Assert.True(sibling.EvaluatedFSharpInputsReady());
             Assert.Equal(wt, sibling.ReadMetadata().WorkspaceRoot);
             Assert.True(sibling.TryGetCapturedMsBuildFilePresence("Core/target/web.config", out bool? target));
             Assert.Equal(false, target);

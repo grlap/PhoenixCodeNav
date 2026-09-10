@@ -55,7 +55,7 @@ public static partial class ProjectFileParser
             ++_itemListEntries <= MaxFSharpSemanticItemListEntries;
     }
 
-    private sealed record FSharpSemanticEvaluation(
+    internal sealed record FSharpSemanticEvaluation(
         List<string> SourceFiles,
         List<string> CommandLineArgs,
         List<string> HintPathReferences,
@@ -71,7 +71,7 @@ public static partial class ProjectFileParser
     private readonly record struct FSharpSemanticReference(
         string ItemSpec, string SimpleName, string? HintPath);
 
-    private enum FSharpSemanticDocumentRole
+    internal enum FSharpSemanticDocumentRole
     {
         Project,
         ExplicitImport,
@@ -80,7 +80,7 @@ public static partial class ProjectFileParser
         DirectoryBuildTargets,
     }
 
-    private readonly record struct FSharpChooseState(
+    internal readonly record struct FSharpChooseState(
         bool HasSemanticItemPhaseFacts,
         bool HasDirectSemanticFacts);
 
@@ -89,7 +89,7 @@ public static partial class ProjectFileParser
     /// import, condition, compile-item, and reference facts needed by Stage 2A.1. It never loads
     /// MSBuild, executes a target/task, restores a package, or treats a solution as authority.
     /// </summary>
-    private sealed class FSharpSemanticProjectEvaluator :
+    internal sealed class FSharpSemanticProjectEvaluator :
         BoundedMsBuildProjectEvaluator<FSharpSemanticDocumentRole, FSharpChooseState>
     {
         private static readonly Regex MakeRelativeProjectToThisFile = new(

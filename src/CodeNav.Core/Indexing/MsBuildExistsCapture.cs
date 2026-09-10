@@ -9,10 +9,25 @@ namespace CodeNav.Core.Indexing;
 internal static class MsBuildExistsCapture
 {
     internal static bool Refresh(IndexStore store, SqliteTransaction tx, string root,
+        Semantic.ProjectModelMode fsharpProjectModel,
         IReadOnlyCollection<string>? changedPaths = null,
-        string? publishedWorkspaceRoot = null)
+        string? publishedWorkspaceRoot = null,
+        Action<string>? log = null)
     {
-        bool changed = false;
+        using var queries = new IndexQueries(tx);
+        bool wasReady = queries.EvaluatedFSharpInputsReady();
+        if (fsharpProjectModel == Semantic.ProjectModelMode.Simple)
+        {
+            // Discard rather than revive stale negative facts after a later model switch.
+            store.ClearMsBuildExistsInputs(tx);
+            store.SetMeta(tx, "fsharp_evaluated_inputs", "disabled");
+            if (wasReady)
+                log?.Invoke("Simple F# model: discarded evaluated Exists facts. Switching back requires full rediscovery.");
+            return wasReady;
+        }
+        if (!wasReady)
+            log?.Invoke("Preparing evaluated F# inputs: full Exists rediscovery in the index writer transaction.");
+        bool changed = !wasReady;
         var owners = new HashSet<long>();
         var observed = new Dictionary<string, bool?>(StringComparer.Ordinal);
         bool? Observe(string path)
@@ -43,8 +58,7 @@ internal static class MsBuildExistsCapture
         // Import/property changes may affect several projects, including newly introduced
         // Directory.Build authority. Ordinary source/config-content edits need no project scan;
         // only projects with changed existence facts are reevaluated on that path.
-        bool rediscoverAll = changedPaths is null || changedPaths.Any(IsProjectInput);
-        using var queries = new IndexQueries(tx);
+        bool rediscoverAll = !wasReady || changedPaths is null || changedPaths.Any(IsProjectInput);
         // Cold build supplies the publication identity before meta exists. Delta reads that
         // same identity in its writer transaction; root remains the separate anchored I/O path.
         string? logicalRoot = publishedWorkspaceRoot ?? queries.ReadMetadata().WorkspaceRoot;
@@ -85,6 +99,7 @@ internal static class MsBuildExistsCapture
         // the same single observation across owners/TFMs and both phases of this transaction.
         foreach ((string path, bool? presence) in observed)
             changed |= store.UpdateMsBuildExistsPresence(tx, path, presence);
+        store.SetMeta(tx, "fsharp_evaluated_inputs", "ready");
         return changed;
     }
 

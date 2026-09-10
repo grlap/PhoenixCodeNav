@@ -97,7 +97,7 @@ public partial class FSharpSemanticStage2Tests
                 """);
 
             string dbPath = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, dbPath);
+            IndexBuilder.Build(root, dbPath, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var fixture = Fixture.Start(root, dbPath);
             // Diverge disk only after the complete project snapshot has been captured. This makes
             // the test independent of watcher startup/reconcile timing: FCS must receive the older

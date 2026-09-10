@@ -40,34 +40,36 @@ public static class DeltaRefresher
         IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? changedRelPaths,
         Action<string>? log = null,
         string? recordCommit = null, string? recordBranch = null,
-        bool recordBranchKnown = false) =>
+        bool recordBranchKnown = false, Semantic.ProjectModelMode? fsharpProjectModel = null) =>
         RefreshCore(store, workspaceRoot, changedRelPaths,
             GitInfo.ReadBoundedWorkspaceFileResult, log, recordCommit, recordBranch,
-            recordBranchKnown);
+            recordBranchKnown, Semantic.FSharpProjectModelConfiguration.Select(fsharpProjectModel, log));
 
     internal static RefreshResult RefreshWithReaderForTest(
         IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? changedRelPaths,
         Func<string, string, int, GitInfo.WorkspaceFileReadResult> readWorkspaceFile,
         Action<string>? log = null,
         string? recordCommit = null, string? recordBranch = null,
-        bool recordBranchKnown = false) =>
+        bool recordBranchKnown = false, Semantic.ProjectModelMode? fsharpProjectModel = null) =>
         RefreshCore(store, workspaceRoot, changedRelPaths, readWorkspaceFile, log,
-            recordCommit, recordBranch, recordBranchKnown);
+            recordCommit, recordBranch, recordBranchKnown,
+            Semantic.FSharpProjectModelConfiguration.Select(fsharpProjectModel, log));
 
     // A private publication may start from another workspace's snapshot. Even an empty source
     // diff must recapture root-sensitive Exists inputs, atomically with the new root identity.
     internal static RefreshResult RefreshForPublication(
         IndexStore store, string workspaceReadRoot, IReadOnlyCollection<string>? changedRelPaths,
-        string publishedWorkspaceRoot, Action<string>? log = null) =>
+        string publishedWorkspaceRoot, Semantic.ProjectModelMode fsharpProjectModel, Action<string>? log = null) =>
         RefreshCore(store, workspaceReadRoot, changedRelPaths,
             GitInfo.ReadBoundedWorkspaceFileResult, log, null, null, false,
-            Path.GetFullPath(publishedWorkspaceRoot));
+            fsharpProjectModel, Path.GetFullPath(publishedWorkspaceRoot));
 
     private static RefreshResult RefreshCore(
         IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? changedRelPaths,
         Func<string, string, int, GitInfo.WorkspaceFileReadResult> readWorkspaceFile,
         Action<string>? log, string? recordCommit, string? recordBranch,
-        bool recordBranchKnown, string? publishedWorkspaceRoot = null)
+        bool recordBranchKnown, Semantic.ProjectModelMode fsharpProjectModel,
+        string? publishedWorkspaceRoot = null)
     {
         var sw = Stopwatch.StartNew();
         var stored = store.AllFilesByPath();
@@ -349,7 +351,7 @@ public static class DeltaRefresher
             if (publishedWorkspaceRoot is not null)
                 store.SetMeta(tx, "workspace_root", publishedWorkspaceRoot);
             bool existsChanged = MsBuildExistsCapture.Refresh(store, tx, workspaceRoot,
-                detectAll || publishedWorkspaceRoot is not null ? null : candidates);
+                fsharpProjectModel, detectAll || publishedWorkspaceRoot is not null ? null : candidates, log: log);
             if (added + changed + deleted > 0 || existsChanged)
             {
                 refreshedAtUtc = DateTime.UtcNow.ToString("O");

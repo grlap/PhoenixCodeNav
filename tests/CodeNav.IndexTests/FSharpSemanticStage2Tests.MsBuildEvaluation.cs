@@ -285,7 +285,7 @@ public partial class FSharpSemanticStage2Tests
             WriteProject(root, "Core/web.config", "<configuration />");
             WriteProject(root, "Core/obj/web.config", "<configuration />");
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var queries = new IndexQueries(db);
             bool? Resolve(string path) => SemanticService.ResolveIndexedFSharpExists(queries, path);
 
@@ -329,7 +329,7 @@ public partial class FSharpSemanticStage2Tests
                 <ItemGroup><Compile Include="Core.fs" /></ItemGroup></Project>
                 """);
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             using var pinned = new IndexQueries(db, pinReadSnapshot: true);
             bool? Resolve(IndexQueries q) => SemanticService.ResolveIndexedFSharpExists(q, "Core/Web.config");
@@ -342,12 +342,12 @@ public partial class FSharpSemanticStage2Tests
 
             WriteProject(root, "Core/Web.config", "<configuration />");
             using (var beforeRefresh = new IndexQueries(db)) Assert.Equal(false, Resolve(beforeRefresh));
-            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(false, Resolve(pinned));
             using (var refreshed = new IndexQueries(db)) Assert.Equal(true, Resolve(refreshed));
 
             File.Delete(Path.Combine(root, "Core", "Web.config"));
-            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using (var removed = new IndexQueries(db)) Assert.Equal(false, Resolve(removed));
 
             // A source edit changes the dependency set even though neither target is indexed.
@@ -361,7 +361,7 @@ public partial class FSharpSemanticStage2Tests
                 """);
             // app.config is a watched/indexed kind; arbitrary Other.config is deliberately not.
             WriteProject(root, "Core/Local.props", "<Project><PropertyGroup Condition=\"Exists('app.config')\" /></Project>");
-            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj", "Core/Local.props"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj", "Core/Local.props"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var updated = new IndexQueries(db);
             Assert.Null(Resolve(updated));
             Assert.Equal(false, SemanticService.ResolveIndexedFSharpExists(updated, "Core/app.config"));
@@ -395,7 +395,7 @@ public partial class FSharpSemanticStage2Tests
                 """);
             WriteProject(root, "Core/Core.fs", "module Core\nlet value = 1\n");
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             FSharpSemanticOptionsSnapshot Evaluate()
             {
@@ -413,12 +413,12 @@ public partial class FSharpSemanticStage2Tests
             Assert.Null(absent.Error);
             Assert.Equal("Absent", absent.AssemblyName);
             WriteProject(root, "Core/Web.config", "<configuration />");
-            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             FSharpSemanticOptionsSnapshot present = Evaluate();
             Assert.Null(present.Error);
             Assert.Equal("Present", present.AssemblyName);
             File.Delete(Path.Combine(root, "Core", "Web.config"));
-            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             FSharpSemanticOptionsSnapshot removed = Evaluate();
             Assert.Null(removed.Error);
             Assert.Equal("Absent", removed.AssemblyName);
@@ -447,7 +447,7 @@ public partial class FSharpSemanticStage2Tests
                 """);
             WriteProject(root, "Build/Optional.props", "<Project><PropertyGroup Condition=\"Exists('nested/Web.config')\" /></Project>");
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             bool? Resolve(string path)
             {
@@ -459,18 +459,18 @@ public partial class FSharpSemanticStage2Tests
             Assert.Null(Resolve("Core/nested/Web.config"));
 
             WriteProject(root, "Core/Web.config", "<configuration />");
-            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Resolve("Core/Web.config"));
             Assert.Equal(false, Resolve("Core/app.config"));
             Assert.Equal(false, Resolve("Core/nested/Web.config"));
 
             WriteProject(root, "Build/Optional.props", "<Project><PropertyGroup Condition=\"Exists('changed/Web.config')\" /></Project>");
-            DeltaRefresher.Refresh(store, root, ["Build/Optional.props"]);
+            DeltaRefresher.Refresh(store, root, ["Build/Optional.props"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Null(Resolve("Core/nested/Web.config"));
             Assert.Equal(false, Resolve("Core/changed/Web.config"));
 
             File.Delete(Path.Combine(root, "Core", "Web.config"));
-            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(false, Resolve("Core/Web.config"));
             Assert.Null(Resolve("Core/changed/Web.config"));
         }
@@ -492,18 +492,18 @@ public partial class FSharpSemanticStage2Tests
                 <Import Project="Local.props" /><ItemGroup><Compile Include="Core/Core.fs" /></ItemGroup></Project>
                 """);
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             using (var initial = new IndexQueries(db))
                 Assert.Equal(false, SemanticService.ResolveIndexedFSharpExists(initial, probe));
             WriteProject(root, "Core/web.config", "<configuration />");
             // The watcher reports the physical spelling, not the spelling in the condition.
-            DeltaRefresher.Refresh(store, root, ["Core/web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             bool nativePresence = File.Exists(Path.Combine(root, probe.Replace('/', Path.DirectorySeparatorChar)));
             using (var present = new IndexQueries(db))
                 Assert.Equal(nativePresence, SemanticService.ResolveIndexedFSharpExists(present, probe));
             File.Delete(Path.Combine(root, "Core", "web.config"));
-            DeltaRefresher.Refresh(store, root, ["Core/web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var removed = new IndexQueries(db);
             Assert.Equal(false, SemanticService.ResolveIndexedFSharpExists(removed, probe));
         }
@@ -532,7 +532,7 @@ public partial class FSharpSemanticStage2Tests
                 Path.Combine(root, "Core", "linked"), Path.Combine(root, "Target"), out string? failure,
                 forceWindowsJunctionFallback: OperatingSystem.IsWindows()), failure);
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             using (var queries = new IndexQueries(db))
             {
@@ -542,7 +542,7 @@ public partial class FSharpSemanticStage2Tests
                 Assert.Equal(false, SemanticService.ResolveIndexedFSharpExists(queries, "Core/missing/Web.config"));
             }
             Directory.Delete(Path.Combine(root, "Core", "app.config"));
-            var result = DeltaRefresher.Refresh(store, root, ["Core/app.config"]);
+            var result = DeltaRefresher.Refresh(store, root, ["Core/app.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(0, result.AddedFiles + result.ChangedFiles + result.DeletedFiles);
             Assert.NotNull(result.RefreshedAtUtc);
             using (var changed = new IndexQueries(db))
@@ -552,7 +552,7 @@ public partial class FSharpSemanticStage2Tests
             Assert.True(TestWorkspaceCleanup.TryCreateDirectoryLink(
                 Path.Combine(root, "Core", "missing"), Path.Combine(root, "Target"), out failure,
                 forceWindowsJunctionFallback: OperatingSystem.IsWindows()), failure);
-            DeltaRefresher.Refresh(store, root, null);
+            DeltaRefresher.Refresh(store, root, null, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var swept = new IndexQueries(db);
             Assert.Null(SemanticService.ResolveIndexedFSharpExists(swept, "Core/missing/Web.config"));
         }
@@ -2021,7 +2021,7 @@ public partial class FSharpSemanticStage2Tests
             WriteProject(root, "Core/Core.fsproj", xml);
             WriteProject(root, "Directory.Build.props", props);
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var queries = new IndexQueries(db);
             Assert.True(queries.TryGetCapturedMsBuildFilePresence("Core/Web.config", out bool? presence));
             Assert.Equal(false, presence);
@@ -2122,7 +2122,7 @@ public partial class FSharpSemanticStage2Tests
                 : Project(properties);
             WriteProject(root, owner, Input(""));
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             bool? Captured(string path)
             {
@@ -2132,10 +2132,10 @@ public partial class FSharpSemanticStage2Tests
             Assert.Equal(false, Captured("Core/Web.config"));
             Assert.Null(Captured("Core/app.config"));
             WriteProject(root, "Core/Web.config", "<configuration />");
-            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Captured("Core/Web.config"));
             WriteProject(root, owner, Input("<Configuration>Release</Configuration><Platform>x64</Platform>"));
-            DeltaRefresher.Refresh(store, root, [owner]);
+            DeltaRefresher.Refresh(store, root, [owner], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Null(Captured("Core/Web.config"));
             Assert.Equal(false, Captured("Core/app.config"));
         }
@@ -2273,7 +2273,7 @@ public partial class FSharpSemanticStage2Tests
                 </Project>
                 """);
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var queries = new IndexQueries(db);
             Assert.True(queries.TryGetCapturedMsBuildFilePresence("Core/Web.config", out bool? presence));
             Assert.Equal(false, presence);

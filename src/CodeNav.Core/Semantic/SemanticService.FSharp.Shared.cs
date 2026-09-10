@@ -236,10 +236,21 @@ public sealed partial class SemanticService
                 }
                 else
                 {
-                    foreach (string targetFramework in targetFrameworks)
+                    FSharpSemanticOptionsSnapshot? simpleReferences = null;
+                    if (SelectedFSharpProjectModel == ProjectModelMode.Simple)
+                    {
+                        string? xml = queries.ContentByPathBounded(project.Path,
+                            IndexBuilder.MaxStructuralFileBytes, cancellationToken);
+                        if (xml is not null)
+                            simpleReferences = SimpleProjectModelBuilder.BuildFSharpReferences(
+                                project.Path, xml, cancellationToken);
+                    }
+                    foreach (string targetFramework in SelectedFSharpProjectModel == ProjectModelMode.Simple
+                                 ? targetFrameworks.Take(1) : targetFrameworks)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         FSharpSemanticOptionsSnapshot? options =
+                            SelectedFSharpProjectModel == ProjectModelMode.Simple ? simpleReferences :
                             EvaluateFSharpSemanticOptions(queries, project, targetFramework,
                                 new ProjectFileParser.FSharpSemanticEvaluationBudget(),
                                 cancellationToken, out _, out _);
@@ -338,7 +349,7 @@ public sealed partial class SemanticService
             .ToList();
         return new(candidates, potentialConsumers.Count,
             potentialConsumersEvaluated, discoveryFailed,
-            SelectedFSharpProjectModel == FSharpProjectModel.Simple);
+            SelectedFSharpProjectModel == ProjectModelMode.Simple);
     }
 
     private FSharpSemanticDiagnostic MapFSharpDiagnostic(

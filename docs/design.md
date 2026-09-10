@@ -39,42 +39,68 @@ different front end. `CodeNav.Mcp` is a thin protocol/shaping layer over it.
 
 ## The four navigation layers
 
-### Simple F# project-model pilot
+### F# project models
 
-`SemanticService` can select `FSharpProjectModel.Simple` instead of the default `Evaluated`.
-An explicit constructor selection wins; otherwise `PHOENIX_FSHARP_PROJECT_MODEL=simple`
-is captured once when the service starts. `server_capabilities.semantic.fsharpProjectModel`
-reports the active model. Restart an existing workspace daemon to change its environment.
+F# now defaults to the same simple raw-project construction used for C#:
+`SimpleProjectModelBuilder`. No environment setting is needed. Roslyn and FCS remain
+separate compiler adapters; F# retains authored Compile order, explicit .fsi signatures
+and literal parser options. Imports and build conditions are not evaluated by this model.
+Glob/default expansions use sorted paths; default F# items contain .fs, not implicit .fsi.
+Literal includes, globs, excludes and removes use the host filesystem's case policy.
 
-This navigation-only pilot reuses `ParseSnapshot`, `ParseCompileShape`, and
-`ParseFSharpParsingOptionsSnapshot`, without running the additional import/condition evaluator.
-The same choice applies to the root, all F# closure children and dependent discovery.
-Indexed source candidates are selected by physical project ID, not shared AssemblyName;
-literal Compile items retain document order, while glob/default expansions use sorted paths.
-Conditions are not evaluated, imports contribute no inputs, and unrepresented expressions
-can be omitted. The old evaluated path and all index-time Exists capture remain unchanged;
-switching navigation models therefore requires no rebuild and does not change schema 41.
+To use the previous advanced implementation, set `PHOENIX_FSHARP_PROJECT_MODEL=evaluated`
+in the MCP launch environment **before starting the workspace daemon**. Proxy/bootstrap
+children inherit it; an already-running daemon must be restarted. Unset the variable or use
+`simple` to return to the default. The manager captures this selection once, and semantic
+services inherit it unless explicitly overridden. `server_capabilities.semantic.fsharpProjectModel`
+reports the selected query model. There is no automatic fallback between builders.
+`ProjectModelMode.Simple` / `ProjectModelMode.Evaluated` names the language-neutral
+construction choice. Configuration remains F#-scoped; this does not enable evaluated C#.
+Composition boundaries resolve the choice once. Internal build, refresh and sibling-worktree
+publication require a concrete model argument without a default, including transient retries.
 
-Every successfully projected simple model carries `fsharp_semantic_simple_project_model`,
-which the closed confidence classifier maps to `indexed`. Reference counts describe the
-approximate compiler model, not a proven build. All four count operations (references,
-implementations, callers and body-local callees) return `totalIsApproximate: true`,
-`countScope: "approximate_project_model"`, and `coverage.approximateModel: true`.
-Core coverage derives workspace/body completeness from scan completion AND non-approximate
-model authority; completing every scan cannot make an approximate model complete. Dependent
-discovery cannot establish a proven candidate set in simple mode. Consumer-evaluation counts
-and group statuses still describe actual work within that model; missing imports are not
-invented evaluation failures. The response makes neither an exact build-total claim nor a
-`totalIsLowerBound` claim: ignored conditions can over-include while ignored imports can
-under-include. Evaluated-mode coverage and count fields remain unchanged.
-Direct package lookup reuses C#'s
-`ResolvePackageDll` and additionally discloses `fsharp_semantic_simple_package_heuristic`:
-it can fall back to a lexically highest cached version, select the first DLL under a fixed
-net472-ish TFM preference even for modern targets, and omit transitive assets. Missing bare
-or HintPath references and non-F# project references can be omitted. This is not restored
-package authority and must not be presented as such. Physical source/binary snapshots, FCS,
-framework availability and remaining closure budgets/refusals still apply. The pilot does
-not change C# composition, repair import semantics, or remove cold-index evaluation costs.
+A successful FCS binding can report `exact`, just as Roslyn can with raw C# project inputs.
+`fsharp_semantic_simple_project_model`, its package-heuristic provenance and the imported-input
+advisory alone no longer force `indexed`. Errors, diagnostics, actual omitted references and
+unclassified partial reasons still degrade confidence; their reasons remain visible.
+This is compiler binding within the selected model, **not proof of a reproduced build**.
+Ignored conditions can over-include sources; imports can supply inputs the model omits.
+Your deployment-only imports can work well with this model without establishing that guarantee
+for arbitrary projects.
+
+References, callers, callees and implementations expose `totalIsApproximate: true`,
+`countScope: "approximate_project_model"` and `coverage.approximateModel: true`, even with
+exact binding confidence. They never claim real-workspace/body completeness or a real-build
+`totalIsLowerBound`: totals can be too high or too low. `scanIncomplete` separately reports
+unfinished scanning **within** the approximate model; retries may find more model results.
+Consumer-evaluation counters describe actual projections, not proof of import coverage.
+
+Package lookup reuses C#'s direct global-cache heuristic, disclosed by
+`fsharp_semantic_simple_package_heuristic`. It may choose a lexically highest cached version
+rather than semantic-version order, uses a fixed net472-ish framework preference even for modern
+targets, and does not close transitive package dependencies. Missing projects, unsupported-language
+project references, unresolved bare references, unreadable HintPath binaries and missing package
+assets have distinct `fsharp_simple_*` reasons. Actual HintPath and package copies retain separate
+snapshot-provenance reasons. Physical source/binary checks, FCS execution and existing
+closure/framework limits remain.
+
+Simple cold builds and delta refreshes do **not** run the advanced F# Exists evaluator.
+Schema 42 establishes this stored-input policy through the normal one-time migration rebuild.
+Switching to simple discards evaluated Exists facts; switching back prepares them through a full
+rediscovery in the existing index writer transaction, including an empty-diff startup. This first
+evaluated refresh can be slow and hold the writer longer; startup logs announce the work.
+Readiness and facts publish atomically and queries read both from one pinned snapshot.
+An evaluated query without prepared facts returns `fsharp_evaluated_inputs_not_ready`:
+restart the daemon in evaluated mode and let its startup sweep complete. A service override
+does not reconfigure the index writer. Mode toggles do not otherwise require a full index rebuild.
+C# composition is unchanged. No monolith latency measurement or general import-parity claim is made.
+
+The common builder owns bounded XML loading and raw input projection; FCS-specific source
+ordering and parse switches are its adapter. One XML document feeds those projections. SDK projects
+never read packages.config, and dependent discovery projects only direct project references once
+per physical project, without materializing source membership or package inputs. The advanced
+entry point is `EvaluatedProjectModelBuilder`, retaining the bounded evaluator rather than
+duplicating it. Existing advanced regression fixtures explicitly select Evaluated.
 
 ### Layer responsibilities
 
@@ -236,11 +262,11 @@ transitive `project.assets.json` closure implemented for F# below.
 The FCS semantic adapter consumes one immutable source/project snapshot captured from a pinned index epoch, copies
 workspace `HintPath` assemblies and restored package compile assets through verified open handles into request-private snapshots, releases
 SQLite before type checking, and bounds source count/bytes, references, concurrency, cache size,
-deadline, diagnostics, contexts, and response bytes. The bounded evaluator deliberately accepts only literal
+deadline, diagnostics, contexts, and response bytes. In the opt-in evaluated model, the bounded evaluator deliberately accepts only literal
 ordered compile items and a bounded evaluation-lite project subset: simple property
 assignment/expansion before semantic items, comparisons and boolean/`Exists` conditions, `Choose`, and recursively loaded
 literal workspace-local `.props` imports with count/depth/aggregate-byte limits and cycle detection.
-`Exists` is distinct from import loading. Since v0.12.94, the index writer runs the same bounded
+`Exists` is distinct from import loading. Since v0.12.94 (evaluated mode only as of schema 42), the index writer runs the same bounded
 project evaluator for each indexed F# project/TFM to capture reached concrete file probes, including
 literal and supported property-expanded paths. Relative operands use the owning project directory,
 also inside imported `.props`/`.targets` (not the directory containing the imported document).
@@ -679,8 +705,14 @@ from the context. `partial:true` and `partialReason` remain visible independentl
 | `fsharp_workspace_unsupported_boundary` | exact | A non-F# project-reference path was excluded from dependent scanning. |
 | `fsharp_workspace_binary_dependents_not_scanned` | exact | An assembly/HintPath-coupled consumer was identified but cannot be proven from source ProjectReference authority. |
 | `fsharp_core_reference_host_fallback` | indexed | A host-selected `FSharp.Core` substituted for project authority. |
-| `fsharp_semantic_simple_project_model` | indexed | The opt-in simple model uses approximate raw project inputs without evaluating imports or conditions. |
-| `fsharp_semantic_simple_package_heuristic` | indexed | The simple model uses the C# direct-package DLL heuristic instead of restored asset authority; package versions, framework selection and transitive inputs may differ from the build. |
+| `fsharp_semantic_simple_project_model` | exact | Default raw inputs qualify model/count scope, not successful FCS binding. Imports/conditions are not evaluated. |
+| `fsharp_semantic_simple_package_heuristic` | exact | The simple model uses the C# direct-package DLL heuristic instead of restored asset authority; package versions, framework selection and transitive inputs may differ from the build. |
+| `fsharp_project_options_imported` | exact only with simple-model provenance | Imports/SDK inputs are advisory for raw-model binding; alone this remains indexed. |
+| `fsharp_simple_project_reference_missing` | indexed | A direct project reference was absent from the index and omitted. |
+| `fsharp_simple_project_reference_language_unsupported` | indexed | A non-F# direct project reference was omitted from the FCS model. |
+| `fsharp_simple_bare_reference_unresolved` | indexed | A bare assembly reference was unresolved and omitted. |
+| `fsharp_simple_hint_reference_unavailable` | indexed | A HintPath binary could not be captured and was omitted. |
+| `fsharp_simple_package_reference_unavailable` | indexed | The cache heuristic found no usable direct package DLL. |
 | `fsharp_semantic_diagnostics_present` | indexed | Compiler errors mean the selected context did not close cleanly. |
 
 Successful responses use a closed partial-reason classifier: any unclassified partial reason is

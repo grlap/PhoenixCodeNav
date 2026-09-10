@@ -108,7 +108,7 @@ public partial class FSharpSemanticStage2Tests
                 """;
             WriteProject(root, "Directory.Build.props", props);
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             bool? Captured()
             {
@@ -117,13 +117,13 @@ public partial class FSharpSemanticStage2Tests
             }
             Assert.Equal(false, Captured());
             WriteProject(root, "Core/Web.config", "<configuration />");
-            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Captured());
             WriteProject(root, "Directory.Build.props", props.Replace(".fsproj", ".csproj", StringComparison.Ordinal));
-            DeltaRefresher.Refresh(store, root, ["Directory.Build.props"]);
+            DeltaRefresher.Refresh(store, root, ["Directory.Build.props"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Null(Captured());
             WriteProject(root, "Directory.Build.props", props);
-            DeltaRefresher.Refresh(store, root, ["Directory.Build.props"]);
+            DeltaRefresher.Refresh(store, root, ["Directory.Build.props"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Captured());
         }
         finally { Cleanup(root); }

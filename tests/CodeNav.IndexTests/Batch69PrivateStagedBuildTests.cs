@@ -98,7 +98,7 @@ public sealed class Batch69PrivateStagedBuildTests
                 File.Delete(wal);
                 File.WriteAllText(wal, "publication-time replacement");
                 File.WriteAllText(journal, "publication-time arrival");
-                BuildResult stage = IndexBuilder.BuildOwned(root, stagePath,
+                BuildResult stage = IndexBuilder.BuildOwned(root, stagePath, CodeNav.Core.Semantic.ProjectModelMode.Simple,
                     reservedPrivateStage: true);
                 Assert.Equal(1, stage.CsFiles);
 
@@ -144,7 +144,7 @@ public sealed class Batch69PrivateStagedBuildTests
             using (destination!)
             {
                 string stagePath = destination!.CreateStagePath();
-                BuildResult stage = IndexBuilder.BuildOwned(root, stagePath,
+                BuildResult stage = IndexBuilder.BuildOwned(root, stagePath, CodeNav.Core.Semantic.ProjectModelMode.Simple,
                     reservedPrivateStage: true);
                 Assert.Equal(1, stage.CsFiles);
 
@@ -472,7 +472,7 @@ public sealed class Batch69PrivateStagedBuildTests
                 Assert.Equal(0, reservation.Length);
             }
 
-            BuildResult result = IndexBuilder.BuildOwned(root, stagePath,
+            BuildResult result = IndexBuilder.BuildOwned(root, stagePath, CodeNav.Core.Semantic.ProjectModelMode.Simple,
                 reservedPrivateStage: true);
 
             Assert.Equal(1, result.CsFiles);

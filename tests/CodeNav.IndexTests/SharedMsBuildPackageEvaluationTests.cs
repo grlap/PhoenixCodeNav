@@ -289,7 +289,7 @@ public sealed class SharedMsBuildPackageEvaluationTests
             File.WriteAllText(Path.Combine(root, "Core", "Core.fsproj"), Project("Web.config"));
             File.WriteAllText(Path.Combine(root, "Core", "Core.fs"), "module Core\nlet value = 1\n");
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             bool? Captured(string path)
             {
@@ -298,10 +298,10 @@ public sealed class SharedMsBuildPackageEvaluationTests
             }
             Assert.Equal(false, Captured("Core/Web.config"));
             File.WriteAllText(Path.Combine(root, "Core", "Web.config"), "<configuration />");
-            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Captured("Core/Web.config"));
             File.WriteAllText(Path.Combine(root, "Core", "Core.fsproj"), Project("app.config"));
-            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Null(Captured("Core/Web.config"));
             Assert.Equal(false, Captured("Core/app.config"));
         }

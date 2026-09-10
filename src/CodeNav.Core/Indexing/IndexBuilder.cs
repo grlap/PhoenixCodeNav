@@ -158,8 +158,9 @@ public static class IndexBuilder
     /// stop F# evaluation; shared project/document path context also changes guards and normalized
     /// Exists paths. Rebuild to capture these dependencies with the published workspace root.
     /// v41: assumed-empty import markers and live-item property-read tracking allow additional
-    /// F# imports and later properties; rebuild to harvest their persisted Exists dependencies.</summary>
-    public const string SchemaVersion = "41";
+    /// F# imports and later properties; rebuild to harvest their persisted Exists dependencies.
+    /// v42: simple is the default; evaluated Exists facts carry transactional readiness.</summary>
+    public const string SchemaVersion = "42";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }
@@ -167,18 +168,19 @@ public static class IndexBuilder
     internal static Action? AnchoredStageInstalledForTest { get; set; }
 
     public static BuildResult Build(string workspaceRoot, string? dbPath = null, Action<string>? progress = null,
-        BuildProgress? liveProgress = null) =>
+        BuildProgress? liveProgress = null, Semantic.ProjectModelMode? fsharpProjectModel = null) =>
         BuildCore(workspaceRoot, dbPath, progress, liveProgress, SourceWriteBatchSize,
-            fSharpPipelineTestHooks: null, buildCaptureTestHooks: null);
+            fSharpPipelineTestHooks: null, buildCaptureTestHooks: null,
+            Semantic.FSharpProjectModelConfiguration.Select(fsharpProjectModel, progress));
 
     internal static BuildResult BuildWithSourceBatchSizeForTest(string workspaceRoot,
         int sourceWriteBatchSize, Action<string>? progress = null,
         FSharpPipelineTestHooks? fSharpPipelineTestHooks = null,
         BuildCaptureTestHooks? buildCaptureTestHooks = null,
-        BuildProgress? liveProgress = null) =>
+        BuildProgress? liveProgress = null, Semantic.ProjectModelMode? fsharpProjectModel = null) =>
         BuildCore(workspaceRoot, dbPath: null, progress, liveProgress,
             Math.Max(1, sourceWriteBatchSize), fSharpPipelineTestHooks,
-            buildCaptureTestHooks);
+            buildCaptureTestHooks, Semantic.FSharpProjectModelConfiguration.Select(fsharpProjectModel, progress));
 
     internal static IOrderedEnumerable<ScannedFile> PrioritizeCSharpFilesForColdBuild(
         IEnumerable<ScannedFile> files)
@@ -192,7 +194,7 @@ public static class IndexBuilder
     private static BuildResult BuildCore(string workspaceRoot, string? dbPath,
         Action<string>? progress, BuildProgress? liveProgress, int sourceWriteBatchSize,
         FSharpPipelineTestHooks? fSharpPipelineTestHooks,
-        BuildCaptureTestHooks? buildCaptureTestHooks)
+        BuildCaptureTestHooks? buildCaptureTestHooks, Semantic.ProjectModelMode fsharpProjectModel)
     {
         string root = Path.GetFullPath(workspaceRoot);
         string database = Path.GetFullPath(dbPath ?? DefaultDbPath(root));
@@ -252,7 +254,7 @@ public static class IndexBuilder
                             string stagePath = anchored.CreateStagePath();
                             AnchoredStageReadyForTest?.Invoke(stagePath);
                             BuildResult staged = BuildOwned(
-                                anchored.WorkspaceReadPath, stagePath, progress,
+                                anchored.WorkspaceReadPath, stagePath, fsharpProjectModel, progress,
                                 liveProgress, sourceWriteBatchSize, fSharpPipelineTestHooks,
                                 buildCaptureTestHooks, reservedPrivateStage: true,
                                 publishedWorkspaceRoot: root);
@@ -282,7 +284,7 @@ public static class IndexBuilder
                             root, root, database))
                         throw new IOException(
                             "required anchored index publication could not be opened safely");
-                    return BuildOwned(root, authority.DatabasePath, progress, liveProgress,
+                    return BuildOwned(root, authority.DatabasePath, fsharpProjectModel, progress, liveProgress,
                         sourceWriteBatchSize, fSharpPipelineTestHooks,
                         buildCaptureTestHooks,
                         waitingForReaders: () =>
@@ -460,6 +462,7 @@ public static class IndexBuilder
     }
 
     internal static BuildResult BuildOwned(string workspaceRoot, string dbPath,
+        Semantic.ProjectModelMode fsharpProjectModel,
         Action<string>? progress = null, BuildProgress? liveProgress = null,
         int sourceWriteBatchSize = SourceWriteBatchSize,
         FSharpPipelineTestHooks? fSharpPipelineTestHooks = null,
@@ -1068,7 +1071,8 @@ public static class IndexBuilder
             store.CompleteBulkLoad(tx);
             // Probe updates use their query-facing path index, avoiding repeated table scans.
             MsBuildExistsCapture.Refresh(store, tx, workspaceRoot,
-                publishedWorkspaceRoot: publishedWorkspaceRoot ?? workspaceRoot);
+                publishedWorkspaceRoot: publishedWorkspaceRoot ?? workspaceRoot,
+                fsharpProjectModel: fsharpProjectModel, log: progress);
             // isTest R3 (custom-resolve-proof): compiled test attributes + graph-leaf promotion —
             // must run after BOTH compile attribution and ref insertion (leaf check).
             int promoted = store.PromoteTestProjectsByCompiledAttributes(tx);

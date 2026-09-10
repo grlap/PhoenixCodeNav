@@ -89,7 +89,7 @@ public partial class FSharpSemanticStage2Tests
                 Directory.CreateDirectory(Path.Combine(root, "Lib"));
                 File.Copy(Path.Combine(AppContext.BaseDirectory, "FSharp.Core.dll"), Path.Combine(root, "Lib", "FSharp.Core.dll"));
             }
-            using var fixture = Fixture.Create(root, FSharpProjectModel.Simple);
+            using var fixture = Fixture.Create(root, ProjectModelMode.Simple);
             var capabilities = Parse(fixture.Tools.ServerCapabilities());
             Assert.Equal("simple", capabilities.GetProperty("semantic").GetProperty("fsharpProjectModel").GetString());
             Assert.Contains(capabilities.GetProperty("features").EnumerateArray(),
@@ -102,17 +102,18 @@ public partial class FSharpSemanticStage2Tests
                 Assert.Equal("value", response.GetProperty("symbol").GetProperty("name").GetString());
                 Assert.Contains(response.GetProperty("declarations").EnumerateArray(),
                     declaration => declaration.GetProperty("path").GetString() == "Core/M.fs");
-                Assert.Equal("indexed", response.GetProperty("meta").GetProperty("confidence").GetString());
+                Assert.Equal("exact", response.GetProperty("meta").GetProperty("confidence").GetString());
                 Assert.Contains(ProjectFileParser.SimpleFSharpProjectModelReason, response.GetProperty("partialReason").GetString());
                 Assert.DoesNotContain("fsharp_semantic_diagnostics_present", response.GetProperty("partialReason").GetString());
                 if (!sdk)
                     Assert.Contains("fsharp_binary_references_snapshotted", response.GetProperty("partialReason").GetString());
             }
-            using var evaluated = new SemanticService(fixture.Manager, fsharpProjectModel: FSharpProjectModel.Evaluated);
+            using var evaluated = new SemanticService(fixture.Manager, enableRoslynPersistence: false, fsharpProjectModel: ProjectModelMode.Evaluated);
             var strictTools = new NavigationTools(fixture.Manager, evaluated);
             var strict = Parse(CallSemantic(() => strictTools.SymbolAt("Core/A.fs", 2, 22, timeoutMs: 60_000)));
             Assert.True(strict.TryGetProperty("error", out var strictError));
-            Assert.StartsWith("fsharp_", strictError.GetString());
+            Assert.Equal("fsharp_evaluated_inputs_not_ready", strictError.GetString());
+            Assert.Contains("PHOENIX_FSHARP_PROJECT_MODEL=evaluated", strict.GetProperty("detail").GetString());
             Assert.DoesNotContain(ProjectFileParser.SimpleFSharpProjectModelReason,
                 strict.TryGetProperty("partialReason", out var strictReason) ? strictReason.GetString() ?? "" : "");
         }
@@ -136,7 +137,7 @@ public partial class FSharpSemanticStage2Tests
             }
             WriteProject(root, "Dependency/Dependency.fs", "module Dependency\nlet value = 42\n");
             WriteProject(root, "Core/Core.fs", "module Core\nlet result = Dependency.value\n");
-            using var fixture = Fixture.Create(root, FSharpProjectModel.Simple);
+            using var fixture = Fixture.Create(root, ProjectModelMode.Simple);
             var symbol = Parse(CallSemantic(() => fixture.Tools.SymbolAt("Core/Core.fs", 2, 26, timeoutMs: 60_000)));
             Assert.True(symbol.GetProperty("found").GetBoolean(), symbol.ToString());
             Assert.Contains(symbol.GetProperty("declarations").EnumerateArray(),
@@ -144,7 +145,7 @@ public partial class FSharpSemanticStage2Tests
             var references = Parse(CallSemantic(() => fixture.Tools.References(
                 path: "Dependency/Dependency.fs", line: 2, column: 6, mode: "semantic", timeoutMs: 60_000)));
             Assert.False(references.TryGetProperty("error", out _), references.ToString());
-            Assert.Equal("indexed", references.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.Equal("exact", references.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.Contains(ProjectFileParser.SimpleFSharpProjectModelReason, references.GetProperty("partialReason").GetString());
             Assert.Contains(references.GetProperty("groups").EnumerateArray(),
                 group => group.GetProperty("project").GetString() == "Core/Core.fsproj" &&
@@ -166,7 +167,7 @@ public partial class FSharpSemanticStage2Tests
                 </ItemGroup>
                 """));
             WriteProject(root, "Core/Core.fs", "module Core\nlet value = 42\nlet answer = value\n");
-            using var fixture = Fixture.Create(root, FSharpProjectModel.Simple);
+            using var fixture = Fixture.Create(root, ProjectModelMode.Simple);
             var response = Parse(CallSemantic(() => fixture.Tools.SymbolAt("Core/Core.fs", 3, 15, timeoutMs: 60_000)));
             Assert.True(response.GetProperty("found").GetBoolean(), response.ToString());
             Assert.Equal("value", response.GetProperty("symbol").GetProperty("name").GetString());
@@ -174,6 +175,9 @@ public partial class FSharpSemanticStage2Tests
             string? reason = response.GetProperty("partialReason").GetString();
             Assert.Contains(ProjectFileParser.SimpleFSharpProjectModelReason, reason);
             Assert.Contains("fsharp_semantic_simple_package_heuristic", reason);
+            Assert.Contains("fsharp_simple_bare_reference_unresolved", reason);
+            Assert.Contains("fsharp_simple_hint_reference_unavailable", reason);
+            Assert.Contains("fsharp_simple_package_reference_unavailable", reason);
             Assert.DoesNotContain("fsharp_binary_references_snapshotted", reason);
             Assert.DoesNotContain("fsharp_package_references_snapshotted", reason);
         }
@@ -192,15 +196,18 @@ public sealed class FSharpProjectModelEnvironmentTests
         string root = Directory.CreateTempSubdirectory("cn-fs-model").FullName;
         try
         {
+            Environment.SetEnvironmentVariable(variable, null);
             using var manager = new IndexManager(root);
-            Environment.SetEnvironmentVariable(variable, " Simple ");
             using var simple = new SemanticService(manager);
-            using var explicitEvaluated = new SemanticService(manager, fsharpProjectModel: FSharpProjectModel.Evaluated);
+            using var explicitEvaluated = new SemanticService(manager, fsharpProjectModel: ProjectModelMode.Evaluated);
             Environment.SetEnvironmentVariable(variable, "evaluated");
-            using var evaluated = new SemanticService(manager);
-            Assert.Equal(FSharpProjectModel.Simple, simple.SelectedFSharpProjectModel);
-            Assert.Equal(FSharpProjectModel.Evaluated, explicitEvaluated.SelectedFSharpProjectModel);
-            Assert.Equal(FSharpProjectModel.Evaluated, evaluated.SelectedFSharpProjectModel);
+            using var sameManager = new SemanticService(manager);
+            using var evaluatedManager = new IndexManager(root);
+            using var evaluated = new SemanticService(evaluatedManager);
+            Assert.Equal(ProjectModelMode.Simple, sameManager.SelectedFSharpProjectModel);
+            Assert.Equal(ProjectModelMode.Simple, simple.SelectedFSharpProjectModel);
+            Assert.Equal(ProjectModelMode.Evaluated, explicitEvaluated.SelectedFSharpProjectModel);
+            Assert.Equal(ProjectModelMode.Evaluated, evaluated.SelectedFSharpProjectModel);
         }
         finally
         {
@@ -210,37 +217,26 @@ public sealed class FSharpProjectModelEnvironmentTests
     }
 }
 
-public sealed class FSharpSimpleProjectionTrial(Xunit.Abstractions.ITestOutputHelper output)
+public sealed class FSharpSimpleProjectionComparison
 {
     [Fact]
-    public void SimpleProjectModelFiftyProjectProjectionTrial()
+    public void BothModelsPreserveAuthoredOrderWithDeploymentOnlyImport()
     {
-        string props = "<Project><PropertyGroup>" + string.Concat(Enumerable.Range(0, 50)
-            .Select(index => $"<DeploymentOption{index}>value</DeploymentOption{index}>")) + "</PropertyGroup></Project>";
         const string xml = """
             <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
               <Import Project="../Build/Common.props" />
               <ItemGroup><Compile Include="Z.fs" /><Compile Include="M.fs" /><Compile Include="A.fs" /></ItemGroup>
             </Project>
             """;
-        double Run(bool simple)
-        {
-            var watch = System.Diagnostics.Stopwatch.StartNew();
-            for (int index = 0; index < 50; index++)
-            {
-                string path = $"Project{index}/Project{index}.fsproj";
-                string[] expected = [$"Project{index}/Z.fs", $"Project{index}/M.fs", $"Project{index}/A.fs"];
-                var options = simple
-                    ? ProjectFileParser.ParseSimpleFSharpSemanticOptions(path, xml, "net10.0", "net10.0", expected, null, default)
-                    : ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(path, xml, "net10.0", "net10.0", importResolver: _ => props);
-                Assert.Null(options.Error);
-                Assert.Equal(expected, options.SourceFiles);
-            }
-            return watch.Elapsed.TotalMilliseconds;
-        }
-        Run(false);
-        Run(true);
-        double evaluated = Run(false), simple = Run(true);
-        output.WriteLine($"50-project in-memory projection only, warmed: evaluated={evaluated:F2} ms; simple={simple:F2} ms. Not an index/FCS/end-to-end or monolith benchmark.");
+        string[] expected = ["Core/Z.fs", "Core/M.fs", "Core/A.fs"];
+        var simple = ProjectFileParser.ParseSimpleFSharpSemanticOptions("Core/Core.fsproj", xml,
+            "net10.0", "net10.0", expected, null, default);
+        var evaluated = ProjectFileParser.ParseFSharpSemanticOptionsSnapshot("Core/Core.fsproj", xml,
+            "net10.0", "net10.0", importResolver: _ =>
+                "<Project><PropertyGroup><Deployment>true</Deployment></PropertyGroup></Project>");
+        Assert.Null(simple.Error);
+        Assert.Null(evaluated.Error);
+        Assert.Equal(expected, simple.SourceFiles);
+        Assert.Equal(expected, evaluated.SourceFiles);
     }
 }

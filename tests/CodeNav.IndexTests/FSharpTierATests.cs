@@ -505,7 +505,8 @@ public class FSharpTierATests
                     project => project.Name == "Streams.Core");
             }
 
-            using var manager = new IndexManager(root, dbPath);
+            using var manager = new IndexManager(root, dbPath,
+                fsharpProjectModel: ProjectModelMode.Evaluated);
             manager.Start();
             IndexManagerTestSupport.WaitUntilReady(manager, TimeSpan.FromSeconds(30),
                 "mixed-language index did not finish its startup freshness sweep");

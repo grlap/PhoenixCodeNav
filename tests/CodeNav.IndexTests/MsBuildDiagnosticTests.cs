@@ -183,13 +183,13 @@ public sealed class MsBuildDiagnosticTests
             File.WriteAllText(Path.Combine(root, "Marker.props"),
                 "<Project><PropertyGroup><Imported>true</Imported></PropertyGroup></Project>");
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using (var store = new IndexStore(db, createNew: false))
             {
                 File.WriteAllText(Path.Combine(root, "Directory.Build.targets"), target + "\n");
-                DeltaRefresher.Refresh(store, root, ["Directory.Build.targets"]);
+                DeltaRefresher.Refresh(store, root, ["Directory.Build.targets"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             }
-            using (var manager = new IndexManager(root, db))
+            using (var manager = new IndexManager(root, db, fsharpProjectModel: ProjectModelMode.Evaluated))
             {
                 manager.Start();
                 Assert.True(SpinWait.SpinUntil(() => manager.State == "ready", TimeSpan.FromSeconds(30)), manager.Health().Error);
@@ -219,6 +219,58 @@ public sealed class MsBuildDiagnosticTests
         finally
         {
             Environment.SetEnvironmentVariable(MsBuildDiagnosticSession.EnvironmentVariable, previous);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
+    [Fact]
+    public void DefaultSimpleBuildRefreshAndQueryNeverStartAdvancedDiagnostics()
+    {
+        const string modelVariable = "PHOENIX_FSHARP_PROJECT_MODEL";
+        string? previousModel = Environment.GetEnvironmentVariable(modelVariable);
+        string? previousDiagnostics = Environment.GetEnvironmentVariable(MsBuildDiagnosticSession.EnvironmentVariable);
+        string root = Directory.CreateTempSubdirectory("cn-simple-no-evaluation").FullName;
+        try
+        {
+            Environment.SetEnvironmentVariable(modelVariable, null);
+            Environment.SetEnvironmentVariable(MsBuildDiagnosticSession.EnvironmentVariable, "1");
+            const string project = """
+                <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
+                  <Import Project="Deploy.targets" Condition="'$(Imported)' != 'true'" />
+                </Project>
+                """;
+            File.WriteAllText(Path.Combine(root, "Core.fsproj"), project);
+            File.WriteAllText(Path.Combine(root, "Core.fs"), "module Core\nlet value = 42\nlet answer = value\n");
+            File.WriteAllText(Path.Combine(root, "Deploy.targets"),
+                "<Project><Target Name=\"Deploy\"><Message Text=\"not compiler input\" /></Target></Project>");
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using (var store = new IndexStore(db, createNew: false))
+            {
+                File.WriteAllText(Path.Combine(root, "Core.fsproj"), project + "\n");
+                DeltaRefresher.Refresh(store, root, ["Core.fsproj"]);
+            }
+            using (var manager = new IndexManager(root, db))
+            {
+                Assert.Equal(ProjectModelMode.Simple, manager.SelectedFSharpProjectModel);
+                manager.Start();
+                Assert.True(SpinWait.SpinUntil(() => manager.State == "ready", TimeSpan.FromSeconds(30)), manager.Health().Error);
+                using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
+                using var result = JsonDocument.Parse(new NavigationTools(manager, semantic)
+                    .SymbolAt("Core.fs", 3, 15, timeoutMs: 60_000));
+                Assert.True(result.RootElement.GetProperty("found").GetBoolean(), result.RootElement.ToString());
+                Assert.Equal("exact", result.RootElement.GetProperty("meta").GetProperty("confidence").GetString());
+            }
+            using var queries = new IndexQueries(db);
+            Assert.False(queries.EvaluatedFSharpInputsReady());
+            string telemetry = Path.Combine(root, ".codenav", "telemetry");
+            Assert.Empty(Directory.Exists(telemetry) ? Directory.GetFiles(telemetry, "msbuild-*.jsonl") : []);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(modelVariable, previousModel);
+            Environment.SetEnvironmentVariable(MsBuildDiagnosticSession.EnvironmentVariable, previousDiagnostics);
             TestWorkspaceCleanup.DeleteWorkspace(root);
         }
     }

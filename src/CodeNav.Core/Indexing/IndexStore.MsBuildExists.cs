@@ -4,6 +4,9 @@ namespace CodeNav.Core.Indexing;
 
 public sealed partial class IndexStore
 {
+    internal void ClearMsBuildExistsInputs(SqliteTransaction tx) =>
+        ExecTx(tx, "DELETE FROM msbuild_exists_inputs");
+
     internal List<(long Id, string Path, string Tfms, string Xml)> MsBuildExistsProjects(
         SqliteTransaction tx, HashSet<long>? owners)
     {

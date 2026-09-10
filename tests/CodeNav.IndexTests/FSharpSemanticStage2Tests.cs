@@ -393,16 +393,16 @@ public partial class FSharpSemanticStage2Tests
         public SemanticService Semantic => _semantic;
         public IndexManager Manager => _manager;
 
-        public static Fixture Create(string root, FSharpProjectModel? projectModel = null)
+        public static Fixture Create(string root, ProjectModelMode? projectModel = ProjectModelMode.Evaluated)
         {
             string dbPath = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, dbPath);
+            IndexBuilder.Build(root, dbPath, fsharpProjectModel: projectModel);
             return Start(root, dbPath, projectModel);
         }
 
-        public static Fixture Start(string root, string dbPath, FSharpProjectModel? projectModel = null)
+        public static Fixture Start(string root, string dbPath, ProjectModelMode? projectModel = ProjectModelMode.Evaluated)
         {
-            var manager = new IndexManager(root, dbPath);
+            var manager = new IndexManager(root, dbPath, fsharpProjectModel: projectModel);
             manager.Start();
             // Every fixture operation opens a protected semantic snapshot. Queryability precedes
             // completion of the mandatory startup sweep, so do not expose tests to the transient

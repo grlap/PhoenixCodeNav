@@ -148,7 +148,7 @@ public sealed class FSharpSingleFilePublishTests
                 cancellationToken: mcpTimeout.Token);
             JsonElement capabilities = await WaitForReadyAsync(client, TimeSpan.FromSeconds(60),
                 mcpTimeout.Token);
-            Assert.Equal("0.12.105", capabilities.GetProperty("version").GetString());
+            Assert.Equal("0.12.106", capabilities.GetProperty("version").GetString());
             int mcpPid = capabilities.GetProperty("runtime").GetProperty("processId").GetInt32();
             JsonElement detailedCapabilities = await CallJsonAsync(client,
                 "server_capabilities", new Dictionary<string, object?>
@@ -160,9 +160,9 @@ public sealed class FSharpSingleFilePublishTests
                     feature => feature.GetProperty("id").GetString() ==
                                "semantic-cold-start-phase-timing")
                 .GetProperty("summary").GetString()!;
-            Assert.Contains("present only when the call enters the C# semantic pipeline",
+            Assert.Contains("Omitted for F# and calls ending before the C# pipeline",
                 coldStartTiming);
-            Assert.Contains("F# semantic navigation", coldStartTiming);
+            Assert.Contains("Omitted for F#", coldStartTiming);
             JsonElement semantic = await CallJsonAsync(client, "symbol_at",
                 new Dictionary<string, object?>
                 {

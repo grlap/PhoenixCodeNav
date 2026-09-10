@@ -163,7 +163,7 @@ public partial class FSharpSemanticStage2Tests
             WriteProject(root, "Core/Core.fsproj", project);
             WriteProject(root, "Directory.Build.props", props);
             string db = IndexBuilder.DefaultDbPath(root);
-            IndexBuilder.Build(root, db);
+            IndexBuilder.Build(root, db, fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             using var store = new IndexStore(db, createNew: false);
             using var pinned = new IndexQueries(db, pinReadSnapshot: true);
             Assert.True(pinned.TryGetCapturedMsBuildFilePresence("Core/Web.config", out bool? initial));
@@ -185,7 +185,7 @@ public partial class FSharpSemanticStage2Tests
             Assert.Null(Current().Error);
             Assert.DoesNotContain("--define:SDK_FILE", Current().CommandLineArgs);
             WriteProject(root, "Core/Web.config", "<configuration />");
-            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Captured());
             Assert.Null(Current().Error);
             Assert.Contains("--define:SDK_FILE", Current().CommandLineArgs);
@@ -194,17 +194,17 @@ public partial class FSharpSemanticStage2Tests
 
             project = SdkContextProject("", sdk: null);
             WriteProject(root, "Core/Core.fsproj", project);
-            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Null(Captured());
             Assert.Equal("fsharp_semantic_condition_property_unresolved", Current().Error);
 
             project = SdkContextProject("");
             WriteProject(root, "Core/Core.fsproj", project);
-            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Core.fsproj"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(true, Captured());
             Assert.Contains("--define:SDK_FILE", Current().CommandLineArgs);
             File.Delete(Path.Combine(root, "Core", "Web.config"));
-            DeltaRefresher.Refresh(store, root, ["Core/Web.config"]);
+            DeltaRefresher.Refresh(store, root, ["Core/Web.config"], fsharpProjectModel: CodeNav.Core.Semantic.ProjectModelMode.Evaluated);
             Assert.Equal(false, Captured());
             Assert.Null(Current().Error);
             Assert.DoesNotContain("--define:SDK_FILE", Current().CommandLineArgs);

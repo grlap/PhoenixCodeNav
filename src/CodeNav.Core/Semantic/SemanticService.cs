@@ -248,12 +248,12 @@ public sealed partial class SemanticService : IDisposable
     private SemanticWorkspace? _workspace;
 
     public SemanticService(IndexManager manager, Action<string>? log = null,
-        bool enableRoslynPersistence = true, FSharpProjectModel? fsharpProjectModel = null)
+        bool enableRoslynPersistence = true, ProjectModelMode? fsharpProjectModel = null)
     {
         _manager = manager;
         _log = log ?? (_ => { });
         _enableRoslynPersistence = enableRoslynPersistence;
-        SelectedFSharpProjectModel = SelectFSharpProjectModel(fsharpProjectModel);
+        SelectedFSharpProjectModel = fsharpProjectModel ?? manager.SelectedFSharpProjectModel;
     }
 
     /// <summary>TEST SEAM (tof): invoked once per counted reference location with the running

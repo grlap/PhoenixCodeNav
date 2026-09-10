@@ -315,7 +315,7 @@ public sealed partial class SemanticService
                     "fsharp_workspace_dependents_not_scanned");
                 var externalCoverage = new FSharpReferencesCoverage(
                     null, 0, 0, 0, null, false, [], [],
-                    ApproximateModel: SelectedFSharpProjectModel == FSharpProjectModel.Simple);
+                    ApproximateModel: SelectedFSharpProjectModel == ProjectModelMode.Simple);
                 return BuildResult(externalCoverage, partialReason);
             }
 
@@ -607,9 +607,10 @@ public sealed partial class SemanticService
             bool incompleteExcluded = excluded.Any(entry =>
                 !entry.Reason.Equals("inactive_project_reference", StringComparison.Ordinal) &&
                 !entry.Reason.Equals("test_project", StringComparison.Ordinal));
-            bool workspaceComplete = candidateSetKnown && !deadlineExhausted &&
+            bool scansComplete = discoveryFailed.Count == 0 &&
+                                 potentialConsumersEvaluated == potentialConsumers && !deadlineExhausted &&
                                      declaringProjectsComplete && failed.Count == 0 &&
-                                     pending == 0 && !incompleteExcluded &&
+                                     candidates.Count == scanned + excluded.Count + failed.Count && !incompleteExcluded &&
                                      !quotationBodiesExcluded;
             if (deadlineExhausted)
                 partialReason = AppendPartialReason(partialReason,
@@ -636,14 +637,14 @@ public sealed partial class SemanticService
             var coverage = new FSharpReferencesCoverage(
                 candidateSetKnown ? candidates.Count : null,
                 scanned, excluded.Count, failed.Count, pending,
-                workspaceComplete, excluded, failed,
+                ScansComplete: scansComplete, Excluded: excluded, Failed: failed,
                 potentialConsumers, potentialConsumersEvaluated,
                 Math.Max(0, potentialConsumers - potentialConsumersEvaluated),
                 discoveryFailed,
                 declaringProjects.FirstOrDefault(),
                 declaringProjectStatus,
                 declaringProjectReason,
-                declaringProjects, ApproximateModel: SelectedFSharpProjectModel == FSharpProjectModel.Simple);
+                declaringProjects, ApproximateModel: SelectedFSharpProjectModel == ProjectModelMode.Simple);
             return BuildResult(coverage, partialReason);
 
             FSharpImplementationsResult BuildResult(

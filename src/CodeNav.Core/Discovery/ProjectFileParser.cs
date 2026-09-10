@@ -86,12 +86,12 @@ public sealed record FSharpSemanticOptionsSnapshot(
 
 /// <summary>
 /// Owns: reading a single .csproj/.fsproj (legacy or SDK style) into a ParsedProject without
-/// MSBuild evaluation — raw XML facts only, confidence "indexed" not "exact".
+/// MSBuild evaluation — raw XML facts only; compiler adapters own binding confidence.
 /// Does not own: file discovery, storage, or semantic project loading (M3).
 /// </summary>
 public static partial class ProjectFileParser
 {
-    private const int MaxSnapshotBytes = 16 * 1024 * 1024;
+    internal const int MaxSnapshotBytes = 16 * 1024 * 1024;
 
     private static readonly string[] TestPackageMarkers =
     {
@@ -155,30 +155,8 @@ public static partial class ProjectFileParser
     /// <summary>Parses a project from the exact bounded, no-follow byte snapshots captured by the
     /// indexer. The optional packages.config bytes participate in the same parse epoch.</summary>
     public static ParsedProject ParseSnapshot(string relPath, byte[] projectBytes,
-        byte[]? packagesConfigBytes = null)
-    {
-        string name = Path.GetFileNameWithoutExtension(relPath);
-        try
-        {
-            XDocument project = LoadSnapshotXml(projectBytes);
-            XDocument? packages = null;
-            if (packagesConfigBytes is not null)
-            {
-                try { packages = LoadSnapshotXml(packagesConfigBytes); }
-                catch { /* packages.config remains optional/partial */ }
-            }
-            return ParseDocuments(relPath, project, packages);
-        }
-        catch (Exception ex)
-        {
-            string language = ProjectLanguage(relPath);
-            return new ParsedProject(relPath, name, "unknown", null, "",
-                LooksLikeTestName(name), [], [], null, [], $"failed:{ex.GetType().Name}",
-                DefaultCompileItems: language == "cs",
-                CompileOwnershipComplete: language == "cs",
-                Language: language);
-        }
-    }
+        byte[]? packagesConfigBytes = null) =>
+        SimpleProjectModelBuilder.Build(relPath, projectBytes, packagesConfigBytes);
 
     /// <summary>
     /// Selects the F# parser switches that can change a syntax tree from the indexed .fsproj
@@ -213,6 +191,12 @@ public static partial class ProjectFileParser
             return new([], Error: "fsharp_project_options_unavailable");
         }
 
+        return ParseFSharpParsingOptionsSnapshot(doc, indexedTargetFrameworks, selectedTargetFramework);
+    }
+
+    internal static FSharpParsingOptionsSnapshot ParseFSharpParsingOptionsSnapshot(
+        XDocument doc, string indexedTargetFrameworks, string? selectedTargetFramework)
+    {
         XElement? root = doc.Root;
         if (root is null)
             return new([], Error: "fsharp_project_options_unavailable");
@@ -394,7 +378,7 @@ public static partial class ProjectFileParser
         Func<string, bool?>? existsResolver = null,
         string? workspaceRoot = null,
         string diagnosticOrigin = "snapshot")
-        => ParseFSharpSemanticOptionsSnapshotCore(relPath, projectXml,
+        => EvaluatedProjectModelBuilder.Build(relPath, projectXml,
             indexedTargetFrameworks, selectedTargetFramework, importResolver,
             importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
             directoryBuildTargetsPath, cancellationToken,
@@ -415,121 +399,12 @@ public static partial class ProjectFileParser
         bool hasAmbiguousDirectoryPackagesAuthority,
         Func<string, bool?>? existsResolver = null,
         string? workspaceRoot = null)
-        => ParseFSharpSemanticOptionsSnapshotCore(relPath, projectXml,
+        => EvaluatedProjectModelBuilder.Build(relPath, projectXml,
             indexedTargetFrameworks, selectedTargetFramework, importResolver,
             importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
             directoryBuildTargetsPath, cancellationToken,
             hasAmbiguousDirectoryBuildAuthority, hasAmbiguousDirectoryPackagesAuthority,
             budget, existsResolver, workspaceRoot, "semantic.query");
-
-    private static FSharpSemanticOptionsSnapshot ParseFSharpSemanticOptionsSnapshotCore(
-        string relPath, string projectXml, string indexedTargetFrameworks,
-        string selectedTargetFramework,
-        Func<string, string?>? importResolver,
-        Func<string, long?>? importSizeResolver,
-        string? directoryPackagesPropsPath,
-        string? directoryBuildPropsPath,
-        string? directoryBuildTargetsPath,
-        CancellationToken cancellationToken,
-        bool hasAmbiguousDirectoryBuildAuthority,
-        bool hasAmbiguousDirectoryPackagesAuthority,
-        FSharpSemanticEvaluationBudget budget,
-        Func<string, bool?>? existsResolver,
-        string? workspaceRoot, string diagnosticOrigin)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        FSharpParsingOptionsSnapshot selection = ParseFSharpParsingOptionsSnapshot(
-            relPath, projectXml, indexedTargetFrameworks, selectedTargetFramework);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (selection.Error is not null || selection.SelectedTargetFramework is null)
-        {
-            return new([], [], [], Path.GetFileNameWithoutExtension(relPath),
-                selectedTargetFramework, selection.PartialReason,
-                selection.Error ?? "fsharp_project_options_unavailable");
-        }
-        if (hasAmbiguousDirectoryBuildAuthority)
-        {
-            return new([], [], [], Path.GetFileNameWithoutExtension(relPath),
-                selection.SelectedTargetFramework, selection.PartialReason,
-                "fsharp_semantic_directory_build_ambiguous");
-        }
-        if (hasAmbiguousDirectoryPackagesAuthority)
-        {
-            return new([], [], [], Path.GetFileNameWithoutExtension(relPath),
-                selection.SelectedTargetFramework, selection.PartialReason,
-                "fsharp_semantic_directory_packages_ambiguous");
-        }
-
-        XDocument doc;
-        try
-        {
-            if (projectXml.Length > MaxSnapshotBytes)
-                throw new InvalidDataException("project XML exceeds the snapshot limit");
-            using var input = new StringReader(projectXml);
-            using XmlReader reader = XmlReader.Create(input, new XmlReaderSettings
-            {
-                DtdProcessing = DtdProcessing.Prohibit,
-                XmlResolver = null,
-                MaxCharactersInDocument = MaxSnapshotBytes,
-            });
-            doc = XDocument.Load(reader, LoadOptions.None);
-            cancellationToken.ThrowIfCancellationRequested();
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            return new([], [], [], Path.GetFileNameWithoutExtension(relPath),
-                selectedTargetFramework, selection.PartialReason,
-                "fsharp_project_options_unavailable");
-        }
-
-        XElement? root = doc.Root;
-        if (root is null)
-        {
-            return new([], [], [], Path.GetFileNameWithoutExtension(relPath),
-                selectedTargetFramework, selection.PartialReason,
-                "fsharp_project_options_unavailable");
-        }
-
-        using var diagnostics = Diagnostics.MsBuildDiagnosticSession.Start(workspaceRoot,
-            relPath, selection.SelectedTargetFramework, diagnosticOrigin);
-        var evaluator = new FSharpSemanticProjectEvaluator(relPath,
-            selection.SelectedTargetFramework,
-            selection.AvailableTargetFrameworks?.ToArray() ?? [], importResolver,
-            importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
-            directoryBuildTargetsPath, cancellationToken, budget, existsResolver, workspaceRoot, diagnostics);
-        FSharpSemanticEvaluation evaluation = evaluator.Evaluate(root);
-        cancellationToken.ThrowIfCancellationRequested();
-        diagnostics?.End(evaluation.Error, evaluation.PartialReason);
-        if (evaluation.Error is not null)
-        {
-            return new FSharpSemanticOptionsSnapshot([], evaluation.CommandLineArgs,
-                evaluation.HintPathReferences,
-                evaluation.AssemblyName, selection.SelectedTargetFramework,
-                evaluation.PartialReason ?? selection.PartialReason, evaluation.Error,
-                evaluation.BareReferences, evaluation.PackageReferences)
-            {
-                ProjectReferences = evaluation.ProjectReferences,
-                ProjectReferencesTransitive = evaluation.ProjectReferencesTransitive,
-                ExistsDependencies = evaluation.ExistsDependencies,
-            };
-        }
-
-        return new FSharpSemanticOptionsSnapshot(evaluation.SourceFiles,
-            evaluation.CommandLineArgs,
-            evaluation.HintPathReferences, evaluation.AssemblyName,
-            selection.SelectedTargetFramework, evaluation.PartialReason,
-            BareReferences: evaluation.BareReferences,
-            PackageReferences: evaluation.PackageReferences)
-        {
-            ProjectReferences = evaluation.ProjectReferences,
-            ProjectReferencesTransitive = evaluation.ProjectReferencesTransitive,
-            ExistsDependencies = evaluation.ExistsDependencies,
-        };
-    }
 
     private static bool IsKnownFSharpSemanticImport(string project)
     {
@@ -576,7 +451,7 @@ public static partial class ProjectFileParser
         return true;
     }
 
-    private static XDocument LoadSnapshotXml(byte[] bytes)
+    internal static XDocument LoadSnapshotXml(byte[] bytes)
     {
         if (bytes.Length > MaxSnapshotBytes)
             throw new InvalidDataException("project XML exceeds the snapshot limit");
@@ -590,7 +465,7 @@ public static partial class ProjectFileParser
         return XDocument.Load(reader, LoadOptions.None);
     }
 
-    private static ParsedProject ParseDocuments(string relPath, XDocument doc,
+    internal static ParsedProject ParseDocuments(string relPath, XDocument doc,
         XDocument? packagesConfig)
     {
         string name = Path.GetFileNameWithoutExtension(relPath);
@@ -746,7 +621,6 @@ public static partial class ProjectFileParser
     {
         string name = Path.GetFileNameWithoutExtension(relPath);
         string language = ProjectLanguage(relPath);
-        string projectDir = WorkspacePaths.ToGitPath(Path.GetDirectoryName(relPath) ?? "");
         XDocument doc;
         try
         {
@@ -768,6 +642,14 @@ public static partial class ProjectFileParser
                 Language: language);
         }
 
+        return ParseCompileShape(relPath, doc);
+    }
+
+    internal static ParsedProject ParseCompileShape(string relPath, XDocument doc)
+    {
+        string name = Path.GetFileNameWithoutExtension(relPath);
+        string language = ProjectLanguage(relPath);
+        string projectDir = WorkspacePaths.ToGitPath(Path.GetDirectoryName(relPath) ?? "");
         XElement? root = doc.Root;
         if (root is null)
         {
@@ -889,12 +771,12 @@ public static partial class ProjectFileParser
             compileOwnershipComplete, compileOperations, Language: language);
     }
 
-    private static string ProjectLanguage(string relPath) =>
+    internal static string ProjectLanguage(string relPath) =>
         Path.GetExtension(relPath).Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
             ? "fs"
             : "cs";
 
-    private static bool IsSdkProject(XElement root) =>
+    internal static bool IsSdkProject(XElement root) =>
         root.Attribute("Sdk") is not null ||
         root.Elements().Any(element => element.Name.LocalName == "Sdk") ||
         root.Descendants().Any(element => element.Name.LocalName == "Import" &&
@@ -1109,7 +991,7 @@ public static partial class ProjectFileParser
         return result.Count > 0 ? result : null;
     }
 
-    private static bool ContainsMsBuildExpression(string value) =>
+    internal static bool ContainsMsBuildExpression(string value) =>
         value.Contains("$(", StringComparison.Ordinal) ||
         value.Contains("@(", StringComparison.Ordinal) ||
         value.Contains("%(", StringComparison.Ordinal);
@@ -1162,7 +1044,7 @@ public static partial class ProjectFileParser
     private static bool IsConditionedOrTargetScoped(XElement e) =>
         e.AncestorsAndSelf().Any(a => a.Attribute("Condition") is not null || a.Name.LocalName == "Target");
 
-    private static bool LooksLikeTestName(string name) =>
+    internal static bool LooksLikeTestName(string name) =>
         TestNameSuffixes.Any(s => name.EndsWith(s, StringComparison.OrdinalIgnoreCase));
 
     private static string? Prop(XElement root, string localName) =>
