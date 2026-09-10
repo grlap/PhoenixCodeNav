@@ -195,7 +195,7 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Theory]
-    [InlineData("SFMC_MONOLITH_VSTOOLS_PATH")]
+    [InlineData("SFMC_MONOREPO_VSTOOLS_PATH")]
     [InlineData("OptionalBuildToolsRoot")]
     public void AbsentOptionalBuildToolsGuardSkipsEarlyPropertyGroup(string propertyName)
     {

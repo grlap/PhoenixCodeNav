@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using CodeNav.Core.Discovery;
 using CodeNav.Core.Indexing;
 using CodeNav.Core.Semantic;
@@ -153,6 +154,52 @@ public partial class FSharpSemanticStage2Tests
         }
         finally { Cleanup(root); }
     }
+
+    [Fact]
+    public void SimplePackageOnlyNavigationReportsPackageSnapshotsWithoutHintPathProvenance()
+    {
+        string root = Directory.CreateTempSubdirectory("cn-simple-package-only").FullName;
+        try
+        {
+            const string packageId = "System.IO.Hashing";
+            const string packageVersion = "10.0.10";
+            // Keep this pinned version in sync with CodeNav.Core.csproj. Read the restored cache;
+            // this test does not restore a fixture project.
+            string packageDll = Path.Combine(ReferenceAssemblyLocator.GlobalPackagesRoot(),
+                packageId.ToLowerInvariant(), packageVersion, "lib", "net462", "System.IO.Hashing.dll");
+            Assert.True(File.Exists(packageDll),
+                $"The solution restore must provide the package fixture: {packageDll}");
+            WriteProject(root, "Core/Core.fsproj", SdkProjectWithBody("net10.0", """
+                <ItemGroup><Compile Include="Use.fs" />
+                  <PackageReference Include="System.IO.Hashing" Version="10.0.10" />
+                </ItemGroup>
+                """));
+            WriteProject(root, "Core/Use.fs", """
+                namespace PackageConsumer
+                open System.IO.Hashing
+                module Use =
+                    let hasher = XxHash64()
+                """);
+            Assert.False(File.Exists(Path.Combine(root, "Core", "obj", "project.assets.json")));
+            using var fixture = Fixture.Create(root, ProjectModelMode.Simple);
+            var response = Parse(CallSemantic(() => fixture.Tools.SymbolAt(
+                "Core/Use.fs", 4, 19, timeoutMs: 60_000)));
+            Assert.False(response.TryGetProperty("error", out _), response.ToString());
+            Assert.True(response.GetProperty("found").GetBoolean(), response.ToString());
+            Assert.Equal("XxHash64", response.GetProperty("symbol").GetProperty("name").GetString());
+            Assert.Equal(packageId, response.GetProperty("symbol").GetProperty("assembly").GetString());
+            Assert.Equal("exact", response.GetProperty("meta").GetProperty("confidence").GetString());
+            string? reasons = response.GetProperty("partialReason").GetString();
+            Assert.Contains(ProjectFileParser.SimpleFSharpProjectModelReason, reasons);
+            Assert.Contains("fsharp_semantic_simple_package_heuristic", reasons);
+            Assert.Contains("fsharp_package_references_snapshotted", reasons);
+            Assert.DoesNotContain("fsharp_binary_references_snapshotted", reasons);
+            Assert.DoesNotContain("fsharp_simple_package_reference_unavailable", reasons);
+            Assert.DoesNotContain("fsharp_semantic_diagnostics_present", reasons);
+        }
+        finally { Cleanup(root); }
+    }
+
     [Fact]
     public void SimpleProjectModelDisclosesPackageHeuristicsWithoutBlockingLocalNavigation()
     {
@@ -188,6 +235,39 @@ public partial class FSharpSemanticStage2Tests
 [Collection(CSharpCpmEnvironmentIsolationCollection.Name)]
 public sealed class FSharpProjectModelEnvironmentTests
 {
+    [Theory]
+    [InlineData(" EVALUATED ", ProjectModelMode.Evaluated, false)]
+    [InlineData(" SiMpLe ", ProjectModelMode.Simple, false)]
+    [InlineData("not-a-model", ProjectModelMode.Simple, true)]
+    public void ProjectModelEnvironmentRecognizesTrimmedCaseVariantsAndWarnsOnInvalidValues(
+        string configured, ProjectModelMode expected, bool warns)
+    {
+        const string variable = "PHOENIX_FSHARP_PROJECT_MODEL";
+        string? previous = Environment.GetEnvironmentVariable(variable);
+        string root = Directory.CreateTempSubdirectory("cn-fs-model-value").FullName;
+        try
+        {
+            Environment.SetEnvironmentVariable(variable, configured);
+            var log = new ConcurrentQueue<string>();
+            using var manager = new IndexManager(root, log: log.Enqueue);
+            using var semantic = new SemanticService(manager, enableRoslynPersistence: false);
+            Assert.Equal(expected, manager.SelectedFSharpProjectModel);
+            Assert.Equal(expected, semantic.SelectedFSharpProjectModel);
+            string[] warnings = log.ToArray().Where(message => message.Contains(
+                "Unrecognized PHOENIX_FSHARP_PROJECT_MODEL", StringComparison.Ordinal)).ToArray();
+            if (warns)
+                Assert.Equal("Unrecognized PHOENIX_FSHARP_PROJECT_MODEL; using simple. Expected simple or evaluated.",
+                    Assert.Single(warnings));
+            else
+                Assert.Empty(warnings);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, previous);
+            TestWorkspaceCleanup.DeleteWorkspace(root);
+        }
+    }
+
     [Fact]
     public void SimpleProjectModelSelectionIsCapturedOnceAndExplicitConstructorWins()
     {

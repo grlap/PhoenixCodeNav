@@ -323,14 +323,15 @@ public sealed partial class IndexQueries : IDisposable
         }
     }
 
-    /// <summary>Reads the persisted index identity through this connection (and therefore through
-    /// the same pinned transaction when this is a review snapshot). Followers use this instead of
-    /// a writer-process cache, which cannot observe another process's refresh epoch.</summary>
-    // The readiness bit and the facts it governs use this connection's SAME pinned epoch.
+    /// <summary>Reads evaluated F# input readiness through the same connection and pinned epoch
+    /// as the captured facts it governs.</summary>
     internal bool EvaluatedFSharpInputsReady(CancellationToken cancellationToken = default) =>
         QueryCancellable("SELECT value FROM meta WHERE key='fsharp_evaluated_inputs'",
             reader => reader.GetString(0), cancellationToken).FirstOrDefault() == "ready";
 
+    /// <summary>Reads the persisted index identity through this connection (and therefore through
+    /// the same pinned transaction when this is a review snapshot). Followers use this instead of
+    /// a writer-process cache, which cannot observe another process's refresh epoch.</summary>
     internal IndexMetadataSnapshot ReadMetadata(CancellationToken cancellationToken = default)
     {
         const string sql =

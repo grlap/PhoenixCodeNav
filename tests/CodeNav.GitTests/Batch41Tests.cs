@@ -25,8 +25,12 @@ public class Batch41Tests
 {
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
 
-    [Fact]
-    public void WorktreeSeedRecapturesRootSensitiveExistsWithNoProjectChanges()
+    [Theory]
+    [InlineData(true, ProjectModelMode.Evaluated)]
+    [InlineData(false, ProjectModelMode.Evaluated)]
+    [InlineData(false, ProjectModelMode.Simple)]
+    public void WorktreeSeedRecapturesRootSensitiveExistsWithNoProjectChanges(
+        bool throughManager, ProjectModelMode siblingModel)
     {
         Assert.True(GitInfo.GitAvailable, "This regression requires Git.");
         if (OperatingSystem.IsMacOS()) return; // Existing worktree publication platform policy.
@@ -68,14 +72,17 @@ public class Batch41Tests
             Assert.True(main.TryGetCapturedMsBuildFilePresence("Core/seed/web.config", out bool? seed));
             Assert.Equal(false, seed);
             Assert.False(main.TryGetCapturedMsBuildFilePresence("Core/target/web.config", out _));
-            var result = manager.EnsureWorktreeIndex(wt, "auto", _ => { });
+            var result = throughManager
+                ? manager.EnsureWorktreeIndex(wt, "auto", _ => { })
+                : WorktreeIndexer.Ensure(root, db, wt, "auto", siblingModel, _ => { });
             Assert.Equal("created", result.Action);
             if (OperatingSystem.IsWindows()) Assert.False(result.UsedFullSweep);
             using var sibling = new IndexQueries(IndexBuilder.DefaultDbPath(wt));
-            Assert.True(sibling.EvaluatedFSharpInputsReady());
+            bool evaluated = siblingModel == ProjectModelMode.Evaluated;
+            Assert.Equal(evaluated, sibling.EvaluatedFSharpInputsReady());
             Assert.Equal(wt, sibling.ReadMetadata().WorkspaceRoot);
-            Assert.True(sibling.TryGetCapturedMsBuildFilePresence("Core/target/web.config", out bool? target));
-            Assert.Equal(false, target);
+            Assert.Equal(evaluated, sibling.TryGetCapturedMsBuildFilePresence("Core/target/web.config", out bool? target));
+            Assert.Equal(evaluated ? false : (bool?)null, target);
             Assert.False(sibling.TryGetCapturedMsBuildFilePresence("Core/seed/web.config", out _));
             Assert.True(main.TryGetCapturedMsBuildFilePresence("Core/seed/web.config", out seed));
             Assert.Equal(false, seed);
@@ -158,7 +165,7 @@ public class Batch41Tests
 
             var listed = GitInfo.Worktrees(co)!;
             var bareEntry = listed.First(w => w.Head is null);
-            var result = WorktreeIndexer.Ensure(co, coDb, bareEntry.Path, "auto", _ => { });
+            var result = WorktreeIndexer.Ensure(co, coDb, bareEntry.Path, "auto", ProjectModelMode.Simple, _ => { });
             Assert.Equal("worktree_not_indexable", result.Action);
             Assert.False(Directory.Exists(Path.Combine(bare, ".codenav")),
                 "nothing may be written into the bare repository directory");
@@ -560,7 +567,7 @@ public class Batch41Tests
             Assert.Equal("bad_request",
                 Parse(tools.IndexWorktree(invalidPath)).GetProperty("error").GetString());
             Assert.Equal("bad_request",
-                WorktreeIndexer.Ensure(root, db, invalidPath, "auto", _ => { }).Action);
+                WorktreeIndexer.Ensure(root, db, invalidPath, "auto", ProjectModelMode.Simple, _ => { }).Action);
 
             // Ownership honesty is Phoenix-to-Phoenix, not inferred from SQLite/native sharing.
             Parse(tools.IndexWorktree(wt)); // seed it first
@@ -596,7 +603,7 @@ public class Batch41Tests
                 using (foreignClaim!)
                 {
                     WorktreeIndexResult lockedByClaim = WorktreeIndexer.Ensure(
-                        root, db, wt, "refresh", _ => { });
+                        root, db, wt, "refresh", ProjectModelMode.Simple, _ => { });
                     Assert.Equal("worktree_index_locked", lockedByClaim.Action);
                 }
                 Cleanup(foreignRoot);
@@ -666,7 +673,7 @@ public class Batch41Tests
             string mainDb = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, mainDb);
             Assert.Equal("created", WorktreeIndexer.Ensure(
-                root, mainDb, wt, "create", _ => { }).Action);
+                root, mainDb, wt, "create", ProjectModelMode.Simple, _ => { }).Action);
 
             string wtDb = IndexBuilder.DefaultDbPath(wt);
             writer = new IndexManager(wt, wtDb);
@@ -702,7 +709,7 @@ public class Batch41Tests
                 Assert.True(releaseInstall.Wait(TimeSpan.FromSeconds(15)));
             };
             refresh = Task.Run(() => WorktreeIndexer.Ensure(
-                root, mainDb, wt, "refresh", publicationLog.Enqueue));
+                root, mainDb, wt, "refresh", ProjectModelMode.Simple, publicationLog.Enqueue));
 
             Assert.True(installReached.Wait(TimeSpan.FromSeconds(15)),
                 "worktree refresh never reached its claimed publication boundary");
@@ -832,7 +839,7 @@ public class Batch41Tests
             Assert.False(linked.HasIndex);
 
             WorktreeIndexResult result = WorktreeIndexer.Ensure(
-                mainWorkspace, mainDb, siblingWorkspace, "create", _ => { });
+                mainWorkspace, mainDb, siblingWorkspace, "create", ProjectModelMode.Simple, _ => { });
             Assert.Equal("worktree_not_indexable", result.Action);
             Assert.Equal("external-marker", File.ReadAllText(marker));
             Assert.False(File.Exists(Path.Combine(externalIndexDirectory, "index.db")));
@@ -873,7 +880,7 @@ public class Batch41Tests
             CreateJunction(junction, external);
 
             WorktreeIndexResult result = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "create", _ => { });
+                root, mainDb, wt, "create", ProjectModelMode.Simple, _ => { });
             Assert.Equal("worktree_not_indexable", result.Action);
             Assert.Equal("external-marker", File.ReadAllText(marker));
             Assert.False(File.Exists(Path.Combine(external, "index.db")));
@@ -904,7 +911,7 @@ public class Batch41Tests
             IndexBuilder.Build(root, mainDb);
             var seedLogs = new List<string>();
             WorktreeIndexResult seed = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "create", seedLogs.Add);
+                root, mainDb, wt, "create", ProjectModelMode.Simple, seedLogs.Add);
             Assert.True(seed.Action == "created",
                 $"{seed.Action}: {seed.Detail}; {string.Join(" | ", seedLogs)}");
             string wtDb = IndexBuilder.DefaultDbPath(wt);
@@ -920,9 +927,9 @@ public class Batch41Tests
                 "child Phoenix never opened the target WAL");
 
             WorktreeIndexResult create = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "create", _ => { });
+                root, mainDb, wt, "create", ProjectModelMode.Simple, _ => { });
             WorktreeIndexResult refresh = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "refresh", _ => { });
+                root, mainDb, wt, "refresh", ProjectModelMode.Simple, _ => { });
             Assert.Equal("worktree_index_locked", create.Action);
             Assert.Equal("worktree_index_locked", refresh.Action);
             Assert.True(File.Exists(wtDb));
@@ -932,7 +939,7 @@ public class Batch41Tests
             Assert.True(WaitUntil(() => !IndexOwnershipLease.IsHeld(wt, wtDb), 10_000),
                 "kernel did not release the ownership lease after process death");
             WorktreeIndexResult recovered = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "refresh", _ => { });
+                root, mainDb, wt, "refresh", ProjectModelMode.Simple, _ => { });
             // Stale-test repair: this fixture starts the child with --standalone, so it is the only
             // lease owner. Once the crashed process releases that kernel lease, recovery is the
             // established contract. The two pre-crash assertions above preserve the still-live
@@ -1009,7 +1016,7 @@ public class Batch41Tests
                 Directory.CreateSymbolicLink(indexDirectory, external);
             };
             WorktreeIndexResult result = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "create", _ => { });
+                root, mainDb, wt, "create", ProjectModelMode.Simple, _ => { });
 
             Assert.Equal("worktree_not_indexable", result.Action);
             Assert.Equal("external-marker", File.ReadAllText(marker));
@@ -1078,7 +1085,7 @@ public class Batch41Tests
                 CreateJunction(indexDirectory, external); // move slipped the pin: finish the swap
             };
             WorktreeIndexResult result = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "create", _ => { });
+                root, mainDb, wt, "create", ProjectModelMode.Simple, _ => { });
 
             Assert.True(replacementBlocked,
                 "the pinned destination must deny rename/replacement until install completes");
@@ -1155,7 +1162,7 @@ public class Batch41Tests
             }
 
             WorktreeIndexResult result = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "create", _ => { });
+                root, mainDb, wt, "create", ProjectModelMode.Simple, _ => { });
             Assert.Equal("created", result.Action);
             Assert.True(result.UsedFullSweep);
             using var queries = new IndexQueries(IndexBuilder.DefaultDbPath(wt));
@@ -1203,7 +1210,7 @@ public class Batch41Tests
             IndexBuilder.Build(root, mainDb);
             var seedLog = new List<string>();
             WorktreeIndexResult seed = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "create", seedLog.Add);
+                root, mainDb, wt, "create", ProjectModelMode.Simple, seedLog.Add);
             Assert.True(seed.Action == "created",
                 $"{seed.Action}: {seed.Detail}; {string.Join(" | ", seedLog)}");
 
@@ -1218,7 +1225,7 @@ public class Batch41Tests
             var log = new List<string>();
 
             WorktreeIndexResult result = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "refresh", log.Add);
+                root, mainDb, wt, "refresh", ProjectModelMode.Simple, log.Add);
 
             Assert.Equal("refreshed", result.Action);
             Assert.False(File.Exists(stage));
@@ -1596,7 +1603,7 @@ public class Batch41Tests
             string mainDb = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, mainDb);
             Task<WorktreeIndexResult> reconcile = Task.Run(() => WorktreeIndexer.Ensure(
-                root, mainDb, wt, "create", _ => { }));
+                root, mainDb, wt, "create", ProjectModelMode.Simple, _ => { }));
             WorktreeIndexResult result = await reconcile.WaitAsync(TimeSpan.FromSeconds(20));
             Assert.Equal(IndexManager.RefreshInputOversizedCause, result.Action);
             Assert.True(result.UsedFullSweep);
@@ -1712,7 +1719,7 @@ public class Batch41Tests
             };
 
             WorktreeIndexResult result = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "create", _ => { });
+                root, mainDb, wt, "create", ProjectModelMode.Simple, _ => { });
 
             Assert.Equal("snapshot_failed", result.Action);
             Assert.Equal("external-marker", File.ReadAllText(marker));
@@ -1751,7 +1758,7 @@ public class Batch41Tests
             };
 
             WorktreeIndexResult result = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "create", _ => { });
+                root, mainDb, wt, "create", ProjectModelMode.Simple, _ => { });
             Assert.Equal("snapshot_failed", result.Action);
             Assert.False(File.Exists(external));
             // The hostile planted journal link is intentionally retained for exact fixture
@@ -1802,7 +1809,7 @@ public class Batch41Tests
             };
 
             WorktreeIndexResult result = WorktreeIndexer.Ensure(
-                root, mainDb, wt, "create", _ => { });
+                root, mainDb, wt, "create", ProjectModelMode.Simple, _ => { });
 
             Assert.Equal("snapshot_failed", result.Action);
             Assert.Equal("external-owner", File.ReadAllText(plantedSidecar));

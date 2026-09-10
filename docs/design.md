@@ -93,7 +93,7 @@ Readiness and facts publish atomically and queries read both from one pinned sna
 An evaluated query without prepared facts returns `fsharp_evaluated_inputs_not_ready`:
 restart the daemon in evaluated mode and let its startup sweep complete. A service override
 does not reconfigure the index writer. Mode toggles do not otherwise require a full index rebuild.
-C# composition is unchanged. No monolith latency measurement or general import-parity claim is made.
+C# composition is unchanged. No monorepo latency measurement or general import-parity claim is made.
 
 The common builder owns bounded XML loading and raw input projection; FCS-specific source
 ordering and parse switches are its adapter. One XML document feeds those projections. SDK projects
@@ -694,7 +694,7 @@ from the context. `partial:true` and `partialReason` remain visible independentl
 | `fsharp_semantic_toolchain_implicit_authority` | exact | The selected recognized compiler toolchain supplied disclosed implicit authority. |
 | `fsharp_core_reference_defaulted` | exact | The selected context used the expected `FSharp.Core` default without host fallback. |
 | `fsharp_binary_references_snapshotted` | exact | Binary inputs were copied and verified as immutable request evidence. |
-| `fsharp_package_references_snapshotted` | exact | Restored package inputs were copied and verified as immutable request evidence. |
+| `fsharp_package_references_snapshotted` | exact | Evaluated mode records declared restored package references, even when the selected package set has no compile assets; Simple mode records actual cache-heuristic DLL copies. Any selected package compile assets are copied and verified as immutable request evidence. |
 | `fsharp_workspace_dependents_not_scanned` | exact | The selected-context result is compiler-exact; this operation-neutral references/implementations/callers token separately discloses that its workspace total is a lower bound. |
 | `fsharp_workspace_deadline` | exact | Completely scanned project groups remain compiler-exact, while unvisited dependents make the workspace total a lower bound. |
 | `fsharp_workspace_dependent_failed` | exact | A dependent context failed independently; successful groups remain compiler-exact and the failed group is attributed. |

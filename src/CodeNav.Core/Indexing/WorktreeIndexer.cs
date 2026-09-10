@@ -120,13 +120,10 @@ public static class WorktreeIndexer
 
     /// <summary>Create (seed from a snapshot of <paramref name="mainDbPath"/>) or refresh the
     /// index of ONE sibling worktree. Mode: 'auto' (create when missing or schema-stale, else
-    /// refresh), 'create' (recreate from a fresh seed), 'refresh' (existing only).</summary>
+    /// refresh), 'create' (recreate from a fresh seed), 'refresh' (existing only).
+    /// The caller supplies the owning index manager's captured F# project model; this entry
+    /// point never resolves the model from the process environment.</summary>
     public static WorktreeIndexResult Ensure(
-        string mainRoot, string mainDbPath, string worktreePath, string mode, Action<string> log) =>
-        Ensure(mainRoot, mainDbPath, worktreePath, mode,
-            Semantic.FSharpProjectModelConfiguration.Select(null, log), log);
-
-    internal static WorktreeIndexResult Ensure(
         string mainRoot, string mainDbPath, string worktreePath, string mode,
         Semantic.ProjectModelMode fsharpProjectModel, Action<string> log)
     {
