@@ -337,6 +337,31 @@ re-harvests newly reachable `Exists` dependencies under the same cold/delta/quer
 including those reached after admitting copy-local project metadata and the path context below.
 Numeric limits are unchanged.
 
+Since v0.12.103, an exact `Import` guard comparing one absent user property to `true` with
+`!=` may select an assumed-empty analysis context, in either operand order. The resolved
+imported document must itself contain a direct unconditional `PropertyGroup` assignment of
+that property to literal `true`; conditional assignments, nested imports, arbitrary switches
+without that assignment, and `== ''` guards gain no exemption. Normal evaluation wins for
+assigned values, including empty and incomplete values; known built-ins are never defaulted.
+This is not detected SDK, command-line, or environment state: an external assignment can
+change the real build's import decision. Public `fsharp_semantic_import_property_assumed_empty`
+discloses that limitation with `indexed` confidence. The assumed value never enters the property
+bag or the invariant-false proof. The file's actual assignment determines later import guards;
+neither duplicate-import suppression nor repeated-import idempotence is assumed.
+
+Import relevance discovery still retains every `Import` attribute's property dependencies.
+Relevance is distinct from item-phase consumption: successfully admitted live `Compile`,
+`Reference`, and `ProjectReference` items freeze their read property names (own attributes,
+child metadata, and enclosing item-group conditions). Later writes to those names remain
+`fsharp_semantic_evaluation_order_unsupported`; unrelated assignments, including import markers,
+may proceed. Directory.Build.targets relevance filtering includes these consumed names, even
+when they occur only in child metadata. Item-name matching follows the case-insensitive dispatch.
+A property alias is a captured scalar, not a live link to its earlier RHS.
+Unknown read syntax, potentially-live skipped items/groups, and semantic `Choose` paths retain
+the conservative ordering barrier. This remains a bounded sequential projection, not full
+MSBuild property/item evaluation. C# is unchanged. Schema v41 re-harvests the newly reachable
+F# `Exists` dependencies with the same cold/delta/query policy; numeric limits are unchanged.
+
 The shared Core path resolver supplies six root-project properties: `MSBuildProjectDirectory`,
 `MSBuildProjectDirectoryNoRoot`, `MSBuildProjectFullPath`, `MSBuildProjectFile`,
 `MSBuildProjectName`, and `MSBuildProjectExtension`; and six current-document properties:
@@ -581,6 +606,7 @@ from the context. `partial:true` and `partialReason` remain visible independentl
 | --- | --- | --- |
 | `fsharp_semantic_sdk_implicit_authority` | exact | The selected standard SDK supplied disclosed implicit authority. |
 | `fsharp_semantic_default_context_assumed` | exact | Evaluation started with Phoenix's mutable Debug/AnyCPU analysis context before imports, not a detected build/IDE context; the reason persists after overrides or unused defaults. |
+| `fsharp_semantic_import_property_assumed_empty` | indexed | An absent import marker was assumed empty in the selected analysis context; the imported document sets the marker, but external SDK/global/environment assignments are not detected. |
 | `fsharp_semantic_toolchain_implicit_authority` | exact | The selected recognized compiler toolchain supplied disclosed implicit authority. |
 | `fsharp_core_reference_defaulted` | exact | The selected context used the expected `FSharp.Core` default without host fallback. |
 | `fsharp_binary_references_snapshotted` | exact | Binary inputs were copied and verified as immutable request evidence. |

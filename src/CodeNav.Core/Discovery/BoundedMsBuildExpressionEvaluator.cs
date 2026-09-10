@@ -269,6 +269,31 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         return true;
     }
 
+    /// <summary>Recognizes only the scalar shape; the caller must establish the imported
+    /// document's own marker assignment before selecting an assumed-empty import context.</summary>
+    public bool TryGetAbsentImportMarker(string condition, out string propertyName)
+    {
+        CheckCancellation();
+        propertyName = "";
+        if (!TryFindComparison(condition, out string left, out string op, out string right) ||
+            op != "!=" || !TryParseConditionOperand(left, out left) ||
+            !TryParseConditionOperand(right, out right)) return false;
+        string operand = left.Equals("true", StringComparison.OrdinalIgnoreCase) ? right :
+            right.Equals("true", StringComparison.OrdinalIgnoreCase) ? left : "";
+        Match match = PropertyReference.Match(operand);
+        if (!match.Success || match.Index != 0 || match.Length != operand.Length) return false;
+        string name = match.Groups["name"].Value;
+        if (_properties.ContainsKey(name) || BoundedMsBuildProjectContext.IsKnownProvidedProperty(name)) return false;
+        propertyName = name;
+        return true;
+    }
+
+    // Precision is opt-in. An item reader must keep its conservative ordering barrier when
+    // expression syntax cannot be described by the same supported property-token grammar.
+    internal bool HasKnownPropertyReadSyntax(string expression) =>
+        !ContainsUnsupportedExpansion(expression, allowItemReferences: false,
+            allowPropertyStringFunctions: true, preserveOpaqueItemAndMetadataReferences: false);
+
     public bool IsSelfDefaultCondition(string condition, string propertyName)
     {
         // The expansion exemption applies to the whole condition. Every occurrence of the

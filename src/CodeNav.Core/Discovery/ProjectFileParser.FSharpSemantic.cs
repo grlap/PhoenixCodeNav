@@ -155,7 +155,7 @@ public static partial class ProjectFileParser
             new(WorkspacePaths.FileSystemPathComparer);
 
         private bool _semanticItemPhaseStarted;
-        private bool _directSemanticItemPhaseStarted;
+        private bool _conservativeItemOrderBarrier;
         private string? _error;
 
         private readonly BoundedMsBuildProjectContext _pathContext;
@@ -405,14 +405,14 @@ public static partial class ProjectFileParser
         {
             if (!state.HasSemanticItemPhaseFacts || !ConditionMayDependOnProperties(choose)) return;
             _semanticItemPhaseStarted = true;
-            _directSemanticItemPhaseStarted |= state.HasDirectSemanticFacts;
+            _conservativeItemOrderBarrier |= state.HasDirectSemanticFacts;
         }
 
         protected override void OnChooseCompleted(XElement choose, FSharpChooseState state)
         {
             if (!state.HasSemanticItemPhaseFacts) return;
             _semanticItemPhaseStarted = true;
-            _directSemanticItemPhaseStarted |= state.HasDirectSemanticFacts;
+            _conservativeItemOrderBarrier |= state.HasDirectSemanticFacts;
         }
 
         private static bool IsDirectoryBuildRole(FSharpSemanticDocumentRole role) =>
@@ -464,10 +464,12 @@ public static partial class ProjectFileParser
             CheckCancellation();
             bool filterToReferenceInputs =
                 role == FSharpSemanticDocumentRole.DirectoryBuildTargets;
-            bool hasReferenceInputProperties = group.Elements().Any(property =>
-                    BoundedMsBuildProjectContext.IsReservedProperty(property.Name.LocalName) ||
-                    IsSemanticPropertyName(property.Name.LocalName) ||
-                    _directoryReferenceProperties.Contains(property.Name.LocalName));
+            bool IsReferenceInputProperty(XElement property) =>
+                BoundedMsBuildProjectContext.IsReservedProperty(property.Name.LocalName) ||
+                IsSemanticPropertyName(property.Name.LocalName) ||
+                _directoryReferenceProperties.Contains(property.Name.LocalName) ||
+                _referenceInputConsumedProperties.Contains(property.Name.LocalName);
+            bool hasReferenceInputProperties = group.Elements().Any(IsReferenceInputProperty);
             bool hasCompilerSchedulingProperties = group.Elements().Any(property =>
                 IsCompilerSchedulingPropertyName(property.Name.LocalName));
             if (filterToReferenceInputs && !hasReferenceInputProperties &&
@@ -487,7 +489,7 @@ public static partial class ProjectFileParser
             if (filterToReferenceInputs && !hasReferenceInputProperties) return;
 
             if (_semanticItemPhaseStarted && group.Elements().Any(property =>
-                    _directSemanticItemPhaseStarted ||
+                    _conservativeItemOrderBarrier ||
                     _referenceInputConsumedProperties.Contains(property.Name.LocalName)))
             {
                 _error = "fsharp_semantic_evaluation_order_unsupported";
@@ -497,10 +499,7 @@ public static partial class ProjectFileParser
             foreach (XElement property in group.Elements())
             {
                 CheckCancellation();
-                if (filterToReferenceInputs &&
-                    !BoundedMsBuildProjectContext.IsReservedProperty(property.Name.LocalName) &&
-                    !IsSemanticPropertyName(property.Name.LocalName) &&
-                    !_directoryReferenceProperties.Contains(property.Name.LocalName))
+                if (filterToReferenceInputs && !IsReferenceInputProperty(property))
                     continue;
                 if (!ShouldProcess(property, documentPath, out process)) return;
                 if (!process) continue;
@@ -554,7 +553,7 @@ public static partial class ProjectFileParser
                     ConditionMayDependOnProperties(group))
                 {
                     _semanticItemPhaseStarted = true;
-                    _directSemanticItemPhaseStarted = true;
+                    _conservativeItemOrderBarrier = true;
                 }
             }
 
@@ -584,12 +583,11 @@ public static partial class ProjectFileParser
                     if (ConditionMayDependOnProperties(item))
                     {
                         _semanticItemPhaseStarted = true;
-                        _directSemanticItemPhaseStarted = true;
+                        _conservativeItemOrderBarrier = true;
                     }
                     continue;
                 }
                 _semanticItemPhaseStarted = true;
-                _directSemanticItemPhaseStarted = true;
                 if (role == FSharpSemanticDocumentRole.DirectoryPackagesProps)
                 {
                     _error = "fsharp_semantic_central_package_management_unsupported";
@@ -628,7 +626,35 @@ public static partial class ProjectFileParser
                     _error = "fsharp_semantic_reference_unresolved";
                 }
                 if (_error is not null) return;
+                // Only admitted live forms can opt into precision. Imports consume properties
+                // during property evaluation, whereas these items must see final property values.
+                // Unknown expressions retain the blanket barrier; skipped/Choose paths above do too.
+                if (!RegisterSemanticItemPropertyReads(item, group))
+                    _conservativeItemOrderBarrier = true;
             }
+        }
+
+        private bool RegisterSemanticItemPropertyReads(XElement item, XElement group)
+        {
+            bool known = IsDirectSemanticItemName(item.Name.LocalName);
+            void Read(string? expression)
+            {
+                if (string.IsNullOrEmpty(expression)) return;
+                CheckCancellation();
+                // Supported helper aliases have already captured their property inputs when
+                // processed. Anything more elaborate than an exact @() token stays conservative.
+                string scalar = ItemReferenceOccurrence.Replace(expression, "");
+                known &= _expressions.HasKnownPropertyReadSyntax(scalar);
+                foreach (string name in BoundedMsBuildExpressionEvaluator.ReferencedPropertyNames(expression))
+                    _referenceInputConsumedProperties.Add(name);
+            }
+            Read(group.Attribute("Condition")?.Value);
+            foreach (XElement element in item.DescendantsAndSelf())
+            {
+                foreach (XAttribute attribute in element.Attributes()) Read(attribute.Value);
+                if (!element.HasElements) Read(element.Value);
+            }
+            return known;
         }
 
         private void ProcessProjectReference(XElement item, string documentPath)
@@ -1082,7 +1108,10 @@ public static partial class ProjectFileParser
             string? deferredConditionError = null;
             if (!ShouldProcess(import, documentPath, out bool process))
             {
-                if (!IsDirectoryPropsAuthorityRole(role)) return;
+                if (!IsDirectoryPropsAuthorityRole(role) &&
+                    !(_error == "fsharp_semantic_condition_property_unresolved" &&
+                      import.Attribute("Condition") is { } guard &&
+                      _expressions.TryGetAbsentImportMarker(guard.Value, out _))) return;
                 deferredConditionError = _error ??
                                          "fsharp_semantic_condition_unsupported";
                 _error = null;
@@ -1144,20 +1173,49 @@ public static partial class ProjectFileParser
             if (deferredConditionError is not null)
             {
                 if (TryResolveImportRoot(importPath, out XElement? deferredRoot) &&
-                    deferredRoot is not null &&
-                    !ContainsDirectoryBuildSemanticFacts(deferredRoot))
+                    deferredRoot is not null)
                 {
-                    _error = null;
+                    if (deferredConditionError == "fsharp_semantic_condition_property_unresolved" &&
+                        TryAssumeImportMarker(import, documentPath, deferredRoot))
+                    {
+                        deferredConditionError = null;
+                    }
+                    else if (IsDirectoryPropsAuthorityRole(role) &&
+                             !ContainsDirectoryBuildSemanticFacts(deferredRoot))
+                    {
+                        _error = null;
+                        return;
+                    }
+                }
+                if (deferredConditionError is not null)
+                {
+                    _error = deferredConditionError;
                     return;
                 }
-                _error = deferredConditionError;
-                return;
             }
             ProcessResolvedImport(importPath,
                 IsDirectoryPropsAuthorityRole(role)
                     ? role
                     : FSharpSemanticDocumentRole.ExplicitImport,
                 depth);
+        }
+
+        private bool TryAssumeImportMarker(XElement import, string documentPath, XElement importedRoot)
+        {
+            string condition = import.Attribute("Condition")!.Value;
+            if (!_expressions.TryGetAbsentImportMarker(condition, out string marker)) return false;
+            bool setsMarker = importedRoot.Elements().Where(group => group.Name.LocalName == "PropertyGroup").Any(group =>
+                group.Attributes().All(attribute => attribute.Name.LocalName == "Label") &&
+                group.Elements().Any(property =>
+                    property.Name.LocalName.Equals(marker, StringComparison.OrdinalIgnoreCase) &&
+                    !property.HasElements && property.Attributes().All(attribute => attribute.Name.LocalName == "Label") &&
+                    property.Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase)));
+            if (!setsMarker || !_expressions.TryEvaluateCondition(condition, documentPath,
+                    out bool process, out _, marker) || !process) return false;
+            // An explicit analysis assumption, not detected global/environment authority. Never
+            // seed it into the property bag or use it in the invariant-false item proof.
+            _partialReasons.Add("fsharp_semantic_import_property_assumed_empty");
+            return true;
         }
 
         private void ProcessResolvedImport(string importPath,
@@ -1630,10 +1688,13 @@ public static partial class ProjectFileParser
              name.Equals("CentralPackageVersionOverrideEnabled",
                  StringComparison.OrdinalIgnoreCase));
 
-        private static bool IsSemanticItemName(string? name) => name is not null &&
+        private static bool IsDirectSemanticItemName(string? name) => name is not null &&
             (name.Equals("Compile", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("Reference", StringComparison.OrdinalIgnoreCase) ||
-             name.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase) ||
+             name.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase));
+
+        private static bool IsSemanticItemName(string? name) => name is not null &&
+            (IsDirectSemanticItemName(name) ||
              name.Equals("PackageReference", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("GlobalPackageReference", StringComparison.OrdinalIgnoreCase) ||
              name.Equals("PackageVersion", StringComparison.OrdinalIgnoreCase) ||

@@ -288,7 +288,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("40", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("41", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -405,6 +405,8 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("fsharp-semantic-property-startswith", ids);
         Assert.Contains("fsharp-semantic-compound-self-defaults", ids);
         Assert.Contains("fsharp-semantic-default-configuration-platform", ids);
+        Assert.Contains("fsharp-semantic-import-markers", ids);
+        Assert.Contains("fsharp-semantic-item-property-reads", ids);
         Assert.Contains("fsharp-semantic-package-asset-closure", ids);
         Assert.Contains("csharp-semantic-central-package-management", ids);
         Assert.Contains("csharp-semantic-central-package-property-expansion", ids);
@@ -578,6 +580,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
             fsharpOwnerCoverage);
         Assert.Contains("incidences per affected file", fsharpOwnerCoverage);
         Assert.Contains("not distinct project identities", fsharpOwnerCoverage);
+        Assert.Contains("owners with none/some-but-not-all contexts retained respectively", fsharpOwnerCoverage);
         string fsharpSemanticConfidence = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -592,7 +595,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("errored", fsharpSemanticConfidence);
         Assert.Contains("removed from the context", fsharpSemanticConfidence);
         Assert.Contains("not yet classified", fsharpSemanticConfidence);
-        Assert.Contains("partial reasons remain visible", fsharpSemanticConfidence);
+        Assert.Contains("partial reasons remain visible in either case", fsharpSemanticConfidence);
         Assert.Contains("renamed fsharpSemanticTools", fsharpSemanticConfidence);
         string fsharpSnapshot = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
@@ -642,6 +645,16 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("VersionOverride", sharedPackages);
         Assert.Contains("GlobalPackageReference is restore-only, not compile", sharedPackages);
         Assert.Contains("caller authority/budgets retained", sharedPackages);
+        string importMarkers = Assert.Single(json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == "fsharp-semantic-import-markers")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("self-marked Import != true guards assume absent empty", importMarkers);
+        Assert.Contains("indexed disclosure", importMarkers);
+        string itemReads = Assert.Single(json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == "fsharp-semantic-item-property-reads")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("live items freeze consumed properties", itemReads);
+        Assert.Contains("unknown/skipped/Choose stay conservative", itemReads);
         string sharedSdkContext = Assert.Single(json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString() == "shared-semantic-sdk-context")
             .GetProperty("summary").GetString()!;
@@ -964,15 +977,15 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
             fsharpProjectReferenceClosure);
         Assert.Contains("legacy-style projects remain direct-only",
             fsharpProjectReferenceClosure);
-        Assert.Contains("child compiler errors retain their source paths",
+        Assert.Contains("child compiler errors retain source paths",
             fsharpProjectReferenceClosure);
         Assert.Contains("fsharp_semantic_diagnostics_present",
             fsharpProjectReferenceClosure);
         Assert.Contains("declarationsFromProjectReferenceClosureCount",
             fsharpProjectReferenceClosure);
-        Assert.Contains("declarationsOutsideSelectedProjectCount retains its not-returned meaning",
+        Assert.Contains("declarationsOutsideSelectedProjectCount stays not-returned",
             fsharpProjectReferenceClosure);
-        Assert.Contains("since v0.12.86 references can additionally scan workspace dependents",
+        Assert.Contains("v0.12.86 references also scan workspace dependents",
             fsharpProjectReferenceClosure);
         Assert.Contains("same-assembly", fsharpProjectReferenceClosure);
         string fsharpNetStandardCompatibility = Assert.Single(

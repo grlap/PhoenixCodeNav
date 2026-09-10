@@ -156,8 +156,10 @@ public static class IndexBuilder
     /// rebuild to recapture probes with the query-time proof and scalar-preserving conditions.
     /// v40: copy-local project metadata and assumed-empty optional PropertyGroup guards no longer
     /// stop F# evaluation; shared project/document path context also changes guards and normalized
-    /// Exists paths. Rebuild to capture these dependencies with the published workspace root.</summary>
-    public const string SchemaVersion = "40";
+    /// Exists paths. Rebuild to capture these dependencies with the published workspace root.
+    /// v41: assumed-empty import markers and live-item property-read tracking allow additional
+    /// F# imports and later properties; rebuild to harvest their persisted Exists dependencies.</summary>
+    public const string SchemaVersion = "41";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }
