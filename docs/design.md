@@ -39,6 +39,45 @@ different front end. `CodeNav.Mcp` is a thin protocol/shaping layer over it.
 
 ## The four navigation layers
 
+### Simple F# project-model pilot
+
+`SemanticService` can select `FSharpProjectModel.Simple` instead of the default `Evaluated`.
+An explicit constructor selection wins; otherwise `PHOENIX_FSHARP_PROJECT_MODEL=simple`
+is captured once when the service starts. `server_capabilities.semantic.fsharpProjectModel`
+reports the active model. Restart an existing workspace daemon to change its environment.
+
+This navigation-only pilot reuses `ParseSnapshot`, `ParseCompileShape`, and
+`ParseFSharpParsingOptionsSnapshot`, without running the additional import/condition evaluator.
+The same choice applies to the root, all F# closure children and dependent discovery.
+Indexed source candidates are selected by physical project ID, not shared AssemblyName;
+literal Compile items retain document order, while glob/default expansions use sorted paths.
+Conditions are not evaluated, imports contribute no inputs, and unrepresented expressions
+can be omitted. The old evaluated path and all index-time Exists capture remain unchanged;
+switching navigation models therefore requires no rebuild and does not change schema 41.
+
+Every successfully projected simple model carries `fsharp_semantic_simple_project_model`,
+which the closed confidence classifier maps to `indexed`. Reference counts describe the
+approximate compiler model, not a proven build. All four count operations (references,
+implementations, callers and body-local callees) return `totalIsApproximate: true`,
+`countScope: "approximate_project_model"`, and `coverage.approximateModel: true`.
+Core coverage derives workspace/body completeness from scan completion AND non-approximate
+model authority; completing every scan cannot make an approximate model complete. Dependent
+discovery cannot establish a proven candidate set in simple mode. Consumer-evaluation counts
+and group statuses still describe actual work within that model; missing imports are not
+invented evaluation failures. The response makes neither an exact build-total claim nor a
+`totalIsLowerBound` claim: ignored conditions can over-include while ignored imports can
+under-include. Evaluated-mode coverage and count fields remain unchanged.
+Direct package lookup reuses C#'s
+`ResolvePackageDll` and additionally discloses `fsharp_semantic_simple_package_heuristic`:
+it can fall back to a lexically highest cached version, select the first DLL under a fixed
+net472-ish TFM preference even for modern targets, and omit transitive assets. Missing bare
+or HintPath references and non-F# project references can be omitted. This is not restored
+package authority and must not be presented as such. Physical source/binary snapshots, FCS,
+framework availability and remaining closure budgets/refusals still apply. The pilot does
+not change C# composition, repair import semantics, or remove cold-index evaluation costs.
+
+### Layer responsibilities
+
 Agents use the cheapest layer that answers the question, preferring compiler-backed facts
 for code identifiers.
 
@@ -640,6 +679,8 @@ from the context. `partial:true` and `partialReason` remain visible independentl
 | `fsharp_workspace_unsupported_boundary` | exact | A non-F# project-reference path was excluded from dependent scanning. |
 | `fsharp_workspace_binary_dependents_not_scanned` | exact | An assembly/HintPath-coupled consumer was identified but cannot be proven from source ProjectReference authority. |
 | `fsharp_core_reference_host_fallback` | indexed | A host-selected `FSharp.Core` substituted for project authority. |
+| `fsharp_semantic_simple_project_model` | indexed | The opt-in simple model uses approximate raw project inputs without evaluating imports or conditions. |
+| `fsharp_semantic_simple_package_heuristic` | indexed | The simple model uses the C# direct-package DLL heuristic instead of restored asset authority; package versions, framework selection and transitive inputs may differ from the build. |
 | `fsharp_semantic_diagnostics_present` | indexed | Compiler errors mean the selected context did not close cleanly. |
 
 Successful responses use a closed partial-reason classifier: any unclassified partial reason is

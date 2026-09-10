@@ -28,6 +28,39 @@ repo's `CLAUDE.md` / `AGENTS.md` ·
 [`docs/agent-experience-roadmap.md`](docs/agent-experience-roadmap.md) — the prioritized product
 contract for the MCP's agent experience.
 
+## Simple F# navigation pilot
+
+To try the C#-like project model, start the Phoenix workspace daemon with
+`PHOENIX_FSHARP_PROJECT_MODEL=simple`. The usual `evaluated` model remains the default;
+unset the variable or use `evaluated` to switch back. Set it in the MCP server launch
+environment before starting Phoenix: proxy/bootstrap children inherit it, but an existing
+daemon must be restarted. `server_capabilities.semantic.fsharpProjectModel` confirms the
+model actually selected. The constructor's explicit model takes precedence over the environment.
+
+The pilot bypasses MSBuild import/condition evaluation for F# navigation and dependent discovery.
+It uses shared raw project parsing, indexed source membership, authored literal Compile order
+(glob/default expansions are alphabetical), literal parser options, and available references.
+Imports are **not evaluated**; conditioned includes can be over-included, and imported sources,
+references or defines can be missing. Results carry `fsharp_semantic_simple_project_model` and
+`indexed` confidence, even when FCS resolves a symbol. Counts describe this approximate model,
+not a proven reproduction of the build. Successful navigation does not prove import correctness.
+References, callers, callees and implementations expose `totalIsApproximate: true` and
+`countScope: "approximate_project_model"`. Their coverage has `approximateModel: true` and
+cannot claim workspace/body completeness. Counts can be too high or too low relative to the
+build, so they are not labelled `totalIsLowerBound`. Scan statuses and consumer-evaluation
+counters describe work performed within the selected model, not proof of build coverage.
+
+Package lookup reuses C#'s direct global-cache heuristic rather than requiring a verified restore
+closure; `fsharp_semantic_simple_package_heuristic` discloses its use. It can choose a different
+version (lexical directory ordering, not semantic version ordering), uses a fixed net472-ish
+framework preference even for modern targets, and does not close transitive package dependencies.
+Missing bare/binary references and non-F# project references may be omitted. Physical source and
+binary snapshot checks, FCS execution, and remaining closure/framework limits still apply.
+
+C# behavior and index-time MSBuild Exists capture are unchanged. This pilot compares navigation
+latency and usefulness; it does not speed up cold indexing. No index rebuild is needed to change
+the navigation model. Measure with MSBuild diagnostic logging disabled.
+
 ## MSBuild evaluation diagnostics
 
 For an F# project/import evaluation problem, set `PHOENIX_MSBUILD_DIAGNOSTICS=1` in the

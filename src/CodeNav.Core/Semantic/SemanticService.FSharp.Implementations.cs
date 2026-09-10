@@ -314,7 +314,8 @@ public sealed partial class SemanticService
                 partialReason = AppendPartialReason(partialReason,
                     "fsharp_workspace_dependents_not_scanned");
                 var externalCoverage = new FSharpReferencesCoverage(
-                    null, 0, 0, 0, null, false, [], []);
+                    null, 0, 0, 0, null, false, [], [],
+                    ApproximateModel: SelectedFSharpProjectModel == FSharpProjectModel.Simple);
                 return BuildResult(externalCoverage, partialReason);
             }
 
@@ -540,7 +541,7 @@ public sealed partial class SemanticService
                 potentialConsumers = discovery.PotentialConsumers;
                 potentialConsumersEvaluated = discovery.PotentialConsumersEvaluated;
                 discoveryFailed = discovery.Failed;
-                candidateSetKnown = discoveryFailed.Count == 0;
+                candidateSetKnown = discovery.CandidateSetKnown;
                 foreach (FSharpDependentCandidate candidate in candidates)
                 {
                     cts.Token.ThrowIfCancellationRequested();
@@ -642,7 +643,7 @@ public sealed partial class SemanticService
                 declaringProjects.FirstOrDefault(),
                 declaringProjectStatus,
                 declaringProjectReason,
-                declaringProjects);
+                declaringProjects, ApproximateModel: SelectedFSharpProjectModel == FSharpProjectModel.Simple);
             return BuildResult(coverage, partialReason);
 
             FSharpImplementationsResult BuildResult(

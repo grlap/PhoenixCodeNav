@@ -69,7 +69,7 @@ public sealed record FSharpReferencesCoverage(
     int DependentsExcluded,
     int DependentsFailed,
     int? DependentsPending,
-    bool WorkspaceComplete,
+    bool ScansComplete,
     List<FSharpDependentCoverageEntry> Excluded,
     List<FSharpDependentCoverageEntry> Failed,
     int PotentialConsumers = 0,
@@ -79,7 +79,12 @@ public sealed record FSharpReferencesCoverage(
     string? DeclaringProject = null,
     string? DeclaringProjectStatus = null,
     string? DeclaringProjectReason = null,
-    List<string>? DeclaringProjects = null);
+    List<string>? DeclaringProjects = null,
+    bool ApproximateModel = false)
+{
+    // Completing a scan of approximate inputs cannot prove real-workspace completeness.
+    public bool WorkspaceComplete => ScansComplete && !ApproximateModel;
+}
 
 public sealed partial class SemanticService
 {
@@ -119,7 +124,11 @@ public sealed partial class SemanticService
         List<FSharpDependentCandidate> Candidates,
         int PotentialConsumers,
         int PotentialConsumersEvaluated,
-        List<FSharpDependentCoverageEntry> Failed);
+        List<FSharpDependentCoverageEntry> Failed,
+        bool ApproximateModel)
+    {
+        public bool CandidateSetKnown => !ApproximateModel && Failed.Count == 0;
+    }
 
     private static FSharpReferenceDefinition? FindFSharpReferenceDefinition(
         CapturedFSharpSemanticProject captured,
@@ -328,7 +337,8 @@ public sealed partial class SemanticService
             .ThenBy(candidate => candidate.Project.Path, StringComparer.Ordinal)
             .ToList();
         return new(candidates, potentialConsumers.Count,
-            potentialConsumersEvaluated, discoveryFailed);
+            potentialConsumersEvaluated, discoveryFailed,
+            SelectedFSharpProjectModel == FSharpProjectModel.Simple);
     }
 
     private FSharpSemanticDiagnostic MapFSharpDiagnostic(

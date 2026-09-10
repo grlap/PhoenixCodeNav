@@ -19,7 +19,8 @@ public sealed partial class NavigationTools
         [Description("Include verbose feature summaries (default false). Stable feature ids are always returned.")] bool detail = false) =>
         ServerCapabilitiesJson(_manager.Health(), _semantic.FrameworkRefsAvailable,
             _semantic.FrameworkRefsSource, includeFeatureSummaries: detail,
-            defaultQueryScope: _defaultQueryScope);
+            defaultQueryScope: _defaultQueryScope,
+            fsharpProjectModel: _semantic.SelectedFSharpProjectModel);
 
     internal static string ServerCapabilitiesForTest(IndexHealth health,
         bool frameworkRefsAvailable = true, string? frameworkRefsSource = null,
@@ -47,7 +48,8 @@ public sealed partial class NavigationTools
 
     private static string ServerCapabilitiesJson(IndexHealth h, bool frameworkRefsAvailable,
         string? frameworkRefsSource = null, bool applyBudget = true,
-        bool includeFeatureSummaries = false, string defaultQueryScope = "all")
+        bool includeFeatureSummaries = false, string defaultQueryScope = "all",
+        CodeNav.Core.Semantic.FSharpProjectModel fsharpProjectModel = CodeNav.Core.Semantic.FSharpProjectModel.Evaluated)
     {
         string state = CapabilityText(h.State, CapabilityIdentityTextBytes,
             out bool stateTruncated, out int? stateBytes)!;
@@ -117,12 +119,12 @@ public sealed partial class NavigationTools
             // trigger its (often silent-when-clean) response fields — grep an id to verify a deploy.
             features = new object[]
             {
-                new { id = "agent-cli-tool-surface", summary = "PhoenixCodeNav.Mcp exposes registration-backed offline tools/help/schema discovery and exact MCP tool invocation as a one-JSON-document CLI over the same shared workspace daemon, with schema-derived flags or complete JSON arguments and deterministic exit codes" },
-                new { id = "agent-first-server-instructions", summary = "MCP initialize instructions route agents through repo_overview, context_pack, exact semantic tools, impact/related_tests, and review_pack while naming structured domain errors and bounded retry guidance" },
+                new { id = "agent-cli-tool-surface", summary = "PhoenixCodeNav.Mcp CLI: registration-backed offline tools/help/schema discovery; exact MCP tool invocation via shared workspace daemon; one-JSON-document output, schema-derived flags or complete JSON arguments, deterministic exit codes" },
+                new { id = "agent-first-server-instructions", summary = "MCP initialize routes agents via repo_overview, context_pack, exact semantic tools, impact/related_tests, review_pack; names structured domain errors and bounded retry guidance" },
                 new { id = "compact-capability-discovery", summary = "server_capabilities returns every stable feature id plus status, language, budget, and confidence contracts by default; detail=true adds bounded feature summaries" },
                 new { id = "language-scoped-symbol-search", summary = "search_symbol lang=csharp|fsharp limits declarations and computes partiality from the effective language and path scope, so unrelated language failures do not poison authoritative scoped misses" },
                 new { id = "agent-zero-hit-recovery", summary = "project and symbol misses disclose effective scope plus bounded ranked suggestions and retry arguments without silently substituting a candidate; project selectors use strict path/filename/stem/AssemblyName precedence, preserve physical ambiguity, and byte-budget selector echoes plus shadow evidence with truthful counts" },
-                new { id = "agent-request-patch-recovery", summary = "caller-dependent recovery emits replayOriginalRequest plus an explicit selector-removal list and replacement arguments, preserving the original filters, limits, and budgets without reflecting or truncating them into a different request" },
+                new { id = "agent-request-patch-recovery", summary = "Caller-dependent recovery: replayOriginalRequest, explicit selector-removal list and replacement arguments; preserves original filters/limits/budgets, never reflects or truncates them into a different request" },
                 new { id = "dual-list-string-inputs", summary = "list-like string arguments accept their established comma-separated form or a JSON-array encoded string while retaining host-compatible string schemas" },
                 new { id = "documentation-comment-selectors", summary = "definition, references, and implementations accept stable C# T:/M:/P:/F:/E: documentationCommentId selectors, preserve assembly ambiguity, and refuse unsupported implementation targets without retargeting" },
                 new { id = "semantic-selector-incompatibility-errors", summary = "definition and references return structured semantic-selector incompatibility errors as bad_request: documentationCommentId rejects indexed mode with incompatible_mode, while references rejects pathGlob/excludePath for documentationCommentId and operator idx handles with incompatible_filter; operator idx handles also reject indexed mode, and genuine semantic unavailability remains semantic_required" },
@@ -169,6 +171,7 @@ public sealed partial class NavigationTools
                 new { id = "fsharp-semantic-import-markers", summary = "v0.12.103 self-marked Import != true guards assume absent empty; indexed disclosure" },
                 new { id = "fsharp-semantic-item-property-reads", summary = "v0.12.103 live items freeze consumed properties; unknown/skipped/Choose stay conservative" },
                 new { id = "msbuild-diagnostics", summary = "v0.12.104 opt-in local F# evaluation JSONL beside telemetry" },
+                new { id = "fsharp-simple-project-model", summary = "Opt-in C#-like F# navigation; approximate inputs, indexed confidence" },
                 new { id = "fsharp-semantic-project-reference-copy-local", summary = "v0.12.102 shared Core metadata roles: Private is copy-local, not compiler inclusion; F# admits it; ReferenceOutputAssembly retained; no new C# closure support" },
                 new { id = "fsharp-semantic-optional-property-guards", summary = "v0.12.102 exact PropertyGroup nonempty guards assume absent property empty; disclosed; assigned values retained; no environment reads or general missing-property fallback" },
                 new { id = "fsharp-semantic-directory-build-reference-evaluation", summary = "v0.12.8 nearest indexed ancestor Directory.Build.props/targets surround each F# project: bounded property-before-item conditions, Reference Include/Remove item lists; v0.12.83 active item-phase ProjectReference; irrelevant chained targets ignored; reference-affecting targets/tasks fail closed" },
@@ -345,6 +348,7 @@ public sealed partial class NavigationTools
             semantic = new
             {
                 engine = "Roslyn ad hoc for C#; bounded FCS for compile-owned .fs/.fsi",
+                fsharpProjectModel = fsharpProjectModel.ToString().ToLowerInvariant(),
                 frameworkRefsAvailable,
                 frameworkRefsSource,
                 exactTools = new[] { "definition", "references", "implementations" },
@@ -355,7 +359,7 @@ public sealed partial class NavigationTools
                     "symbol_at", "definition", "references", "implementations", "callers", "callees",
                 },
                 fsharpSyntaxIndexedTools = new[] { "search_symbol" },
-                note = "C# exact results cover loaded clusters. F# symbol_at/definition are compiler-checked in the selected project/TFM and ProjectReference closure. References, implementations, and callers add proven source dependents; callees is body-local. potentialConsumersUnevaluated and group statuses disclose a workspace lower bound and filters. TraitCall stays unresolved. Successful results are exact only while disclosed partial reasons preserve authority; every error, authority loss, or unclassified partial reason is indexed. F# explicit multi-target project/TFM selection, exact child-TFM matching, and netstandard2.0/2.1 single-target inputs are supported; compatibility fallback from multi-target children and netstandard1.x compile inputs fail closed. F# assets are snapshotted; C# never borrows last-built dependency DLLs.",
+                note = "C# exact: loaded clusters, never last-built dependency DLLs. Evaluated F#: symbol_at/definition compiler-checked in selected project/TFM + ProjectReference closure; references/implementations/callers add proven source dependents, callees body-local. potentialConsumersUnevaluated/group statuses show workspace lower bound/filters. TraitCall unresolved. Success is exact only with authority-preserving disclosed reasons; every error, authority loss or unclassified partial reason is indexed. Simple F#: approximate inputs, always indexed. Both F# modes: explicit multi-target project/TFM, exact child-TFM, single-target netstandard2.0/2.1 supported; multi-target child compatibility fallback/netstandard1.x compile inputs fail closed; assets snapshotted.",
                 fsharpSyntaxNote = "F# search_symbol is syntax-indexed across the available owner/TFM parse contexts, including orphaned .fs/.fsi files; it is not compiler-checked, reports actionable incomplete context coverage as partial, and keeps ordinary SDK/import limits advisory.",
             },
             index = new

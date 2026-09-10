@@ -393,14 +393,14 @@ public partial class FSharpSemanticStage2Tests
         public SemanticService Semantic => _semantic;
         public IndexManager Manager => _manager;
 
-        public static Fixture Create(string root)
+        public static Fixture Create(string root, FSharpProjectModel? projectModel = null)
         {
             string dbPath = IndexBuilder.DefaultDbPath(root);
             IndexBuilder.Build(root, dbPath);
-            return Start(root, dbPath);
+            return Start(root, dbPath, projectModel);
         }
 
-        public static Fixture Start(string root, string dbPath)
+        public static Fixture Start(string root, string dbPath, FSharpProjectModel? projectModel = null)
         {
             var manager = new IndexManager(root, dbPath);
             manager.Start();
@@ -409,7 +409,7 @@ public partial class FSharpSemanticStage2Tests
             // index_snapshot_unavailable window.
             Assert.True(WaitUntil(() => manager.State == "ready", 30_000),
                 manager.Health().Error);
-            var semantic = new SemanticService(manager, enableRoslynPersistence: false);
+            var semantic = new SemanticService(manager, enableRoslynPersistence: false, fsharpProjectModel: projectModel);
             return new Fixture(manager, semantic);
         }
 

@@ -248,6 +248,11 @@ public sealed partial class NavigationTools
             includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds);
     }
 
+    private static bool HasSimpleFSharpModelReason(string? partialReason) =>
+        partialReason?.Split(';', StringSplitOptions.TrimEntries)
+            .Contains(CodeNav.Core.Discovery.ProjectFileParser.SimpleFSharpProjectModelReason,
+                StringComparer.Ordinal) == true;
+
     private static object? FSharpCallSymbolJson(FSharpSemanticSymbolInfo? symbol) =>
         symbol is null ? null : new
         {
@@ -320,8 +325,10 @@ public sealed partial class NavigationTools
         bool succeeded = result.Error is null && result.Symbol is not null &&
                          result.TotalCallers is not null &&
                          result.TotalCallSites is not null;
-        bool workspaceComplete = result.Coverage?.WorkspaceComplete == true;
-        bool totalIsLowerBound = succeeded && !workspaceComplete;
+        bool approximateModel = result.Coverage?.ApproximateModel == true ||
+            HasSimpleFSharpModelReason(result.PartialReason);
+        bool workspaceComplete = !approximateModel && result.Coverage?.WorkspaceComplete == true;
+        bool totalIsLowerBound = succeeded && !approximateModel && !workspaceComplete;
         string? detail = result.Error switch
         {
             "fsharp_semantic_position_invalid" =>
@@ -343,6 +350,8 @@ public sealed partial class NavigationTools
         };
         string? summary = !succeeded
             ? null
+            : approximateModel
+                ? $"{result.TotalCallers} direct callers at {result.TotalCallSites} call sites in the approximate F# project model; not a proven workspace total or lower bound."
             : workspaceComplete
                 ? $"Exactly {result.TotalCallers} compiler-bound direct callers at {result.TotalCallSites} call sites across the selected F# project, distinct declaring project, and every proven workspace dependent."
                 : $"At least {result.TotalCallers} compiler-bound direct callers at {result.TotalCallSites} call sites were proven in completed F# groups; inspect coverage before treating this as the workspace total.";
@@ -368,6 +377,8 @@ public sealed partial class NavigationTools
                     totalCallers = result.TotalCallers,
                     totalCallSites = result.TotalCallSites,
                     totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
+                    totalIsApproximate = succeeded && approximateModel ? true : (bool?)null,
+                    countScope = succeeded && approximateModel ? "approximate_project_model" : null,
                     callers = items.Select(caller => new
                     {
                         caller = FSharpCallSymbolJson(caller.Caller),
@@ -415,7 +426,8 @@ public sealed partial class NavigationTools
                         dependentsExcluded = result.Coverage.DependentsExcluded,
                         dependentsFailed = result.Coverage.DependentsFailed,
                         dependentsPending = result.Coverage.DependentsPending,
-                        workspaceComplete = result.Coverage.WorkspaceComplete,
+                        workspaceComplete,
+                        approximateModel = approximateModel ? true : (bool?)null,
                         potentialConsumers = result.Coverage.PotentialConsumers,
                         potentialConsumersEvaluated =
                         result.Coverage.PotentialConsumersEvaluated,
@@ -506,8 +518,10 @@ public sealed partial class NavigationTools
         bool succeeded = result.Error is null && result.Symbol is not null &&
                          result.TotalCallees is not null &&
                          result.TotalCallSites is not null;
-        bool complete = result.Coverage?.Complete == true;
-        bool totalIsLowerBound = succeeded && !complete;
+        bool approximateModel = result.Coverage?.ApproximateModel == true ||
+            HasSimpleFSharpModelReason(result.PartialReason);
+        bool complete = !approximateModel && result.Coverage?.Complete == true;
+        bool totalIsLowerBound = succeeded && !approximateModel && !complete;
         string? detail = result.Error switch
         {
             "fsharp_semantic_position_invalid" =>
@@ -527,6 +541,8 @@ public sealed partial class NavigationTools
         };
         string? summary = !succeeded
             ? null
+            : approximateModel
+                ? $"{result.TotalCallees} callees at {result.TotalCallSites} call sites in the selected body of the approximate F# project model; not a proven build total or lower bound."
             : complete
                 ? $"Exactly {result.TotalCallees} compiler-bound callees at {result.TotalCallSites} call sites in the selected F# body."
                 : $"At least {result.TotalCallees} compiler-bound callees at {result.TotalCallSites} call sites were proven in the selected F# body; inspect coverage before treating this as complete.";
@@ -549,6 +565,8 @@ public sealed partial class NavigationTools
                     totalCallees = result.TotalCallees,
                     totalCallSites = result.TotalCallSites,
                     totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
+                    totalIsApproximate = succeeded && approximateModel ? true : (bool?)null,
+                    countScope = succeeded && approximateModel ? "approximate_project_model" : null,
                     callees = items.Select(callee => new
                     {
                         callee = FSharpCallSymbolJson(callee.Callee),
@@ -593,7 +611,8 @@ public sealed partial class NavigationTools
                     coverage = result.Coverage is null ? null : new
                     {
                         scope = "selected_fsharp_body_with_project_reference_closure_targets",
-                        complete = result.Coverage.Complete,
+                        complete,
+                        approximateModel = approximateModel ? true : (bool?)null,
                         quotationBodiesExcluded =
                         result.Coverage.QuotationBodiesExcluded,
                         traitCallsUnresolved = result.Coverage.TraitCallsUnresolved,
@@ -682,8 +701,10 @@ public sealed partial class NavigationTools
 
         bool succeeded = result.Error is null && result.Symbol is not null &&
                          result.TotalImplementations is not null;
-        bool workspaceComplete = result.Coverage?.WorkspaceComplete == true;
-        bool totalIsLowerBound = succeeded && !workspaceComplete;
+        bool approximateModel = result.Coverage?.ApproximateModel == true ||
+            HasSimpleFSharpModelReason(result.PartialReason);
+        bool workspaceComplete = !approximateModel && result.Coverage?.WorkspaceComplete == true;
+        bool totalIsLowerBound = succeeded && !approximateModel && !workspaceComplete;
         int concreteCount = result.Implementations.Count(item => !item.IsAbstract);
         string? detail = result.Error switch
         {
@@ -777,7 +798,9 @@ public sealed partial class NavigationTools
                         ? result.ResolvedFromOverride
                         : null,
                     summary = succeeded
-                        ? workspaceComplete
+                        ? approximateModel
+                            ? $"{result.TotalImplementations} implementations in the approximate F# project model; not a proven workspace total or lower bound."
+                        : workspaceComplete
                             ? $"Exactly {result.TotalImplementations} compiler-bound implementations across every completely scanned F# project/TFM context in the proven workspace scope." +
                               (!includeTests ? " Test projects were excluded before counting." : "") +
                               (!includeGenerated ? " Generated files were excluded before counting." : "")
@@ -800,6 +823,8 @@ public sealed partial class NavigationTools
                         : null,
                     totalImplementations = succeeded ? result.TotalImplementations : null,
                     totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
+                    totalIsApproximate = succeeded && approximateModel ? true : (bool?)null,
+                    countScope = succeeded && approximateModel ? "approximate_project_model" : null,
                     concreteCount = succeeded ? concreteCount : (int?)null,
                     likelyImplementation = likely,
                     coverage = succeeded ? new
@@ -820,6 +845,7 @@ public sealed partial class NavigationTools
                         declaringProjectStatus = result.Coverage?.DeclaringProjectStatus,
                         declaringProjectReason = result.Coverage?.DeclaringProjectReason,
                         workspaceComplete,
+                        approximateModel = approximateModel ? true : (bool?)null,
                         quotationBodiesExcluded = result.QuotationBodiesExcluded
                             ? true
                             : (bool?)null,
@@ -966,8 +992,10 @@ public sealed partial class NavigationTools
                 (groupIndex, sample))).ToList();
         List<(int GroupIndex, FSharpReferenceGroup Group)> budgetedGroups = referenceGroups
             .Select((group, groupIndex) => (groupIndex, group)).ToList();
-        bool workspaceComplete = result.Coverage?.WorkspaceComplete == true;
-        bool totalIsLowerBound = succeeded && !workspaceComplete;
+        bool approximateModel = result.Coverage?.ApproximateModel == true ||
+            HasSimpleFSharpModelReason(result.PartialReason);
+        bool workspaceComplete = !approximateModel && result.Coverage?.WorkspaceComplete == true;
+        bool totalIsLowerBound = succeeded && !approximateModel && !workspaceComplete;
         string? detail = result.Error switch
         {
             "fsharp_semantic_position_invalid" =>
@@ -1005,7 +1033,7 @@ public sealed partial class NavigationTools
             null => null,
             _ => "FCS could not produce trustworthy same-project reference evidence for this project snapshot.",
         };
-        if (detail is null && succeeded &&
+        if (detail is null && succeeded && !approximateModel &&
             result.PartialReason?.Split(';', StringSplitOptions.TrimEntries)
                 .Contains("fsharp_workspace_dependents_not_scanned",
                     StringComparer.Ordinal) == true)
@@ -1060,7 +1088,9 @@ public sealed partial class NavigationTools
                         : (bool?)null,
                     symbol,
                     summary = succeeded
-                    ? workspaceComplete
+                    ? approximateModel
+                        ? $"{result.TotalReferences} non-definition references in the approximate F# project model; not a proven workspace total or lower bound."
+                    : workspaceComplete
                         ? $"Exactly {result.TotalReferences} compiler-bound non-definition references across every completely scanned F# project/TFM context in the proven workspace scope." +
                           (!includeTests ? " Test projects were excluded before counting." : "") +
                           (!includeGenerated ? " Generated files were excluded before counting." : "")
@@ -1068,6 +1098,8 @@ public sealed partial class NavigationTools
                     : null,
                     totalReferences = succeeded ? result.TotalReferences : null,
                     totalIsLowerBound = totalIsLowerBound ? true : (bool?)null,
+                    totalIsApproximate = succeeded && approximateModel ? true : (bool?)null,
+                    countScope = succeeded && approximateModel ? "approximate_project_model" : null,
                     groupBy = succeeded ? "project" : null,
                     groups = succeeded
                     ? shownGroups.Select(entry => new
@@ -1154,6 +1186,7 @@ public sealed partial class NavigationTools
                         declaringProjectStatus = result.Coverage?.DeclaringProjectStatus,
                         declaringProjectReason = result.Coverage?.DeclaringProjectReason,
                         workspaceComplete,
+                        approximateModel = approximateModel ? true : (bool?)null,
                         excludedByReason = result.Coverage?.Excluded
                             .GroupBy(entry => entry.Reason, StringComparer.Ordinal)
                             .OrderBy(group => group.Key, StringComparer.Ordinal)

@@ -63,9 +63,10 @@ internal sealed record CSharpPackageReferenceSnapshot(
     bool CentrallyManaged = false);
 
 /// <summary>Literal, ordered inputs that are safe to hand to the isolated FCS semantic adapter.
-/// This is intentionally narrower than <see cref="ParsedProject"/>: F# compile order is semantic,
+/// The evaluated model is narrower than <see cref="ParsedProject"/>: F# compile order is semantic,
 /// so an unevaluated wildcard/condition/default item is a hard boundary rather than a best-effort
-/// ownership fact.</summary>
+/// ownership fact. The opt-in simple navigation model instead supplies approximate inputs and
+/// always discloses fsharp_semantic_simple_project_model; these are never compiler-exact inputs.</summary>
 public sealed record FSharpSemanticOptionsSnapshot(
     List<string> SourceFiles,
     List<string> CommandLineArgs,

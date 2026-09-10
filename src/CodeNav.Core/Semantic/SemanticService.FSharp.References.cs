@@ -391,7 +391,7 @@ public sealed partial class SemanticService
                 partialReason = AppendPartialReason(partialReason,
                     "fsharp_workspace_dependents_not_scanned");
                 var externalCoverage = new FSharpReferencesCoverage(null, 0, 0, 0, null,
-                    false, [], []);
+                    false, [], [], ApproximateModel: SelectedFSharpProjectModel == FSharpProjectModel.Simple);
                 return new(symbol, totalReferences, groups.SelectMany(group => group.Samples).ToList(),
                     null, captured.SelectedContext, captured.AvailableContexts,
                     captured.SelectedProjectIsTest, partialReason, check.DiagnosticCount,
@@ -459,7 +459,7 @@ public sealed partial class SemanticService
                 potentialConsumers = discovery.PotentialConsumers;
                 potentialConsumersEvaluated = discovery.PotentialConsumersEvaluated;
                 discoveryFailed = discovery.Failed;
-                candidateSetKnown = discoveryFailed.Count == 0;
+                candidateSetKnown = discovery.CandidateSetKnown;
                 foreach (FSharpDependentCandidate candidate in candidates)
                 {
                     cts.Token.ThrowIfCancellationRequested();
@@ -555,7 +555,7 @@ public sealed partial class SemanticService
                 potentialConsumers, potentialConsumersEvaluated,
                 Math.Max(0, potentialConsumers - potentialConsumersEvaluated),
                 discoveryFailed, declaringProject, declaringProjectStatus,
-                declaringProjectReason);
+                declaringProjectReason, ApproximateModel: SelectedFSharpProjectModel == FSharpProjectModel.Simple);
             int diagnosticCount = check.DiagnosticCount + additionalDiagnosticCount;
             List<FSharpReferenceSample> samples = groups.SelectMany(group => group.Samples).ToList();
             return new(symbol, totalReferences, samples, null,

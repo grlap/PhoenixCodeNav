@@ -2357,6 +2357,12 @@ public sealed partial class IndexQueries : IDisposable
         return map;
     }
 
+    internal List<string> FSharpProjectFiles(long projectId, CancellationToken cancellationToken) =>
+        QueryCancellable("""
+            SELECT f.path FROM compile_items ci JOIN files f ON f.id = ci.file_id
+            WHERE ci.project_id = $id AND f.lang = 'fs' ORDER BY f.path
+            """, row => row.GetString(0), cancellationToken, ("$id", projectId));
+
     /// <summary>File paths compiled by a project, ordered. DISTINCT is load-bearing (field P1,
     /// 0.7.2): monorepos carry same-AssemblyName csproj PAIRS (net-old/net-new multi-targets both
     /// named X) — the name join matches BOTH project rows, so without DISTINCT every shared file

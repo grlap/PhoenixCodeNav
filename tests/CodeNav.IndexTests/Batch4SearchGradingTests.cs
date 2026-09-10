@@ -244,14 +244,19 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.DoesNotContain("search_symbol", semantic.GetProperty("fsharpSemanticTools")
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.False(semantic.TryGetProperty("fsharpIndexedTools", out _));
+        Assert.Equal("evaluated", semantic.GetProperty("fsharpProjectModel").GetString());
         Assert.Contains("search_symbol", semantic.GetProperty("fsharpSyntaxIndexedTools")
             .EnumerateArray().Select(tool => tool.GetString()));
         Assert.Contains("compiler-checked", semantic.GetProperty("note").GetString());
-        Assert.Contains("Successful results are exact only", semantic.GetProperty("note").GetString());
+        Assert.Contains("Success is exact only with authority-preserving disclosed reasons",
+            semantic.GetProperty("note").GetString());
         Assert.Contains("every error", semantic.GetProperty("note").GetString());
         Assert.Contains("unclassified partial reason is indexed",
             semantic.GetProperty("note").GetString());
         Assert.Contains("workspace lower bound", semantic.GetProperty("note").GetString());
+        Assert.Contains("Simple F#: approximate inputs, always indexed", semantic.GetProperty("note").GetString());
+        Assert.Contains("Both F# modes: explicit multi-target project/TFM, exact child-TFM",
+            semantic.GetProperty("note").GetString());
         Assert.Contains("syntax-indexed", semantic.GetProperty("fsharpSyntaxNote").GetString());
         Assert.Contains("SDK/import limits advisory",
             semantic.GetProperty("fsharpSyntaxNote").GetString());
