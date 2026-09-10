@@ -102,6 +102,7 @@ public sealed partial class SemanticWorkspace
         bool HasDirectoryBuildAuthority,
         bool HasDirectoryBuildTargetsAuthority,
         DirectoryPackagesSemanticAuthority DirectoryPackagesAuthority,
+        string? PublishedWorkspaceRoot,
         long ProjectFileSize,
         long PackagesFileSize);
 
@@ -937,6 +938,7 @@ public sealed partial class SemanticWorkspace
                         authority.HasPotentialAuthority,
                         authority.HasPotentialTargetsAuthority,
                         packageAuthority,
+                        plannedMetadata.WorkspaceRoot,
                         0,
                         0));
                 }
@@ -1492,7 +1494,9 @@ public sealed partial class SemanticWorkspace
                             // Aggregate props/targets authority is conservative for SDK seeds;
                             // targets already refuse property-dependent versions via the prior flag.
                             hasPotentialImportedSdkPropertyAuthority: plan.HasDirectoryBuildAuthority,
-                            projectPath: plan.Row.Path);
+                            projectPath: plan.Row.Path,
+                            workspaceRoot: plan.PublishedWorkspaceRoot,
+                            directoryPackagesPath: plan.DirectoryPackagesAuthority.Path);
                     parsed = parsed with
                     {
                         PackageRefs = packageReferences

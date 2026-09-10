@@ -131,14 +131,14 @@ public static partial class ProjectFileParser
         private readonly List<FSharpProjectReferenceSnapshot> _projectReferences = [];
         private readonly HashSet<string> _projectReferenceSet =
             new(WorkspacePaths.FileSystemPathComparer);
-        private ImmutableDictionary<string, ImmutableList<string>> _itemLists =
-            ImmutableDictionary.Create<string, ImmutableList<string>>(StringComparer.OrdinalIgnoreCase);
+        private ImmutableDictionary<string, ImmutableList<BoundedMsBuildProperty>> _itemLists =
+            ImmutableDictionary.Create<string, ImmutableList<BoundedMsBuildProperty>>(StringComparer.OrdinalIgnoreCase);
         private ImmutableDictionary<string, string> _incompleteItemListErrors =
             ImmutableDictionary.Create<string, string>(StringComparer.OrdinalIgnoreCase);
         // A positional snapshot contains helper state only. Properties are deliberately absent:
         // deferred package expressions must still consume the final evaluated property state.
         private readonly record struct ItemListSnapshot(
-            ImmutableDictionary<string, ImmutableList<string>> Items,
+            ImmutableDictionary<string, ImmutableList<BoundedMsBuildProperty>> Items,
             ImmutableDictionary<string, string> Errors);
         private readonly HashSet<string> _directoryReferenceProperties =
             new(StringComparer.OrdinalIgnoreCase);
@@ -158,6 +158,8 @@ public static partial class ProjectFileParser
         private bool _directSemanticItemPhaseStarted;
         private string? _error;
 
+        private readonly BoundedMsBuildProjectContext _pathContext;
+
         public FSharpSemanticProjectEvaluator(
             string projectPath,
             string selectedTargetFramework,
@@ -169,7 +171,8 @@ public static partial class ProjectFileParser
             string? directoryBuildTargetsPath,
             CancellationToken cancellationToken,
             FSharpSemanticEvaluationBudget budget,
-            Func<string, bool?>? existsResolver)
+            Func<string, bool?>? existsResolver,
+            string? workspaceRoot)
             : base(cancellationToken, MaxFSharpSemanticEvaluationDepth,
                 MaxFSharpSemanticImportDepth)
         {
@@ -187,7 +190,8 @@ public static partial class ProjectFileParser
             _directoryBuildTargetsPath = NormalizeOptionalWorkspacePath(directoryBuildTargetsPath);
             _cancellationToken = cancellationToken;
             _budget = budget;
-            BoundedMsBuildProjectContext.SeedProperties(_projectPath, _properties);
+            _pathContext = new BoundedMsBuildProjectContext(_projectPath, workspaceRoot);
+            _pathContext.SeedProperties(_properties);
             _properties["TargetFramework"] = new(selectedTargetFramework, true);
             // Phoenix's initial analysis context, available even to early props. These are
             // mutable defaults, not detected IDE state or immutable MSBuild global properties.
@@ -203,7 +207,8 @@ public static partial class ProjectFileParser
                 EvaluateExists,
                 cancellationToken,
                 MaxFSharpSemanticPropertyValueChars,
-                MaxFSharpSemanticConditionDepth);
+                MaxFSharpSemanticConditionDepth,
+                _pathContext);
             _packages = new(_properties,
                 (string value, string document, out string expanded) =>
                     TryExpandProperties(value, document, null, out expanded, out bool complete) && complete,
@@ -519,10 +524,9 @@ public static partial class ProjectFileParser
                     _error = "fsharp_semantic_property_value_limit";
                     return;
                 }
-                if (!TryExpandProperties(raw, documentPath, name,
-                        out string value, out bool complete))
+                if (!TryExpandPropertyValue(raw, documentPath, name, out var value))
                     return;
-                if (value.Length > MaxFSharpSemanticPropertyValueChars)
+                if (value.Value.Length > MaxFSharpSemanticPropertyValueChars)
                 {
                     _error = "fsharp_semantic_property_value_limit";
                     return;
@@ -531,7 +535,7 @@ public static partial class ProjectFileParser
                 // The caller-selected physical TFM is the one global property in this projection.
                 // A multi-target project cannot overwrite it while evaluating one selected context.
                 if (name.Equals("TargetFramework", StringComparison.OrdinalIgnoreCase)) continue;
-                _properties[name] = new(value, complete);
+                _properties[name] = value;
             }
         }
 
@@ -636,8 +640,8 @@ public static partial class ProjectFileParser
                     !attribute.Name.LocalName.Equals("Include", StringComparison.OrdinalIgnoreCase) &&
                     !attribute.Name.LocalName.Equals("Condition", StringComparison.OrdinalIgnoreCase) &&
                     !attribute.Name.LocalName.Equals("Label", StringComparison.OrdinalIgnoreCase) &&
-                    !attribute.Name.LocalName.Equals("ReferenceOutputAssembly",
-                        StringComparison.OrdinalIgnoreCase)))
+                    !BoundedMsBuildReferenceMetadata.ControlsCompilerInclusion(attribute.Name.LocalName) &&
+                    !BoundedMsBuildReferenceMetadata.IsCopyLocal(attribute.Name.LocalName)))
             {
                 _error = "fsharp_semantic_project_reference_metadata_unsupported";
                 return;
@@ -646,8 +650,7 @@ public static partial class ProjectFileParser
             bool referenceOutputAssembly = true;
             var activeReferenceOutputAssembly = new List<string>();
             XAttribute? outputAttribute = item.Attributes().FirstOrDefault(attribute =>
-                attribute.Name.LocalName.Equals("ReferenceOutputAssembly",
-                    StringComparison.OrdinalIgnoreCase));
+                BoundedMsBuildReferenceMetadata.ControlsCompilerInclusion(attribute.Name.LocalName));
             if (outputAttribute is not null)
                 activeReferenceOutputAssembly.Add(outputAttribute.Value);
 
@@ -663,14 +666,15 @@ public static partial class ProjectFileParser
                     _error = "fsharp_semantic_project_reference_metadata_unsupported";
                     return;
                 }
+                // Copy-local values and conditions cannot change compiler inclusion. Do not
+                // demand ambient property authority for an output-copying decision we never make.
+                if (BoundedMsBuildReferenceMetadata.IsCopyLocal(metadata.Name.LocalName)) continue;
                 if (!ShouldProcess(metadata, documentPath, out bool process)) return;
                 if (!process) continue;
                 string name = metadata.Name.LocalName;
-                if (name.Equals("Name", StringComparison.OrdinalIgnoreCase) ||
-                    name.Equals("Project", StringComparison.OrdinalIgnoreCase))
+                if (BoundedMsBuildReferenceMetadata.IsProjectIdentityOnly(name))
                     continue;
-                if (!name.Equals("ReferenceOutputAssembly",
-                        StringComparison.OrdinalIgnoreCase))
+                if (!BoundedMsBuildReferenceMetadata.ControlsCompilerInclusion(name))
                 {
                     _error = "fsharp_semantic_project_reference_metadata_unsupported";
                     return;
@@ -693,7 +697,7 @@ public static partial class ProjectFileParser
             }
             if (!referenceOutputAssembly) return;
 
-            if (!TryExpandItemSpecs(rawInclude, documentPath, out List<string> specs))
+            if (!TryExpandItemSpecs(rawInclude, documentPath, out List<string> specs, forPath: true))
             {
                 if (_error == "fsharp_semantic_reference_unresolved")
                     _error = "fsharp_semantic_project_reference_metadata_unsupported";
@@ -775,17 +779,18 @@ public static partial class ProjectFileParser
                 {
                     if (!TryExpandItemSpecs(rawRemove, documentPath,
                             out List<string> removeSpecs)) return;
-                    if (_itemLists.TryGetValue(name, out ImmutableList<string>? current))
+                    if (_itemLists.TryGetValue(name, out ImmutableList<BoundedMsBuildProperty>? current))
                     {
                         _itemLists = _itemLists.SetItem(name, current.RemoveAll(existing =>
-                            removeSpecs.Contains(existing, StringComparer.OrdinalIgnoreCase)));
+                            removeSpecs.Contains(existing.Value, StringComparer.OrdinalIgnoreCase)));
                     }
                 }
                 if (include?.Value is not { } rawInclude) return;
-                if (!TryExpandItemSpecs(rawInclude, documentPath,
-                        out List<string> includeSpecs)) return;
+                if (!TryExpandItemValues(rawInclude, documentPath,
+                        new ItemListSnapshot(_itemLists, _incompleteItemListErrors),
+                        out List<BoundedMsBuildProperty> includeSpecs)) return;
                 var list = _itemLists[name].ToBuilder();
-                foreach (string spec in includeSpecs)
+                foreach (var spec in includeSpecs)
                 {
                     if (!_budget.TryReserveItemListEntry())
                     {
@@ -815,7 +820,19 @@ public static partial class ProjectFileParser
             // Reserved root-context assignments are refused above; only those values can prove
             // a skipped semantic group/item permanently inactive across later property groups.
             !_expressions.IsConditionInvariantFalse(condition.Value,
-                BoundedMsBuildProjectContext.IsReservedProperty);
+                BoundedMsBuildProjectContext.IsRootReservedProperty);
+
+        private bool TryNormalizeSemanticRelative(string relativeBase, string value, out string normalized)
+        {
+            if (Path.IsPathRooted(value) || value.StartsWith('/'))
+            {
+                normalized = "";
+                // Expansion already normalized authored separators while retaining native pieces.
+                return _pathContext.TryMakeWorkspaceRelative(value, out normalized);
+            }
+            return ProjectFileParser.TryNormalizeSemanticRelative(relativeBase, value, out normalized,
+                authoredSeparators: false);
+        }
 
         private void RegisterReferenceInputPropertyDependencies(XElement item, XElement boundary)
         {
@@ -847,7 +864,7 @@ public static partial class ProjectFileParser
                 return;
             }
             if (!TryExpandProperties(raw, documentPath, null,
-                    out string include, out bool complete)) return;
+                    out string include, out bool complete, forPath: true)) return;
             if (!complete)
             {
                 _error = "fsharp_semantic_compile_order_unavailable";
@@ -945,7 +962,7 @@ public static partial class ProjectFileParser
 
             string rawHint = activeHints[0].Value.Trim();
             if (!TryExpandProperties(rawHint, documentPath, null,
-                    out string value, out bool complete)) return;
+                    out string value, out bool complete, forPath: true)) return;
             if (!complete || value.Length == 0)
             {
                 _error = "fsharp_semantic_reference_unresolved";
@@ -973,22 +990,38 @@ public static partial class ProjectFileParser
             new ItemListSnapshot(_itemLists, _incompleteItemListErrors), out specs);
 
         private bool TryExpandItemSpecs(string raw, string documentPath,
-            ItemListSnapshot snapshot, out List<string> specs)
+            out List<string> specs, bool forPath) => TryExpandItemSpecs(raw, documentPath,
+            new ItemListSnapshot(_itemLists, _incompleteItemListErrors), out specs, forPath);
+
+        private bool TryExpandItemSpecs(string raw, string documentPath,
+            ItemListSnapshot snapshot, out List<string> specs, bool forPath = false)
+        {
+            bool result = TryExpandItemValues(raw, documentPath, snapshot, out var values);
+            specs = values.Select(value => forPath ? value.ForPath : value.Value).ToList();
+            return result;
+        }
+
+        private bool TryExpandItemValues(string raw, string documentPath,
+            ItemListSnapshot snapshot, out List<BoundedMsBuildProperty> specs)
         {
             specs = [];
-            if (!TryExpandProperties(raw.Trim(), documentPath, null,
-                    out string expanded, out bool complete, allowItemReferences: true))
+            if (!TryExpandPropertyValue(raw.Trim(), documentPath, null,
+                    out var expanded, allowItemReferences: true))
                 return false;
-            if (!complete)
+            if (!expanded.Complete)
             {
                 _error = "fsharp_semantic_reference_unresolved";
                 return false;
             }
 
-            foreach (string token in expanded.Split(';',
-                         StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            // Separator projection changes only backslash characters, so scalar and path tokens
+            // have identical list boundaries. Keep both through helper snapshots and aliases.
+            string[] tokens = expanded.Value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            string[] pathTokens = expanded.ForPath.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            for (int index = 0; index < tokens.Length; index++)
             {
                 CheckCancellation();
+                string token = tokens[index];
                 if (token.Contains('*') || token.Contains('?'))
                 {
                     _error = "fsharp_semantic_reference_unresolved";
@@ -1002,7 +1035,7 @@ public static partial class ProjectFileParser
                         _error = "fsharp_semantic_reference_unresolved";
                         return false;
                     }
-                    specs.Add(token);
+                    specs.Add(new(token, true, pathTokens[index]));
                     continue;
                 }
 
@@ -1012,7 +1045,7 @@ public static partial class ProjectFileParser
                     _error = itemListError;
                     return false;
                 }
-                if (!snapshot.Items.TryGetValue(name, out ImmutableList<string>? itemSpecs))
+                if (!snapshot.Items.TryGetValue(name, out ImmutableList<BoundedMsBuildProperty>? itemSpecs))
                 {
                     _error = "fsharp_semantic_reference_unresolved";
                     return false;
@@ -1077,15 +1110,12 @@ public static partial class ProjectFileParser
                     _error = "fsharp_semantic_import_unsupported";
                     return;
                 }
-                rawProject = configuredTargets.Value;
+                // Leave the property token intact: its captured path spelling belongs to the
+                // defining document and must not be reclassified as newly authored XML text.
             }
 
-            // These imports are compiler/toolchain infrastructure. Stage 2A supplies its own
-            // bounded framework/compiler inputs and never opens or executes the imported targets.
-            if (AcceptKnownFSharpSemanticImport(rawProject)) return;
-
             if (!TryExpandProperties(rawProject, documentPath, null,
-                    out string expandedProject, out bool complete)) return;
+                    out string expandedProject, out bool complete, forPath: true)) return;
             if (AcceptKnownFSharpSemanticImport(expandedProject)) return;
             if (!complete || expandedProject.Contains('*') || expandedProject.Contains('?') ||
                 expandedProject.Contains(';'))
@@ -1305,23 +1335,22 @@ public static partial class ProjectFileParser
             }
             string? unsetSelfProperty = IsCanonicalUnsetSelfCondition(element,
                 condition.Value) ? element.Name.LocalName : null;
-            if (!TryEvaluateCondition(condition.Value, documentPath, out process,
-                    unsetSelfProperty))
-            {
-                _error ??= "fsharp_semantic_condition_unsupported";
-                return false;
-            }
-            return true;
-        }
+            if (_expressions.TryEvaluateCondition(condition.Value, documentPath, out process,
+                    out string? error, unsetSelfProperty)) return true;
 
-        private bool TryEvaluateCondition(string condition, string documentPath, out bool result,
-            string? unsetSelfProperty = null, int depth = 0)
-        {
-            bool evaluated = _expressions.TryEvaluateCondition(condition, documentPath,
-                out result, out string? error, unsetSelfProperty, depth);
-            if (!evaluated && error is not null)
-                _error ??= FSharpExpressionError(error);
-            return evaluated;
+            // Selected analysis default for optional PropertyGroup presence guards only.
+            // Normal evaluation wins first; existing incomplete assignments remain unknown.
+            // Never seed this assumption into the property bag or invariant-item proof.
+            if (error == "condition_property_unresolved" && element.Name.LocalName == "PropertyGroup" &&
+                _expressions.TryGetAbsentNonemptyGuardProperty(condition.Value, out string absentProperty) &&
+                _expressions.TryEvaluateCondition(condition.Value, documentPath, out process,
+                    out _, absentProperty) && !process)
+            {
+                _partialReasons.Add("fsharp_semantic_optional_property_assumed_empty");
+                return true;
+            }
+            _error ??= error is null ? "fsharp_semantic_condition_unsupported" : FSharpExpressionError(error);
+            return false;
         }
 
         private BoundedMsBuildExistsResult EvaluateExists(string documentPath, string rawPath)
@@ -1359,10 +1388,20 @@ public static partial class ProjectFileParser
                 : "fsharp_semantic_" + error;
 
         private bool TryExpandProperties(string input, string documentPath, string? selfProperty,
-            out string output, out bool complete, bool allowItemReferences = false)
+            out string output, out bool complete, bool allowItemReferences = false, bool forPath = false)
         {
-            bool expanded = _expressions.TryExpandProperties(input, documentPath, selfProperty,
-                out output, out complete, out string? error, allowItemReferences);
+            bool expanded = TryExpandPropertyValue(input, documentPath, selfProperty, out var value,
+                allowItemReferences);
+            output = forPath ? value.ForPath : value.Value;
+            complete = value.Complete;
+            return expanded;
+        }
+
+        private bool TryExpandPropertyValue(string input, string documentPath, string? selfProperty,
+            out BoundedMsBuildProperty value, bool allowItemReferences = false)
+        {
+            bool expanded = _expressions.TryExpandPropertyValue(input, documentPath, selfProperty,
+                out value, out string? error, allowItemReferences);
             if (!expanded && error is not null)
                 _error ??= FSharpExpressionError(error);
             return expanded;

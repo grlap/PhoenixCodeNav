@@ -26,6 +26,59 @@ public class Batch41Tests
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
 
     [Fact]
+    public void WorktreeSeedRecapturesRootSensitiveExistsWithNoProjectChanges()
+    {
+        Assert.True(GitInfo.GitAvailable, "This regression requires Git.");
+        if (OperatingSystem.IsMacOS()) return; // Existing worktree publication platform policy.
+        string root = Path.GetFullPath(Directory.CreateTempSubdirectory("codenav-root-seed").FullName);
+        string wt = root + "-wt";
+        try
+        {
+            WriteRepo(root);
+            Directory.CreateDirectory(Path.Combine(root, "Core"));
+            string mainDirectory = System.Security.SecurityElement.Escape(Path.Combine(root, "Core"))!;
+            string targetDirectory = System.Security.SecurityElement.Escape(Path.Combine(wt, "Core"))!;
+            File.WriteAllText(Path.Combine(root, "Core", "Core.fsproj"), $$"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+                  <PropertyGroup Condition="'$(MSBuildProjectDirectory)' == '{{mainDirectory}}' And Exists('seed/web.config')">
+                    <DefineConstants>SEED_ROOT</DefineConstants>
+                  </PropertyGroup>
+                  <PropertyGroup Condition="'$(MSBuildProjectDirectory)' == '{{targetDirectory}}' And Exists('target/web.config')">
+                    <DefineConstants>TARGET_ROOT</DefineConstants>
+                  </PropertyGroup>
+                  <ItemGroup><Compile Include="Core.fs" /></ItemGroup>
+                </Project>
+                """);
+            File.WriteAllText(Path.Combine(root, "Core", "Core.fs"), "module Core\nlet value = 1\n");
+            Git(root, "add -A");
+            Git(root, "commit -q -m path-context");
+            Git(root, $"worktree add --detach \"{wt}\"");
+            Assert.Equal(GitInfo.HeadCommit(root), GitInfo.HeadCommit(wt));
+            Assert.Empty(GitInfo.DirtyFiles(wt)!);
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using (var store = new IndexStore(db, createNew: false))
+                store.SetMeta("indexed_commit", GitInfo.HeadCommit(root)!);
+            using var main = new IndexQueries(db, pinReadSnapshot: true);
+            Assert.True(main.TryGetCapturedMsBuildFilePresence("Core/seed/web.config", out bool? seed));
+            Assert.Equal(false, seed);
+            Assert.False(main.TryGetCapturedMsBuildFilePresence("Core/target/web.config", out _));
+            var result = WorktreeIndexer.Ensure(root, db, wt, "auto", _ => { });
+            Assert.Equal("created", result.Action);
+            if (OperatingSystem.IsWindows()) Assert.False(result.UsedFullSweep);
+            using var sibling = new IndexQueries(IndexBuilder.DefaultDbPath(wt));
+            Assert.Equal(wt, sibling.ReadMetadata().WorkspaceRoot);
+            Assert.True(sibling.TryGetCapturedMsBuildFilePresence("Core/target/web.config", out bool? target));
+            Assert.Equal(false, target);
+            Assert.False(sibling.TryGetCapturedMsBuildFilePresence("Core/seed/web.config", out _));
+            Assert.True(main.TryGetCapturedMsBuildFilePresence("Core/seed/web.config", out seed));
+            Assert.Equal(false, seed);
+        }
+        finally { CleanupWorktree(root, wt); Cleanup(root); }
+    }
+
+    [Fact]
     public void LinkedWorktreePlumbingResolvesGitDirAndListsAndSeesDirt()
     {
         if (!GitInfo.GitAvailable || OperatingSystem.IsMacOS()) return;

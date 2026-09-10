@@ -153,8 +153,11 @@ public static class IndexBuilder
     /// v38: reserved root MSBuildProjectExtension reaches additional F# Exists conditions;
     /// rebuild to harvest the same project context used by semantic queries.
     /// v39: immutable-false semantic items no longer block later F# property/Exists evaluation;
-    /// rebuild to recapture probes with the query-time proof and scalar-preserving conditions.</summary>
-    public const string SchemaVersion = "39";
+    /// rebuild to recapture probes with the query-time proof and scalar-preserving conditions.
+    /// v40: copy-local project metadata and assumed-empty optional PropertyGroup guards no longer
+    /// stop F# evaluation; shared project/document path context also changes guards and normalized
+    /// Exists paths. Rebuild to capture these dependencies with the published workspace root.</summary>
+    public const string SchemaVersion = "40";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }
@@ -1062,7 +1065,8 @@ public static class IndexBuilder
             // and schema_version can never advertise a partial schema.
             store.CompleteBulkLoad(tx);
             // Probe updates use their query-facing path index, avoiding repeated table scans.
-            MsBuildExistsCapture.Refresh(store, tx, workspaceRoot);
+            MsBuildExistsCapture.Refresh(store, tx, workspaceRoot,
+                publishedWorkspaceRoot: publishedWorkspaceRoot ?? workspaceRoot);
             // isTest R3 (custom-resolve-proof): compiled test attributes + graph-leaf promotion —
             // must run after BOTH compile attribution and ref insertion (leaf check).
             int promoted = store.PromoteTestProjectsByCompiledAttributes(tx);

@@ -440,7 +440,8 @@ public sealed partial class SemanticService
             cancellationToken: cancellationToken,
             hasAmbiguousDirectoryBuildAuthority: directoryBuild.HasAmbiguity,
             hasAmbiguousDirectoryPackagesAuthority: directoryPackages.PathAmbiguous,
-            existsResolver: path => ResolveIndexedFSharpExists(queries, path));
+            existsResolver: path => ResolveIndexedFSharpExists(queries, path),
+            workspaceRoot: queries.ReadMetadata(cancellationToken).WorkspaceRoot);
     }
 
     internal static bool? ResolveIndexedFSharpExists(IndexQueries queries, string path)

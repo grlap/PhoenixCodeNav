@@ -21,6 +21,55 @@ public sealed class CSharpCentralPackageManagementTests
     private const string PackageId = "Microsoft.CodeAnalysis.CSharp";
 
     [Theory]
+    [InlineData("MSBuildThisFileName", false, "directory.packages")]
+    [InlineData("MSBuildThisFile", false, "directory.packages.props")]
+    [InlineData("MSBuildThisFileExtension", false, "kind.props")]
+    [InlineData("MSBuildProjectName", false, "cpm")]
+    [InlineData("MSBuildProjectFile", false, "cpm.csproj")]
+    [InlineData("MSBuildThisFileName", true, "cpm")]
+    [InlineData("CapturedName", true, "directory.packages")]
+    public async Task SharedPathPropertiesReachTheActualCSharpCompilerModel(string property, bool projectOverride, string suffix)
+    {
+        _ = ReferenceAssemblyLocator.Net472References(out _);
+        string sandbox = Directory.CreateTempSubdirectory("codenav-path-cpm").FullName;
+        string root = Path.Combine(sandbox, "workspace");
+        string packagesRoot = Path.Combine(sandbox, "packages");
+        string? priorPackagesRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES");
+        try
+        {
+            Directory.CreateDirectory(root);
+            string version = "5.6.0-" + suffix;
+            WritePackageFixture(packagesRoot, PackageId, version);
+            WritePackageFixture(packagesRoot, PackageId, "5.6.0-wrong");
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", packagesRoot);
+            WriteWorkspace(root, "5.6.0-wrong");
+            string expression = "5.6.0-" + (property.EndsWith("Extension", StringComparison.Ordinal) ? "kind" : "") + "$(" + property + ")";
+            File.WriteAllText(Path.Combine(root, "Directory.Packages.props"),
+                CentralXml(projectOverride ? "5.6.0-wrong" : expression,
+                    extraProperty: "<CapturedName>$(MSBuildThisFileName)</CapturedName>"));
+            if (projectOverride)
+            {
+                string projectPath = Path.Combine(root, "src", "Cpm.csproj");
+                File.WriteAllText(projectPath, File.ReadAllText(projectPath).Replace(
+                    $"<PackageReference Include=\"{PackageId}\" />",
+                    $"<PackageReference Include=\"{PackageId}\" VersionOverride=\"{expression}\" />", StringComparison.Ordinal));
+            }
+            string db = IndexBuilder.DefaultDbPath(root);
+            IndexBuilder.Build(root, db);
+            using var workspace = new SemanticWorkspace(root, db, enableRoslynPersistence: false);
+            using SemanticSolutionLease lease = await workspace.EnsureLoadedAsync(["Cpm.Consumer"], CancellationToken.None);
+            Assert.Empty(lease.Coverage.FailedProjects);
+            Assert.Equal(Path.Combine(packagesRoot, PackageId.ToLowerInvariant(), version, "lib", "netstandard2.0", "Microsoft.CodeAnalysis.CSharp.dll"),
+                PackageReferencePath(Assert.Single(lease.Solution.Projects)), WorkspacePaths.FileSystemPathComparer);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("NUGET_PACKAGES", priorPackagesRoot);
+            TestWorkspaceCleanup.DeleteWorkspace(sandbox);
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ProjectExtensionSuppliesCSharpCompilerReferenceThroughProductionCaller(bool earlyProps)

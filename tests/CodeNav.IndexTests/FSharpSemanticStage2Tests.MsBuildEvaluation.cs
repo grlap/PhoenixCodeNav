@@ -2041,14 +2041,20 @@ public partial class FSharpSemanticStage2Tests
     }
 
     [Theory]
-    [InlineData("Directory.Build.props", "AmbientConfiguration")]
-    [InlineData("Directory.Build.props", "AmbientPlatform")]
-    [InlineData("Directory.Packages.props", "AmbientConfiguration")]
-    [InlineData("Directory.Packages.props", "AmbientPlatform")]
-    public void AnalysisContextDoesNotResolveOtherAmbientPropertiesInEarlyImports(string importPath, string property)
+    [InlineData("Directory.Build.props", "AmbientConfiguration", false)]
+    [InlineData("Directory.Build.props", "AmbientPlatform", false)]
+    [InlineData("Directory.Packages.props", "AmbientConfiguration", false)]
+    [InlineData("Directory.Packages.props", "AmbientPlatform", false)]
+    [InlineData("Directory.Build.props", "AmbientConfiguration", true)]
+    [InlineData("Directory.Build.props", "AmbientPlatform", true)]
+    [InlineData("Directory.Packages.props", "AmbientConfiguration", true)]
+    [InlineData("Directory.Packages.props", "AmbientPlatform", true)]
+    public void AnalysisContextDistinguishesAbsentAndIncompletePresenceGuardsInEarlyImports(
+        string importPath, string property, bool incomplete)
     {
         string props = $"""
             <Project>
+              {(incomplete ? $"<PropertyGroup><{property}>$(Unknown)</{property}></PropertyGroup>" : "")}
               <PropertyGroup Condition="'$({property})' != ''">
                 <DefineConstants>WRONG_EARLY_CONTEXT</DefineConstants>
               </PropertyGroup>
@@ -2059,9 +2065,20 @@ public partial class FSharpSemanticStage2Tests
             "net8.0", "net8.0", importResolver: path => path == importPath ? props : null,
             directoryBuildPropsPath: importPath == "Directory.Build.props" ? importPath : null,
             directoryPackagesPropsPath: importPath == "Directory.Packages.props" ? importPath : null);
-        Assert.Equal("fsharp_semantic_condition_property_unresolved", result.Error);
         Assert.DoesNotContain("--define:WRONG_EARLY_CONTEXT", result.CommandLineArgs);
-        Assert.Empty(result.SourceFiles);
+        if (incomplete)
+        {
+            Assert.Equal("fsharp_semantic_condition_property_unresolved", result.Error);
+            Assert.Empty(result.SourceFiles);
+            Assert.DoesNotContain("fsharp_semantic_optional_property_assumed_empty", result.PartialReason ?? "");
+        }
+        else
+        {
+            // v0.12.102 selects an explicit absent-as-empty default for this exact guard.
+            Assert.Null(result.Error);
+            Assert.Equal(["Core/Core.fs"], result.SourceFiles);
+            Assert.Contains("fsharp_semantic_optional_property_assumed_empty", result.PartialReason);
+        }
     }
 
     [Theory]

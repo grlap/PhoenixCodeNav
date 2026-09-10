@@ -9,7 +9,8 @@ namespace CodeNav.Core.Indexing;
 internal static class MsBuildExistsCapture
 {
     internal static bool Refresh(IndexStore store, SqliteTransaction tx, string root,
-        IReadOnlyCollection<string>? changedPaths = null)
+        IReadOnlyCollection<string>? changedPaths = null,
+        string? publishedWorkspaceRoot = null)
     {
         bool changed = false;
         var owners = new HashSet<long>();
@@ -44,6 +45,9 @@ internal static class MsBuildExistsCapture
         // only projects with changed existence facts are reevaluated on that path.
         bool rediscoverAll = changedPaths is null || changedPaths.Any(IsProjectInput);
         using var queries = new IndexQueries(tx);
+        // Cold build supplies the publication identity before meta exists. Delta reads that
+        // same identity in its writer transaction; root remains the separate anchored I/O path.
+        string? logicalRoot = publishedWorkspaceRoot ?? queries.ReadMetadata().WorkspaceRoot;
         foreach ((long id, string path, string tfms, string xml) in
                  store.MsBuildExistsProjects(tx, rediscoverAll ? null : owners))
         {
@@ -72,7 +76,7 @@ internal static class MsBuildExistsCapture
                     directoryPackages.Path, directoryBuild.PropsPath, directoryBuild.TargetsPath,
                     hasAmbiguousDirectoryBuildAuthority: directoryBuild.HasAmbiguity,
                     hasAmbiguousDirectoryPackagesAuthority: directoryPackages.PathAmbiguous,
-                    existsResolver: Capture);
+                    existsResolver: Capture, workspaceRoot: logicalRoot);
             }
             changed |= store.ReplaceMsBuildExistsPaths(tx, id, probes);
         }

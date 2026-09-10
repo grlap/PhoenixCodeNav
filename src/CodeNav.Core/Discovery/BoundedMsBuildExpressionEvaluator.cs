@@ -4,7 +4,15 @@ using System.Text.RegularExpressions;
 
 namespace CodeNav.Core.Discovery;
 
-internal readonly record struct BoundedMsBuildProperty(string Value, bool Complete);
+internal readonly record struct BoundedMsBuildProperty(string Value, bool Complete, string? PathValue = null)
+{
+    // Scalars keep their authored spelling. Path consumers select the spelling assembled while
+    // expansion provenance was available; native Unix backslashes must not become separators.
+    internal string ForPath => PathValue ?? NormalizeAuthoredPath(Value);
+    internal static string NormalizeAuthoredPath(string value) =>
+        OperatingSystem.IsWindows() ? value : value.Replace('\\', '/');
+    internal static BoundedMsBuildProperty Native(string value) => new(value, true, value);
+}
 
 internal readonly record struct BoundedMsBuildExpansion(bool Handled, string Value);
 
@@ -33,6 +41,7 @@ internal sealed class BoundedMsBuildExpressionEvaluator
     private readonly CancellationToken _cancellationToken;
     private readonly int _maxPropertyValueChars;
     private readonly int _maxConditionDepth;
+    private readonly BoundedMsBuildProjectContext? _pathContext;
 
     public BoundedMsBuildExpressionEvaluator(
         IReadOnlyDictionary<string, BoundedMsBuildProperty> properties,
@@ -40,7 +49,8 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         Func<string, string, BoundedMsBuildExistsResult> exists,
         CancellationToken cancellationToken,
         int maxPropertyValueChars,
-        int maxConditionDepth)
+        int maxConditionDepth,
+        BoundedMsBuildProjectContext? pathContext = null)
     {
         _properties = properties;
         _expandIntrinsic = expandIntrinsic;
@@ -48,6 +58,7 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         _cancellationToken = cancellationToken;
         _maxPropertyValueChars = maxPropertyValueChars;
         _maxConditionDepth = maxConditionDepth;
+        _pathContext = pathContext;
     }
 
     public bool TryEvaluateCondition(string condition, string documentPath, out bool result,
@@ -117,9 +128,14 @@ internal sealed class BoundedMsBuildExpressionEvaluator
 
         if (TryParseExists(condition, out string rawPath))
         {
-            if (!TryExpandConditionScalar(rawPath, documentPath, unsetSelfProperty,
-                    out string path, out error)) return false;
-            BoundedMsBuildExistsResult exists = _exists(documentPath, path);
+            if (!TryExpandPropertyValue(rawPath, documentPath, unsetSelfProperty,
+                    out var path, out error)) return false;
+            if (!path.Complete)
+            {
+                error = "condition_property_unresolved";
+                return false;
+            }
+            BoundedMsBuildExistsResult exists = _exists(documentPath, path.ForPath);
             if (!exists.Complete)
             {
                 error = exists.Error;
@@ -232,6 +248,27 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         }
     }
 
+    /// <summary>
+    /// Recognizes an exact absent-property nonempty guard. This is not proof of build-environment
+    /// absence: a caller may explicitly select an assumed-empty analysis context for this shape.
+    /// No property is inserted, and incomplete or complete assignments are never replaced.
+    /// </summary>
+    public bool TryGetAbsentNonemptyGuardProperty(string condition, out string propertyName)
+    {
+        CheckCancellation();
+        propertyName = "";
+        if (!TryFindComparison(condition, out string left, out string op, out string right) ||
+            op != "!=" || !TryParseConditionOperand(left, out left) ||
+            !TryParseConditionOperand(right, out right)) return false;
+        string operand = left.Length == 0 ? right : right.Length == 0 ? left : "";
+        Match match = PropertyReference.Match(operand);
+        if (!match.Success || match.Index != 0 || match.Length != operand.Length) return false;
+        string name = match.Groups["name"].Value;
+        if (_properties.ContainsKey(name) || BoundedMsBuildProjectContext.IsKnownProvidedProperty(name)) return false;
+        propertyName = name;
+        return true;
+    }
+
     public bool IsSelfDefaultCondition(string condition, string propertyName)
     {
         // The expansion exemption applies to the whole condition. Every occurrence of the
@@ -280,9 +317,32 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         bool stopOnUnresolvedProperty = false,
         Func<string, bool>? tryReservePropertyExpansion = null,
         Func<int, bool>? tryReserveExpandedValue = null)
+        => TryExpandPropertiesCore(input, documentPath, selfProperty, out output, out _,
+            out complete, out error, allowItemReferences, allowPropertyStringFunctions,
+            preserveOpaqueItemAndMetadataReferences, stopOnUnresolvedProperty,
+            tryReservePropertyExpansion, tryReserveExpandedValue);
+
+    public bool TryExpandPropertyValue(string input, string documentPath, string? selfProperty,
+        out BoundedMsBuildProperty value, out string? error, bool allowItemReferences = false)
+    {
+        bool result = TryExpandPropertiesCore(input, documentPath, selfProperty,
+            out string scalar, out string? path, out bool complete, out error, allowItemReferences);
+        value = new(scalar, complete, path);
+        return result;
+    }
+
+    private bool TryExpandPropertiesCore(string input, string documentPath, string? selfProperty,
+        out string output, out string? pathOutput, out bool complete, out string? error,
+        bool allowItemReferences = false,
+        bool allowPropertyStringFunctions = true,
+        bool preserveOpaqueItemAndMetadataReferences = false,
+        bool stopOnUnresolvedProperty = false,
+        Func<string, bool>? tryReservePropertyExpansion = null,
+        Func<int, bool>? tryReserveExpandedValue = null)
     {
         CheckCancellation();
         output = "";
+        pathOutput = null;
         complete = false;
         error = null;
         if (input.Length > _maxPropertyValueChars)
@@ -295,6 +355,7 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         if (intrinsic.Handled)
         {
             output = intrinsic.Value;
+            pathOutput = intrinsic.Value;
             complete = true;
             return true;
         }
@@ -308,20 +369,24 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         string scalarInput = input;
         bool functionsComplete = true;
         if (allowPropertyStringFunctions &&
-            !TryExpandPropertyStringFunctions(input, out scalarInput,
+            !TryExpandPropertyStringFunctions(input, documentPath, out scalarInput,
                 out functionsComplete, out error, stopOnUnresolvedProperty,
                 tryReservePropertyExpansion))
             return false;
 
         var builder = new StringBuilder(scalarInput.Length);
+        // Only Unix distinguishes captured native backslashes from authored MSBuild separators.
+        // Build both spellings in this same walk, without re-evaluation or additional budget use.
+        StringBuilder? pathBuilder = OperatingSystem.IsWindows() ? null : new(scalarInput.Length);
         int cursor = 0;
         bool allComplete = functionsComplete;
         foreach (Match match in PropertyReference.Matches(scalarInput))
         {
             CheckCancellation();
             builder.Append(scalarInput, cursor, match.Index - cursor);
+            pathBuilder?.Append(BoundedMsBuildProperty.NormalizeAuthoredPath(scalarInput[cursor..match.Index]));
             string name = match.Groups["name"].Value;
-            if (_properties.TryGetValue(name, out BoundedMsBuildProperty property))
+            if (TryGetProperty(name, documentPath, out BoundedMsBuildProperty property))
             {
                 if (stopOnUnresolvedProperty && !property.Complete) return false;
                 if (tryReservePropertyExpansion is not null &&
@@ -331,16 +396,20 @@ internal sealed class BoundedMsBuildExpressionEvaluator
                     return false;
                 }
                 builder.Append(property.Value);
+                pathBuilder?.Append(property.ForPath);
                 allComplete &= property.Complete;
             }
-            else if (name.Equals(selfProperty, StringComparison.OrdinalIgnoreCase))
+            else if (name.Equals(selfProperty, StringComparison.OrdinalIgnoreCase) &&
+                     !BoundedMsBuildProjectContext.IsKnownProvidedProperty(name))
             {
-                // An unset property is empty only for its own value and canonical self-default.
+                // Only the caller-designated absent property gains an empty-value exemption:
+                // its own value/self-default, or an explicitly assumed-empty presence guard.
             }
             else
             {
                 if (stopOnUnresolvedProperty) return false;
                 builder.Append(match.Value);
+                pathBuilder?.Append(match.Value);
                 allComplete = false;
             }
             cursor = match.Index + match.Length;
@@ -351,12 +420,14 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             }
         }
         builder.Append(scalarInput, cursor, scalarInput.Length - cursor);
+        pathBuilder?.Append(BoundedMsBuildProperty.NormalizeAuthoredPath(scalarInput[cursor..]));
         if (builder.Length > _maxPropertyValueChars)
         {
             error = "property_value_limit";
             return false;
         }
         output = builder.ToString();
+        pathOutput = pathBuilder?.ToString();
         complete = allComplete &&
                    !output.Contains("$(", StringComparison.Ordinal) &&
                    (preserveOpaqueItemAndMetadataReferences ||
@@ -378,7 +449,18 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             yield return match.Groups["name"].Value;
     }
 
-    private bool TryExpandPropertyStringFunctions(string input, out string output,
+    private bool TryGetProperty(string name, string documentPath, out BoundedMsBuildProperty value)
+    {
+        if (_pathContext is not null && BoundedMsBuildProjectContext.IsReservedProperty(name))
+        {
+            BoundedMsBuildProperty? resolved = _pathContext.Resolve(name, documentPath);
+            value = resolved.GetValueOrDefault();
+            return resolved.HasValue;
+        }
+        return _properties.TryGetValue(name, out value);
+    }
+
+    private bool TryExpandPropertyStringFunctions(string input, string documentPath, out string output,
         out bool complete, out string? error, bool stopOnUnresolvedProperty,
         Func<string, bool>? tryReservePropertyExpansion)
     {
@@ -400,7 +482,7 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             CheckCancellation();
             builder.Append(input, cursor, match.Index - cursor);
             string name = match.Groups["name"].Value;
-            if (_properties.TryGetValue(name, out BoundedMsBuildProperty property))
+            if (TryGetProperty(name, documentPath, out BoundedMsBuildProperty property))
             {
                 if (property.Complete)
                 {

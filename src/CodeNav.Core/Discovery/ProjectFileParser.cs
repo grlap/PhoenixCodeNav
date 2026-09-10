@@ -390,13 +390,14 @@ public static partial class ProjectFileParser
         CancellationToken cancellationToken = default,
         bool hasAmbiguousDirectoryBuildAuthority = false,
         bool hasAmbiguousDirectoryPackagesAuthority = false,
-        Func<string, bool?>? existsResolver = null)
+        Func<string, bool?>? existsResolver = null,
+        string? workspaceRoot = null)
         => ParseFSharpSemanticOptionsSnapshotCore(relPath, projectXml,
             indexedTargetFrameworks, selectedTargetFramework, importResolver,
             importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
             directoryBuildTargetsPath, cancellationToken,
             hasAmbiguousDirectoryBuildAuthority, hasAmbiguousDirectoryPackagesAuthority,
-            new FSharpSemanticEvaluationBudget(), existsResolver);
+            new FSharpSemanticEvaluationBudget(), existsResolver, workspaceRoot);
 
     internal static FSharpSemanticOptionsSnapshot ParseFSharpSemanticOptionsClosureSnapshot(
         FSharpSemanticEvaluationBudget budget,
@@ -410,13 +411,14 @@ public static partial class ProjectFileParser
         CancellationToken cancellationToken,
         bool hasAmbiguousDirectoryBuildAuthority,
         bool hasAmbiguousDirectoryPackagesAuthority,
-        Func<string, bool?>? existsResolver = null)
+        Func<string, bool?>? existsResolver = null,
+        string? workspaceRoot = null)
         => ParseFSharpSemanticOptionsSnapshotCore(relPath, projectXml,
             indexedTargetFrameworks, selectedTargetFramework, importResolver,
             importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
             directoryBuildTargetsPath, cancellationToken,
             hasAmbiguousDirectoryBuildAuthority, hasAmbiguousDirectoryPackagesAuthority,
-            budget, existsResolver);
+            budget, existsResolver, workspaceRoot);
 
     private static FSharpSemanticOptionsSnapshot ParseFSharpSemanticOptionsSnapshotCore(
         string relPath, string projectXml, string indexedTargetFrameworks,
@@ -430,7 +432,8 @@ public static partial class ProjectFileParser
         bool hasAmbiguousDirectoryBuildAuthority,
         bool hasAmbiguousDirectoryPackagesAuthority,
         FSharpSemanticEvaluationBudget budget,
-        Func<string, bool?>? existsResolver)
+        Func<string, bool?>? existsResolver,
+        string? workspaceRoot)
     {
         cancellationToken.ThrowIfCancellationRequested();
         FSharpParsingOptionsSnapshot selection = ParseFSharpParsingOptionsSnapshot(
@@ -493,7 +496,7 @@ public static partial class ProjectFileParser
             selection.SelectedTargetFramework,
             selection.AvailableTargetFrameworks?.ToArray() ?? [], importResolver,
             importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
-            directoryBuildTargetsPath, cancellationToken, budget, existsResolver);
+            directoryBuildTargetsPath, cancellationToken, budget, existsResolver, workspaceRoot);
         FSharpSemanticEvaluation evaluation = evaluator.Evaluate(root);
         cancellationToken.ThrowIfCancellationRequested();
         if (evaluation.Error is not null)
@@ -542,15 +545,15 @@ public static partial class ProjectFileParser
     }
 
     private static bool TryNormalizeSemanticRelative(string projectDir, string include,
-        out string normalized)
+        out string normalized, bool authoredSeparators = true)
     {
         normalized = "";
         if (string.IsNullOrWhiteSpace(include) || Path.IsPathRooted(include) ||
-            include.StartsWith('/') || include.StartsWith('\\'))
+            include.StartsWith('/') || authoredSeparators && include.StartsWith('\\'))
             return false;
 
         var parts = projectDir.Split('/', StringSplitOptions.RemoveEmptyEntries).ToList();
-        foreach (string part in include.Replace('\\', '/').Split('/',
+        foreach (string part in (authoredSeparators ? include.Replace('\\', '/') : WorkspacePaths.ToGitPath(include)).Split('/',
                      StringSplitOptions.RemoveEmptyEntries))
         {
             if (part == ".") continue;

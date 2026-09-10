@@ -54,11 +54,20 @@ public static class DeltaRefresher
         RefreshCore(store, workspaceRoot, changedRelPaths, readWorkspaceFile, log,
             recordCommit, recordBranch, recordBranchKnown);
 
+    // A private publication may start from another workspace's snapshot. Even an empty source
+    // diff must recapture root-sensitive Exists inputs, atomically with the new root identity.
+    internal static RefreshResult RefreshForPublication(
+        IndexStore store, string workspaceReadRoot, IReadOnlyCollection<string>? changedRelPaths,
+        string publishedWorkspaceRoot, Action<string>? log = null) =>
+        RefreshCore(store, workspaceReadRoot, changedRelPaths,
+            GitInfo.ReadBoundedWorkspaceFileResult, log, null, null, false,
+            Path.GetFullPath(publishedWorkspaceRoot));
+
     private static RefreshResult RefreshCore(
         IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? changedRelPaths,
         Func<string, string, int, GitInfo.WorkspaceFileReadResult> readWorkspaceFile,
         Action<string>? log, string? recordCommit, string? recordBranch,
-        bool recordBranchKnown)
+        bool recordBranchKnown, string? publishedWorkspaceRoot = null)
     {
         var sw = Stopwatch.StartNew();
         var stored = store.AllFilesByPath();
@@ -337,8 +346,10 @@ public static class DeltaRefresher
                     store.ReplaceFSharpParseCoverage(tx, indexedFile.Id, coverage);
                 }
             }
+            if (publishedWorkspaceRoot is not null)
+                store.SetMeta(tx, "workspace_root", publishedWorkspaceRoot);
             bool existsChanged = MsBuildExistsCapture.Refresh(store, tx, workspaceRoot,
-                detectAll ? null : candidates);
+                detectAll || publishedWorkspaceRoot is not null ? null : candidates);
             if (added + changed + deleted > 0 || existsChanged)
             {
                 refreshedAtUtc = DateTime.UtcNow.ToString("O");

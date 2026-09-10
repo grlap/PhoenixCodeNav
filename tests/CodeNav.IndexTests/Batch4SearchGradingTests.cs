@@ -288,7 +288,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("39", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("40", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -411,6 +411,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("shared-mcp-daemon", ids);
         Assert.Contains("shared-daemon-session-recovery", ids);
         Assert.Contains("shared-semantic-project-extension", ids);
+        Assert.Contains("shared-semantic-path-context", ids);
         Assert.Contains("shared-semantic-invariant-conditions", ids);
         Assert.Contains("shared-mcp-daemon-default", ids);
         Assert.Contains("workspace-msbuild-config-indexing", ids);
@@ -653,11 +654,30 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("v0.12.101 shared scalar conditions", invariantConditions);
         Assert.Contains("invariant-false F# items allow later properties", invariantConditions);
         Assert.Contains("mutable guards kept", invariantConditions);
+        string copyLocal = Assert.Single(json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == "fsharp-semantic-project-reference-copy-local")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("Private is copy-local, not compiler inclusion", copyLocal);
+        Assert.Contains("ReferenceOutputAssembly retained", copyLocal);
+        Assert.Contains("no new C# closure support", copyLocal);
+        string optionalGuards = Assert.Single(json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == "fsharp-semantic-optional-property-guards")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("exact PropertyGroup nonempty guards assume absent property empty", optionalGuards);
+        Assert.Contains("disclosed; assigned values retained", optionalGuards);
+        Assert.Contains("no environment reads or general missing-property fallback", optionalGuards);
         string projectExtension = Assert.Single(json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString() == "shared-semantic-project-extension")
             .GetProperty("summary").GetString()!;
         Assert.Contains("MSBuildProjectExtension from root project path before imports", projectExtension);
         Assert.Contains("reserved, SDK-independent", projectExtension);
+        string pathContext = Assert.Single(json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == "shared-semantic-path-context")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("C#/F# MSBuildProject*/MSBuildThisFile* paths", pathContext);
+        Assert.Contains("published root, lexical document, RHS capture", pathContext);
+        Assert.Contains("contained paths stay relative", pathContext);
+        Assert.Contains("unprovided built-ins never assumed empty; caller authority retained", pathContext);
         string sessionRecovery = Assert.Single(json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString() == "shared-daemon-session-recovery")
             .GetProperty("summary").GetString()!;
@@ -1583,6 +1603,29 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
             Assert.True(duplicateId is null,
                 $"Feature token '{token}' is also owned by '{duplicateId}'.");
         }
+    }
+
+    [Fact]
+    public void CompactedLegacyCapabilitySummariesRetainTheirClaims()
+    {
+        var tools = new NavigationTools(_manager, _semantic);
+        var json = Parse(tools.ServerCapabilities(detail: true));
+        string Summary(string id) => Assert.Single(json.GetProperty("features").EnumerateArray(),
+            feature => feature.GetProperty("id").GetString() == id).GetProperty("summary").GetString()!;
+        foreach (string token in new[] { "package/binary nunit/xunit/MSTest", "names containing nunit.framework",
+                     "compiled [TestFixture] graph leaves promoted without framework refs", "narrow dotted-suffix fallback, never TestRoute",
+                     "Schema v7", "older cached isTest may differ", "Since v8, same-AssemblyName csproj pairs" })
+            Assert.Contains(token, Summary("test-classification"));
+        foreach (string token in new[] { "outline/search_symbol/symbol_at/definition", "static/sealed/abstract/virtual/override/new/readonly/const",
+                     "schema v4; omitted if none", "partial uses isPartial on every symbol", "outline-type partialFiles",
+                     "accessors={get:'public',set:'private'}", "only for accessibility differing from the member (schema v9)" })
+            Assert.Contains(token, Summary("member-modifiers"));
+        foreach (string token in new[] { "building only", "server_capabilities.index.progress + index_building",
+                     "scanning|parsing_projects|indexing_files|finalizing", "filesIndexed/filesTotal/elapsedMs",
+                     "monotonic counts, no fake percent", "no ready/background-refresh bar", "filesSkipped/projectsFailed only >0",
+                     "filesPerSecond/estimatedRemainingMs only after >=100 files over >=1s in indexing_files",
+                     "pendingProcessed=monotonic applied deltas", "pendingChanges both flat means stuck pump" })
+            Assert.Contains(token, Summary("build-progress"));
     }
 
     [Fact]

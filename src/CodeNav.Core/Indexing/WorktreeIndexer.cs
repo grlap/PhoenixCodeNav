@@ -345,13 +345,12 @@ public static class WorktreeIndexer
                     }
                 }
                 var result = RefreshWithTransientRetries(store, readRoot,
-                    sweep ? null : paths, log);
+                    sweep ? null : paths, target.WorkspacePath, log);
                 added = result.AddedFiles;
                 changed = result.ChangedFiles;
                 deleted = result.DeletedFiles;
-                // SnapshotToReserved copied the main workspace's metadata. Rebind the staged
-                // database before publication so a manager in the sibling accepts its own index.
-                store.SetMeta("workspace_root", Path.GetFullPath(target.WorkspacePath));
+                // Reconcile bound the publication root and recaptured its Exists inputs in the
+                // same transaction, including an unchanged-commit/empty-dirt targeted refresh.
                 if (head is not null)
                 {
                     store.SetMeta("indexed_commit", head);
@@ -424,14 +423,15 @@ public static class WorktreeIndexer
 
     private static RefreshResult RefreshWithTransientRetries(
         IndexStore store, string workspaceRoot, IReadOnlyCollection<string>? paths,
-        Action<string> log)
+        string publishedWorkspaceRoot, Action<string> log)
     {
         int retry = 0;
         while (true)
         {
             try
             {
-                return DeltaRefresher.Refresh(store, workspaceRoot, paths, log);
+                return DeltaRefresher.RefreshForPublication(store, workspaceRoot, paths,
+                    publishedWorkspaceRoot, log);
             }
             catch (RefreshInputUnavailableException ex)
                 when (retry < DeltaRefresher.RefreshInputRetryDelays.Length)

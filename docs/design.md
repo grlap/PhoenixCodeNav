@@ -278,7 +278,7 @@ F# makes it available before early imports; C# uses it within its existing CPM s
 including under early Directory.Build authority because the value is reserved, not overridable.
 An admitted assignment to this reserved property fails closed (F# `fsharp_semantic_property_unsupported`,
 C# unresolved-reference fallback). A missing project path confers no guessed extension, and this
-does not infer SDK flags or add general `MSBuildProject*`/`MSBuildThisFile*` support.
+does not infer SDK flags. The original extension-only boundary is expanded below in v0.12.102.
 Schema v38 rebuilds extension-dependent persisted F# `Exists` probes; cold and delta capture use
 the same root context as semantic queries.
 Since v0.12.101, a shared bounded condition proof prevents permanently inactive semantic items
@@ -293,8 +293,9 @@ property-before-item evaluation.
 The proof uses the existing quote-aware raw boolean grammar (`And`, `Or`, `!`, parentheses)
 and three-valued reasoning: only proven false suppresses the guard. Its leaves admit literal
 booleans and equality/inequality between literals or single complete invariant properties.
-The invariant predicate is shared with the reserved root context, currently only
-`MSBuildProjectExtension`; soundness depends on refusing assignments to those reserved values.
+The invariant predicate admits only complete reserved root-project values (originally
+`MSBuildProjectExtension`); soundness depends on refusing assignments to those values.
+Document-relative reserved values are not globally invariant and never enter this proof.
 Mutable properties, including SDK flags, and unsupported proof atoms remain unknown. Values are
 compared as scalars, never reparsed as condition syntax; the proof performs no intrinsic expansion
 or `Exists` probes. Ordinary condition evaluation shares that raw grammar and expands scalar
@@ -305,6 +306,82 @@ property value containing a boolean expression is not itself condition syntax. C
 this F# ordering guard and this change does not broaden its
 existing imported-item/condition evaluation. Schema v39 re-harvests newly reachable persisted F#
 `Exists` probes through the same cold/delta evaluator. Existing limits are unchanged.
+Since v0.12.102, F# admits `Private` on `ProjectReference` as copy-local-only metadata,
+using language-neutral reference-metadata roles in Core. Attribute and child forms do not
+change compiler inclusion; copy-local values and conditions need no compiler authority,
+while the existing child-metadata shape checks remain. `ReferenceOutputAssembly=false`
+still excludes the compiler reference; unsupported compiler-affecting metadata such as
+`Aliases` remains refused. C# structural discovery already retains the build edge without
+evaluating reference metadata, and its compiler loader keeps that dependency. This is not
+a claim that C# now evaluates imported reference metadata or honors every compiler-only
+metadata rule. Structural build edges must not be removed for `ReferenceOutputAssembly=false`.
+F#-to-C# compiler closure remains a separate unsupported boundary; admitting `Private`
+does not authorize substituting a stale last-built C# DLL.
+
+The same release selects an assumed-empty analysis default for an exact `PropertyGroup`
+nonempty guard such as `'$(OptionalBuildToolsRoot)' != ''`. An absent user-property entry may
+be treated as empty to skip that group, including before the project in early imports.
+This is an explicitly selected analysis context, not detected environment or `/p` state.
+Normal condition evaluation takes precedence, so complete values (including explicit empty)
+and incomplete assignments remain authoritative. The shared expression helper recognizes
+only a single property operand compared with empty using `!=` (quoted or unquoted property,
+either operand order); concatenation, functions and compound conditions gain no exemption.
+Only F# PropertyGroup traversal enables this policy: imports, items and child-property or
+reference-metadata conditions retain their existing unknown-property behavior. No assumed
+value is inserted into the property bag or used by the invariant-condition proof, and the
+item/property ordering guards remain intact. General missing-property expansion is unchanged.
+Each consumed assumption adds `fsharp_semantic_optional_property_assumed_empty` to public
+`partialReason`; semantic confidence remains `indexed` rather than claiming the user's actual
+build configuration. Evaluation never reads process environment for these guards. Schema v40
+re-harvests newly reachable `Exists` dependencies under the same cold/delta/query policy,
+including those reached after admitting copy-local project metadata and the path context below.
+Numeric limits are unchanged.
+
+The shared Core path resolver supplies six root-project properties: `MSBuildProjectDirectory`,
+`MSBuildProjectDirectoryNoRoot`, `MSBuildProjectFullPath`, `MSBuildProjectFile`,
+`MSBuildProjectName`, and `MSBuildProjectExtension`; and six current-document properties:
+`MSBuildThisFileDirectory`, `MSBuildThisFileDirectoryNoRoot`, `MSBuildThisFileFullPath`,
+`MSBuildThisFile`, `MSBuildThisFileName`, and `MSBuildThisFileExtension`.
+Project values remain tied to the owning project throughout imports. Document values use the
+lexical document of each expression, including nested imports and return; an assignment captures
+the expanded value in its defining document. Both families are reserved against assignment, but
+only the root family is eligible for the invariant-false proof. File includes the extension;
+Name excludes it. ProjectDirectory has no added trailing separator, ThisFileDirectory has one;
+NoRoot removes the host filesystem root, not the workspace root, and is not a portable path.
+At a filesystem root, ProjectDirectoryNoRoot is empty while ThisFileDirectoryNoRoot retains
+one host separator; the ordinary Directory values both retain the root itself.
+
+Absolute values require captured published workspace-root authority, not CWD or Phoenix's runtime.
+Filename components remain available from a known relative project/document path without a root.
+Unavailable supported properties and known unprovided MSBuild/toolchain inputs (including
+`MSBuildToolsPath`, `MSBuildExtensionsPath`, `MSBuildRuntimeType` and `OS`) never receive the
+optional-empty exemption. An admitted explicit assignment to an unprovided non-path property
+retains its existing authority; no installed toolset or environment value is guessed.
+With path authority, nonempty directory guards evaluate true and contribute their compiler inputs
+without the assumed-empty reason. C# consumes the same resolver only within its existing
+unconditional CPM projection: central assignments use the indexed Directory.Packages document,
+while project-local package metadata uses the project document. Imports, conditions and other
+unsupported C# expressions do not gain admission.
+
+Cold capture receives the published root separately from its anchored I/O root; delta and semantic
+queries read the publication identity from their pinned metadata. Contained absolute Import,
+Compile, ProjectReference, HintPath and Exists paths normalize to workspace-relative identities.
+Expansion retains both scalar spelling and path spelling, assembling the latter per fragment:
+authored MSBuild backslashes become separators on Unix, while captured native path components
+retain literal backslashes. Assignments and helper-item snapshots carry both spellings through
+aliases; only path consumers select the path spelling, so scalar comparisons remain unchanged.
+Relative Import paths still use the current document directory; relative item and Exists paths
+still use the project directory. Outside-workspace paths retain their existing refusals.
+Derived identity columns remain relative, including foreign-key item/reference identities;
+intentional `meta.workspace_root` and original source snapshots are not subject to that rule.
+Moving a workspace still requires an explicit rebuild. After rebuild, root-independent inputs
+remain equivalent and root-sensitive conditions legitimately change. Existing index-version and
+semantic-input fingerprints invalidate warm models; no property bag is persisted.
+Sibling-worktree publication rebinds the logical root and recaptures all F# Exists dependencies
+in the same refresh transaction, even for an unchanged commit with no working-tree dirt. This
+does not force a source-file sweep: the expanded property/item state is query-time state, while
+the root-sensitive persisted projection is the Exists dependency set and its observed presence.
+
 The declared property-function allowlist contains two exact shapes. The path-only
 `$([MSBuild]::MakeRelative($(MSBuildProjectDirectory), $(MSBuildThisFileDirectory)))`
 shape allows optional matching single or double quotes around either reserved property. It is

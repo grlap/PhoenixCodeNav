@@ -30,7 +30,9 @@ public static partial class ProjectFileParser
         bool hasAmbiguousDirectoryPackagesAuthority,
         bool hasPotentialLateProjectPropertyAuthority = false,
         bool hasPotentialImportedSdkPropertyAuthority = false,
-        string? projectPath = null)
+        string? projectPath = null,
+        string? workspaceRoot = null,
+        string? directoryPackagesPath = null)
     {
         var direct = packageReferences.Select(reference =>
             new CSharpPackageReferenceSnapshot(reference.Package, reference.Version)).ToList();
@@ -90,6 +92,7 @@ public static partial class ProjectFileParser
             item.Elements().Any(e => (NameEquals(e, "Version") || NameEquals(e, "VersionOverride")) &&
                 e.Value.Contains("$(", StringComparison.Ordinal)));
         var expansionBudget = new CSharpCentralPropertyExpansionBudget();
+        var pathContext = new BoundedMsBuildProjectContext(projectPath, workspaceRoot);
         // SDK flags precede Directory.Build.props, which this C# adapter does not evaluate.
         // Withhold those seeds when imported authority may shadow them; explicit central
         // assignments still run afterward. Literal package versions do not need the seeds.
@@ -104,7 +107,8 @@ public static partial class ProjectFileParser
         {
             if (hasPotentialLateProjectPropertyAuthority ||
                 project.Descendants().Any(e => NameEquals(e, "Import")) ||
-                !TryEvaluateCSharpCentralProperties(central, expansionBudget, sdkContext, projectPath, out properties))
+                !TryEvaluateCSharpCentralProperties(central, expansionBudget, sdkContext, pathContext,
+                    directoryPackagesPath, out properties))
                 return direct;
             int projectPropertyCount = 0;
             foreach (XElement property in project.Descendants().Where(e => NameEquals(e, "PropertyGroup"))
@@ -117,7 +121,7 @@ public static partial class ProjectFileParser
         else
         {
             properties = new(StringComparer.OrdinalIgnoreCase);
-            BoundedMsBuildProjectContext.SeedProperties(projectPath, properties);
+            pathContext.SeedProperties(properties);
             sdkContext.SeedProperties(properties);
         }
         foreach (var flag in flags) properties[flag.Key] = flag.Value;
@@ -128,7 +132,7 @@ public static partial class ProjectFileParser
             if (!usesProperties) return !value.Contains("$(", StringComparison.Ordinal);
             var referencedProperties = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             return TryExpandCSharpCentralPropertyValue(value, properties, referencedProperties,
-                       expansionBudget, out expanded) &&
+                       expansionBudget, pathContext, document, out expanded) &&
                    !referencedProperties.Overlaps(projectPropertyNames);
         }
         static bool ExpandItems(string value, string document, out List<string> ids)
@@ -143,7 +147,8 @@ public static partial class ProjectFileParser
         }
         var evaluator = new BoundedMsBuildPackageEvaluator(properties, Expand, ExpandItems,
             Unconditional, static () => true, CancellationToken.None);
-        foreach (XElement item in items) evaluator.Add(item.Parent!, item, "");
+        foreach (XElement item in items)
+            evaluator.Add(item.Parent!, item, (item.Document == central ? directoryPackagesPath : projectPath) ?? "");
         if (!evaluator.Evaluate()) return direct;
 
         var resolved = new List<CSharpPackageReferenceSnapshot>();
@@ -165,12 +170,13 @@ public static partial class ProjectFileParser
     private static bool TryEvaluateCSharpCentralProperties(XDocument central,
         CSharpCentralPropertyExpansionBudget expansionBudget,
         BoundedMsBuildSdkContext sdkContext,
-        string? projectPath,
+        BoundedMsBuildProjectContext pathContext,
+        string? documentPath,
         out Dictionary<string, BoundedMsBuildProperty> properties)
     {
         properties = new Dictionary<string, BoundedMsBuildProperty>(
             StringComparer.OrdinalIgnoreCase);
-        BoundedMsBuildProjectContext.SeedProperties(projectPath, properties);
+        pathContext.SeedProperties(properties);
         sdkContext.SeedProperties(properties);
         int propertyCount = 0;
         foreach (XElement group in central.Root!.Descendants().Where(element =>
@@ -191,7 +197,7 @@ public static partial class ProjectFileParser
                 }
 
                 if (!TryExpandCSharpCentralPropertyValue(property.Value.Trim(), properties,
-                        referencedProperties: null, expansionBudget, out string expanded))
+                        referencedProperties: null, expansionBudget, pathContext, documentPath ?? "", out string expanded))
                 {
                     properties.Remove(name);
                     continue;
@@ -206,6 +212,8 @@ public static partial class ProjectFileParser
         IReadOnlyDictionary<string, BoundedMsBuildProperty> properties,
         HashSet<string>? referencedProperties,
         CSharpCentralPropertyExpansionBudget expansionBudget,
+        BoundedMsBuildProjectContext pathContext,
+        string documentPath,
         out string expanded)
     {
         expanded = "";
@@ -225,8 +233,8 @@ public static partial class ProjectFileParser
             CancellationToken.None,
             MaxCSharpCentralPackagePropertyValueChars,
             // The enclosing C# projection still rejects every Condition before scalar expansion.
-            maxConditionDepth: 0);
-        return evaluator.TryExpandProperties(value, documentPath: "", selfProperty: null,
+            maxConditionDepth: 0, pathContext);
+        return evaluator.TryExpandProperties(value, documentPath, selfProperty: null,
                    out expanded, out bool complete, out _,
                    allowPropertyStringFunctions: false,
                    // The legacy C# expander preserved these markers as opaque text; the final
