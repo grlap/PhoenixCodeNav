@@ -37,6 +37,24 @@ watchers keep exclusive workspaces and writer ownership.
 `CodeNav.Core` has no dependency on the MCP SDK — it is a plain library that could back a
 different front end. `CodeNav.Mcp` is a thin protocol/shaping layer over it.
 
+### Core distribution and API compatibility
+
+Phoenix is delivered as one product, used through MCP or the CLI. `CodeNav.Core` and
+its `CodeNav.FSharp` compiler adapter are internal implementation libraries, not
+separately distributed NuGet packages; both projects declare `IsPackable=false`.
+This does not remove either library from Phoenix or change its use through project
+references. The operations portal remains a companion application.
+
+`WorktreeIndexer.Ensure` now requires an explicit `ProjectModelMode` before its `log`
+argument. Direct callers must migrate from
+`Ensure(mainRoot, mainDbPath, worktreePath, mode, log)` to
+`Ensure(mainRoot, mainDbPath, worktreePath, mode, manager.SelectedFSharpProjectModel, log)`
+and recompile against the updated Core assembly. Removing the five-argument overload is a
+source- and binary-breaking CLR API change; it does not change the MCP tool contract.
+The supplied model must be the owning index manager's captured selection. The old overload
+is not retained because resolving the process environment again could choose a different
+model when publishing a sibling index.
+
 ## The four navigation layers
 
 ### F# project models

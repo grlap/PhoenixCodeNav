@@ -124,6 +124,7 @@ For lower-noise indexed searches, optionally set
 `CODENAV_DEFAULT_QUERY_SCOPE=first_party` in the server environment.
 Per-call `queryScope: "all"` restores all indexed content.
 
+<!-- Compatibility anchor: website/index.html links here for the language boundaries. -->
 <a id="why-not-just-grep"></a>
 
 ## Language and model limits
