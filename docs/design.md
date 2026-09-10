@@ -349,6 +349,25 @@ discloses that limitation with `indexed` confidence. The assumed value never ent
 bag or the invariant-false proof. The file's actual assignment determines later import guards;
 neither duplicate-import suppression nor repeated-import idempotence is assumed.
 
+Since v0.12.104, `PHOENIX_MSBUILD_DIAGNOSTICS=1` enables a separate local diagnostic sidecar
+under `.codenav/telemetry/msbuild-<pid>-<run>.jsonl`. The common F# semantic evaluator entry
+creates one diagnostic session per project/TFM evaluation, including cold (`index.build`),
+delta (`index.refresh`) and query (`semantic.query`) paths; standalone parser calls are
+labelled `snapshot`. XML/context refusals before evaluator construction are outside this trace.
+The shared scalar evaluator receives the optional session explicitly and never reads diagnostic
+environment flags or files itself. C# callers leave that session null and remain unchanged.
+Per-evaluation IDs, ordered sequence numbers and paired span IDs distinguish condition attempts
+and expansions. Records include exact input/name/self-property strings, found/stored-complete
+state, the actual property branch, function completeness, residual property/item/metadata tokens,
+marker eligibility/retry and import outcomes. Start records identify the Core build and module.
+No property dictionary is dumped; evaluated expressions and individual values are nevertheless
+sensitive, unlike privacy-safe telemetry. The portal's `phoenix-*` selection excludes these files.
+Writes are opt-in synchronous best-effort appends, serialized within the process with each handle
+closed after its record; no background queues, size limits or retention deletion are introduced.
+I/O failures do not change evaluation results, but enabled logging can change timing. Disable it
+after reproducing the issue. Diagnostic files are neither indexed nor automatically uploaded.
+Schema v41 and all evaluation limits/results remain unchanged; this is instrumentation only.
+
 Import relevance discovery still retains every `Import` attribute's property dependencies.
 Relevance is distinct from item-phase consumption: successfully admitted live `Compile`,
 `Reference`, and `ProjectReference` items freeze their read property names (own attributes,

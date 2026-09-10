@@ -76,7 +76,8 @@ internal static class MsBuildExistsCapture
                     directoryPackages.Path, directoryBuild.PropsPath, directoryBuild.TargetsPath,
                     hasAmbiguousDirectoryBuildAuthority: directoryBuild.HasAmbiguity,
                     hasAmbiguousDirectoryPackagesAuthority: directoryPackages.PathAmbiguous,
-                    existsResolver: Capture, workspaceRoot: logicalRoot);
+                    existsResolver: Capture, workspaceRoot: logicalRoot,
+                    diagnosticOrigin: publishedWorkspaceRoot is null ? "index.refresh" : "index.build");
             }
             changed |= store.ReplaceMsBuildExistsPaths(tx, id, probes);
         }

@@ -42,6 +42,7 @@ internal sealed class BoundedMsBuildExpressionEvaluator
     private readonly int _maxPropertyValueChars;
     private readonly int _maxConditionDepth;
     private readonly BoundedMsBuildProjectContext? _pathContext;
+    private readonly Diagnostics.MsBuildDiagnosticSession? _diagnostics;
 
     public BoundedMsBuildExpressionEvaluator(
         IReadOnlyDictionary<string, BoundedMsBuildProperty> properties,
@@ -50,7 +51,8 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         CancellationToken cancellationToken,
         int maxPropertyValueChars,
         int maxConditionDepth,
-        BoundedMsBuildProjectContext? pathContext = null)
+        BoundedMsBuildProjectContext? pathContext = null,
+        Diagnostics.MsBuildDiagnosticSession? diagnostics = null)
     {
         _properties = properties;
         _expandIntrinsic = expandIntrinsic;
@@ -59,10 +61,29 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         _maxPropertyValueChars = maxPropertyValueChars;
         _maxConditionDepth = maxConditionDepth;
         _pathContext = pathContext;
+        _diagnostics = diagnostics;
     }
 
     public bool TryEvaluateCondition(string condition, string documentPath, out bool result,
         out string? error, string? unsetSelfProperty = null, int depth = 0)
+    {
+        if (_diagnostics is null)
+            return TryEvaluateConditionCore(condition, documentPath, out result, out error, unsetSelfProperty, depth);
+        long span = _diagnostics.NextSpan();
+        _diagnostics.Write("condition.begin", new { span, documentPath, condition, unsetSelfProperty, depth });
+        bool success = false;
+        result = false;
+        error = null;
+        try
+        {
+            success = TryEvaluateConditionCore(condition, documentPath, out result, out error, unsetSelfProperty, depth);
+            return success;
+        }
+        finally { _diagnostics.Write("condition.end", new { span, success, result, error }); }
+    }
+
+    private bool TryEvaluateConditionCore(string condition, string documentPath, out bool result,
+        out string? error, string? unsetSelfProperty, int depth)
     {
         CheckCancellation();
         result = false;
@@ -365,6 +386,61 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         Func<string, bool>? tryReservePropertyExpansion = null,
         Func<int, bool>? tryReserveExpandedValue = null)
     {
+        if (_diagnostics is null)
+            return ExpandPropertiesCore(input, documentPath, selfProperty, out output, out pathOutput,
+                out complete, out error, allowItemReferences, allowPropertyStringFunctions,
+                preserveOpaqueItemAndMetadataReferences, stopOnUnresolvedProperty,
+                tryReservePropertyExpansion, tryReserveExpandedValue);
+        long span = _diagnostics.NextSpan();
+        _diagnostics.Write("expansion.begin", new
+        {
+            span,
+            documentPath,
+            input,
+            selfProperty,
+            allowItemReferences,
+            allowPropertyStringFunctions,
+            preserveOpaqueItemAndMetadataReferences,
+            stopOnUnresolvedProperty,
+        });
+        bool success = false;
+        output = "";
+        pathOutput = null;
+        complete = false;
+        error = null;
+        try
+        {
+            success = ExpandPropertiesCore(input, documentPath, selfProperty, out output, out pathOutput,
+                out complete, out error, allowItemReferences, allowPropertyStringFunctions,
+                preserveOpaqueItemAndMetadataReferences, stopOnUnresolvedProperty,
+                tryReservePropertyExpansion, tryReserveExpandedValue, span);
+            return success;
+        }
+        finally
+        {
+            _diagnostics.Write("expansion.end", new
+            {
+                span,
+                success,
+                complete,
+                error,
+                output,
+                containsPropertyToken = output.Contains("$(", StringComparison.Ordinal),
+                containsMetadataToken = output.Contains("%(", StringComparison.Ordinal),
+                containsItemToken = output.Contains("@(", StringComparison.Ordinal),
+            });
+        }
+    }
+
+    private bool ExpandPropertiesCore(string input, string documentPath, string? selfProperty,
+        out string output, out string? pathOutput, out bool complete, out string? error,
+        bool allowItemReferences = false,
+        bool allowPropertyStringFunctions = true,
+        bool preserveOpaqueItemAndMetadataReferences = false,
+        bool stopOnUnresolvedProperty = false,
+        Func<string, bool>? tryReservePropertyExpansion = null,
+        Func<int, bool>? tryReserveExpandedValue = null, long diagnosticSpan = 0)
+    {
         CheckCancellation();
         output = "";
         pathOutput = null;
@@ -396,8 +472,10 @@ internal sealed class BoundedMsBuildExpressionEvaluator
         if (allowPropertyStringFunctions &&
             !TryExpandPropertyStringFunctions(input, documentPath, out scalarInput,
                 out functionsComplete, out error, stopOnUnresolvedProperty,
-                tryReservePropertyExpansion))
+                tryReservePropertyExpansion, diagnosticSpan))
             return false;
+        if (_diagnostics is not null)
+            _diagnostics.Write("expansion.functions", new { span = diagnosticSpan, complete = functionsComplete });
 
         var builder = new StringBuilder(scalarInput.Length);
         // Only Unix distinguishes captured native backslashes from authored MSBuild separators.
@@ -413,6 +491,8 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             string name = match.Groups["name"].Value;
             if (TryGetProperty(name, documentPath, out BoundedMsBuildProperty property))
             {
+                if (_diagnostics is not null)
+                    TraceProperty(diagnosticSpan, name, selfProperty, property.Complete ? "resolved" : "stored_incomplete", property);
                 if (stopOnUnresolvedProperty && !property.Complete) return false;
                 if (tryReservePropertyExpansion is not null &&
                     !tryReservePropertyExpansion(name))
@@ -429,9 +509,13 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             {
                 // Only the caller-designated absent property gains an empty-value exemption:
                 // its own value/self-default, or an explicitly assumed-empty presence guard.
+                if (_diagnostics is not null)
+                    TraceProperty(diagnosticSpan, name, selfProperty, "assumed_empty", null);
             }
             else
             {
+                if (_diagnostics is not null)
+                    TraceProperty(diagnosticSpan, name, selfProperty, "absent", null);
                 if (stopOnUnresolvedProperty) return false;
                 builder.Append(match.Value);
                 pathBuilder?.Append(match.Value);
@@ -474,6 +558,24 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             yield return match.Groups["name"].Value;
     }
 
+    private void TraceProperty(long span, string name, string? selfProperty, string decision,
+        BoundedMsBuildProperty? property)
+    {
+        if (_diagnostics is null) return;
+        _diagnostics.Write("expansion.property", new
+        {
+            span,
+            name,
+            selfProperty,
+            decision,
+            matchesSelf = name.Equals(selfProperty, StringComparison.OrdinalIgnoreCase),
+            knownProvided = BoundedMsBuildProjectContext.IsKnownProvidedProperty(name),
+            found = property.HasValue,
+            storedComplete = property?.Complete,
+            storedValue = property?.Value,
+        });
+    }
+
     private bool TryGetProperty(string name, string documentPath, out BoundedMsBuildProperty value)
     {
         if (_pathContext is not null && BoundedMsBuildProjectContext.IsReservedProperty(name))
@@ -487,7 +589,7 @@ internal sealed class BoundedMsBuildExpressionEvaluator
 
     private bool TryExpandPropertyStringFunctions(string input, string documentPath, out string output,
         out bool complete, out string? error, bool stopOnUnresolvedProperty,
-        Func<string, bool>? tryReservePropertyExpansion)
+        Func<string, bool>? tryReservePropertyExpansion, long diagnosticSpan)
     {
         CheckCancellation();
         error = null;
@@ -509,6 +611,9 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             string name = match.Groups["name"].Value;
             if (TryGetProperty(name, documentPath, out BoundedMsBuildProperty property))
             {
+                if (_diagnostics is not null)
+                    TraceProperty(diagnosticSpan, name, null,
+                        property.Complete ? "function_resolved" : "function_stored_incomplete", property);
                 if (property.Complete)
                 {
                     if (tryReservePropertyExpansion is not null &&
@@ -538,6 +643,8 @@ internal sealed class BoundedMsBuildExpressionEvaluator
             }
             else
             {
+                if (_diagnostics is not null)
+                    TraceProperty(diagnosticSpan, name, null, "function_absent", null);
                 if (stopOnUnresolvedProperty)
                 {
                     output = "";

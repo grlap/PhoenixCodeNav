@@ -123,6 +123,7 @@ public static partial class ProjectFileParser
         private readonly Dictionary<string, BoundedMsBuildProperty> _properties =
             new(StringComparer.OrdinalIgnoreCase);
         private readonly BoundedMsBuildExpressionEvaluator _expressions;
+        private readonly Diagnostics.MsBuildDiagnosticSession? _diagnostics;
         private readonly List<string> _sources = [];
         private readonly HashSet<string> _sourceSet =
             new(WorkspacePaths.FileSystemPathComparer);
@@ -172,7 +173,7 @@ public static partial class ProjectFileParser
             CancellationToken cancellationToken,
             FSharpSemanticEvaluationBudget budget,
             Func<string, bool?>? existsResolver,
-            string? workspaceRoot)
+            string? workspaceRoot, Diagnostics.MsBuildDiagnosticSession? diagnostics)
             : base(cancellationToken, MaxFSharpSemanticEvaluationDepth,
                 MaxFSharpSemanticImportDepth)
         {
@@ -190,6 +191,7 @@ public static partial class ProjectFileParser
             _directoryBuildTargetsPath = NormalizeOptionalWorkspacePath(directoryBuildTargetsPath);
             _cancellationToken = cancellationToken;
             _budget = budget;
+            _diagnostics = diagnostics;
             _pathContext = new BoundedMsBuildProjectContext(_projectPath, workspaceRoot);
             _pathContext.SeedProperties(_properties);
             _properties["TargetFramework"] = new(selectedTargetFramework, true);
@@ -208,7 +210,7 @@ public static partial class ProjectFileParser
                 cancellationToken,
                 MaxFSharpSemanticPropertyValueChars,
                 MaxFSharpSemanticConditionDepth,
-                _pathContext);
+                _pathContext, diagnostics);
             _packages = new(_properties,
                 (string value, string document, out string expanded) =>
                     TryExpandProperties(value, document, null, out expanded, out bool complete) && complete,
@@ -535,6 +537,8 @@ public static partial class ProjectFileParser
                 // A multi-target project cannot overwrite it while evaluating one selected context.
                 if (name.Equals("TargetFramework", StringComparison.OrdinalIgnoreCase)) continue;
                 _properties[name] = value;
+                if (_diagnostics is not null)
+                    _diagnostics.Write("property.assigned", new { documentPath, name, value = value.Value, complete = value.Complete });
             }
         }
 
@@ -1084,6 +1088,33 @@ public static partial class ProjectFileParser
         private void ProcessImport(XElement import, string documentPath,
             FSharpSemanticDocumentRole role, int depth)
         {
+            if (_diagnostics is null)
+            {
+                ProcessImportCore(import, documentPath, role, depth);
+                return;
+            }
+            long span = _diagnostics.NextSpan();
+            _diagnostics.Write("import.begin", new
+            {
+                span,
+                documentPath,
+                role = role.ToString(),
+                depth,
+                project = import.Attribute("Project")?.Value,
+                condition = import.Attribute("Condition")?.Value,
+            });
+            bool completed = false;
+            try
+            {
+                ProcessImportCore(import, documentPath, role, depth);
+                completed = true;
+            }
+            finally { _diagnostics.Write("import.end", new { span, completed, error = _error }); }
+        }
+
+        private void ProcessImportCore(XElement import, string documentPath,
+            FSharpSemanticDocumentRole role, int depth)
+        {
             CheckCancellation();
             if (import.Attributes().Any(attribute => attribute.Name.LocalName.Equals("Sdk",
                     StringComparison.OrdinalIgnoreCase)))
@@ -1114,10 +1145,14 @@ public static partial class ProjectFileParser
                       _expressions.TryGetAbsentImportMarker(guard.Value, out _))) return;
                 deferredConditionError = _error ??
                                          "fsharp_semantic_condition_unsupported";
+                if (_diagnostics is not null)
+                    _diagnostics.Write("import.condition_deferred", new { documentPath, error = deferredConditionError });
                 _error = null;
             }
             else if (!process)
             {
+                if (_diagnostics is not null)
+                    _diagnostics.Write("import.skipped", new { documentPath, reason = "condition_false" });
                 return;
             }
 
@@ -1163,6 +1198,8 @@ public static partial class ProjectFileParser
             }
             bool supportedProps = importPath.EndsWith(".props",
                 StringComparison.OrdinalIgnoreCase);
+            if (_diagnostics is not null)
+                _diagnostics.Write("import.path", new { documentPath, importPath });
             bool supportedDirectoryTargets = IsDirectoryBuildRole(role) &&
                 importPath.EndsWith(".targets", StringComparison.OrdinalIgnoreCase);
             if (!supportedProps && !supportedDirectoryTargets)
@@ -1184,6 +1221,8 @@ public static partial class ProjectFileParser
                              !ContainsDirectoryBuildSemanticFacts(deferredRoot))
                     {
                         _error = null;
+                        if (_diagnostics is not null)
+                            _diagnostics.Write("import.skipped", new { documentPath, importPath, reason = "no_semantic_facts" });
                         return;
                     }
                 }
@@ -1198,6 +1237,8 @@ public static partial class ProjectFileParser
                     ? role
                     : FSharpSemanticDocumentRole.ExplicitImport,
                 depth);
+            if (_diagnostics is not null)
+                _diagnostics.Write("import.evaluated", new { documentPath, importPath, error = _error });
         }
 
         private bool TryAssumeImportMarker(XElement import, string documentPath, XElement importedRoot)
@@ -1210,8 +1251,14 @@ public static partial class ProjectFileParser
                     property.Name.LocalName.Equals(marker, StringComparison.OrdinalIgnoreCase) &&
                     !property.HasElements && property.Attributes().All(attribute => attribute.Name.LocalName == "Label") &&
                     property.Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase)));
-            if (!setsMarker || !_expressions.TryEvaluateCondition(condition, documentPath,
-                    out bool process, out _, marker) || !process) return false;
+            if (_diagnostics is not null)
+                _diagnostics.Write("import.marker", new { documentPath, marker, setsMarker });
+            if (!setsMarker) return false;
+            bool evaluated = _expressions.TryEvaluateCondition(condition, documentPath,
+                out bool process, out string? retryError, marker);
+            if (_diagnostics is not null)
+                _diagnostics.Write("import.marker_retry", new { documentPath, marker, evaluated, process, error = retryError });
+            if (!evaluated || !process) return false;
             // An explicit analysis assumption, not detected global/environment authority. Never
             // seed it into the property bag or use it in the invariant-false item proof.
             _partialReasons.Add("fsharp_semantic_import_property_assumed_empty");

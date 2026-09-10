@@ -28,6 +28,25 @@ repo's `CLAUDE.md` / `AGENTS.md` ·
 [`docs/agent-experience-roadmap.md`](docs/agent-experience-roadmap.md) — the prioritized product
 contract for the MCP's agent experience.
 
+## MSBuild evaluation diagnostics
+
+For an F# project/import evaluation problem, set `PHOENIX_MSBUILD_DIAGNOSTICS=1` in the
+environment of the Phoenix process doing the work (including the workspace daemon), then
+reproduce the operation. Restart an already-running daemon with that environment; changing
+only an attached CLI's environment does not reconfigure it.
+
+Local JSONL records appear beside telemetry at `.codenav/telemetry/msbuild-<pid>-<run>.jsonl`.
+They include project/TFM, document, condition, property lookup/completeness decisions,
+assumed-empty retries, import outcomes, evaluation IDs and Core build/module identity.
+The same F# evaluator is traced for cold indexing, delta refresh and semantic queries.
+
+These are **raw local diagnostics**, not privacy-safe telemetry: expressions and individual
+property values can contain sensitive build configuration. They are not sent to the portal
+or MCP stdout. Logging is off by default, adds synchronous I/O when enabled, and has no
+automatic size cap or retention cleanup. Unset the variable after diagnosis and remove
+the diagnostic files when no longer needed. A canceled/aborted trace does not establish a
+parser defect; diagnostic I/O can affect timing. C# evaluation and index semantics are unchanged.
+
 ## Why not just grep?
 
 At thousands of projects / millions of lines, text search returns too many weak matches, dependency

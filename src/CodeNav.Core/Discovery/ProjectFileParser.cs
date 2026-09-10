@@ -391,13 +391,14 @@ public static partial class ProjectFileParser
         bool hasAmbiguousDirectoryBuildAuthority = false,
         bool hasAmbiguousDirectoryPackagesAuthority = false,
         Func<string, bool?>? existsResolver = null,
-        string? workspaceRoot = null)
+        string? workspaceRoot = null,
+        string diagnosticOrigin = "snapshot")
         => ParseFSharpSemanticOptionsSnapshotCore(relPath, projectXml,
             indexedTargetFrameworks, selectedTargetFramework, importResolver,
             importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
             directoryBuildTargetsPath, cancellationToken,
             hasAmbiguousDirectoryBuildAuthority, hasAmbiguousDirectoryPackagesAuthority,
-            new FSharpSemanticEvaluationBudget(), existsResolver, workspaceRoot);
+            new FSharpSemanticEvaluationBudget(), existsResolver, workspaceRoot, diagnosticOrigin);
 
     internal static FSharpSemanticOptionsSnapshot ParseFSharpSemanticOptionsClosureSnapshot(
         FSharpSemanticEvaluationBudget budget,
@@ -418,7 +419,7 @@ public static partial class ProjectFileParser
             importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
             directoryBuildTargetsPath, cancellationToken,
             hasAmbiguousDirectoryBuildAuthority, hasAmbiguousDirectoryPackagesAuthority,
-            budget, existsResolver, workspaceRoot);
+            budget, existsResolver, workspaceRoot, "semantic.query");
 
     private static FSharpSemanticOptionsSnapshot ParseFSharpSemanticOptionsSnapshotCore(
         string relPath, string projectXml, string indexedTargetFrameworks,
@@ -433,7 +434,7 @@ public static partial class ProjectFileParser
         bool hasAmbiguousDirectoryPackagesAuthority,
         FSharpSemanticEvaluationBudget budget,
         Func<string, bool?>? existsResolver,
-        string? workspaceRoot)
+        string? workspaceRoot, string diagnosticOrigin)
     {
         cancellationToken.ThrowIfCancellationRequested();
         FSharpParsingOptionsSnapshot selection = ParseFSharpParsingOptionsSnapshot(
@@ -492,13 +493,16 @@ public static partial class ProjectFileParser
                 "fsharp_project_options_unavailable");
         }
 
+        using var diagnostics = Diagnostics.MsBuildDiagnosticSession.Start(workspaceRoot,
+            relPath, selection.SelectedTargetFramework, diagnosticOrigin);
         var evaluator = new FSharpSemanticProjectEvaluator(relPath,
             selection.SelectedTargetFramework,
             selection.AvailableTargetFrameworks?.ToArray() ?? [], importResolver,
             importSizeResolver, directoryPackagesPropsPath, directoryBuildPropsPath,
-            directoryBuildTargetsPath, cancellationToken, budget, existsResolver, workspaceRoot);
+            directoryBuildTargetsPath, cancellationToken, budget, existsResolver, workspaceRoot, diagnostics);
         FSharpSemanticEvaluation evaluation = evaluator.Evaluate(root);
         cancellationToken.ThrowIfCancellationRequested();
+        diagnostics?.End(evaluation.Error, evaluation.PartialReason);
         if (evaluation.Error is not null)
         {
             return new FSharpSemanticOptionsSnapshot([], evaluation.CommandLineArgs,

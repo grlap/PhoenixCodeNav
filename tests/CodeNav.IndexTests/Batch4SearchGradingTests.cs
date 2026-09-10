@@ -407,6 +407,10 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("fsharp-semantic-default-configuration-platform", ids);
         Assert.Contains("fsharp-semantic-import-markers", ids);
         Assert.Contains("fsharp-semantic-item-property-reads", ids);
+        string msbuildDiagnostics = Assert.Single(json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == "msbuild-diagnostics")
+            .GetProperty("summary").GetString()!;
+        Assert.Contains("opt-in local F# evaluation JSONL beside telemetry", msbuildDiagnostics);
         Assert.Contains("fsharp-semantic-package-asset-closure", ids);
         Assert.Contains("csharp-semantic-central-package-management", ids);
         Assert.Contains("csharp-semantic-central-package-property-expansion", ids);
@@ -551,6 +555,12 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.Contains("actionably incomplete contexts are partial", fsharpSymbolSearch);
         Assert.Contains("SDK/import limits remain advisory", fsharpSymbolSearch);
         Assert.Contains(".fsx-only scopes fail closed", fsharpSymbolSearch);
+        Assert.Contains("syntax declarations plus parse and project-option coverage from .fs/.fsi files", fsharpSymbolSearch);
+        foreach (string claim in new[] { "persists deterministic FCS",
+                     "search_symbol", "F# kinds", "namespace/path/generated filters", "generic arity",
+                     "orphan disclosure", "signature/implementation pairs", "linked multi-owner files",
+                     "source/project-option delta convergence", "mixed script scopes disclose skipped text-only files" })
+            Assert.Contains(claim, fsharpSymbolSearch);
         string fsharpIndexedContextBudget = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
