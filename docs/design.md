@@ -1584,7 +1584,7 @@ broader compatible range requires a later explicit contract and evidence.
   tells the host to restart/update its agent;
 - a newer client may request `retire-and-replace`; a compatible older daemon stops accepting new
   sessions, removes its endpoint, drains admitted sessions under the existing operation deadline
-  ceiling, releases the workspace writer lease, removes its ready descriptor, and exits. Endpoint
+  ceiling, then follows the final-shutdown sequence described below and exits. Endpoint
   disappearance alone is not completion: unless another successor generation already owns
   discovery, the newer client must acquire and release a transient lease probe before starting its
   successor;
@@ -1597,13 +1597,20 @@ broader compatible range requires a later explicit contract and evidence.
 
 The daemon stays alive for a 15-minute linger after its last client disconnects so normal agent
 restarts retain the watcher and semantic estate. Another connection cancels the idle shutdown. A
-keep-alive option supports build servers. At final shutdown the daemon stops accepting connections,
-drains admitted work, disposes semantic/index services, removes only its own verified descriptor and
-endpoint, and releases the workspace lease. An initialized raw-relay MCP session ends if its daemon
-dies; the proxy does not replace its transport under the existing protocol session. The MCP host then
-restarts its stdio proxy; replacement proxies use the same bounded autostart election, so one starts
-the successor while peers wait. Negotiation failures before initialization remain visible through the
-typed unavailable shim rather than silently opening the database.
+keep-alive option supports build servers. At final shutdown the daemon stops accepting connections
+and removes its endpoint, drains admitted work, then disposes semantic/index services and removes
+only its own verified descriptor. Index disposal releases the workspace writer lease after its
+owned SQLite resources. If background index work outlives bounded disposal, resource and lease
+release is deferred until that work settles; cleanup failure can also retain ownership. Descriptor
+removal therefore does not prove that the writer lease is free. A retire-and-replace client performs
+the transient lease probe described above; an ordinary successor daemon instead attempts to acquire
+its own writer lease during index startup. On every platform, the shared daemon rejects a non-writer
+index manager with a typed startup refusal and exits before creating its listener. An initialized
+raw-relay MCP session ends if its daemon dies; the proxy does not replace its transport under the
+existing protocol session. The MCP host then restarts its stdio proxy; replacement proxies use the
+same bounded autostart election, so one starts the successor while peers wait. Negotiation failures
+before initialization remain visible through the typed unavailable shim rather than silently opening
+the database.
 Retirement or shutdown during an in-flight private staged rebuild abandons that GUID-named stage;
 the existing verified orphan-scavenging contract reaps it after the successor acquires ownership,
 without publishing partial output or deleting another owner's stage.
