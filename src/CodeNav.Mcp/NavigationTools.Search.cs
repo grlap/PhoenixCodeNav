@@ -309,14 +309,10 @@ public sealed partial class NavigationTools
         });
     }
 
-    // Only compile-form source participates in this indexed signal. Scripts and other text-only
-    // files normally have no compile owner, which does not make them orphaned source.
+    // Core owns source eligibility, shared with the overview's indexed orphan count.
     // Batch the pre-budget page once; serialization may shrink it without querying again.
     private static HashSet<string> OrphanedTextPaths(IndexQueries q, IEnumerable<TextHit> hits) =>
-        q.OrphanedPaths(hits.Select(hit => hit.FilePath).Where(path =>
-            path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
-            path.EndsWith(".fs", StringComparison.OrdinalIgnoreCase) ||
-            path.EndsWith(".fsi", StringComparison.OrdinalIgnoreCase)).ToArray());
+        q.OrphanedSourcePaths(hits.Select(hit => hit.FilePath).ToArray());
 
     // Best-effort owning symbol per .cs hit — BATCHED (one grouped query per ~40 keys) instead of one
     // InnermostSymbolAt point query per hit (9fr N+1: a full page issued up to ~100 queries).

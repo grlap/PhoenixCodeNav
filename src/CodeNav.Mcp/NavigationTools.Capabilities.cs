@@ -500,10 +500,11 @@ public sealed partial class NavigationTools
             totalLines = stats.TotalLines,
             symbols = stats.Symbols,
             generatedFiles = stats.GeneratedFiles,
-            // C# plus compiled-form F# source (.fs/.fsi) in no project's compile set — code no
-            // project compiler consumes. F# scripts (.fsx) are intentionally excluded. The graph
+            // C# plus compile-form F# source (.fs/.fsi) with no indexed compile owner.
+            // F# scripts (.fsx) are intentionally excluded. The graph
             // expands <Compile Include> globs and honors <Compile Remove>; residual gaps are shared
-            // .projitems, props-level globs, and ignored Conditions. Per C# symbol hit: orphaned.
+            // .projitems, props-level globs, and ignored Conditions; this is not native-build proof.
+            // Per source symbol/text hit and structured text suggestion sample: orphaned.
             orphanedFiles = stats.OrphanedFiles,
             targetFrameworks = stats.TfmBreakdown,
             // Vendored/generated directory globs detected in the index — pass to search_symbol /

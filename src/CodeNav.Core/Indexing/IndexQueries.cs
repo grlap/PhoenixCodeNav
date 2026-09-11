@@ -3309,6 +3309,11 @@ public sealed partial class IndexQueries : IDisposable
 
     // ---------------------------------------------------------------- misc
 
+    // Shared by the source-scoped lookup and Overview; both queries bind files as f.
+    // Use indexed language classification, excluding text-only F# scripts regardless of case.
+    private const string OrphanEligibleSourceSql =
+        "(f.lang='cs' OR (f.lang='fs' AND lower(f.path) NOT LIKE '%.fsx'))";
+
     /// <summary>Of the given workspace-relative paths, the subset in NO project's compile set — the
     /// "is this file really compiled?" signal (the compile graph grep lacks). Since 3tz the graph
     /// expands &lt;Compile Include&gt; wildcard globs (legacy wildcard projects are owned), honors
@@ -3319,9 +3324,20 @@ public sealed partial class IndexQueries : IDisposable
     /// so dead code under it will NOT appear. Still a syntactic signal, not a compiler fact — never
     /// hide results on it; absence is not absolute proof a file compiles.</summary>
     public HashSet<string> OrphanedPaths(IReadOnlyCollection<string> paths)
+        => OrphanedPaths(paths, sourceOnly: false);
+
+    /// <summary>Of the given paths, indexed C# and compile-form F# sources with no compile owner.
+    /// Uses the same source eligibility rule as Overview's orphan count; text-only files, including
+    /// F# scripts, are excluded. This remains indexed-model evidence, with the limitations described
+    /// by <see cref="OrphanedPaths(IReadOnlyCollection{string})"/>.</summary>
+    public HashSet<string> OrphanedSourcePaths(IReadOnlyCollection<string> paths)
+        => OrphanedPaths(paths, sourceOnly: true);
+
+    private HashSet<string> OrphanedPaths(IReadOnlyCollection<string> paths, bool sourceOnly)
     {
         var result = new HashSet<string>(StringComparer.Ordinal);
         if (paths.Count == 0) return result;
+        string sourceFilter = sourceOnly ? $" AND {OrphanEligibleSourceSql}" : "";
         foreach (var chunk in paths.Distinct(StringComparer.Ordinal).Chunk(400))
         {
             var args = new List<(string, object)>();
@@ -3335,7 +3351,7 @@ public sealed partial class IndexQueries : IDisposable
             foreach (var path in Query(
                 $"""
                 SELECT f.path FROM files f
-                WHERE f.path IN ({string.Join(",", placeholders)})
+                WHERE f.path IN ({string.Join(",", placeholders)}){sourceFilter}
                   AND NOT EXISTS (SELECT 1 FROM compile_items ci WHERE ci.file_id = f.id)
                 """,
                 r => r.GetString(0), args.ToArray()))
@@ -3489,10 +3505,9 @@ public sealed partial class IndexQueries : IDisposable
             Solutions: Scalar("SELECT COUNT(*) FROM solutions"),
             GeneratedFiles: Scalar("SELECT COUNT(*) FROM files WHERE is_generated=1"),
             // Indexed C# and compiled-form F# source (.fs/.fsi) in no project's compile set —
-            // the "really compiled?" count. F# scripts are intentionally outside project compile
-            // sets, so .fsx is source/search evidence but never an orphan (see OrphanedPaths for
-            // the exact C# symbol semantics and remaining shared/props/Condition gaps).
-            OrphanedFiles: Scalar("SELECT COUNT(*) FROM files WHERE (lang='cs' OR (lang='fs' AND lower(path) NOT LIKE '%.fsx')) AND NOT EXISTS (SELECT 1 FROM compile_items ci WHERE ci.file_id = files.id)"),
+            // the same indexed-model signal as OrphanedSourcePaths, not native-build proof.
+            // F# scripts are text-only evidence, so they are never counted as orphaned source.
+            OrphanedFiles: Scalar($"SELECT COUNT(*) FROM files f WHERE {OrphanEligibleSourceSql} AND NOT EXISTS (SELECT 1 FROM compile_items ci WHERE ci.file_id = f.id)"),
             TfmBreakdown: tfms,
             IndexVersion: version,
             IndexedAtUtc: at);

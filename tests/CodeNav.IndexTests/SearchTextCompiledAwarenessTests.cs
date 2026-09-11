@@ -43,36 +43,41 @@ public class SearchTextCompiledAwarenessTests(ITestOutputHelper output)
             Write(root, "Fs/Fs.fsproj", """
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup><TargetFramework>net10.0</TargetFramework><EnableDefaultCompileItems>true</EnableDefaultCompileItems></PropertyGroup>
-                  <ItemGroup><Compile Include="Live.fsi" /><Compile Remove="Removed.fs" /></ItemGroup>
+                  <ItemGroup><Compile Include="Live.fsi;Upper.FSI" /><Compile Remove="Removed.fs" /></ItemGroup>
                 </Project>
                 """);
-            foreach (string path in new[] { "Cs/Live.cs", "Cs/Removed.cs", "Cs/Linked.cs", "Loose.cs" })
+            foreach (string path in new[] { "Cs/Live.cs", "Cs/Removed.cs", "Cs/Linked.cs", "Cs/Upper.CS", "Loose.cs", "LooseUpper.CS" })
                 Write(root, path, $"// {Marker}\nclass Source {{ }}\n");
-            foreach (string path in new[] { "Fs/Live.fs", "Fs/Removed.fs", "Loose.fs" })
+            foreach (string path in new[] { "Fs/Live.fs", "Fs/Removed.fs", "Loose.fs", "LooseMixed.fS" })
                 Write(root, path, $"// {Marker}\nmodule Source\nlet value = 1\n");
-            foreach (string path in new[] { "Fs/Live.fsi", "Loose.fsi" })
+            foreach (string path in new[] { "Fs/Live.fsi", "Fs/Upper.FSI", "Loose.fsi", "LooseUpper.FSI" })
                 Write(root, path, $"// {Marker}\nmodule Source\nval value: int\n");
-            foreach (string path in new[] { "Script.fsx", "Readme.md", "Query.sql", "web.config" })
+            foreach (string path in new[] { "Script.fsx", "ScriptMixed.FsX", "Readme.md", "Query.sql", "web.config" })
                 Write(root, path, Marker + "\n");
         }, (root, manager, tools) =>
         {
-            string[] orphans = ["Cs/Removed.cs", "Loose.cs", "Fs/Removed.fs", "Loose.fs", "Loose.fsi"];
-            string[] owned = ["Cs/Live.cs", "Cs/Linked.cs", "Fs/Live.fs", "Fs/Live.fsi"];
-            string[] textOnly = ["Script.fsx", "Readme.md", "Query.sql", "web.config"];
+            string[] orphans = ["Cs/Removed.cs", "Loose.cs", "Fs/Removed.fs", "Loose.fs", "Loose.fsi",
+                "LooseUpper.CS", "LooseMixed.fS", "LooseUpper.FSI"];
+            string[] owned = ["Cs/Live.cs", "Cs/Linked.cs", "Cs/Upper.CS", "Fs/Live.fs", "Fs/Live.fsi", "Fs/Upper.FSI"];
+            string[] textOnly = ["Script.fsx", "ScriptMixed.FsX", "Readme.md", "Query.sql", "web.config"];
+            JsonElement response = Parse(tools.SearchText(Marker, regex: regex, limit: 100));
+            var hits = response.GetProperty("hits").EnumerateArray().ToDictionary(h => h.GetProperty("path").GetString()!);
+            Assert.Equal(orphans.Concat(owned).Concat(textOnly).Order(), hits.Keys.Order());
+            Assert.Equal(19, response.GetProperty(regex ? "matchCount" : "preciseCount").GetInt32());
+            Assert.Equal("indexed", response.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.All(orphans, path => Assert.True(hits[path].GetProperty("orphaned").GetBoolean(), path));
+            Assert.All(owned.Concat(textOnly), path => Assert.False(hits[path].TryGetProperty("orphaned", out _), path));
+
             using (var queries = manager.OpenQueries())
             {
                 Assert.Equal(orphans.Order(), queries.OrphanedPaths(orphans.Concat(owned).ToArray()).Order());
                 Assert.Equal(textOnly.Order(), queries.OrphanedPaths(textOnly).Order());
+                Assert.Equal(orphans.Order(), queries.OrphanedSourcePaths(
+                    orphans.Concat(owned).Concat(textOnly).Concat(orphans).Append("Missing.CS").ToArray()).Order());
+                Assert.Empty(queries.OrphanedSourcePaths([]));
                 Assert.Equal(orphans.Length, queries.Overview().OrphanedFiles);
                 Assert.Equal("Consumer", Assert.Single(queries.ProjectsContaining("Cs/Linked.cs")).Name);
             }
-            JsonElement response = Parse(tools.SearchText(Marker, regex: regex, limit: 100));
-            var hits = response.GetProperty("hits").EnumerateArray().ToDictionary(h => h.GetProperty("path").GetString()!);
-            Assert.Equal(orphans.Concat(owned).Concat(textOnly).Order(), hits.Keys.Order());
-            Assert.Equal(13, response.GetProperty(regex ? "matchCount" : "preciseCount").GetInt32());
-            Assert.Equal("indexed", response.GetProperty("meta").GetProperty("confidence").GetString());
-            Assert.All(orphans, path => Assert.True(hits[path].GetProperty("orphaned").GetBoolean(), path));
-            Assert.All(owned.Concat(textOnly), path => Assert.False(hits[path].TryGetProperty("orphaned", out _), path));
 
             JsonElement filtered = Parse(tools.SearchText(Marker, regex: regex, project: "Consumer"));
             JsonElement linked = Assert.Single(filtered.GetProperty("hits").EnumerateArray());
