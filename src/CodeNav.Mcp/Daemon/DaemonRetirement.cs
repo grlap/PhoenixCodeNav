@@ -204,7 +204,8 @@ internal static class DaemonRetirement
             response.Cause != "daemon_index_destination_mismatch" &&
             !string.Equals(response.DatabaseKey, request.DatabaseKey, StringComparison.Ordinal))
             throw new DaemonAuthorityException(
-                "Phoenix daemon retirement response did not prove the requested authority.");
+                "Phoenix daemon retirement response did not prove the requested authority.",
+                responseFailure: true);
     }
 
     private static bool MatchesRetiringGeneration(

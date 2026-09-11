@@ -66,7 +66,7 @@ if (!Directory.Exists(workspaceRoot))
     if (command.Mode == McpLaunchMode.SharedProxy)
     {
         return await UnavailableMcpShim.RunAsync(new DaemonUnavailableFailure(
-            "daemon_workspace_unavailable",
+            DaemonFailureCause.WorkspaceUnavailable,
             "Phoenix workspace root does not exist or is not a directory.",
             "Fix --workspace-root or CODENAV_WORKSPACE_ROOT, then reconnect.",
             Retryable: false));
@@ -100,7 +100,7 @@ catch (Exception ex) when (ex is ArgumentException or IOException or
     if (command.Mode == McpLaunchMode.SharedProxy)
     {
         return await UnavailableMcpShim.RunAsync(new DaemonUnavailableFailure(
-            "daemon_index_destination_invalid",
+            DaemonFailureCause.IndexDestinationInvalid,
             "Phoenix index destination could not be normalized.",
             "Fix --index-db and reconnect.",
             Retryable: false));
@@ -153,7 +153,7 @@ try
             return await PhoenixCli.WriteUnavailableAsync(
                 command.Cli!,
                 new DaemonUnavailableFailure(
-                    "daemon_runtime_directory_unavailable",
+                    DaemonFailureCause.RuntimeDirectoryUnavailable,
                     $"Phoenix could not select a runtime directory for its local transport ({ex.GetType().Name}).",
                     "Verify the owner-only runtime authority or shorten the configured runtime paths, then retry.",
                     Retryable: false));
@@ -163,7 +163,7 @@ try
             return await PhoenixCli.WriteUnavailableAsync(
                 command.Cli!,
                 new DaemonUnavailableFailure(
-                    "daemon_workspace_identity_unavailable",
+                    DaemonFailureCause.WorkspaceIdentityUnavailable,
                     $"Phoenix could not prove the physical workspace identity ({ex.GetType().Name}).",
                     "Verify workspace ownership and path safety, then retry.",
                     Retryable: false));
@@ -266,7 +266,7 @@ try
         catch (DaemonRuntimeDirectoryUnavailableException ex)
         {
             return await UnavailableMcpShim.RunAsync(new DaemonUnavailableFailure(
-                "daemon_runtime_directory_unavailable",
+                DaemonFailureCause.RuntimeDirectoryUnavailable,
                 $"Phoenix could not select a runtime directory for its local transport ({ex.GetType().Name}).",
                 "Verify the owner-only /tmp runtime authority or shorten the configured runtime paths, then reconnect.",
                 Retryable: false), shutdown.Token);
@@ -274,7 +274,7 @@ try
         catch (Exception ex)
         {
             return await UnavailableMcpShim.RunAsync(new DaemonUnavailableFailure(
-                "daemon_workspace_identity_unavailable",
+                DaemonFailureCause.WorkspaceIdentityUnavailable,
                 $"Phoenix could not prove the physical workspace identity ({ex.GetType().Name}).",
                 "Verify workspace ownership and path safety, then reconnect.",
                 Retryable: false), shutdown.Token);

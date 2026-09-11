@@ -25,17 +25,52 @@ internal sealed record DaemonHandshakeRequest(
     string Nonce,
     bool Rebuild = false);
 
-internal sealed record DaemonHandshakeResponse(
-    bool Accepted,
-    string Cause,
-    string Detail,
-    string ToolVersion,
-    string SchemaVersion,
-    string WorkspaceIdentity,
-    string DatabaseKey,
-    int DaemonPid,
-    string Nonce,
-    bool Retiring = false);
+internal sealed record DaemonHandshakeResponse
+{
+    public bool Accepted { get; init; }
+    public string Cause { get; }
+    public string Detail { get; init; }
+    public string ToolVersion { get; init; }
+    public string SchemaVersion { get; init; }
+    public string WorkspaceIdentity { get; init; }
+    public string DatabaseKey { get; init; }
+    public int DaemonPid { get; init; }
+    public string Nonce { get; init; }
+    public bool Retiring { get; init; }
+
+    // Unknown received causes remain representable without a local string-cause factory.
+    [System.Text.Json.Serialization.JsonConstructor]
+    private DaemonHandshakeResponse(bool Accepted, string Cause, string Detail,
+        string ToolVersion, string SchemaVersion, string WorkspaceIdentity,
+        string DatabaseKey, int DaemonPid, string Nonce, bool Retiring = false)
+    {
+        this.Accepted = Accepted;
+        this.Cause = Cause;
+        this.Detail = Detail;
+        this.ToolVersion = ToolVersion;
+        this.SchemaVersion = SchemaVersion;
+        this.WorkspaceIdentity = WorkspaceIdentity;
+        this.DatabaseKey = DatabaseKey;
+        this.DaemonPid = DaemonPid;
+        this.Nonce = Nonce;
+        this.Retiring = Retiring;
+    }
+
+    internal static DaemonHandshakeResponse Refused(DaemonFailureCause cause, string detail,
+        string toolVersion, string schemaVersion, string workspaceIdentity,
+        string databaseKey, int daemonPid, string nonce) =>
+        new(false, cause.Id, detail, toolVersion, schemaVersion, workspaceIdentity, databaseKey, daemonPid, nonce);
+
+    internal static DaemonHandshakeResponse SessionAccepted(string detail,
+        string toolVersion, string schemaVersion, string workspaceIdentity,
+        string databaseKey, int daemonPid, string nonce) =>
+        new(true, "ok", detail, toolVersion, schemaVersion, workspaceIdentity, databaseKey, daemonPid, nonce);
+
+    internal static DaemonHandshakeResponse RetirementAccepted(string detail,
+        string toolVersion, string schemaVersion, string workspaceIdentity,
+        string databaseKey, int daemonPid, string nonce) =>
+        new(true, "daemon_retiring", detail, toolVersion, schemaVersion, workspaceIdentity, databaseKey, daemonPid, nonce, Retiring: true);
+}
 
 /// <summary>
 /// Frozen pre-MCP framing. Bytes 0..15 are permanent: magic, preamble version, mode, reserved,
@@ -136,8 +171,7 @@ internal static partial class DaemonProtocol
     {
         string nonce = request?.Nonce ?? "";
         string responseDatabaseKey = endpoint.DatabaseKey;
-        DaemonHandshakeResponse Refuse(string cause, string detail) => new(
-            false,
+        DaemonHandshakeResponse Refuse(DaemonFailureCause cause, string detail) => DaemonHandshakeResponse.Refused(
             cause,
             detail,
             BuildInfo.Version,
@@ -148,29 +182,29 @@ internal static partial class DaemonProtocol
             nonce);
 
         if (preambleVersion != CurrentVersion)
-            return Refuse("daemon_preamble_incompatible",
+            return Refuse(DaemonFailureCause.PreambleIncompatible,
                 "Phoenix daemon handshake version is incompatible; update Phoenix and retry graceful replacement.");
         if (mode is not (DaemonPreambleMode.Connect or DaemonPreambleMode.RetireAndReplace) ||
             request is null)
-            return Refuse("daemon_preamble_invalid", "Phoenix daemon handshake is malformed.");
+            return Refuse(DaemonFailureCause.PreambleInvalid, "Phoenix daemon handshake is malformed.");
         if (!NoncePattern().IsMatch(request.Nonce))
-            return Refuse("daemon_nonce_invalid", "Phoenix daemon handshake nonce is invalid.");
+            return Refuse(DaemonFailureCause.NonceInvalid, "Phoenix daemon handshake nonce is invalid.");
         if (request.ClientPid <= 0 || string.IsNullOrWhiteSpace(request.ClientName) ||
             request.ClientName.Length > 128)
-            return Refuse("daemon_client_invalid", "Phoenix daemon client identity is invalid.");
+            return Refuse(DaemonFailureCause.ClientInvalid, "Phoenix daemon client identity is invalid.");
         if (!string.Equals(request.UserIdentity, endpoint.UserIdentity, StringComparison.Ordinal))
-            return Refuse("daemon_user_mismatch", "Phoenix daemon belongs to another operating-system user.");
+            return Refuse(DaemonFailureCause.UserMismatch, "Phoenix daemon belongs to another operating-system user.");
         if (!Path.IsPathFullyQualified(request.WorkspaceRoot) ||
             !WorkspacePhysicalIdentity.TryGet(request.WorkspaceRoot, out string liveIdentity) ||
             !string.Equals(request.WorkspaceIdentity, liveIdentity, StringComparison.Ordinal) ||
             !string.Equals(request.WorkspaceIdentity, endpoint.WorkspaceIdentity,
                 StringComparison.Ordinal))
-            return Refuse("daemon_workspace_mismatch", "Phoenix daemon belongs to another physical worktree.");
+            return Refuse(DaemonFailureCause.WorkspaceMismatch, "Phoenix daemon belongs to another physical worktree.");
         if (!endpoint.MatchesDatabaseKey(request.DatabaseKey))
         {
             bool clientIsOlder = IsOlderToolVersion(
                 request.ToolVersion, BuildInfo.Version);
-            return Refuse("daemon_index_destination_mismatch",
+            return Refuse(DaemonFailureCause.IndexDestinationMismatch,
                 clientIsOlder
                     ? "Phoenix daemon uses a different index-destination identity; relaunch this client with the daemon's --workspace-root spelling or upgrade the client."
                     : "Phoenix daemon is bound to a different index destination for this worktree.");
@@ -187,34 +221,29 @@ internal static partial class DaemonProtocol
         if (mode == DaemonPreambleMode.RetireAndReplace)
         {
             if (versionOrder < 0 || (versionOrder == 0 && schemaOrder <= 0))
-                return Refuse("daemon_retire_not_newer",
+                return Refuse(DaemonFailureCause.RetireNotNewer,
                     "Only a newer Phoenix client may retire this daemon.");
-            return new DaemonHandshakeResponse(
-                true,
-                "daemon_retiring",
+            return DaemonHandshakeResponse.RetirementAccepted(
                 "Older Phoenix daemon accepted graceful retirement.",
                 BuildInfo.Version,
                 BuildInfo.IndexSchema,
                 endpoint.WorkspaceIdentity,
                 responseDatabaseKey,
                 Environment.ProcessId,
-                request.Nonce,
-                Retiring: true);
+                request.Nonce);
         }
 
         if (!exact)
         {
             bool clientOlder = versionOrder < 0 || (versionOrder == 0 && schemaOrder < 0);
             return Refuse(
-                clientOlder ? "daemon_newer_than_client" : "daemon_older_than_client",
+                clientOlder ? DaemonFailureCause.NewerThanClient : DaemonFailureCause.OlderThanClient,
                 clientOlder
                     ? "Phoenix daemon is newer; restart or update this agent."
                     : "Phoenix daemon is older; graceful replacement is required.");
         }
 
-        return new DaemonHandshakeResponse(
-            true,
-            "ok",
+        return DaemonHandshakeResponse.SessionAccepted(
             "Phoenix daemon session accepted.",
             BuildInfo.Version,
             BuildInfo.IndexSchema,

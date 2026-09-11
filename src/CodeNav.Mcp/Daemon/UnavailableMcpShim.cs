@@ -7,11 +7,33 @@ using ModelContextProtocol.Server;
 
 namespace CodeNav.Mcp.Daemon;
 
-internal sealed record DaemonUnavailableFailure(
-    string Cause,
-    string Detail,
-    string Recovery,
-    bool Retryable);
+internal sealed record DaemonUnavailableFailure
+{
+    public string Cause { get; }
+    public string Detail { get; init; }
+    public string Recovery { get; init; }
+    public bool Retryable { get; init; }
+
+    // Local emitters cannot introduce a cause without the catalog's explicit policy.
+    internal DaemonUnavailableFailure(DaemonFailureCause cause, string Detail, string Recovery, bool Retryable)
+        : this(cause.Id, Detail, Recovery, Retryable) { }
+
+    [System.Text.Json.Serialization.JsonConstructor]
+    private DaemonUnavailableFailure(string Cause, string Detail, string Recovery, bool Retryable)
+    {
+        this.Cause = Cause;
+        this.Detail = Detail;
+        this.Recovery = Recovery;
+        this.Retryable = Retryable;
+    }
+
+    // Only received protocol causes use this path; unknown peers' causes fail closed.
+    internal static DaemonUnavailableFailure FromRefusal(DaemonHandshakeResponse response, string Recovery, bool Retryable) =>
+        new(response.Cause, response.Detail, Recovery, Retryable);
+
+    // Computed from the same catalog after deserialization and with-copies; no wire field.
+    internal bool CanRecoverInSession => DaemonFailureCause.CanRecover(Cause);
+}
 
 internal static class UnavailableMcpShim
 {
@@ -20,15 +42,18 @@ internal static class UnavailableMcpShim
     internal static async Task<int> RunAsync(
         DaemonUnavailableFailure failure,
         CancellationToken cancellationToken = default,
-        Func<CancellationToken, Task<Stream>>? reconnect = null)
+        Func<CancellationToken, Task<Stream>>? reconnect = null,
+        Stream? input = null, Stream? output = null)
     {
+        if ((input is null) != (output is null))
+            throw new ArgumentException("Supply both input and output streams, or neither.");
         PhoenixRuntimeMode.Set(PhoenixProcessMode.UnavailableShim);
         await using var recovery = reconnect is null ? null : new DaemonSessionRecovery(failure, reconnect, cancellationToken);
         HostApplicationBuilder builder = Host.CreateApplicationBuilder();
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
-        builder.Services
+        var mcp = builder.Services
             .AddMcpServer(options =>
             {
                 options.ServerInfo = new()
@@ -41,14 +66,19 @@ internal static class UnavailableMcpShim
                     : "Phoenix tools reconnect to the existing shared daemon on demand after a transient startup failure. " +
                       "Inspect server_capabilities for current availability. Recovery retains this MCP session; " +
                       "calls already dispatched are never replayed.";
-            })
-            .WithStdioServerTransport()
-            .WithTools(ValidatedMcpToolRegistration.CreateNavigationTools()
+            });
+        if (input is null)
+            mcp.WithStdioServerTransport();
+        else
+            mcp.WithStreamServerTransport(input, output!);
+        mcp.WithTools(ValidatedMcpToolRegistration.CreateNavigationTools()
                 .Select(tool => (McpServerTool)new UnavailableMcpServerTool(tool, failure, recovery))
                 .ToArray());
         using IHost host = builder.Build();
         await host.RunAsync(cancellationToken).ConfigureAwait(false);
-        return 4;
+        // Read before owned recovery disposal clears the connection. This describes the
+        // established session, not proof that every tool succeeded or the daemon is still alive.
+        return recovery?.HasEstablishedConnection == true ? 0 : 4;
     }
 
     internal static JsonElement CreatePayload(
@@ -88,6 +118,11 @@ internal static class UnavailableMcpShim
                     {
                         id = "shared-mcp-daemon-default",
                         summary = "Phoenix's default shared-daemon topology is present but unavailable for this session.",
+                    },
+                    new
+                    {
+                        id = "shared-daemon-recovery-cause-policy",
+                        summary = "v0.12.108 recovery by cause, not retryable advice",
                     },
                 }.Concat(sessionRecoveryAvailable
                     ? [new { id = "shared-daemon-session-recovery", summary = "This MCP session can reconnect to an existing daemon on later tool calls; dispatched calls are not replayed." }]

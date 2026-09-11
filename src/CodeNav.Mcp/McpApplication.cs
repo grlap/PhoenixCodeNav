@@ -115,6 +115,6 @@ internal static class McpApplication
             ? "Reconnect without --standalone; normal Phoenix launches join the shared daemon automatically."
             : "Resolve the reported index startup condition, then reconnect without --standalone; normal Phoenix launches join the shared daemon automatically.";
         return new DaemonUnavailableFailure(
-            "standalone_writer_unavailable", detail, recovery, Retryable: true);
+            DaemonFailureCause.StandaloneWriterUnavailable, detail, recovery, Retryable: true);
     }
 }

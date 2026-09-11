@@ -11,8 +11,10 @@ internal sealed class DaemonEndpointUnavailableException : IOException
 
 internal sealed class DaemonAuthorityException : IOException
 {
-    internal DaemonAuthorityException(string message, Exception? inner = null)
-        : base(message, inner) { }
+    internal bool IsResponseFailure { get; }
+
+    internal DaemonAuthorityException(string message, Exception? inner = null, bool responseFailure = false)
+        : base(message, inner) => IsResponseFailure = responseFailure;
 }
 
 internal interface IDaemonTransportListener : IAsyncDisposable

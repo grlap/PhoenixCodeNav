@@ -27,38 +27,38 @@ internal static class DaemonStartupFailures
         IndexStartupFailureCause cause) => cause switch
         {
             IndexStartupFailureCause.RebuildRequired => new DaemonUnavailableFailure(
-                "daemon_index_rebuild_required",
+                DaemonFailureCause.IndexRebuildRequired,
                 "Phoenix found an index database that moved with its workspace and requires explicit rebinding.",
                 "Approve an explicit full index rebuild with the existing --rebuild action, then reconnect.",
                 Retryable: false),
             IndexStartupFailureCause.DestinationForeign => new DaemonUnavailableFailure(
-                "daemon_index_destination_foreign",
+                DaemonFailureCause.IndexDestinationForeign,
                 "Phoenix index destination belongs to a different workspace.",
                 "Choose the correct index destination for this workspace, then reconnect.",
                 Retryable: false),
             IndexStartupFailureCause.DestinationUnsafe or
             IndexStartupFailureCause.DestinationChanged => new DaemonUnavailableFailure(
-                "daemon_index_destination_unsafe",
+                DaemonFailureCause.IndexDestinationUnsafe,
                 "Phoenix could not establish safe authority over the index destination.",
                 "Verify index-path ownership and remove unsafe links or replacements, then reconnect.",
                 Retryable: false),
             IndexStartupFailureCause.WriterLeaseContended => new DaemonUnavailableFailure(
-                "daemon_writer_unavailable",
+                DaemonFailureCause.WriterUnavailable,
                 "Another Phoenix process currently owns the workspace index writer lease.",
                 "Allow the existing Phoenix process to finish or close naturally, then reconnect.",
                 Retryable: true),
             IndexStartupFailureCause.WriterAuthorityUnavailable => new DaemonUnavailableFailure(
-                "daemon_writer_authority_unavailable",
+                DaemonFailureCause.WriterAuthorityUnavailable,
                 "Phoenix could not verify or acquire safe index writer authority.",
                 "Verify current-user index ownership and reconnect after the authority blocker clears.",
                 Retryable: true),
             IndexStartupFailureCause.DestinationValidationFailed => new DaemonUnavailableFailure(
-                "daemon_index_validation_failed",
+                DaemonFailureCause.IndexValidationFailed,
                 "Phoenix failed while validating the configured index destination.",
                 "Inspect the Phoenix server log, resolve the validation failure, then reconnect.",
                 Retryable: true),
             _ => new DaemonUnavailableFailure(
-                "daemon_index_startup_failed",
+                DaemonFailureCause.IndexStartupFailed,
                 "Phoenix could not establish the shared index writer during daemon startup.",
                 "Resolve the index startup condition reported in the Phoenix server log, then reconnect.",
                 Retryable: true),
@@ -66,10 +66,40 @@ internal static class DaemonStartupFailures
 
     internal static DaemonUnavailableFailure Unexpected(Exception exception) =>
         new(
-            "daemon_startup_exception",
+            DaemonFailureCause.StartupException,
             $"Phoenix daemon failed before publishing its endpoint ({exception.GetType().Name}).",
             "Retry the MCP connection; if this repeats, inspect the Phoenix server log for the startup failure.",
             Retryable: true);
+
+    internal static DaemonUnavailableFailure LaunchFailed(Exception exception) => new(
+        DaemonFailureCause.LaunchFailed,
+        $"Phoenix daemon process could not be launched ({exception.GetType().Name}).",
+        "Verify the deployed Phoenix executable and retry the MCP connection.",
+        Retryable: true);
+
+    internal static DaemonUnavailableFailure DiedBeforeReport(int? exitCode, bool bootstrap)
+    {
+        string process = bootstrap ? "daemon bootstrap" : "daemon";
+        return new(
+            DaemonFailureCause.DiedBeforeReport,
+            exitCode is { } code
+                ? $"Phoenix {process} exited with code {code} before reporting startup state."
+                : $"Phoenix {process} closed its startup channel before reporting startup state.",
+            "Retry the MCP connection; if this repeats, inspect the Phoenix server log for the startup failure.",
+            Retryable: true);
+    }
+
+    internal static DaemonUnavailableFailure ReportTimeout() => new(
+        DaemonFailureCause.StartupReportTimeout,
+        "Phoenix daemon did not report ready or refused before the startup deadline.",
+        "Retry the MCP connection; if this repeats, inspect the Phoenix server log for a blocked startup.",
+        Retryable: true);
+
+    internal static DaemonUnavailableFailure InvalidReport() => new(
+        DaemonFailureCause.StartupReportInvalid,
+        "Phoenix daemon returned an invalid private startup report.",
+        "Restart active Phoenix sessions for this workspace, then reconnect.",
+        Retryable: true);
 }
 
 /// <summary>

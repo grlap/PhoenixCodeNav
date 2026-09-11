@@ -982,7 +982,7 @@ internal static class PhoenixCli
         failure is IOException or McpException or JsonException or
             TimeoutException or OperationCanceledException
             ? new DaemonUnavailableFailure(
-                "daemon_cli_transport_failed",
+                DaemonFailureCause.CliTransportFailed,
                 $"Phoenix CLI could not complete its MCP exchange ({failure.GetType().Name}).",
                 "Retry the CLI call and inspect Phoenix daemon discovery state if the failure repeats.",
                 Retryable: true)

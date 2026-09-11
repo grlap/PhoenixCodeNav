@@ -407,7 +407,7 @@ public sealed class PhoenixCliArgumentTests
     public void UnavailablePayloadUsesTheSharedPhoenixJsonEncoder()
     {
         JsonElement payload = CodeNav.Mcp.Daemon.UnavailableMcpShim.CreatePayload(
-            new CodeNav.Mcp.Daemon.DaemonUnavailableFailure(
+            DaemonWireTestData.Failure(
                 "daemon_cli_transport_failed",
                 "Caf\u00e9 daemon unavailable",
                 "Retry once.",

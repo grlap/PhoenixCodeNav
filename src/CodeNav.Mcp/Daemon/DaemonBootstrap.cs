@@ -35,33 +35,19 @@ internal static class DaemonBootstrap
                         .ConfigureAwait(false);
                     report = DaemonStartupReport.Refused(
                         daemon.Id,
-                        new DaemonUnavailableFailure(
-                            "daemon_died_before_report",
-                            exitCode is { } code
-                                ? $"Phoenix daemon exited with code {code} before reporting startup state."
-                                : "Phoenix daemon closed its startup channel before reporting startup state.",
-                            "Retry the MCP connection; if this repeats, inspect the Phoenix server log for the startup failure.",
-                            Retryable: true));
+                        DaemonStartupFailures.DiedBeforeReport(exitCode, bootstrap: false));
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
                     report = DaemonStartupReport.Refused(
                         daemon.Id,
-                        new DaemonUnavailableFailure(
-                            "daemon_startup_report_timeout",
-                            "Phoenix daemon did not report ready or refused before the startup deadline.",
-                            "Retry the MCP connection; if this repeats, inspect the Phoenix server log for a blocked startup.",
-                            Retryable: true));
+                        DaemonStartupFailures.ReportTimeout());
                 }
                 catch (IOException)
                 {
                     report = DaemonStartupReport.Refused(
                         daemon.Id,
-                        new DaemonUnavailableFailure(
-                            "daemon_startup_report_invalid",
-                            "Phoenix daemon returned an invalid private startup report.",
-                            "Restart active Phoenix sessions for this workspace, then reconnect.",
-                            Retryable: true));
+                        DaemonStartupFailures.InvalidReport());
                 }
             }
             finally
@@ -76,11 +62,7 @@ internal static class DaemonBootstrap
         {
             report = DaemonStartupReport.Refused(
                 0,
-                new DaemonUnavailableFailure(
-                    "daemon_launch_failed",
-                    $"Phoenix daemon process could not be launched ({ex.GetType().Name}).",
-                    "Verify the deployed Phoenix executable and retry the MCP connection.",
-                    Retryable: true));
+                DaemonStartupFailures.LaunchFailed(ex));
         }
 
         await DaemonStartupChannel.WriteAsync(

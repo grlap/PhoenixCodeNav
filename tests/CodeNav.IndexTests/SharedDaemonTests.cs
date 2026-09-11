@@ -53,7 +53,7 @@ public sealed partial class SharedDaemonTests
     {
         var expected = DaemonStartupReport.Refused(
             42,
-            new DaemonUnavailableFailure(
+            DaemonWireTestData.Failure(
                 "daemon_test_refusal",
                 "Test startup was refused.",
                 "Resolve the test condition.",
@@ -126,7 +126,7 @@ public sealed partial class SharedDaemonTests
         string root = Directory.CreateTempSubdirectory(
             "Phoenix daemon startup status ").FullName;
         DaemonEndpoint endpoint = DaemonEndpoint.Create(root, null);
-        var failure = new DaemonUnavailableFailure(
+        var failure = DaemonWireTestData.Failure(
             "daemon_index_rebuild_required",
             "Index rebinding requires an explicit rebuild.",
             "Approve an explicit full rebuild.",
@@ -854,6 +854,12 @@ public sealed partial class SharedDaemonTests
             Assert.False(invalidNonce.Accepted);
             Assert.Equal("daemon_nonce_invalid", invalidNonce.Cause);
 
+            DaemonHandshakeResponse invalidClient = DaemonProtocol.Evaluate(
+                endpoint, DaemonProtocol.CurrentVersion, DaemonPreambleMode.Connect,
+                exact with { ClientPid = 0 });
+            Assert.False(invalidClient.Accepted);
+            Assert.Equal("daemon_client_invalid", invalidClient.Cause);
+
             DaemonHandshakeRequest newer = exact with { ToolVersion = "99.0.0" };
             DaemonHandshakeResponse replaceRequired = DaemonProtocol.Evaluate(
                 endpoint, DaemonProtocol.CurrentVersion, DaemonPreambleMode.Connect, newer);
@@ -897,6 +903,13 @@ public sealed partial class SharedDaemonTests
                 endpoint, null, false, false, "validation-test");
             proxy.ValidateResponse(exact, malformed);
             Assert.Equal("daemon_preamble_invalid", malformed.Cause);
+            foreach (var refusal in new[] { wrongUser, wrongDatabase, oldClientWrongSpelling,
+                wrongWorkspace, wrongPreamble, invalidNonce, invalidClient, restartAgent,
+                forbiddenRetire, malformed })
+                Assert.False(DaemonWireTestData.Failure(
+                    refusal.Cause, refusal.Detail, "repair", Retryable: true).CanRecoverInSession);
+            Assert.True(DaemonWireTestData.Failure(
+                replaceRequired.Cause, replaceRequired.Detail, "replace", Retryable: false).CanRecoverInSession);
         }
         finally
         {
@@ -3088,21 +3101,12 @@ public sealed partial class SharedDaemonTests
                 DaemonHandshakeResponse current = DaemonProtocol.Evaluate(
                     endpoint, version, mode, request);
                 DaemonHandshakeResponse response = mode == DaemonPreambleMode.RetireAndReplace
-                    ? current with
-                    {
-                        Accepted = true,
-                        Cause = "daemon_retiring",
-                        Detail = "Older Phoenix daemon accepted graceful retirement.",
-                        ToolVersion = "0.12.60",
-                        Retiring = true,
-                    }
-                    : current with
-                    {
-                        Accepted = false,
-                        Cause = "daemon_older_than_client",
-                        Detail = "Phoenix daemon is older; graceful replacement is required.",
-                        ToolVersion = "0.12.60",
-                    };
+                    ? DaemonHandshakeResponse.RetirementAccepted(
+                        "Older Phoenix daemon accepted graceful retirement.", "0.12.60",
+                        current.SchemaVersion, current.WorkspaceIdentity, current.DatabaseKey, current.DaemonPid, current.Nonce)
+                    : DaemonHandshakeResponse.Refused(DaemonFailureCause.OlderThanClient,
+                        "Phoenix daemon is older; graceful replacement is required.", "0.12.60",
+                        current.SchemaVersion, current.WorkspaceIdentity, current.DatabaseKey, current.DaemonPid, current.Nonce);
                 await DaemonProtocol.WriteResponseAsync(
                     stream, response, cancellationToken);
                 retirementAccepted = response.Retiring;
@@ -3134,9 +3138,8 @@ public sealed partial class SharedDaemonTests
                     await DaemonProtocol.ReadRequestAsync(connect, cancellationToken);
                 Assert.Equal(DaemonPreambleMode.Connect, mode);
                 Assert.NotNull(request);
-                var mismatch = new DaemonHandshakeResponse(
-                    false,
-                    "daemon_index_destination_mismatch",
+                var mismatch = DaemonHandshakeResponse.Refused(
+                    DaemonFailureCause.IndexDestinationMismatch,
                     "Older daemon uses its legacy destination identity.",
                     "0.12.84",
                     BuildInfo.IndexSchema,
@@ -3155,17 +3158,14 @@ public sealed partial class SharedDaemonTests
                 Assert.Equal(DaemonPreambleMode.RetireAndReplace, mode);
                 Assert.NotNull(request);
                 Assert.Equal(endpoint.LegacyDatabaseKey, request.DatabaseKey);
-                var accepted = new DaemonHandshakeResponse(
-                    true,
-                    "daemon_retiring",
+                var accepted = DaemonHandshakeResponse.RetirementAccepted(
                     "Older Phoenix daemon accepted graceful retirement.",
                     "0.12.84",
                     BuildInfo.IndexSchema,
                     endpoint.WorkspaceIdentity,
                     request.DatabaseKey,
                     Environment.ProcessId,
-                    request.Nonce,
-                    Retiring: true);
+                    request.Nonce);
                 await DaemonProtocol.WriteResponseAsync(
                     retire, accepted, cancellationToken);
                 retiredKey.TrySetResult(request.DatabaseKey);

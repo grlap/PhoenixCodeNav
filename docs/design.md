@@ -1615,7 +1615,7 @@ other advertised tool returns the same typed unavailable cause. Hosts therefore 
 "daemon is newer; restart/update this agent" or "takeover timed out" rather than an unexplained dead
 stdio server.
 
-Since v0.12.100 a retryable pre-relay failure starts a recovery-capable MCP server
+Since v0.12.100 an eligible pre-relay failure starts a recovery-capable MCP server
 named `phoenix-codenav`, with the same tool schemas. Each later tool call can retry
 the authority handshake against the existing daemon; concurrent callers share an
 in-flight attempt. Recovery never launches or replaces a daemon, repeats `--rebuild`, raises a deadline,
@@ -1624,8 +1624,11 @@ an upstream MCP client and forwards complete tool parameters/results, progress a
 logging notifications, and cancellation. A cancelled waiter does not cancel a peer's
 connection attempt; session shutdown cancels and disposes the owned connection.
 After recovery, `server_capabilities` comes from the daemon, not a cached failure.
-Before recovery, the unavailable manifest already advertises `shared-daemon-session-recovery`;
-terminal shims do not advertise it.
+Before recovery, the unavailable manifest already advertises `shared-daemon-session-recovery`
+while the session remains eligible. A later terminal refusal withdraws that feature and stops
+further connection attempts; terminal shims do not advertise it.
+Cached startup failures append advice to retry inside this session only for eligible causes;
+the separate close-and-reconnect advice remains available for terminal causes.
 When no endpoint responds, recovery rereads an exact live-owner startup report if present;
 its typed cause is retained as the owner's last-reported diagnosis, not proof that the original
 condition still holds. A successful connection takes precedence over any retained refusal record.
@@ -1633,11 +1636,52 @@ Permanent authority refusals remain unavailable. Lost or unreadable dispatched r
 replayed and report `daemon_request_outcome_unknown` with `retryable:false`, because
 the operation may have executed. Later calls can reconnect. A received JSON-RPC tool rejection
 remains a protocol error and retains the connection; an initialization rejection leaves no usable
-client and may be retried on a later call. Normal raw-relay sessions
+client and may be retried on a later call. Connection cleanup failures do not replace the
+primary unavailable/uncertain result, caller cancellation, or orderly shutdown status;
+stream cleanup still runs when client disposal fails. Unexpected non-transport cleanup
+faults emit one stderr warning per failure with the operation and exception type only,
+never exception messages or paths. The connect diagnostic says the attempt failed and was
+observed at shutdown, including a previously completed fault; it does not label the attempt's
+failure as a cleanup failure or date the fault to shutdown.
+Diagnostic writes are serialized, and a failing stderr sink cannot replace the primary result. Normal raw-relay sessions
 still disconnect on transport loss; they never start a second MCP server on consumed
 stdio. Relay shutdown cancellation exits successfully; a failed output flush returns the
 controlled failure exit code without bypassing copy-task cleanup.
 Non-recovery shims retain `phoenix-codenav-unavailable`.
+
+Since v0.12.108 client-facing `retryable` advice is independent of in-session recovery
+eligibility. The latter is a local rule derived from the typed cause, including after startup
+report/record deserialization; it does not depend on the advice boolean. Local causes
+are declared in a typed catalog with an explicit recovery decision; local failure
+constructor/factory APIs require a catalog member or a received handshake response. Handshake
+refusal factories also require a catalog member; successful session/retirement factories have
+fixed statuses, and cause properties cannot be changed by record copies. JSON decoding retains
+unknown external causes as terminal; it is not a local failure-emission API. The four-field
+serialized failure shape and the frozen handshake JSON are unchanged. Existing transient
+startup, connection and older-daemon causes allow recovery; terminal endpoint/response authority,
+compatibility and destination refusals, unknown causes, and `daemon_proxy_failed` do not.
+The last advises `retryable:true` for a new MCP connection,
+but remains a terminal shim in the current session. This does not permit automatic replay of
+`daemon_request_outcome_unknown`, which retains `retryable:false`; recovery availability follows
+the session state rather than that per-call cause.
+The singular `shared-daemon-recovery-cause-policy` feature identifies this policy in both
+ordinary and unavailable manifests, including terminal shims. It describes the implementation,
+not a promise that this session can reconnect; only `shared-daemon-session-recovery` makes that
+conditional promise in the unavailable manifest.
+Known runtime-directory preparation failures (`IOException` or `UnauthorizedAccessException`)
+report `daemon_runtime_directory_unavailable` with `retryable:false`: repair the path or its
+permissions before reconnecting. On Unix the earlier connect-time authority check can instead
+report `daemon_endpoint_authority_failed`, also non-retryable. Unclassified proxy failures retain
+the generic advice above; the runtime classification is scoped to directory preparation only.
+On orderly shutdown, a recovery-capable shim exits 0 if an upstream MCP initialize completed
+and no subsequent transport loss was observed; a never-recovered or subsequently lost session
+exits 4. The state is read before disposing the connection. Exit 0 does not prove the daemon
+is still alive or that every tool succeeded; even an attempt whose waiting caller cancelled can
+complete the shared initialize. No new liveness probe or change to cancellation policy is implied.
+Transport failure while forwarding a caller's cancellation invalidates only that failed
+connection, allowing the next independent call to reconnect without replaying the cancelled call.
+The caller's cancellation survives even a cleanup error. Lifetime-token cancellation during
+orderly shutdown alone is not transport-loss evidence; an actual I/O failure still is.
 
 ### Security boundary
 

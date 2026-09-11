@@ -48,6 +48,8 @@ internal sealed class DaemonProxy
     internal async Task<int> RunAsync(CancellationToken cancellationToken = default,
         Stream? input = null, Stream? output = null)
     {
+        if ((input is null) != (output is null))
+            throw new ArgumentException("Supply both input and output streams, or neither.");
         PhoenixRuntimeMode.Set(PhoenixProcessMode.Proxy);
         Stream daemon;
         try
@@ -58,7 +60,7 @@ internal sealed class DaemonProxy
         catch (DaemonProxyFailureException failure)
         {
             return await UnavailableMcpShim.RunAsync(failure.Failure, cancellationToken,
-                failure.Failure.Retryable ? ConnectExistingAsync : null)
+                failure.Failure.CanRecoverInSession ? ConnectExistingAsync : null, input, output)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -68,12 +70,8 @@ internal sealed class DaemonProxy
         catch (Exception ex)
         {
             return await UnavailableMcpShim.RunAsync(
-                new DaemonUnavailableFailure(
-                    "daemon_proxy_failed",
-                    $"Phoenix daemon proxy failed before MCP relay ({ex.GetType().Name}).",
-                    "Retry the MCP connection and inspect Phoenix daemon discovery state.",
-                    Retryable: false),
-                cancellationToken).ConfigureAwait(false);
+                MapProxyFailure(ex),
+                cancellationToken, input: input, output: output).ConfigureAwait(false);
         }
         // Once relay starts, stdio may already contain an initialized MCP conversation.
         // Never replace it with a new unavailable server on that same stream.
@@ -87,6 +85,12 @@ internal sealed class DaemonProxy
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return 0; }
         catch (IOException) { return 4; }
     }
+
+    internal static DaemonUnavailableFailure MapProxyFailure(Exception exception) => new(
+        DaemonFailureCause.ProxyFailed,
+        $"Phoenix daemon proxy failed before MCP relay ({exception.GetType().Name}).",
+        "Retry the MCP connection and inspect Phoenix daemon discovery state.",
+        Retryable: true);
 
     internal async Task<Stream> ConnectExistingAsync(CancellationToken cancellationToken)
     {
@@ -158,7 +162,7 @@ internal sealed class DaemonProxy
         catch (DaemonAuthorityException ex)
         {
             throw Failure(
-                "daemon_endpoint_authority_failed",
+                DaemonFailureCause.EndpointAuthorityFailed,
                 "Phoenix daemon endpoint authority could not be verified.",
                 "Inspect the current-user runtime directory and remove only the unsafe endpoint after verification.",
                 retryable: false,
@@ -184,7 +188,7 @@ internal sealed class DaemonProxy
                 (!cancellationToken.IsCancellationRequested)
             {
                 throw Failure(
-                    "daemon_handshake_timeout",
+                    DaemonFailureCause.HandshakeTimeout,
                     "Phoenix connected to the shared daemon endpoint, but the authority handshake did not complete before the protocol deadline.",
                     "Retry a tool call in this MCP session after the daemon is ready; the session can reconnect without restarting it.",
                     retryable: true,
@@ -222,7 +226,19 @@ internal sealed class DaemonProxy
 
     private async Task<Stream> StartAndConnectAsync(CancellationToken cancellationToken)
     {
-        DaemonTransport.EnsureRuntimeDirectory(_endpoint);
+        try
+        {
+            DaemonTransport.EnsureRuntimeDirectory(_endpoint);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw Failure(
+                DaemonFailureCause.RuntimeDirectoryUnavailable,
+                $"Phoenix could not prepare a runtime directory for its local transport ({ex.GetType().Name}).",
+                "Verify the local runtime directory path and permissions, repair the obstruction, then reconnect.",
+                retryable: false,
+                ex);
+        }
         DateTime deadline = DateTime.UtcNow + StartupTimeout;
         while (DateTime.UtcNow < deadline)
         {
@@ -315,7 +331,7 @@ internal sealed class DaemonProxy
         }
 
         throw Failure(
-            "daemon_startup_timeout",
+            DaemonFailureCause.StartupTimeout,
             "Phoenix shared daemon did not become ready within the startup deadline; an older daemon at an undiscoverable environment-specific address may still own the writer lease.",
             "Close or restart pre-v0.12.61 Phoenix sessions for this workspace, then reconnect; do not kill an unverified process.",
             retryable: true);
@@ -330,12 +346,7 @@ internal sealed class DaemonProxy
         }
         catch (Exception ex)
         {
-            throw Failure(
-                "daemon_launch_failed",
-                $"Phoenix daemon process could not be launched ({ex.GetType().Name}).",
-                "Verify the deployed Phoenix executable and retry the MCP connection.",
-                retryable: true,
-                ex);
+            throw Failure(DaemonStartupFailures.LaunchFailed(ex), ex);
         }
     }
 
@@ -350,7 +361,7 @@ internal sealed class DaemonProxy
             TimeSpan remaining = deadline - DateTime.UtcNow;
             if (remaining <= TimeSpan.Zero)
                 throw Failure(
-                    "daemon_startup_timeout",
+                    DaemonFailureCause.StartupTimeout,
                     "Phoenix daemon startup deadline elapsed before a ready or refused report was received.",
                     "Retry the MCP connection; if this repeats, inspect the Phoenix server log.",
                     retryable: true);
@@ -379,32 +390,15 @@ internal sealed class DaemonProxy
                                                   TimeoutException or OperationCanceledException)
                 {
                 }
-                throw Failure(
-                    "daemon_died_before_report",
-                    exitCode is { } code
-                        ? $"Phoenix daemon bootstrap exited with code {code} before reporting startup state."
-                        : "Phoenix daemon bootstrap closed its startup channel before reporting startup state.",
-                    "Retry the MCP connection; if this repeats, inspect the Phoenix server log for the startup failure.",
-                    retryable: true,
-                    ex);
+                throw Failure(DaemonStartupFailures.DiedBeforeReport(exitCode, bootstrap: true), ex);
             }
             catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
-                throw Failure(
-                    "daemon_startup_report_timeout",
-                    "Phoenix daemon did not report ready or refused before the startup deadline.",
-                    "Retry the MCP connection; if this repeats, inspect the Phoenix server log for a blocked startup.",
-                    retryable: true,
-                    ex);
+                throw Failure(DaemonStartupFailures.ReportTimeout(), ex);
             }
             catch (IOException ex)
             {
-                throw Failure(
-                    "daemon_startup_report_invalid",
-                    "Phoenix daemon returned an invalid private startup report.",
-                    "Restart active Phoenix sessions for this workspace, then reconnect.",
-                    retryable: true,
-                    ex);
+                throw Failure(DaemonStartupFailures.InvalidReport(), ex);
             }
         }
         catch
@@ -420,8 +414,10 @@ internal sealed class DaemonProxy
         {
             Detail = "The live startup owner last reported: " + failure.Detail,
             Recovery = failure.Recovery +
-                " If no daemon is running after the condition clears, close the Phoenix session that first reported this startup failure, then reconnect. " +
-                "If an existing daemon is ready, retry a tool call in this MCP session; recovery does not start another daemon."
+                " If no daemon is running after the condition clears, close the Phoenix session that first reported this startup failure, then reconnect." +
+                (failure.CanRecoverInSession
+                    ? " If an existing daemon is ready, retry a tool call in this MCP session; recovery does not start another daemon."
+                    : "")
         };
 
     private void TryPublishStartupFailure(DaemonUnavailableFailure failure)
@@ -471,6 +467,10 @@ internal sealed class DaemonProxy
         {
             throw Refusal(ex.Response);
         }
+        catch (DaemonAuthorityException ex)
+        {
+            throw Failure(MapRetirementFailure(ex), ex);
+        }
         catch (DaemonWriterLeaseUnverifiableException ex)
         {
             throw Failure(MapRetirementFailure(ex), ex);
@@ -484,13 +484,23 @@ internal sealed class DaemonProxy
     internal static DaemonUnavailableFailure MapRetirementFailure(Exception exception) =>
         exception switch
         {
+            DaemonAuthorityException { IsResponseFailure: true } => new(
+                DaemonFailureCause.ResponseAuthorityFailed,
+                "Phoenix daemon retirement response did not prove the requested authority.",
+                "Inspect the current-user endpoint and reconnect after resolving the identity failure.",
+                Retryable: false),
+            DaemonAuthorityException => new(
+                DaemonFailureCause.EndpointAuthorityFailed,
+                "Phoenix daemon endpoint authority could not be verified during retirement.",
+                "Inspect the current-user runtime directory and remove only the unsafe endpoint after verification.",
+                Retryable: false),
             DaemonWriterLeaseUnverifiableException => new(
-                "daemon_writer_lease_unverifiable",
+                DaemonFailureCause.WriterLeaseUnverifiable,
                 "Phoenix could not verify whether the retiring daemon released workspace writer ownership.",
                 "Reconnect; if this repeats, inspect workspace identity and named-mutex access for this user.",
                 Retryable: true),
             OperationCanceledException => new(
-                "daemon_takeover_timeout",
+                DaemonFailureCause.TakeoverTimeout,
                 "Older Phoenix daemon did not relinquish discovery and writer ownership within the takeover deadline.",
                 "Allow existing agent requests to finish, then reconnect; do not kill an unverified process.",
                 Retryable: true),
@@ -572,7 +582,7 @@ internal sealed class DaemonProxy
             (!string.Equals(response.DatabaseKey, request.DatabaseKey, StringComparison.Ordinal) ||
              !_endpoint.MatchesDatabaseKey(response.DatabaseKey)))
             throw Failure(
-                "daemon_response_authority_failed",
+                DaemonFailureCause.ResponseAuthorityFailed,
                 "Phoenix daemon handshake response did not prove the requested authority.",
                 "Inspect the current-user endpoint and reconnect after resolving the identity failure.",
                 retryable: false);
@@ -580,27 +590,26 @@ internal sealed class DaemonProxy
             (!string.Equals(response.ToolVersion, BuildInfo.Version, StringComparison.Ordinal) ||
              !string.Equals(response.SchemaVersion, BuildInfo.IndexSchema, StringComparison.Ordinal)))
             throw Failure(
-                "daemon_response_version_mismatch",
+                DaemonFailureCause.ResponseVersionMismatch,
                 "Phoenix daemon accepted an incompatible tool or schema version.",
                 "Restart Phoenix processes and reconnect.",
                 retryable: false);
     }
 
     private static DaemonProxyFailureException Refusal(DaemonHandshakeResponse response) =>
-        Failure(
-            response.Cause,
-            response.Detail,
+        Failure(DaemonUnavailableFailure.FromRefusal(
+            response,
             response.Cause switch
             {
                 "daemon_newer_than_client" => "Restart or update this agent so it launches the deployed Phoenix version.",
                 "daemon_index_destination_mismatch" => "Use the daemon's configured index destination or stop it gracefully before changing --index-db.",
                 _ => "Resolve the reported daemon authority or compatibility condition, then reconnect.",
             },
-            retryable: response.Cause is "daemon_older_than_client" or
-                "daemon_startup_timeout");
+            Retryable: response.Cause is "daemon_older_than_client" or
+                "daemon_startup_timeout"));
 
     private static DaemonProxyFailureException Failure(
-        string cause,
+        DaemonFailureCause cause,
         string detail,
         string recovery,
         bool retryable,
