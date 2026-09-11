@@ -132,7 +132,15 @@ for code identifiers.
    at most 300 matching files, and exposes `filesScanned`, `filesAtLeast`, `partial`, and
    `partialReason:"candidate_file_cap"` when that bound clips coverage. Each graded line is
    `precise` (contains all query tokens as whole tokens) or `partial` (a token-covering lead), so
-   a partial-token match is never presented as a full hit.
+   a partial-token match is never presented as a full hit. Token and regex hits, plus structured
+   `elsewhere`/`didYouMean` samples, carry `orphaned:true` only for `.cs`/`.fs`/`.fsi` files in no
+   indexed project's compile set. The field is omitted for compile-owned sources and text-only
+   files, including `.fsx`, Markdown, SQL and configuration files. This is additive indexed-model
+   evidence, not proof a native build excludes the file: shared/imported compile items and ignored
+   conditions remain model limitations. Absence of the flag is not proof the file compiles either.
+   Results are never hidden by this annotation; ranking, counts, filters and cursor semantics are
+   unchanged, though the added bytes can reduce hits per page. Path-only suggestion lists retain
+   their shape.
 2. **Syntax (C#)** — `outline`, `search_symbol`, `symbol_at`, `batch_outline`. Roslyn
    *syntax-only* parsing (no compilation) extracts namespaces/types/members with spans,
    signatures, accessibility, partial flags, and generated/test classification. This is the

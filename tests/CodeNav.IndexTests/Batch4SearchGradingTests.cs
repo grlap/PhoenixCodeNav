@@ -1663,6 +1663,10 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
                      "filesPerSecond/estimatedRemainingMs only after >=100 files over >=1s in indexing_files",
                      "pendingProcessed=monotonic applied deltas", "pendingChanges both flat means stuck pump" })
             Assert.Contains(token, Summary("build-progress"));
+        foreach (string token in new[] { "refresh_index", "force:auto|incremental", "delta", "skip hash-identical files",
+                     "never rebuild intact-looking index", "full = delete/rebuild from scratch", "pump-serialized", "even in failed state",
+                     "reattach watcher/git tracking", "clear old error", "In-band corruption recovery without shell", "index.progress" })
+            Assert.Contains(token, Summary("rebuild-hatch"));
     }
 
     [Fact]

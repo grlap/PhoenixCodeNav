@@ -63,7 +63,7 @@ public sealed partial class NavigationTools
     }
 
     [McpServerTool(Name = "search_text")]
-    [Description("Ranked full-text search over indexed C# and F# source, Markdown, SQL, and project/solution/config files. WHOLE-WORD and token-based by default: 'Batch' does NOT match 'Batching'. For \\s / alternation / character classes set regex:true (.NET regex, line-based, scoped by pathGlob) — still not rust/ripgrep syntax; other file types need grep. Returns 'precise' hits (all query tokens on one line) by default; set partials='always' for weaker co-occurrence leads. Token mode grades at most 300 filtered candidate files and exposes filesScanned/filesAtLeast/partial when that cap is reached. Use context (or contextBefore/contextAfter) for surrounding lines, like grep -C/-B/-A. Best for literals, config keys, error messages, comments, documentation, and database scripts; only C#/F# participate in syntax or compiler semantics.")]
+    [Description("Ranked full-text search over indexed C# and F# source, Markdown, SQL, and project/solution/config files. WHOLE-WORD and token-based by default: 'Batch' does NOT match 'Batching'. For \\s / alternation / character classes set regex:true (.NET regex, line-based, scoped by pathGlob) — still not rust/ripgrep syntax; other file types need grep. Returns 'precise' hits (all query tokens on one line) by default; set partials='always' for weaker co-occurrence leads. Token mode grades at most 300 filtered candidate files and exposes filesScanned/filesAtLeast/partial when that cap is reached. Use context (or contextBefore/contextAfter) for surrounding lines, like grep -C/-B/-A. Best for literals, config keys, error messages, comments, documentation, and database scripts; only C#/F# participate in syntax or compiler semantics. Token/regex hits and structured suggestion samples carry orphaned:true only for .cs/.fs/.fsi files with no indexed compile owner; omitted for owned sources and text-only files. Indexed-model evidence only: neither the flag nor its absence proves native-build membership; results are never hidden by it.")]
     public string SearchText(
         [Description("Text to find. Multi-word queries are AND-ed by token; a line with all tokens is 'precise'.")] string query,
         [Description("Restrict to paths matching this glob (e.g. 'src/Billing/**').")] string? pathGlob = null,
@@ -152,6 +152,7 @@ public sealed partial class NavigationTools
                     // context main hits carry; samplePaths stays for compatibility.
                     var sampleHits = vp.Hits.Take(3).ToList();
                     var sampleOwners = OwningSymbols(q, sampleHits);
+                    var sampleOrphans = OrphanedTextPaths(q, sampleHits);
                     didYouMean = new
                     {
                         query = variant,
@@ -163,6 +164,7 @@ public sealed partial class NavigationTools
                             path = h.FilePath,
                             h.Line,
                             containingSymbol = sampleOwners.TryGetValue((h.FilePath, h.Line), out var cs) ? cs : null,
+                            orphaned = sampleOrphans.Contains(h.FilePath) ? true : (bool?)null,
                         }),
                     };
                     string what = kind == "spelling"
@@ -198,6 +200,7 @@ public sealed partial class NavigationTools
                     // is file-level (no line to anchor an owner on).
                     var probeSamples = probe.Hits.Take(3).ToList();
                     var probeOwners = OwningSymbols(q, probeSamples);
+                    var probeOrphans = OrphanedTextPaths(q, probeSamples);
                     elsewhere = new
                     {
                         preciseCount = probe.TotalPrecise,
@@ -207,6 +210,7 @@ public sealed partial class NavigationTools
                             path = h.FilePath,
                             h.Line,
                             containingSymbol = probeOwners.TryGetValue((h.FilePath, h.Line), out var cs) ? cs : null,
+                            orphaned = probeOrphans.Contains(h.FilePath) ? true : (bool?)null,
                         }),
                     };
                     bool probeAllGenerated = probe.Hits.All(h => h.IsGenerated);
@@ -255,6 +259,7 @@ public sealed partial class NavigationTools
         // Best-effort owning symbol per hit (feedback: jump from a text match to the owning
         // method/type without a follow-up symbol_at). Only .cs files carry symbols.
         var owners = OwningSymbols(q, hits);
+        var orphans = OrphanedTextPaths(q, hits);
 
         var meta = Meta.From(_manager.Health(), "indexed", "text");
         return Json.WithListBudget(hits, (items, truncated) => new
@@ -283,6 +288,7 @@ public sealed partial class NavigationTools
                 matched = t.MatchKind == "partial" ? t.Matched : null, // tokens only meaningful on partials
                 containingSymbol = owners.TryGetValue((t.FilePath, t.Line), out var cs) ? cs : null,
                 noise = IndexQueries.IsVendorPath(t.FilePath) ? true : (bool?)null, // under a vendored/generated dir
+                orphaned = orphans.Contains(t.FilePath) ? true : (bool?)null,
             }),
             filesMatchedAcrossLines = acrossLines,
             elsewhere, // dead-end redirect: where matches DO exist when the filtered result is empty
@@ -302,6 +308,15 @@ public sealed partial class NavigationTools
             meta,
         });
     }
+
+    // Only compile-form source participates in this indexed signal. Scripts and other text-only
+    // files normally have no compile owner, which does not make them orphaned source.
+    // Batch the pre-budget page once; serialization may shrink it without querying again.
+    private static HashSet<string> OrphanedTextPaths(IndexQueries q, IEnumerable<TextHit> hits) =>
+        q.OrphanedPaths(hits.Select(hit => hit.FilePath).Where(path =>
+            path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith(".fs", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith(".fsi", StringComparison.OrdinalIgnoreCase)).ToArray());
 
     // Best-effort owning symbol per .cs hit — BATCHED (one grouped query per ~40 keys) instead of one
     // InnermostSymbolAt point query per hit (9fr N+1: a full page issued up to ~100 queries).
@@ -337,6 +352,7 @@ public sealed partial class NavigationTools
 
         // Owning symbol per .cs hit — parity with token search_text (feedback loved containingSymbol).
         var owners = OwningSymbols(q, hits);
+        var orphans = OrphanedTextPaths(q, hits);
 
         // Contextual note — only when it changes the caller's next move (timeout, clipped coverage, or
         // a zero-hit that needs the line-based/case-sensitivity reminder). Silent on a clean success.
@@ -375,6 +391,7 @@ public sealed partial class NavigationTools
                 t.IsGenerated,
                 containingSymbol = owners.TryGetValue((t.FilePath, t.Line), out var cs) ? cs : null,
                 noise = IndexQueries.IsVendorPath(t.FilePath) ? true : (bool?)null,
+                orphaned = orphans.Contains(t.FilePath) ? true : (bool?)null,
             }),
             nextCursor = (hadMore || truncated) ? $"o:{offset + items.Count}" : null,
             truncated,
