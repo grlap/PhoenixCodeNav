@@ -889,12 +889,27 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
             .GetProperty("summary")
             .GetString()!;
         Assert.Contains("timing.semanticColdStart", coldStartTiming);
-        Assert.Contains("Omitted for F# and calls ending before the C# pipeline",
+        Assert.Contains("C# shape omitted for calls ending before the C# pipeline",
             coldStartTiming);
-        Assert.Contains("Omitted for F#", coldStartTiming);
+        Assert.Contains("F# uses fcs phases", coldStartTiming);
         Assert.Contains("calls ending before the C# pipeline", coldStartTiming);
         Assert.Contains("integer-ms", coldStartTiming);
         Assert.Contains("semanticOp", coldStartTiming);
+        foreach (var (id, field) in new[]
+                 {
+                     ("fsharp-semantic-cold-start-attribution", "engine=fcs"),
+                     ("fsharp-semantic-admission-attribution", "admissionWaitMs"),
+                     ("fsharp-semantic-snapshot-attribution", "snapshotCaptureMs"),
+                     ("fsharp-semantic-fcs-setup-attribution", "fcsSetupMs"),
+                     ("fsharp-semantic-project-parse-check-attribution", "projectParseAndCheckMs"),
+                     ("fsharp-semantic-file-parse-check-attribution", "fileParseAndCheckMs"),
+                 })
+        {
+            string summary = Assert.Single(json.GetProperty("features").EnumerateArray(),
+                feature => feature.GetProperty("id").GetString() == id).GetProperty("summary").GetString()!;
+            Assert.Contains("v0.12.109", summary);
+            Assert.Contains(field, summary);
+        }
         string gcPauseAttribution = Assert.Single(
                 json.GetProperty("features").EnumerateArray(),
                 feature => feature.GetProperty("id").GetString()
@@ -1589,7 +1604,14 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
                        ("v0.12.50 transient implementations",
                           "implementations-semantic-retry-guidance"),
                        ("typed cold-start retry contract", "cold-start-retry-contract"),
-                       ("timing.semanticColdStart", "semantic-cold-start-phase-timing"),
+                       // The envelope is shared; ownership is now per language shape/field.
+                       ("degraded C# semantic paths", "semantic-cold-start-phase-timing"),
+                       ("engine=fcs", "fsharp-semantic-cold-start-attribution"),
+                       ("admissionWaitMs", "fsharp-semantic-admission-attribution"),
+                       ("snapshotCaptureMs", "fsharp-semantic-snapshot-attribution"),
+                       ("fcsSetupMs", "fsharp-semantic-fcs-setup-attribution"),
+                       ("projectParseAndCheckMs", "fsharp-semantic-project-parse-check-attribution"),
+                       ("fileParseAndCheckMs", "fsharp-semantic-file-parse-check-attribution"),
                        ("queryStages.compilationPreparation.gcPauseMs",
                            "references-gc-pause-attribution"),
                        ("immutable-evidence provenance",

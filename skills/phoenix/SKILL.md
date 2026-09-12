@@ -56,7 +56,7 @@ Keep stdout and stderr separate. Every non-interrupted completed command writes 
 
 Always inspect the JSON even when the process exits nonzero. CLI-generated envelopes use `retryable`; relayed tool-domain results preserve `retryRecommended` and `retryHint`. Follow the stated recovery before retrying; never invent an unbounded loop or a name-based fallback.
 
-`timing.semanticColdStart` attributes where a cold first semantic call spent time; it is diagnostic and never changes the answer. Its fields are attribution, not an additive equation, and `metadataReferenceWorkMs` is summed worker activity rather than wall time. It is present only when the call entered the C# semantic pipeline; F# semantic navigation and calls that end before that pipeline omit it — absence is not a zero.
+`timing.semanticColdStart` is diagnostic attribution, not an additive total or a cold/cache verdict. C# retains its phase shape (`metadataReferenceWorkMs` is summed worker activity, not wall time). F# semantic calls use `engine: "fcs"` with `admissionWaitMs`, `snapshotCaptureMs`, `fcsSetupMs`, `projectParseAndCheckMs` and, when entered, `fileParseAndCheckMs`. Values are whole observed milliseconds, including interrupted work; zero means entered below 1 ms, omission means unentered. Warm calls also carry attribution. Syntax-only F# and calls ending before semantic admission omit it. Answers and confidence are unchanged.
 
 `server_capabilities` is the exception: when the daemon is unavailable it has no top-level `error`; read `meta.indexMode == "unavailable"`, `meta.cause`, `meta.recovery`, and `meta.retryable`. Every other tool returns top-level `error: "phoenix_daemon_unavailable"` with `cause`, `recovery`, and `retryable`.
 

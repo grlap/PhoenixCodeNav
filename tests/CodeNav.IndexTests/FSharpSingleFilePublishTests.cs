@@ -131,6 +131,14 @@ public sealed class FSharpSingleFilePublishTests
                 """);
             File.WriteAllText(Path.Combine(workspace, "Canary.fs"),
                 "module Canary\nlet publishedSidecarMarker = 42\n");
+            // Existing C# semanticOp emissions provide FIFO fences in the SAME JSONL file.
+            // This does not add a flush endpoint or change the empty-cache F# authority case.
+            File.WriteAllText(Path.Combine(workspace, "Fence.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>
+                  <TargetFramework>net9.0</TargetFramework>
+                </PropertyGroup></Project>
+                """);
+            File.WriteAllText(Path.Combine(workspace, "Fence.cs"), "public class TelemetryFence { }\n");
 
             var transport = new StdioClientTransport(new StdioClientTransportOptions
             {
@@ -148,7 +156,7 @@ public sealed class FSharpSingleFilePublishTests
                 cancellationToken: mcpTimeout.Token);
             JsonElement capabilities = await WaitForReadyAsync(client, TimeSpan.FromSeconds(60),
                 mcpTimeout.Token);
-            Assert.Equal("0.12.108", capabilities.GetProperty("version").GetString());
+            Assert.Equal("0.12.109", capabilities.GetProperty("version").GetString());
             int mcpPid = capabilities.GetProperty("runtime").GetProperty("processId").GetInt32();
             JsonElement detailedCapabilities = await CallJsonAsync(client,
                 "server_capabilities", new Dictionary<string, object?>
@@ -160,9 +168,9 @@ public sealed class FSharpSingleFilePublishTests
                     feature => feature.GetProperty("id").GetString() ==
                                "semantic-cold-start-phase-timing")
                 .GetProperty("summary").GetString()!;
-            Assert.Contains("Omitted for F# and calls ending before the C# pipeline",
+            Assert.Contains("C# shape omitted for calls ending before the C# pipeline",
                 coldStartTiming);
-            Assert.Contains("Omitted for F#", coldStartTiming);
+            Assert.Contains("F# uses fcs phases", coldStartTiming);
             JsonElement semantic = await CallJsonAsync(client, "symbol_at",
                 new Dictionary<string, object?>
                 {
@@ -186,7 +194,9 @@ public sealed class FSharpSingleFilePublishTests
                     ? error.GetString()
                     : null);
 
-            int semanticOpsBeforeDefinition = SemanticOpLineCount(workspace);
+            string telemetryPath = Assert.Single(Directory.EnumerateFiles(
+                Path.Combine(workspace, ".codenav", "telemetry"), $"phoenix-{mcpPid}-*.jsonl"));
+            string beforeDefinition = await EmitSemanticFenceAsync(client, telemetryPath, mcpTimeout.Token);
             JsonElement definition = await CallJsonAsync(client, "definition",
                 new Dictionary<string, object?>
                 {
@@ -197,10 +207,13 @@ public sealed class FSharpSingleFilePublishTests
                     ["timeoutMs"] = 60_000,
                 }, mcpTimeout.Token);
             Assert.False(definition.TryGetProperty("error", out _), definition.ToString());
-            Assert.False(definition.TryGetProperty("timing", out JsonElement fsharpTiming) &&
-                         fsharpTiming.TryGetProperty("semanticColdStart", out _),
-                definition.ToString());
-            Assert.Equal(semanticOpsBeforeDefinition, SemanticOpLineCount(workspace));
+            string afterDefinition = await EmitSemanticFenceAsync(client, telemetryPath, mcpTimeout.Token);
+            JsonElement definitionRecord = FSharpSemanticTelemetryAssert.Between(
+                telemetryPath, beforeDefinition, afterDefinition, "definition");
+            FSharpSemanticTelemetryAssert.Match(definition, definitionRecord, "definition", "degraded");
+            Assert.Equal("indexed", definition.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.Contains("fsharp_core_reference_host_fallback", definition.GetProperty("partialReason").GetString());
+            Assert.Contains("fsharp_core_reference_defaulted", definition.GetProperty("partialReason").GetString());
 
             JsonElement started = await CallJsonAsync(
                 client,
@@ -298,23 +311,20 @@ public sealed class FSharpSingleFilePublishTests
         return JsonDocument.Parse(text.Text).RootElement.Clone();
     }
 
-    private static int SemanticOpLineCount(string workspace)
+    private static async Task<string> EmitSemanticFenceAsync(McpClient client, string path,
+        CancellationToken cancellationToken)
     {
-        string telemetryDir = Path.Combine(workspace, ".codenav", "telemetry");
-        if (!Directory.Exists(telemetryDir)) return 0;
-        return Directory.EnumerateFiles(telemetryDir, "phoenix-*.jsonl")
-            .SelectMany(path => ReadShared(path)
-                .Split('\n', StringSplitOptions.RemoveEmptyEntries))
-            .Count(line => line.Contains("\"e\":\"semanticOp\"",
-                StringComparison.Ordinal));
-    }
-
-    private static string ReadShared(string path)
-    {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
-            FileShare.ReadWrite);
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        var preceding = FSharpSemanticTelemetryAssert.Read(path)
+            .Select(FSharpSemanticTelemetryAssert.Correlation).ToHashSet(StringComparer.Ordinal);
+        JsonElement response = await CallJsonAsync(client, "type_hierarchy",
+            new Dictionary<string, object?> { ["name"] = "TelemetryFence", ["timeoutMs"] = 60_000 },
+            cancellationToken);
+        Assert.False(response.TryGetProperty("error", out _), response.ToString());
+        bool IsNewFence(JsonElement row) => FSharpSemanticTelemetryAssert.Event(row) == "semanticOp" &&
+            row.GetProperty("tool").GetString() == "type_hierarchy" &&
+            !preceding.Contains(FSharpSemanticTelemetryAssert.Correlation(row));
+        var records = FSharpSemanticTelemetryAssert.WaitFor(path, rows => rows.Any(IsNewFence));
+        return FSharpSemanticTelemetryAssert.Correlation(Assert.Single(records, IsNewFence))!;
     }
 
     private static string FindRepositoryRoot()

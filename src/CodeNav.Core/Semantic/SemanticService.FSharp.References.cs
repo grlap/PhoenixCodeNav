@@ -62,8 +62,9 @@ public sealed partial class SemanticService
         bool includeTests,
         bool includeGenerated,
         int samplesPerGroup,
-        int timeoutMs)
+        int timeoutMs, FSharpSemanticTimingBox? timing = null)
     {
+        timing ??= new();
         if (line < 1 || column < 0)
             return new(null, null, [], "fsharp_semantic_position_invalid", null, []);
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 120_000));
@@ -74,14 +75,17 @@ public sealed partial class SemanticService
         bool rootReady = false;
         try
         {
-            await _fsharpSemanticGate.WaitAsync(cts.Token).ConfigureAwait(false);
+            using (timing.Admission())
+                await _fsharpSemanticGate.WaitAsync(cts.Token).ConfigureAwait(false);
             entered = true;
+            using IDisposable captureTiming = timing.Capture();
             snapshot = _manager.TryOpenReviewSnapshot(cts.Token);
             if (snapshot is null)
                 return new(null, null, [], "index_snapshot_unavailable", null, []);
             captured = CaptureFSharpSemanticProject(snapshot, path, projectPath, targetFramework,
                 cts.Token, out FSharpSemanticResult? failure, captureSession);
             if (captured is null) return FSharpReferencesFailure(failure!);
+            captureTiming.Dispose();
             FSharpSemanticSnapshotCapturedForTest?.Invoke();
 
             SemanticCheckResult check = await SemanticResolver.ResolveReferencesAsync(
@@ -93,7 +97,7 @@ public sealed partial class SemanticService
                 line,
                 column,
                 MaxFSharpSemanticLineOnlySourceChars,
-                cts.Token).ConfigureAwait(false);
+                timing, cts.Token).ConfigureAwait(false);
             FSharpSemanticCheckCompletedForTest?.Invoke(check.Error);
             rootReady = check.Symbol is not null;
 
@@ -259,7 +263,7 @@ public sealed partial class SemanticService
                     CapturedFSharpSemanticProject? projectCapture =
                         CaptureFSharpSemanticProjectContext(snapshot, project,
                             projectTargetFramework, cts.Token,
-                            out FSharpSemanticResult? projectCaptureFailure, captureSession);
+                            out FSharpSemanticResult? projectCaptureFailure, captureSession, timing);
                     if (projectCapture is null)
                     {
                         failures.Add(projectCaptureFailure?.Error ??
@@ -284,7 +288,7 @@ public sealed partial class SemanticService
                             lookupProjectIndex, projectCapture.Fingerprint,
                             projectCapture.BinaryReferences.Count == 0,
                             definition.FullPath, definition.Line, definition.Column,
-                            MaxFSharpSemanticLineOnlySourceChars, cts.Token)
+                            MaxFSharpSemanticLineOnlySourceChars, timing, cts.Token)
                         .ConfigureAwait(false);
                     FSharpSemanticCheckCompletedForTest?.Invoke(projectCheck.Error);
                     if (projectCheck.Symbol is null || projectCheck.Error is not null ||

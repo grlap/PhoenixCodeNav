@@ -170,8 +170,9 @@ public sealed partial class SemanticService
         int column,
         string? projectPath,
         string? targetFramework,
-        int timeoutMs)
+        int timeoutMs, FSharpSemanticTimingBox? timing = null)
     {
+        timing ??= new();
         if (line < 1 || column < 0)
             return new(null, "fsharp_semantic_position_invalid", null, []);
         using var cts = new CancellationTokenSource(Math.Clamp(timeoutMs, 500, 60_000));
@@ -181,13 +182,16 @@ public sealed partial class SemanticService
         {
             // Admission precedes all source/reference capture so waiting requests cannot each retain
             // a maximum-sized snapshot while the single FCS worker is busy.
-            await _fsharpSemanticGate.WaitAsync(cts.Token).ConfigureAwait(false);
+            using (timing.Admission())
+                await _fsharpSemanticGate.WaitAsync(cts.Token).ConfigureAwait(false);
             entered = true;
+            using IDisposable captureTiming = timing.Capture();
             captured = CaptureFSharpSemanticProject(path, projectPath, targetFramework,
                 cts.Token, out FSharpSemanticResult? failure);
             if (captured is null) return failure!;
             // Capture owns a short SQLite read snapshot. Invoke the deterministic test seam only
             // after Capture has returned and its using scope has released that snapshot.
+            captureTiming.Dispose();
             FSharpSemanticSnapshotCapturedForTest?.Invoke();
 
             SemanticCheckResult check = await SemanticResolver.ResolveAsync(
@@ -199,7 +203,7 @@ public sealed partial class SemanticService
                 line,
                 column,
                 MaxFSharpSemanticLineOnlySourceChars,
-                cts.Token).ConfigureAwait(false);
+                timing, cts.Token).ConfigureAwait(false);
             FSharpSemanticCheckCompletedForTest?.Invoke(check.Error);
 
             var rootSourcePaths = captured.SourceFiles.ToHashSet(

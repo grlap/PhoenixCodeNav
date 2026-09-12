@@ -146,10 +146,10 @@ public partial class FSharpSemanticStage2Tests
                     let second = 2
                     """);
 
-            string raw = CallSemantic(() => fixture.Tools.References(
+            var (response, _) = FSharpSemanticTelemetryAssert.Observe(fixture.Manager.Telemetry, () => fixture.Tools.References(
                 path: "Library/Library.fs", line: 2, column: 5, mode: "semantic",
-                samplesPerGroup: 10, timeoutMs: 60_000));
-            JsonElement response = Parse(raw);
+                samplesPerGroup: 10, timeoutMs: 60_000), "references", "partial");
+            string raw = response.GetRawText();
 
             Assert.False(response.TryGetProperty("error", out _), raw);
             Assert.Equal(3, response.GetProperty("totalReferences").GetInt32());
@@ -1498,10 +1498,11 @@ public partial class FSharpSemanticStage2Tests
                 """);
 
             using var fixture = Fixture.Create(root);
-            JsonElement noSymbol = Parse(CallSemantic(() => fixture.Tools.References(
+            var (noSymbol, noSymbolRecord) = FSharpSemanticTelemetryAssert.Observe(fixture.Manager.Telemetry, () => fixture.Tools.References(
                 path: "Core/Core.fs", line: 3, column: 4, mode: "semantic",
-                timeoutMs: 60_000)));
+                timeoutMs: 60_000), "references", "unresolved");
             Assert.Equal("fsharp_symbol_not_resolved", noSymbol.GetProperty("error").GetString());
+            Assert.Equal("fsharp_symbol_not_resolved", noSymbolRecord.GetProperty("reason").GetString());
             Assert.False(noSymbol.GetProperty("found").GetBoolean());
             Assert.False(noSymbol.TryGetProperty("totalReferences", out _));
             Assert.False(noSymbol.TryGetProperty("groups", out _));

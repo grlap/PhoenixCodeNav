@@ -124,6 +124,22 @@ public partial class FSharpSemanticStage2Tests
             Assert.Equal("value", response.GetProperty("symbol").GetProperty("name").GetString());
             Assert.Equal("exact", response.GetProperty("meta").GetProperty("confidence").GetString());
             Assert.DoesNotContain("fsharp_semantic_diagnostics_present", response.GetProperty("partialReason").GetString());
+            var (definition, record) = FSharpSemanticTelemetryAssert.Observe(fixture.Manager.Telemetry,
+                () => fixture.Tools.Definition(path: "Core/Use.fs", line: 2, column: 20,
+                    mode: "semantic", timeoutMs: 60_000), "definition", "partial",
+                assertResponse: definition => Assert.Equal("exact",
+                    definition.GetProperty("meta").GetProperty("confidence").GetString()));
+            Assert.True(definition.GetProperty("found").GetBoolean(), definition.ToString());
+            Assert.Equal("value", definition.GetProperty("symbol").GetProperty("name").GetString());
+            Assert.Equal("exact", definition.GetProperty("meta").GetProperty("confidence").GetString());
+            Assert.True(definition.GetProperty("partial").GetBoolean());
+            Assert.Equal(new[] { "Core/Api.fs", "Core/Api.fsi" },
+                definition.GetProperty("declarations").EnumerateArray()
+                    .Select(declaration => declaration.GetProperty("path").GetString()).Order().ToArray());
+            Assert.Equal(definition.GetProperty("partialReason").GetString(), record.GetProperty("reason").GetString());
+            var timing = definition.GetProperty("timing").GetProperty("semanticColdStart");
+            foreach (string phase in new[] { "snapshotCaptureMs", "fcsSetupMs", "projectParseAndCheckMs", "fileParseAndCheckMs" })
+                Assert.True(timing.GetProperty(phase).GetInt64() >= 0);
         }
         finally { Cleanup(root); }
     }

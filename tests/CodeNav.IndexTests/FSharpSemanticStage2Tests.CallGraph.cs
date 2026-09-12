@@ -22,10 +22,10 @@ public partial class FSharpSemanticStage2Tests
                 """);
 
             using var fixture = Fixture.Create(root);
-            string callersRaw = CallSemantic(() => fixture.Tools.Callers(
+            var (callers, _) = FSharpSemanticTelemetryAssert.Observe(fixture.Manager.Telemetry, () => fixture.Tools.Callers(
                 path: "Calls/Calls.fs", line: 3, column: 9,
-                timeoutMs: 60_000));
-            JsonElement callers = Parse(callersRaw);
+                timeoutMs: 60_000), "callers", "partial");
+            string callersRaw = callers.GetRawText();
             Assert.False(callers.TryGetProperty("error", out _), callersRaw);
             Assert.Equal(1, callers.GetProperty("totalCallers").GetInt32());
             Assert.Equal(1, callers.GetProperty("totalCallSites").GetInt32());
@@ -45,10 +45,11 @@ public partial class FSharpSemanticStage2Tests
             Assert.Equal("semantic", callers.GetProperty("meta")
                 .GetProperty("navigationLayer").GetString());
 
-            string calleesRaw = CallSemantic(() => fixture.Tools.Callees(
+            var (callees, calleesRecord) = FSharpSemanticTelemetryAssert.Observe(fixture.Manager.Telemetry, () => fixture.Tools.Callees(
                 path: "Calls/Calls.fs", line: 4, column: 9,
-                timeoutMs: 60_000));
-            JsonElement callees = Parse(calleesRaw);
+                timeoutMs: 60_000), "callees", "partial");
+            string calleesRaw = callees.GetRawText();
+            Assert.False(calleesRecord.GetProperty("semanticColdStart").TryGetProperty("fileParseAndCheckMs", out _));
             Assert.False(callees.TryGetProperty("error", out _), calleesRaw);
             Assert.Equal(1, callees.GetProperty("totalCallees").GetInt32());
             Assert.Equal(1, callees.GetProperty("totalCallSites").GetInt32());

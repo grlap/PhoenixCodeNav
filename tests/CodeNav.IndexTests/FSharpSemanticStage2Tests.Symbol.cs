@@ -334,12 +334,13 @@ public partial class FSharpSemanticStage2Tests
                 $"module Core\nlet ``{identifier}`` = 1\nlet result = ``{identifier}``\n");
 
             using var fixture = Fixture.Create(root);
-            string raw = CallSemantic(() => fixture.Tools.SymbolAt(
-                "Core/Core.fs", 3, 16, timeoutMs: 60_000));
+            var (response, record) = FSharpSemanticTelemetryAssert.Observe(fixture.Manager.Telemetry,
+                () => fixture.Tools.SymbolAt("Core/Core.fs", 3, 16, timeoutMs: 60_000), "symbol_at", "error");
+            string raw = response.GetRawText();
             Assert.True(Json.Utf8Bytes(raw) <= Json.HardBudgetBytes, raw);
-            JsonElement response = Parse(raw);
             Assert.True(response.TryGetProperty("error", out JsonElement error), raw);
             Assert.Equal("fsharp_semantic_response_too_large", error.GetString());
+            Assert.Equal("fsharp_semantic_response_too_large", record.GetProperty("reason").GetString());
             Assert.Equal("indexed", response.GetProperty("meta").GetProperty("confidence").GetString());
         }
         finally

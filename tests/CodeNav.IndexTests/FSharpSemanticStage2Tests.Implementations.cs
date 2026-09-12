@@ -47,10 +47,10 @@ public partial class FSharpSemanticStage2Tests
                 """);
 
             using var fixture = Fixture.Create(root);
-            string raw = CallSemantic(() => fixture.Tools.Implementations(
+            var (response, _) = FSharpSemanticTelemetryAssert.Observe(fixture.Manager.Telemetry, () => fixture.Tools.Implementations(
                 path: "Contracts/Contracts.fs", line: 2, column: 7,
-                timeoutMs: 60_000));
-            JsonElement response = Parse(raw);
+                timeoutMs: 60_000), "implementations", "partial");
+            string raw = response.GetRawText();
 
             Assert.False(response.TryGetProperty("error", out _), raw);
             Assert.Equal(2, response.GetProperty("totalImplementations").GetInt32());

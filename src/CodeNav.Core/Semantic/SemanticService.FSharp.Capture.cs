@@ -569,8 +569,9 @@ public sealed partial class SemanticService
         string targetFramework,
         CancellationToken cancellationToken,
         out FSharpSemanticResult? failure,
-        FSharpSemanticCaptureSession captureSession)
+        FSharpSemanticCaptureSession captureSession, FSharpSemanticTimingBox timing)
     {
+        using IDisposable captureTiming = timing.Capture();
         var contexts = owner.Tfms.Split(';',
                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.OrdinalIgnoreCase)

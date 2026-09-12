@@ -148,25 +148,31 @@ public sealed partial class NavigationTools
     private string FSharpSymbolAt(string path, int line, int column,
         string? projectPath, string? targetFramework, int timeoutMs)
     {
+        var timing = new SemanticService.FSharpSemanticTimingBox();
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         FSharpSemanticResult result = _semantic.FSharpSymbolAtAsync(path, line, column,
-                projectPath, targetFramework, timeoutMs)
+                projectPath, targetFramework, timeoutMs, timing)
             .GetAwaiter().GetResult();
-        return ShapeFSharpSemanticResult("symbol_at", path, line, column, result,
-            Math.Clamp(timeoutMs, 500, 60_000), stopwatch.ElapsedMilliseconds);
+        var snapshot = timing.Snapshot();
+        string response = ShapeFSharpSemanticResult("symbol_at", path, line, column, result,
+            Math.Clamp(timeoutMs, 500, 60_000), stopwatch.ElapsedMilliseconds, snapshot);
+        return CompleteFSharpOperation("symbol_at", response, snapshot);
     }
 
     private string FSharpDefinition(string path, int line, int column,
         string? projectPath, string? targetFramework, int timeoutMs)
     {
+        var timing = new SemanticService.FSharpSemanticTimingBox();
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         FSharpSemanticResult result = _semantic.FSharpSymbolAtAsync(path, line, column,
-                projectPath, targetFramework, timeoutMs)
+                projectPath, targetFramework, timeoutMs, timing)
             .GetAwaiter().GetResult();
         if (result.Symbol is { Declarations.Count: 0 } && result.Error is null)
             result = result with { Error = "fsharp_definition_not_in_selected_project" };
-        return ShapeFSharpSemanticResult("definition", path, line, column, result,
-            Math.Clamp(timeoutMs, 500, 60_000), stopwatch.ElapsedMilliseconds);
+        var snapshot = timing.Snapshot();
+        string response = ShapeFSharpSemanticResult("definition", path, line, column, result,
+            Math.Clamp(timeoutMs, 500, 60_000), stopwatch.ElapsedMilliseconds, snapshot);
+        return CompleteFSharpOperation("definition", response, snapshot);
     }
 
     internal static string FSharpSemanticConfidence(string? partialReason)
@@ -217,42 +223,51 @@ public sealed partial class NavigationTools
         string? projectPath, string? targetFramework, bool includeTests,
         bool includeGenerated, int samplesPerGroup, int timeoutMs)
     {
+        var timing = new SemanticService.FSharpSemanticTimingBox();
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
         FSharpReferencesResult result = _semantic.FSharpReferencesAsync(
                 path, line, column, projectPath, targetFramework, includeTests,
-                includeGenerated, Math.Clamp(samplesPerGroup, 0, 10), deadlineMs)
+                includeGenerated, Math.Clamp(samplesPerGroup, 0, 10), deadlineMs, timing)
             .GetAwaiter().GetResult();
-        return ShapeFSharpReferencesResult(path, line, column, result, includeTests,
-            includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds);
+        var snapshot = timing.Snapshot();
+        string response = ShapeFSharpReferencesResult(path, line, column, result, includeTests,
+            includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds, snapshot);
+        return CompleteFSharpOperation("references", response, snapshot);
     }
 
     private string FSharpCallers(string path, int line, int column,
         string? projectPath, string? targetFramework, bool includeTests,
         bool includeGenerated, int timeoutMs)
     {
+        var timing = new SemanticService.FSharpSemanticTimingBox();
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
         FSharpCallersResult result = _semantic.FSharpCallersAsync(
                 path, line, column, projectPath, targetFramework, includeTests,
-                includeGenerated, deadlineMs)
+                includeGenerated, deadlineMs, timing)
             .GetAwaiter().GetResult();
-        return ShapeFSharpCallersResult(path, line, column, result, includeTests,
-            includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds);
+        var snapshot = timing.Snapshot();
+        string response = ShapeFSharpCallersResult(path, line, column, result, includeTests,
+            includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds, snapshot);
+        return CompleteFSharpOperation("callers", response, snapshot);
     }
 
     private string FSharpCallees(string path, int line, int column,
         string? projectPath, string? targetFramework, bool includeTests,
         bool includeGenerated, int timeoutMs)
     {
+        var timing = new SemanticService.FSharpSemanticTimingBox();
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
         FSharpCalleesResult result = _semantic.FSharpCalleesAsync(
                 path, line, column, projectPath, targetFramework, includeTests,
-                includeGenerated, deadlineMs)
+                includeGenerated, deadlineMs, timing)
             .GetAwaiter().GetResult();
-        return ShapeFSharpCalleesResult(path, line, column, result, includeTests,
-            includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds);
+        var snapshot = timing.Snapshot();
+        string response = ShapeFSharpCalleesResult(path, line, column, result, includeTests,
+            includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds, snapshot);
+        return CompleteFSharpOperation("callees", response, snapshot);
     }
 
     private static bool HasSimpleFSharpModelReason(string? partialReason) =>
@@ -300,7 +315,7 @@ public sealed partial class NavigationTools
 
     private string ShapeFSharpCallersResult(string path, int line, int column,
         FSharpCallersResult result, bool includeTests, bool includeGenerated,
-        int deadlineMs, long elapsedMs)
+        int deadlineMs, long elapsedMs, SemanticService.FSharpSemanticTiming? semanticColdStart = null)
     {
         var selected = result.SelectedContext is null
             ? null
@@ -499,7 +514,7 @@ public sealed partial class NavigationTools
                                 StringComparison.Ordinal) == true
                     ? $"Retry callers with timeoutMs greater than {deadlineMs} (maximum {SemanticNavigationDeadlineMaxMs})."
                     : null,
-                    timing = new { semanticMs = elapsedMs, deadlineMs },
+                    timing = new { semanticMs = elapsedMs, deadlineMs, semanticColdStart },
                     meta,
                 }, maxBytes: TestOnlyReferencesResponseMaxBytes);
         return Json.WithCompleteSemanticIdentity(shaped);
@@ -507,7 +522,7 @@ public sealed partial class NavigationTools
 
     private string ShapeFSharpCalleesResult(string path, int line, int column,
         FSharpCalleesResult result, bool includeTests, bool includeGenerated,
-        int deadlineMs, long elapsedMs)
+        int deadlineMs, long elapsedMs, SemanticService.FSharpSemanticTiming? semanticColdStart = null)
     {
         var selected = result.SelectedContext is null
             ? null
@@ -661,7 +676,7 @@ public sealed partial class NavigationTools
                                 StringComparison.Ordinal) == true
                     ? $"Retry callees with timeoutMs greater than {deadlineMs} (maximum {SemanticNavigationDeadlineMaxMs})."
                     : null,
-                    timing = new { semanticMs = elapsedMs, deadlineMs },
+                    timing = new { semanticMs = elapsedMs, deadlineMs, semanticColdStart },
                     meta,
                 }, maxBytes: TestOnlyReferencesResponseMaxBytes);
         return Json.WithCompleteSemanticIdentity(shaped);
@@ -671,19 +686,22 @@ public sealed partial class NavigationTools
         string? projectPath, string? targetFramework, bool includeTests,
         bool includeGenerated, int timeoutMs)
     {
+        var timing = new SemanticService.FSharpSemanticTimingBox();
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         int deadlineMs = Math.Clamp(timeoutMs, 500, SemanticNavigationDeadlineMaxMs);
         FSharpImplementationsResult result = _semantic.FSharpImplementationsAsync(
                 path, line, column, projectPath, targetFramework, includeTests,
-                includeGenerated, deadlineMs)
+                includeGenerated, deadlineMs, timing)
             .GetAwaiter().GetResult();
-        return ShapeFSharpImplementationsResult(path, line, column, result,
-            includeTests, includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds);
+        var snapshot = timing.Snapshot();
+        string response = ShapeFSharpImplementationsResult(path, line, column, result,
+            includeTests, includeGenerated, deadlineMs, stopwatch.ElapsedMilliseconds, snapshot);
+        return CompleteFSharpOperation("implementations", response, snapshot);
     }
 
     private string ShapeFSharpImplementationsResult(string path, int line, int column,
         FSharpImplementationsResult result, bool includeTests, bool includeGenerated,
-        int deadlineMs, long elapsedMs)
+        int deadlineMs, long elapsedMs, SemanticService.FSharpSemanticTiming? semanticColdStart = null)
     {
         var selected = result.SelectedContext is null
             ? null
@@ -965,7 +983,7 @@ public sealed partial class NavigationTools
                                            diagnosticsTruncated
                         ? true
                         : (bool?)null,
-                    timing = new { deadlineMs, elapsedMs },
+                    timing = new { deadlineMs, elapsedMs, semanticColdStart },
                     truncated = itemsTruncated ? true : (bool?)null,
                     truncationNoteId = itemsTruncated
                         ? NoteIds.FSharpImplementationItemsByteBudget
@@ -981,7 +999,7 @@ public sealed partial class NavigationTools
 
     private string ShapeFSharpReferencesResult(string path, int line, int column,
         FSharpReferencesResult result, bool includeTests, bool includeGenerated,
-        int deadlineMs, long elapsedMs)
+        int deadlineMs, long elapsedMs, SemanticService.FSharpSemanticTiming? semanticColdStart = null)
     {
         var selected = result.SelectedContext is null
             ? null
@@ -1267,6 +1285,7 @@ public sealed partial class NavigationTools
                     {
                         deadlineMs,
                         elapsedMs,
+                        semanticColdStart,
                     },
                     meta,
                 };
@@ -1286,6 +1305,7 @@ public sealed partial class NavigationTools
             {
                 deadlineMs,
                 elapsedMs,
+                semanticColdStart,
             },
             meta = FSharpSemanticMeta(result.Health, "fsharp_semantic_response_too_large",
                 result.PartialReason),
@@ -1302,7 +1322,7 @@ public sealed partial class NavigationTools
     }
 
     private string ShapeFSharpSemanticResult(string operation, string path, int line, int column,
-        FSharpSemanticResult result, int deadlineMs, long elapsedMs)
+        FSharpSemanticResult result, int deadlineMs, long elapsedMs, SemanticService.FSharpSemanticTiming? semanticColdStart = null)
     {
         var selected = result.SelectedContext is null
             ? null
@@ -1537,6 +1557,7 @@ public sealed partial class NavigationTools
                     {
                         deadlineMs,
                         elapsedMs,
+                        semanticColdStart,
                     },
                     meta,
                 }, auxiliarySampleItems: MaxFSharpTypeCheckContexts);
@@ -1559,6 +1580,7 @@ public sealed partial class NavigationTools
             {
                 deadlineMs,
                 elapsedMs,
+                semanticColdStart,
             },
             meta = fallbackMeta,
         });

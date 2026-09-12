@@ -61,6 +61,50 @@ ring keeps rolling regardless).
 open with `FileShare.ReadWrite` (a plain `File.ReadAllText` is refused on Windows while the
 process is alive).
 
+## F# semantic attribution (v0.12.109)
+
+`symbol_at`, semantic `definition`/`references`, `implementations`, `callers` and `callees`
+return the following distinct shape and emit the identical frozen snapshot in one `semanticOp`.
+The values here are illustrative, not performance measurements:
+
+```json
+{"e":"semanticOp","ts":"2026-09-11T23:49:12.482Z","corr":"a1b2c3d4",
+ "tool":"definition","accessMode":"writer","result":"partial",
+ "reason":"fsharp_semantic_simple_project_model",
+ "semanticColdStart":{"engine":"fcs","admissionWaitMs":0,"snapshotCaptureMs":8,
+                      "fcsSetupMs":2,"projectParseAndCheckMs":49,"fileParseAndCheckMs":1}}
+```
+
+| F# field | Observed work |
+| --- | --- |
+| `engine` | `fcs`, not a C# phase schema |
+| `admissionWaitMs` | Wall time waiting for the Core FCS gate, including interrupted waits |
+| `snapshotCaptureMs` | Sum of whole input-capture attempts: selected context, indexed project-option evaluation and immutable source/binary capture, including failed attempts |
+| `fcsSetupMs` | Sum of runtime/checker lookup or creation, source arrays, FCS command-line project options and project-reference wiring |
+| `projectParseAndCheckMs` | Sum of actual FCS `ParseAndCheckProject` awaits across root/closure and repeated dependent passes |
+| `fileParseAndCheckMs` | Sum of actual `ParseAndCheckFileInProject` awaits, only when entered |
+
+These are fixed scalar monotonic wall spans. Ticks are summed before flooring to whole
+milliseconds: zero means entered for less than 1 ms; unentered phases are omitted, never
+filled with zero. Interrupted spans retain elapsed work, not a claim of completion. Warm
+calls also carry the shape: the historical `semanticColdStart` name does not assert cold,
+cache hit/miss or checker creation. Parse and check are measured together, not fabricated
+as separate FCS phases. Discovery, symbol traversal, post-check reference verification,
+response shaping and cleanup are not attributed here; this is not an additive total.
+Existing `elapsedMs`/`semanticMs` and `deadlineMs` retain their meanings. Syntax-only F#,
+unsupported F# `type_hierarchy`, and calls ending before admission omit the shape.
+
+MCP emits once after choosing the final budgeted response, never inside repeated shaping
+callbacks or once per dependent project. Error/unresolved responses retain those outcomes;
+successful `indexed` responses map to `degraded`; successful `exact` responses map to
+`partial` only when the final response actually has `partial:true`, otherwise `exact`.
+An unresolved `found:false` response need not have a top-level error. The original response's
+confidence is never changed. `reason` carries disclosed codes, not source/path/diagnostic text.
+The record has no invented C# `ownerLoad`, `scanLoad`, `clusterLoadMs` or `queryMs`.
+The portal therefore shows unknown total duration/cold state for F# records. Its existing
+`partial` normalization is completed/unknown-confidence/partial, even when the original
+tool response was exact; `degraded` remains degraded/unknown-confidence/partial.
+
 ## Record: `semanticOp`
 
 ```json
@@ -87,7 +131,7 @@ process is alive).
              "loadedBefore":4,"requested":21,"reloaded":0,"loaded":21,"failed":0}}
 ```
 
-`implementations` and `type_hierarchy` add a privacy-safe planning block after type
+C# `implementations` and `type_hierarchy` add a privacy-safe planning block after type
 resolution. `references` emits the same `seedDiscovery`/`scanSet` shape (with
 `mode:"directCandidates"` for type targets) but no `implementationClosure`:
 
@@ -130,10 +174,11 @@ load ran).
 | Field | Meaning |
 |---|---|
 | `ts` | UTC, `yyyy-MM-ddTHH:mm:ss.fffZ` |
-| `tool` | `references` \| `implementations` \| `type_hierarchy` \| `definition` \| `callers` \| `callees` |
+| `tool` | `references` \| `implementations` \| `type_hierarchy` \| `definition` \| `callers` \| `callees` \| F# `symbol_at` |
 | `accessMode` | `writer` \| `follower` \| `unattached`; compare planning samples within the same mode |
-| `result` | `exact` (success) \| `degraded` (deadline died: see `reason`) \| `unresolved` (position/symbol didn't resolve; see `reason`) \| `error` |
+| `result` | `exact` \| `partial` \| `degraded` (see `reason`) \| `unresolved` (position/symbol did not resolve) \| `error`; F# mapping below preserves the final response's confidence and partial distinction |
 | `reason` | Stable primary cause, including `cluster_cold_load`, `semantic_timeout`, `project_load_failed`, `index_snapshot_unavailable`, symbol-resolution causes, or an exception type name. A `semantic_timeout` with `queryStages.compilationPreparation.unfinishedProjects > 0` expired during eager preparation |
+| `semanticColdStart` | Immutable request-local attribution also returned at `timing.semanticColdStart`; C# retains its phase fields, F# uses the distinct `engine:"fcs"` shape below |
 | `clusterLoadMs` | the op's LOAD+RESOLVE wall (all phases through symbol resolution) — restored after a field regression hid a 48s query behind load-only telemetry |
 | `clusterLoadProcessWideCpuMs` | `references` only: process-wide CPU consumed while `clusterLoadMs` was open. It includes GC, runtime, and every concurrent MCP thread; it is diagnostic attribution, never elapsed duration |
 | `queryMs` | the op's FIND wall after scan-set planning/loading/resolution (compilation preparation, SymbolFinder, and result processing). Null when the op died during load |

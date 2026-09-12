@@ -17,6 +17,51 @@ namespace CodeNav.Tests;
 /// </summary>
 public class PortalDataSourceTests
 {
+    [Theory]
+    [InlineData("exact", "completed", "exact", false)]
+    [InlineData("partial", "completed", "unknown", true)]
+    [InlineData("degraded", "degraded", "unknown", true)]
+    [InlineData("unresolved", "failed", "unknown", false)]
+    [InlineData("error", "failed", "unknown", false)]
+    public void FcsSemanticRecordsDoNotInventRoslynDurationOrExactPartialConfidence(
+        string result, string outcome, string confidence, bool partial)
+    {
+        string root = Directory.CreateTempSubdirectory("cn-fcs-portal").FullName;
+        try
+        {
+            string directory = Path.Combine(root, ".codenav", "telemetry");
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, $"phoenix-{Environment.ProcessId}-20260911000000-1.jsonl"),
+                JsonSerializer.Serialize(new
+                {
+                    e = "semanticOp",
+                    ts = DateTimeOffset.UtcNow,
+                    corr = "fcs-call",
+                    tool = "definition",
+                    accessMode = "writer",
+                    result,
+                    semanticColdStart = new
+                    {
+                        engine = "fcs",
+                        admissionWaitMs = 0,
+                        snapshotCaptureMs = 3,
+                        fcsSetupMs = 1,
+                        projectParseAndCheckMs = 7
+                    },
+                }) + "\n");
+            var source = new PortalDataSource([root]);
+            source.RefreshForTest();
+            using JsonDocument operations = Serialize(source.Operations());
+            JsonElement operation = Assert.Single(operations.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal(outcome, operation.GetProperty("outcome").GetString());
+            Assert.Equal(confidence, operation.GetProperty("confidence").GetString());
+            Assert.Equal(partial, operation.GetProperty("partial").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, operation.GetProperty("durationMs").ValueKind);
+            Assert.Equal("unknown", operation.GetProperty("coldState").GetString());
+        }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
+    }
+
     [Fact]
     public void AnchoredIndexPresenceAndSemanticJsonlBecomeALiveReadOnlyView()
     {

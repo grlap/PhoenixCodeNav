@@ -1021,6 +1021,24 @@ This is the part designed specifically for net472 enterprise scale.
   Any actual eviction creates one new Roslyn `Solution`, so the next operation performs one new
   document-scope scan; no-pressure steady state preserves both solution identity and the cache.
 
+### F# semantic operation attribution
+
+Since v0.12.109 the six F# semantic tools carry a distinct `engine: "fcs"` object at
+`timing.semanticColdStart`. Core owns request-local admission and whole snapshot-capture
+spans; the F# adapter reports typed setup and combined project/file parse-and-check spans
+through an explicit collector. Repeated closure/dependent checks accumulate into the same
+request, without a global last-operation value. The frozen integer-millisecond snapshot
+includes interrupted spans and cannot be changed by late completion; unentered phases are
+omitted. Neither warm calls nor checker reuse are relabeled as cold or cache misses.
+
+The MCP wrapper owns the tool identity and emits one `semanticOp` only after final response
+budgeting, using that same snapshot. It distinguishes errors, unresolved `found:false`,
+indexed success, exact partial success and exact success without changing confidence or
+retry behavior. C# load/query fields are not synthesized. These partial attributions are
+not an additive elapsed-time total; traversal, verification and shaping remain outside
+the named spans. Field semantics and portal normalization are in
+[the telemetry contract](features/telemetry.md#f-semantic-attribution-v012109).
+
 ### Semantic cold-start loader: parallel prepare, ordered commit
 
 Before 0.12.9, the C# semantic cold path held one `SemaphoreSlim(1, 1)` for the complete

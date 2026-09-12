@@ -15,6 +15,12 @@ open FSharp.Compiler.Symbols
 open FSharp.Compiler.Text
 
 module private Semantic =
+    let measure (timing: ISemanticTiming) phase work =
+        async {
+            use span = timing.StartPhase(phase)
+            return! work ()
+        }
+
     let nullString: string = Unchecked.defaultof<string>
     let nullSymbol: SemanticSymbol = Unchecked.defaultof<SemanticSymbol>
     let maxCachedProjects = 4
@@ -125,13 +131,14 @@ module private Semantic =
                     assemblyContentsRuntimes[fingerprint] <- created
                     created)
 
-    let checkAssemblyContents
+    let checkAssemblyContents (timing: ISemanticTiming)
         (projects: SemanticProjectInput array)
         fingerprint
         cacheRuntime
         operationName
         (cancellationToken: CancellationToken) =
         async {
+            use setup = timing.StartPhase(SemanticPhase.Setup)
             let sourceFiles = projects |> Array.collect (fun project -> project.SourceFiles)
             let sourceTexts = projects |> Array.collect (fun project -> project.SourceTexts)
             let runtime = assemblyContentsRuntime fingerprint sourceFiles sourceTexts cacheRuntime
@@ -158,16 +165,18 @@ module private Semantic =
                 optionsByIndex[index] <-
                     { baseOptions with ReferencedProjects = referencedProjects }
 
+            setup.Dispose()
+
             let checkedProjects = Array.zeroCreate<FSharpCheckProjectResults> projects.Length
             let projectDiagnostics = ResizeArray<FSharpDiagnostic>()
             let mutable hasCriticalErrors = false
             for index in 0 .. projects.Length - 1 do
                 cancellationToken.ThrowIfCancellationRequested()
                 let! checkedProject =
-                    checker.ParseAndCheckProject(
+                    measure timing SemanticPhase.ProjectParseAndCheck (fun () -> checker.ParseAndCheckProject(
                         optionsByIndex[index],
                         userOpName = operationName
-                    )
+                    ))
                 checkedProjects[index] <- checkedProject
                 projectDiagnostics.AddRange(checkedProject.Diagnostics)
                 hasCriticalErrors <- hasCriticalErrors || checkedProject.HasCriticalErrors
@@ -787,7 +796,7 @@ module private Semantic =
             expressionRangeKey expressionRange
         )
 
-    let resolveImplementations
+    let resolveImplementations (timing: ISemanticTiming)
         (projects: SemanticProjectInput array)
         rootProjectIndex
         lookupProjectIndex
@@ -815,7 +824,7 @@ module private Semantic =
             else
                 let lookupProject = projects[lookupProjectIndex]
                 let! closure =
-                    checkAssemblyContents projects fingerprint cacheRuntime
+                    checkAssemblyContents timing projects fingerprint cacheRuntime
                         "PhoenixCodeNav.implementations" cancellationToken
                 let checker = closure.Checker
                 let optionsByIndex = closure.OptionsByIndex
@@ -837,13 +846,13 @@ module private Semantic =
                                 "fsharp_semantic_target_not_in_project" allProjectDiagnostics Array.empty false
                     | Some targetIndex ->
                         let! _, answer =
-                            checker.ParseAndCheckFileInProject(
+                            measure timing SemanticPhase.FileParseAndCheck (fun () -> checker.ParseAndCheckFileInProject(
                                 targetFileName,
                                 0,
                                 SourceText.ofString lookupProject.SourceTexts[targetIndex],
                                 optionsByIndex[lookupProjectIndex],
                                 userOpName = "PhoenixCodeNav.implementations"
-                            )
+                            ))
                         match answer with
                         | FSharpCheckFileAnswer.Aborted ->
                             return
@@ -1279,7 +1288,7 @@ module private Semantic =
             elif insideEtaLambda then "partialApplication"
             else "directApplication"
 
-    let resolveCallers
+    let resolveCallers (timing: ISemanticTiming)
         (projects: SemanticProjectInput array)
         rootProjectIndex
         lookupProjectIndex
@@ -1305,7 +1314,7 @@ module private Semantic =
             else
                 let lookupProject = projects[lookupProjectIndex]
                 let! closure =
-                    checkAssemblyContents projects fingerprint cacheRuntime
+                    checkAssemblyContents timing projects fingerprint cacheRuntime
                         "PhoenixCodeNav.callers" cancellationToken
                 if closure.HasCriticalErrors then
                     return callGraphResult nullSymbol Array.empty
@@ -1322,13 +1331,13 @@ module private Semantic =
                             Array.empty false false false
                     | Some targetIndex ->
                         let! _, answer =
-                            closure.Checker.ParseAndCheckFileInProject(
+                            measure timing SemanticPhase.FileParseAndCheck (fun () -> closure.Checker.ParseAndCheckFileInProject(
                                 targetFileName,
                                 0,
                                 SourceText.ofString lookupProject.SourceTexts[targetIndex],
                                 closure.OptionsByIndex[lookupProjectIndex],
                                 userOpName = "PhoenixCodeNav.callers"
-                            )
+                            ))
                         match answer with
                         | FSharpCheckFileAnswer.Aborted ->
                             return callGraphResult nullSymbol Array.empty
@@ -1707,7 +1716,7 @@ module private Semantic =
                                             deadlineExhausted
         }
 
-    let resolveCallees
+    let resolveCallees (timing: ISemanticTiming)
         (projects: SemanticProjectInput array)
         rootProjectIndex
         lookupProjectIndex
@@ -1732,7 +1741,7 @@ module private Semantic =
                     "fsharp_semantic_snapshot_invalid" Array.empty Array.empty false false false
             else
                 let! closure =
-                    checkAssemblyContents projects fingerprint cacheRuntime
+                    checkAssemblyContents timing projects fingerprint cacheRuntime
                         "PhoenixCodeNav.callees" cancellationToken
                 if closure.HasCriticalErrors then
                     return callGraphResult nullSymbol Array.empty
@@ -1977,7 +1986,7 @@ module private Semantic =
                             Array.empty quotationsExcluded traitCallsUnresolved deadlineExhausted
         }
 
-    let resolve
+    let resolve (timing: ISemanticTiming)
         (projects: SemanticProjectInput array)
         rootProjectIndex
         lookupProjectIndex
@@ -2003,6 +2012,7 @@ module private Semantic =
                 return checkResult nullSymbol "fsharp_semantic_snapshot_invalid" Array.empty
             else
                 let lookupProject = projects[lookupProjectIndex]
+                use setup = timing.StartPhase(SemanticPhase.Setup)
                 let sourceFiles = projects |> Array.collect (fun project -> project.SourceFiles)
                 let sourceTexts = projects |> Array.collect (fun project -> project.SourceTexts)
                 let runtime = runtime fingerprint sourceFiles sourceTexts cacheRuntime
@@ -2029,12 +2039,13 @@ module private Semantic =
                         { baseOptions with ReferencedProjects = referencedProjects }
                 let operationName =
                     if includeReferences then "PhoenixCodeNav.references" else "PhoenixCodeNav.symbol_at"
+                setup.Dispose()
                 let checkedProjects = Array.zeroCreate projects.Length
                 let projectDiagnostics = ResizeArray<FSharpDiagnostic>()
                 let mutable hasCriticalErrors = false
                 for index in 0 .. projects.Length - 1 do
                     let! checkedProject =
-                        checker.ParseAndCheckProject(optionsByIndex[index], userOpName = operationName)
+                        measure timing SemanticPhase.ProjectParseAndCheck (fun () -> checker.ParseAndCheckProject(optionsByIndex[index], userOpName = operationName))
                     checkedProjects[index] <- checkedProject
                     projectDiagnostics.AddRange(checkedProject.Diagnostics)
                     hasCriticalErrors <- hasCriticalErrors || checkedProject.HasCriticalErrors
@@ -2057,13 +2068,13 @@ module private Semantic =
                             checkResult nullSymbol "fsharp_semantic_target_not_in_project" allProjectDiagnostics
                     | Some targetIndex ->
                         let! _, answer =
-                            checker.ParseAndCheckFileInProject(
+                            measure timing SemanticPhase.FileParseAndCheck (fun () -> checker.ParseAndCheckFileInProject(
                                 targetFileName,
                                 0,
                                 SourceText.ofString lookupProject.SourceTexts[targetIndex],
                                 optionsByIndex[lookupProjectIndex],
                                 userOpName = operationName
-                            )
+                            ))
                         match answer with
                         | FSharpCheckFileAnswer.Aborted ->
                             return
@@ -2175,9 +2186,10 @@ type SemanticResolver private () =
         line: int,
         column: int,
         maxLineOnlySourceChars: int,
+        timing: ISemanticTiming,
         cancellationToken: CancellationToken
     ) : Task<SemanticCheckResult> =
-        Semantic.resolve projects rootProjectIndex rootProjectIndex fingerprint cacheRuntime
+        Semantic.resolve timing projects rootProjectIndex rootProjectIndex fingerprint cacheRuntime
             targetFileName line column maxLineOnlySourceChars false
         |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)
 
@@ -2190,9 +2202,10 @@ type SemanticResolver private () =
         line: int,
         column: int,
         maxLineOnlySourceChars: int,
+        timing: ISemanticTiming,
         cancellationToken: CancellationToken
     ) : Task<SemanticCheckResult> =
-        Semantic.resolve projects rootProjectIndex rootProjectIndex fingerprint cacheRuntime
+        Semantic.resolve timing projects rootProjectIndex rootProjectIndex fingerprint cacheRuntime
             targetFileName line column maxLineOnlySourceChars true
         |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)
 
@@ -2206,9 +2219,10 @@ type SemanticResolver private () =
         line: int,
         column: int,
         maxLineOnlySourceChars: int,
+        timing: ISemanticTiming,
         cancellationToken: CancellationToken
     ) : Task<SemanticCheckResult> =
-        Semantic.resolve projects rootProjectIndex lookupProjectIndex fingerprint cacheRuntime
+        Semantic.resolve timing projects rootProjectIndex lookupProjectIndex fingerprint cacheRuntime
             targetFileName line column maxLineOnlySourceChars true
         |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)
 
@@ -2222,9 +2236,10 @@ type SemanticResolver private () =
         line: int,
         column: int,
         implementationTraversalBoundary: Action<string>,
+        timing: ISemanticTiming,
         cancellationToken: CancellationToken
     ) : Task<SemanticImplementationsCheckResult> =
-        Semantic.resolveImplementations projects rootProjectIndex lookupProjectIndex
+        Semantic.resolveImplementations timing projects rootProjectIndex lookupProjectIndex
             fingerprint cacheRuntime targetFileName line column implementationTraversalBoundary
         |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)
 
@@ -2238,9 +2253,10 @@ type SemanticResolver private () =
         line: int,
         column: int,
         traversalBoundary: Action<string>,
+        timing: ISemanticTiming,
         cancellationToken: CancellationToken
     ) : Task<SemanticCallGraphCheckResult> =
-        Semantic.resolveCallers projects rootProjectIndex lookupProjectIndex
+        Semantic.resolveCallers timing projects rootProjectIndex lookupProjectIndex
             fingerprint cacheRuntime targetFileName line column traversalBoundary
         |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)
 
@@ -2254,8 +2270,9 @@ type SemanticResolver private () =
         line: int,
         column: int,
         traversalBoundary: Action<string>,
+        timing: ISemanticTiming,
         cancellationToken: CancellationToken
     ) : Task<SemanticCallGraphCheckResult> =
-        Semantic.resolveCallees projects rootProjectIndex lookupProjectIndex
+        Semantic.resolveCallees timing projects rootProjectIndex lookupProjectIndex
             fingerprint cacheRuntime targetFileName line column traversalBoundary
         |> fun work -> Async.StartAsTask(work, cancellationToken = cancellationToken)

@@ -74,11 +74,13 @@ ownership, dependencies, or likely tests.
   For F# semantic results, `exact` means the selected context carries only disclosed assumptions
   or immutable-evidence provenance; `indexed` means something was substituted, errored, or removed
   from that context.
-- `timing.semanticColdStart` attributes where a cold first semantic call spent time; it is
-  diagnostic and never changes the answer. The fields are attribution, not an additive equation,
-  and `metadataReferenceWorkMs` is summed worker activity rather than wall time. It is present only
-  when the call entered the C# semantic pipeline; F# semantic navigation and calls that end before
-  that pipeline omit it — absence is not a zero.
+- `timing.semanticColdStart` is diagnostic attribution, not an additive total or a cold/cache
+  verdict; it never changes the answer. C# keeps its existing phase shape, where
+  `metadataReferenceWorkMs` is summed worker activity rather than wall time. F# uses the distinct
+  `engine: "fcs"` shape for admission, snapshot capture, FCS setup and combined project/file
+  parse-and-check awaits, including warm calls and interrupted work. Entered phases report integer
+  milliseconds (zero means below 1 ms); unentered phases are omitted, not zero. F# syntax-only calls
+  and calls ending before semantic admission omit the shape. See [telemetry](features/telemetry.md).
 - A zero-hit retry template preserves the effective filters and `queryScope`; replay it as emitted
   so the suggested symbol remains visible under the same evidence scope.
 - Recovery has two executable shapes. When `arguments` stands alone, call the named tool with

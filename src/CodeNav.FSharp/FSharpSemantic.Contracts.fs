@@ -3,6 +3,15 @@
 
 namespace CodeNav.FSharp
 
+/// FCS-owned spans only; the caller owns the per-operation collector and snapshot.
+type SemanticPhase =
+    | Setup = 0
+    | ProjectParseAndCheck = 1
+    | FileParseAndCheck = 2
+
+type ISemanticTiming =
+    abstract StartPhase: SemanticPhase -> System.IDisposable
+
 [<Sealed>]
 type SemanticLocation(
     role: string,
