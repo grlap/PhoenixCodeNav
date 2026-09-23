@@ -13,6 +13,10 @@ normally. Unrecognizable or unavailable registration metadata does not establish
 Each scan/refresh caches ancestor classification for that operation; the watcher checks current
 metadata and requests a sweep on nested `.git` creation/removal. A concurrent registration can
 temporarily precede/follow a scan; subsequent convergence applies the current boundary.
+Since v0.12.112, Created/Changed events for existing nested `.git` directories and all metadata
+events below default-excluded parents do not trigger sweeps or invalidate directory knowledge.
+Pointer-file changes still reconcile. Deleted/rename-away events remain conservative even if
+a directory has already replaced the pointer before dispatch; that transition admits new sources.
 After registration changes, unknown absent paths under that directory conservatively request
 sweeps: the original directory seed may have skipped descendants, including dotted directories.
 Both full sweeps and targeted refreshes treat excluded stored files as missing, removing their
@@ -38,8 +42,13 @@ the workspace JSONL semantic-operation stream; absence from JSONL is not failure
 
 Git HEAD and recovery timer entrypoints contain exceptions, including calls from GitWatcher.
 Diagnostic sink failures are isolated separately so logging cannot prevent queue publication.
-An operational callback failure emits code-only diagnostics and increments a process-local failure
-generation. It does not kill/restart the pump, retry the callback, write SQLite from a timer, or
+An operational callback failure emits code-only telemetry/IPC and increments a process-local failure
+generation. Since v0.12.112, server logs retain full exception details through a guarded formatter/sink.
+HEAD snapshot-read exceptions use the existing five-retry, two-second budget, before any tuple or
+request publication; failures of operations with an unknown outcome are not retried.
+Failure generations are latched inside the observation gate, but diagnostic callbacks execute
+outside it. A successful read queues recovery even for unchanged HEAD while uncertainty is pending.
+It does not kill/restart the pump, write SQLite from a timer, or
 claim that recovery completed. A readable writer is stale until a later admitted request completes
 a full sweep. That request widens even an empty/targeted batch, captures the failure generation,
 and acknowledges only that generation after successful convergence; a concurrent newer failure

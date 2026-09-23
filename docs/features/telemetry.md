@@ -45,7 +45,12 @@ A broken diagnostic sink alone does not cancel callback work. JSONL serializatio
 reporting also tolerate a throwing sink: file I/O failure leaves the bounded ring and consumer
 running; terminal consumer exit seals its channel. Callback failure is not a dead refresh pump.
 It adds writer-local `refresh_callback_failed` freshness uncertainty until a subsequent successful
-complete sweep, without automatically retrying. Existing incomplete-source reasons take precedence.
+complete sweep. Since v0.12.112, only side-effect-free HEAD snapshot reads retry automatically,
+using the existing five-retry, two-second budget. A successful read does not itself clear uncertainty;
+the queued reconcile must complete its sweep, including when the successful retry finds unchanged
+HEAD. Exhaustion waits for another signal or manual refresh.
+Server logs retain the full exception; JSONL/IPC remain code-only even if formatting or logging throws.
+Existing incomplete-source reasons take precedence.
 
 ## Record: `serverInfo`
 

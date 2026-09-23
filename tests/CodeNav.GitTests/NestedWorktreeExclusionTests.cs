@@ -6,6 +6,40 @@ namespace CodeNav.Tests;
 
 public sealed class NestedWorktreeExclusionTests
 {
+    [Theory]
+    [InlineData("vendor/.git", true)]
+    [InlineData("bin/vendor/.git", false)]
+    [InlineData("obj/vendor/.git", false)]
+    [InlineData(".git/modules/vendor/.git", false)]
+    public async Task RoutineGitMetadataDoesNotSweepOrInvalidateDirectoryKnowledge(string relative, bool directory)
+    {
+        string root = Directory.CreateTempSubdirectory("pcn-wt-meta").FullName;
+        try
+        {
+            string entry = Path.Combine(root, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(entry)!);
+            if (directory) Git(Path.GetDirectoryName(entry)!, "init", "-q");
+            else File.WriteAllText(entry, "gitdir: unavailable");
+            int sweeps = 0, batches = 0;
+            using var watcher = new WorkspaceWatcher(root, _ => batches++, () => sweeps++);
+            watcher.DisableNativeEventsForTest();
+            await watcher.SeedCompletionForTest.WaitAsync(TimeSpan.FromSeconds(20));
+            watcher.NotifyPathForTest(entry, WatcherChangeTypes.Changed);
+            watcher.NotifyPathForTest(entry, WatcherChangeTypes.Created);
+            if (!directory)
+            {
+                watcher.NotifyPathForTest(entry, WatcherChangeTypes.Deleted);
+            }
+            watcher.FlushForTest();
+            Assert.Equal(0, sweeps);
+            watcher.NotifyPathForTest(Path.Combine(Path.GetDirectoryName(entry)!, "LICENSE"), WatcherChangeTypes.Deleted);
+            watcher.FlushForTest();
+            Assert.Equal(0, sweeps); // Ignored metadata must not mark the directory unseeded.
+            Assert.Equal(0, batches);
+        }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
+    }
+
     [Fact]
     public void ScanAndBuildExcludeLinkedWorktreesButKeepOrdinaryDirectoriesAndSubmodules()
     {
@@ -66,8 +100,10 @@ public sealed class NestedWorktreeExclusionTests
         });
     }
 
-    [Fact]
-    public void WatcherSkipsNestedChangesButRecognizesRegistrationTransitions()
+    [Theory]
+    [InlineData(WatcherChangeTypes.Created)]
+    [InlineData(WatcherChangeTypes.Changed)]
+    public void WatcherSkipsNestedChangesButRecognizesRegistrationTransitions(WatcherChangeTypes transition)
     {
         WithRepository((root, first, second) =>
         {
@@ -84,16 +120,18 @@ public sealed class NestedWorktreeExclusionTests
             watcher.NotifyPathForTest(Path.Combine(root, "A.cs"), WatcherChangeTypes.Changed);
             watcher.FlushForTest();
             Assert.Contains("A.cs", batches);
-            watcher.NotifyPathForTest(Path.Combine(root, first, ".git"), WatcherChangeTypes.Created);
+            watcher.NotifyPathForTest(Path.Combine(root, first, ".git"), transition);
             watcher.FlushForTest();
             Assert.True(sweep.IsSet);
         });
     }
 
     [Theory]
-    [InlineData("subtree")]
-    [InlineData("subtree.cs")]
-    public void RemovingBoundaryThenMovingUntouchedDescendantRemovesIndexedRows(string directoryName)
+    [InlineData("subtree", false)]
+    [InlineData("subtree.cs", false)]
+    [InlineData("subtree", true)]
+    [InlineData("subtree.cs", true)]
+    public void RemovingBoundaryThenMovingUntouchedDescendantRemovesIndexedRows(string directoryName, bool replaceWithDirectory)
     {
         WithRepository((root, first, second) =>
         {
@@ -115,7 +153,11 @@ public sealed class NestedWorktreeExclusionTests
             Assert.DoesNotContain(relativeFile, store.AllFilesByPath().Keys);
             string pointer = Path.Combine(child, ".git");
             File.Move(pointer, pointer + ".saved");
+            // Recreate metadata before delivering the old deletion: native events can lag
+            // the filesystem. No child-directory Created event is delivered to mask the gap.
+            if (replaceWithDirectory) Git(child, "init", "-q");
             watcher.NotifyPathForTest(pointer, WatcherChangeTypes.Deleted);
+            if (replaceWithDirectory) watcher.NotifyPathForTest(pointer, WatcherChangeTypes.Created);
             watcher.NotifyPathForTest(child, WatcherChangeTypes.Changed);
             watcher.FlushForTest();
             Assert.Equal(1, sweeps);
@@ -152,6 +194,7 @@ public sealed class NestedWorktreeExclusionTests
             Git(root, "init", "-q");
             Git(root, "config", "user.email", "test@example.invalid");
             Git(root, "config", "user.name", "Test");
+            Git(root, "config", "commit.gpgsign", "false");
             File.WriteAllText(Path.Combine(root, "A.cs"), "class First { }");
             File.WriteAllText(Path.Combine(root, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
             File.WriteAllText(Path.Combine(root, "A.fs"), "module A\nlet value = 1\n");

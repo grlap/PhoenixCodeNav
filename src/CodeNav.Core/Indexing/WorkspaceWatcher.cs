@@ -87,10 +87,19 @@ public sealed class WorkspaceWatcher : IDisposable
         // nested .git pointer itself must request another sweep, although it isn't indexed.
         if (rel.EndsWith("/.git", StringComparison.Ordinal))
         {
+            string parent = rel[..^5];
+            // Static exclusions still apply to metadata. Do not use linked-worktree
+            // classification here: the pointer's own parent is the boundary being changed.
+            if (WorkspaceScanner.IsExcludedPath(parent)) return;
+            if (change != WatcherChangeTypes.Deleted && SafeDirectoryExists(fullPath)) return;
+            // Existing .git directories belong to ordinary clones; activity inside them
+            // does not change a worktree boundary. Deleted/rename-away remains ambiguous
+            // even if a directory has already replaced the pointer before event dispatch.
+            // Reconcile conservatively: removing that pointer may admit an entire tree.
             // The initial seed may have skipped this whole subtree. A sweep repairs the
             // index, not directory knowledge. Keep absent paths here conservative even if
             // the initial seed finishes after this notification; no second walker is needed.
-            _unseededRoots.TryAdd(rel[..^5], 0);
+            _unseededRoots.TryAdd(parent, 0);
             RequestSweep();
             return;
         }

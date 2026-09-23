@@ -1551,6 +1551,7 @@ public sealed class IndexManager : IDisposable
     // cannot graft obsolete Git metadata onto the replacement or clear its convergence marker.
     private long _refreshRecoveryGitSnapshotRetiredThroughGeneration;
     internal Func<int, TimeSpan>? RefreshRecoverySweepDelayForTest { get; set; }
+    internal TimeSpan? GitHeadRetryDelayForTest { get; set; }
 
     private void ScheduleGitHeadRetry()
     {
@@ -1566,7 +1567,7 @@ public sealed class IndexManager : IDisposable
             (_gitHeadRetry ??= new System.Threading.Timer(
                     _ => OnGitHeadMaybeChanged(fromRetry: true),
                     null, Timeout.Infinite, Timeout.Infinite))
-                .Change(TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
+                .Change(GitHeadRetryDelayForTest ?? TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
         }
         catch (ObjectDisposedException)
         {
@@ -1593,6 +1594,7 @@ public sealed class IndexManager : IDisposable
         if (_disposed) return;
         bool scheduleRetry = false;
         string? logMessage = null;
+        Exception? readFailure = null;
         lock (_gitHeadObservationGate)
         {
             if (_disposed) return;
@@ -1600,9 +1602,20 @@ public sealed class IndexManager : IDisposable
             // Snapshot acquisition belongs to the same critical section as comparison and queue
             // publication. Otherwise overlapping watcher/retry callbacks can capture old/new HEAD
             // in order but acquire this gate in reverse, permanently publishing the older tuple.
-            GitInfo.HeadSnapshot snapshot = ReadGitHeadSnapshot();
+            GitInfo.HeadSnapshot snapshot = default;
+            try { snapshot = ReadGitHeadSnapshot(); }
+            catch (Exception ex)
+            {
+                // Only acquisition is side-effect free. Retry it with the existing budget,
+                // before publishing any observed tuple or request. The outer guard must not
+                // retry failures whose queue/publication outcome is unknown.
+                // Latch in observation order, before another callback can queue recovery.
+                // Formatting and external diagnostics happen only after leaving this gate.
+                Interlocked.Increment(ref _refreshCallbackFailureGeneration);
+                readFailure = ex;
+            }
             if (_disposed) return;
-            if (!snapshot.IsResolved)
+            if (readFailure is not null || !snapshot.IsResolved)
             {
                 scheduleRetry = true;
             }
@@ -1610,14 +1623,23 @@ public sealed class IndexManager : IDisposable
             {
                 string head = snapshot.Commit!;
                 GitInfo.HeadSnapshot? previousObserved = _latestObservedGitHead;
-                if (previousObserved is { } previous && SameGitHead(previous, snapshot))
+                if (previousObserved is { } previous && SameGitHead(previous, snapshot) &&
+                    !RefreshCallbackRecoveryPending)
                     return; // duplicate signal for a request already published or queued
                 _latestObservedGitHead = snapshot;
 
                 string? current = _indexedCommit;
                 bool observedCommitChanged = previousObserved is { } observed &&
                     !string.Equals(observed.Commit, head, StringComparison.OrdinalIgnoreCase);
-                if (current is null)
+                if (RefreshCallbackRecoveryPending)
+                {
+                    // A duplicate tuple proves HEAD readability, not workspace convergence.
+                    // The pump widens this ordered request and acknowledges only its captured
+                    // callback generation after a successful sweep, retaining any newer fault.
+                    EnqueueGitReconcile(snapshot);
+                    logMessage = "Git HEAD readable again; queueing callback recovery reconcile.";
+                }
+                else if (current is null)
                 {
                     // A first-commit signal may arrive while the startup baseline request is still
                     // queued. Resolve its file scope against the baseline that is actually published
@@ -1652,6 +1674,7 @@ public sealed class IndexManager : IDisposable
                 }
             }
         }
+        if (readFailure is not null) EmitRefreshCallbackFailure("git_head", readFailure);
         if (scheduleRetry)
         {
             ScheduleGitHeadRetry(); // 17zd: transient — do not swallow the only first-commit signal
@@ -1727,12 +1750,18 @@ public sealed class IndexManager : IDisposable
     {
         // A callback failure is not a dead refresh consumer. Preserve the current freshness
         // latch and worker ownership; do not retry an operation with an unknown outcome.
-        // Keep diagnostics code-only, and make this final thread-pool boundary nonthrowing.
+        // Keep telemetry/IPC code-only; server logs retain the full exception. This final
+        // thread-pool boundary must remain nonthrowing even when formatting/logging fails.
         // Never write SQLite from a timer. The next pump request widens to a sweep and only
         // acknowledges the generation it captured; a concurrent later fault remains stale.
         Interlocked.Increment(ref _refreshCallbackFailureGeneration);
+        EmitRefreshCallbackFailure(callback, exception);
+    }
+
+    private void EmitRefreshCallbackFailure(string callback, Exception exception)
+    {
         string type = exception.GetType().Name;
-        Diagnostics.SafeDiagnosticLog.Write(_log, $"Refresh callback {callback} failed: {type}.");
+        Diagnostics.SafeDiagnosticLog.Write(_log, $"Refresh callback {callback} failed", exception);
         try
         {
             Telemetry.Emit(new

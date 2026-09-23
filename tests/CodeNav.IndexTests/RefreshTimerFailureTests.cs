@@ -7,6 +7,99 @@ namespace CodeNav.Tests;
 
 public sealed class RefreshTimerFailureTests
 {
+    [Fact]
+    public void HeadReadFailureLatchesBeforeDiagnosticsOutsideObservationLock()
+    {
+        string root = Directory.CreateTempSubdirectory("pcn-callback-lock").FullName;
+        try
+        {
+            IndexManager? observed = null;
+            bool? lockHeld = null;
+            long generationAtLog = 0;
+            using var manager = new IndexManager(root, log: line =>
+            {
+                if (!line.StartsWith("Refresh callback git_head failed:", StringComparison.Ordinal)) return;
+                lockHeld = Monitor.IsEntered(Get(observed!, "_gitHeadObservationGate")!);
+                generationAtLog = (long)Get(observed!, "_refreshCallbackFailureGeneration")!;
+            });
+            observed = manager;
+            manager.GitHeadRetryDelayForTest = Timeout.InfiniteTimeSpan;
+            manager.GitHeadSnapshotForTest = () => throw new IOException("snapshot failed");
+            manager.NotifyGitHeadChangedForTest();
+            Assert.Equal(false, lockHeld);
+            Assert.Equal(1, generationAtLog);
+            Assert.Single(manager.Telemetry.Snapshot(), text => text.Contains("refreshCallbackFailed"));
+        }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
+    }
+
+    [Fact]
+    public void CallbackFailureLogsFullExceptionButTelemetryRemainsCodeOnly()
+    {
+        string root = Directory.CreateTempSubdirectory("pcn-callback-log").FullName;
+        try
+        {
+            var logs = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            using var broker = new TestTelemetryBroker();
+            using var manager = new IndexManager(root, log: logs.Enqueue, telemetryPipeName: broker.PipeName);
+            manager.GitHeadRetryDelayForTest = Timeout.InfiniteTimeSpan;
+            manager.GitHeadSnapshotForTest = () => throw new IOException("private snapshot at " + root);
+            manager.NotifyGitHeadChangedForTest();
+            string message = Assert.Single(logs, line => line.StartsWith("Refresh callback git_head failed:", StringComparison.Ordinal));
+            Assert.Contains("private snapshot at " + root, message);
+            Assert.Contains(nameof(CallbackFailureLogsFullExceptionButTelemetryRemainsCodeOnly), message);
+            Assert.Contains("System.IO.IOException", message);
+            string record = Assert.Single(manager.Telemetry.Snapshot(), line => line.Contains("refreshCallbackFailed"));
+            Assert.DoesNotContain("private snapshot", record);
+            Assert.DoesNotContain(root, record);
+            Assert.DoesNotContain(nameof(CallbackFailureLogsFullExceptionButTelemetryRemainsCodeOnly), record);
+            // IPC is supported on Windows only; the log/JSONL assertions above run everywhere.
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.True(SpinWait.SpinUntil(() => broker.FramesOfType("index.refresh.snapshot").Count > 0,
+                    TimeSpan.FromSeconds(10)), "Callback failure IPC snapshot was not delivered");
+                var data = broker.FramesOfType("index.refresh.snapshot")[0].RootElement.GetProperty("data");
+                Assert.Equal("failed", data.GetProperty("state").GetString());
+                Assert.Equal("refresh_callback_failed", data.GetProperty("errorCode").GetString());
+                Assert.Equal(0, data.GetProperty("batchProcessed").GetInt32());
+                Assert.Equal(0, data.GetProperty("elapsedMs").GetInt64());
+                Assert.DoesNotContain("private snapshot", data.GetRawText());
+                Assert.DoesNotContain(nameof(CallbackFailureLogsFullExceptionButTelemetryRemainsCodeOnly), data.GetRawText());
+                Assert.DoesNotContain("snapshot at", JsonSerializer.Serialize(manager.Health()));
+            }
+        }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExceptionFormattingAndSinkFailuresDoNotPreventCallbackFailureReporting(bool brokenFormatter)
+    {
+        string root = Directory.CreateTempSubdirectory("pcn-format-log").FullName;
+        try
+        {
+            using var manager = new IndexManager(root, log: _ => throw new IOException("sink failed"));
+            manager.GitHeadRetryDelayForTest = Timeout.InfiniteTimeSpan;
+            manager.GitHeadSnapshotForTest = () => throw (brokenFormatter
+                ? new BrokenFormattingException() : new IOException("snapshot failed"));
+            manager.NotifyGitHeadChangedForTest();
+            Assert.False(manager.RefreshWorkerFailed);
+            string line = Assert.Single(manager.Telemetry.Snapshot(), text => text.Contains("refreshCallbackFailed"));
+            Assert.Contains(brokenFormatter ? nameof(BrokenFormattingException) : "IOException", line);
+            Assert.Equal(0, manager.QueuedRefreshCountForTest);
+            manager.GitHeadSnapshotForTest = () => new GitInfo.HeadSnapshot(new string('a', 40), "main", "attached");
+            manager.NotifyGitHeadChangedForTest();
+            Assert.Equal(1, manager.QueuedRefreshCountForTest);
+        }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
+    }
+
+    private sealed class BrokenFormattingException : Exception
+    {
+        public override string ToString() => throw new InvalidOperationException("formatter failed");
+    }
+
     [Theory]
     [InlineData("git", false)]
     [InlineData("git", true)]
@@ -49,9 +142,16 @@ public sealed class RefreshTimerFailureTests
                 diagnostic.Set();
                 if (brokenLogger) throw new IOException("private sink failure");
             });
-            manager.GitHeadSnapshotForTest = () => mode == "git-fault"
-                ? throw new IOException("private snapshot failure")
-                : new GitInfo.HeadSnapshot(new string('a', 40), "main", "attached");
+            manager.GitHeadRetryDelayForTest = TimeSpan.FromMilliseconds(10);
+            manager.GitHeadSnapshotForTest = () =>
+            {
+                // Execute the initial real timer callback, but never arm a second one
+                // while the parent test waits to drain and inspect this invocation.
+                manager.GitHeadRetryDelayForTest = Timeout.InfiniteTimeSpan;
+                return mode == "git-fault"
+                    ? throw new IOException("private snapshot failure")
+                    : new GitInfo.HeadSnapshot(new string('a', 40), "main", "attached");
+            };
             string timerField;
             if (mode == "recovery")
             {
