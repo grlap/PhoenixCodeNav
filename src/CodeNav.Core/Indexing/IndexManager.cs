@@ -99,6 +99,12 @@ public sealed class IndexManager : IDisposable
     public const string RefreshInputUnavailableCause = "refresh_input_unavailable";
     public const string RefreshInputOversizedCause = "refresh_input_oversized";
     public const string RefreshWorkerFailedCause = "refresh_worker_failed";
+    public const string RefreshCallbackFailedCause = "refresh_callback_failed";
+    private long _refreshCallbackFailureGeneration;
+    private long _refreshCallbackRecoveredGeneration;
+    private bool RefreshCallbackRecoveryPending =>
+        Volatile.Read(ref _refreshCallbackFailureGeneration) >
+        Volatile.Read(ref _refreshCallbackRecoveredGeneration);
 
     private sealed record FollowerPublication(
         IndexMetadataSnapshot? Metadata,
@@ -569,7 +575,10 @@ public sealed class IndexManager : IDisposable
     }
     public string State => IsFollower
         ? Volatile.Read(ref _followerPublication).State
-        : RefreshWorkerFailed ? "failed" : _state;
+        : RefreshWorkerFailed ? "failed" : CallbackAwareState(_state, RefreshCallbackRecoveryPending);
+
+    private static string CallbackAwareState(string state, bool pending) =>
+        pending && state is "ready" or "refreshing" or "stale" ? "stale" : state;
 
     public bool RefreshWorkerFailed => Volatile.Read(ref _refreshWorkerFailed) != 0;
     internal Task RefreshWorkerCompletionForTest => _pump ?? Task.CompletedTask;
@@ -1548,7 +1557,8 @@ public sealed class IndexManager : IDisposable
         if (_disposed) return;
         if (Interlocked.Decrement(ref _gitHeadRetriesLeft) < 0)
         {
-            _log("Git HEAD unresolvable after retries — waiting for the next git signal.");
+            Diagnostics.SafeDiagnosticLog.Write(_log,
+                "Git HEAD unresolvable after retries — waiting for the next git signal.");
             return;
         }
         try
@@ -1573,6 +1583,12 @@ public sealed class IndexManager : IDisposable
     /// there, so any pre-first-commit signal (fetch, branch creation) burned the budget
     /// permanently and the eventual first commit was lost exactly as before the fix.</summary>
     private void OnGitHeadMaybeChanged(bool fromRetry = false)
+    {
+        try { ObserveGitHead(fromRetry); }
+        catch (Exception ex) { ReportRefreshCallbackFailure("git_head", ex); }
+    }
+
+    private void ObserveGitHead(bool fromRetry)
     {
         if (_disposed) return;
         bool scheduleRetry = false;
@@ -1641,7 +1657,7 @@ public sealed class IndexManager : IDisposable
             ScheduleGitHeadRetry(); // 17zd: transient — do not swallow the only first-commit signal
             return;
         }
-        if (logMessage is not null) _log(logMessage);
+        if (logMessage is not null) Diagnostics.SafeDiagnosticLog.Write(_log, logMessage);
     }
 
     private void ScheduleRefreshRecoverySweep(string unavailablePath)
@@ -1687,17 +1703,49 @@ public sealed class IndexManager : IDisposable
 
     private void QueueRefreshRecoverySweep()
     {
+        try { EnqueueRefreshRecoverySweep(); }
+        catch (Exception ex) { ReportRefreshCallbackFailure("recovery_sweep", ex); }
+    }
+
+    private void EnqueueRefreshRecoverySweep()
+    {
         if (_disposed ||
             !string.Equals(_refreshIncompleteReason, RefreshInputUnavailableCause,
                 StringComparison.Ordinal))
             return;
 
-        _log("Retrying stale index recovery with a complete workspace sweep.");
+        Diagnostics.SafeDiagnosticLog.Write(_log,
+            "Retrying stale index recovery with a complete workspace sweep.");
         string? pendingGitCommit = _refreshRecoveryPendingGitCommit;
         _refreshQueue.Writer.TryWrite(new RefreshRequest(null,
             RecordCommit: pendingGitCommit, Reason: "recovery_sweep",
             TimerInitiatedRecovery: true,
             RevalidateRecordCommit: pendingGitCommit is not null));
+    }
+
+    private void ReportRefreshCallbackFailure(string callback, Exception exception)
+    {
+        // A callback failure is not a dead refresh consumer. Preserve the current freshness
+        // latch and worker ownership; do not retry an operation with an unknown outcome.
+        // Keep diagnostics code-only, and make this final thread-pool boundary nonthrowing.
+        // Never write SQLite from a timer. The next pump request widens to a sweep and only
+        // acknowledges the generation it captured; a concurrent later fault remains stale.
+        Interlocked.Increment(ref _refreshCallbackFailureGeneration);
+        string type = exception.GetType().Name;
+        Diagnostics.SafeDiagnosticLog.Write(_log, $"Refresh callback {callback} failed: {type}.");
+        try
+        {
+            Telemetry.Emit(new
+            {
+                e = "refreshCallbackFailed",
+                ts = DateTimeOffset.UtcNow,
+                callback,
+                exceptionType = type
+            });
+            EmitRefreshSnapshot(Guid.NewGuid().ToString("N"), callback, "failed",
+                batchProcessed: 0, elapsedMs: 0, errorCode: RefreshCallbackFailedCause);
+        }
+        catch { /* Diagnostics cannot escape a timer or watcher callback. */ }
     }
 
     private void ResetRefreshRecoverySweepBackoff()
@@ -1743,6 +1791,9 @@ public sealed class IndexManager : IDisposable
             {
                 activeCompletion = queuedRequest.CompletionForTest;
                 RefreshRequest req = queuedRequest;
+                long callbackGeneration = Volatile.Read(ref _refreshCallbackFailureGeneration);
+                bool callbackRecovery = callbackGeneration >
+                    Volatile.Read(ref _refreshCallbackRecoveredGeneration);
                 if (req.TimerInitiatedRecovery &&
                     !req.PublishRevalidatedGitSnapshot &&
                     !string.Equals(_refreshIncompleteReason, RefreshInputUnavailableCause,
@@ -1784,7 +1835,7 @@ public sealed class IndexManager : IDisposable
                         ResolveGitPathsAtExecution = false,
                     };
                 }
-                if (_refreshIncompleteReason is not null && !req.FullRebuild &&
+                if ((_refreshIncompleteReason is not null || callbackRecovery) && !req.FullRebuild &&
                     req.Paths is not null)
                 {
                     // A later narrow notification cannot prove recovery of the source whose event
@@ -1956,6 +2007,8 @@ public sealed class IndexManager : IDisposable
                             req.RecoveryGitSnapshotGeneration >= requiredGitGeneration;
                         if (gitRecoverySnapshotIsCurrent && TryClearRefreshIncomplete())
                         {
+                            if (req.Paths is null)
+                                Volatile.Write(ref _refreshCallbackRecoveredGeneration, callbackGeneration);
                             ResetRefreshRecoverySweepBackoff();
                             _error = null;
                             _state = "ready";
@@ -2896,14 +2949,16 @@ public sealed class IndexManager : IDisposable
         // cold-build progress bar (field design note; refresh honesty is bead z4c).
         var bp = _buildProgress;
         bool workerFailed = RefreshWorkerFailed;
+        bool callbackPending = RefreshCallbackRecoveryPending;
         return new IndexHealth(
-            workerFailed ? "failed" : _state, _indexVersion, _indexedAtUtc, _lastRefreshUtc,
-            _watcher?.PendingCount ?? 0, workerFailed ? RefreshWorkerFailedCause : _error,
+            workerFailed ? "failed" : CallbackAwareState(_state, callbackPending), _indexVersion, _indexedAtUtc, _lastRefreshUtc,
+            _watcher?.PendingCount ?? 0, workerFailed ? RefreshWorkerFailedCause :
+                _error ?? (callbackPending ? RefreshCallbackFailedCause : null),
             dbBytes, _workspaceRoot, _dbPath,
             _indexedCommit, _indexedBranch,
             !workerFailed && _state == "building" && bp is not null ? bp.Snapshot() : null,
             Interlocked.Read(ref _pendingProcessed), _accessMode,
-            _refreshIncompleteReason, _refreshIncompletePaths,
+            _refreshIncompleteReason ?? (callbackPending ? RefreshCallbackFailedCause : null), _refreshIncompletePaths,
             Volatile.Read(ref _refreshIncompletePathCount),
             Volatile.Read(ref _refreshIncompletePathCountIsLowerBound) != 0,
             _startupBuildReason, _startupPriorSchema);

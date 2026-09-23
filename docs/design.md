@@ -34,6 +34,31 @@ Flat `pendingProcessed` and `pendingChanges` counters are not proof of a dead wo
 counts watcher backlog, not the refresh channel. Refresh snapshot events use telemetry IPC, not
 the workspace JSONL semantic-operation stream; absence from JSONL is not failure evidence.
 
+## Async failure boundaries (v0.12.111)
+
+Git HEAD and recovery timer entrypoints contain exceptions, including calls from GitWatcher.
+Diagnostic sink failures are isolated separately so logging cannot prevent queue publication.
+An operational callback failure emits code-only diagnostics and increments a process-local failure
+generation. It does not kill/restart the pump, retry the callback, write SQLite from a timer, or
+claim that recovery completed. A readable writer is stale until a later admitted request completes
+a full sweep. That request widens even an empty/targeted batch, captures the failure generation,
+and acknowledges only that generation after successful convergence; a concurrent newer failure
+remains outstanding. Startup and post-rebuild convergence use the same pump. Existing incomplete
+reasons take precedence. Followers see persisted state, not this local uncertainty (like pending
+writer queues); this overlay does not change stored output or schema 43.
+
+`refresh_callback_failed` is an authority-loss freshness reason: exact confidence becomes indexed,
+including F# confidence classification. `refresh_index` can recover it, unlike terminal
+`refresh_worker_failed`. Failure during a targeted request cannot be cleared by that already-running
+request; the next request must sweep. No indefinite-hang detection is claimed.
+
+Daemon session accounting encloses setup, registration, RunAsync, unregistration and asynchronous
+disposal. Cleanup faults cannot skip counter release or permanently prevent idle retirement.
+Unexpected session faults are observed and safely logged with the local session ID; requested
+cancellation and transport disconnects from RunAsync stay quiet. Setup/disposal I/O errors are not
+classified as ordinary peer disconnects. Telemetry diagnostic failures cannot escape Emit or kill
+the consumer from an ordinary file-error handler; terminal consumer exit seals admission.
+
 ## Solution layout
 
 ```

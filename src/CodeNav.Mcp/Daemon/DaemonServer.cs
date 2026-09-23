@@ -29,6 +29,8 @@ internal sealed class DaemonServer
     private long _lastClientTicks = DateTime.UtcNow.Ticks;
     private int _activeClients;
 
+    internal Action<McpServer>? SessionRegisteredForTest { get; set; }
+
     internal DaemonServer(
         DaemonEndpoint endpoint,
         string? indexDb,
@@ -130,16 +132,7 @@ internal sealed class DaemonServer
                                 host.Services,
                                 sessionToken),
                             CancellationToken.None);
-                        _sessions[id] = session;
-                        _ = session.ContinueWith(
-                            completedTask =>
-                            {
-                                _ = completedTask.Exception;
-                                _sessions.TryRemove(id, out _);
-                            },
-                            CancellationToken.None,
-                            TaskContinuationOptions.ExecuteSynchronously,
-                            TaskScheduler.Default);
+                        _ = TrackSession(id, session, logger);
                     }
                 }
                 finally
@@ -168,6 +161,25 @@ internal sealed class DaemonServer
             host.Dispose();
             DaemonDescriptor.DeleteOwn(_endpoint);
         }
+    }
+
+    private Task TrackSession(long id, Task session, ILogger logger)
+    {
+        _sessions[id] = session;
+        return session.ContinueWith(completed =>
+        {
+            try
+            {
+                if (completed.Exception is { } failure)
+                {
+                    // Normal disconnect/cancellation is handled at the transport boundary.
+                    // Setup, registration and disposal faults must not disappear as disconnects.
+                    try { logger.LogWarning(failure, "Phoenix daemon session {SessionId} failed unexpectedly.", id); }
+                    catch { /* Observing a session must not depend on the diagnostic provider. */ }
+                }
+            }
+            finally { _sessions.TryRemove(id, out _); }
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     internal static async ValueTask<Stream> AcceptWithRetryAsync(
@@ -237,24 +249,31 @@ internal sealed class DaemonServer
 
             Interlocked.Increment(ref _activeClients);
             Volatile.Write(ref _lastClientTicks, DateTime.UtcNow.Ticks);
-            ILoggerFactory loggerFactory = services.GetRequiredService<ILoggerFactory>();
-            McpServerOptions options = services
-                .GetRequiredService<IOptions<McpServerOptions>>().Value;
-            await using var transport = new StreamServerTransport(
-                stream, stream, "phoenix-codenav-daemon", loggerFactory);
-            await using McpServer server = McpServer.Create(
-                transport, options, loggerFactory, services);
-            admission.Register(server, $"{request.ClientPid}:{request.Nonce}");
             try
             {
-                await server.RunAsync(daemonCancellation).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (daemonCancellation.IsCancellationRequested)
-            {
+                ILoggerFactory loggerFactory = services.GetRequiredService<ILoggerFactory>();
+                McpServerOptions options = services
+                    .GetRequiredService<IOptions<McpServerOptions>>().Value;
+                await using var transport = new StreamServerTransport(
+                    stream, stream, "phoenix-codenav-daemon", loggerFactory);
+                await using McpServer server = McpServer.Create(
+                    transport, options, loggerFactory, services);
+                admission.Register(server, $"{request.ClientPid}:{request.Nonce}");
+                try
+                {
+                    SessionRegisteredForTest?.Invoke(server);
+                    try { await server.RunAsync(daemonCancellation).ConfigureAwait(false); }
+                    catch (OperationCanceledException) when (daemonCancellation.IsCancellationRequested) { }
+                    catch (Exception ex) when (ex is IOException or SocketException)
+                    {
+                        // Only errors from the running transport are expected peer disconnects.
+                    }
+                }
+                finally { admission.Unregister(server); }
             }
             finally
             {
-                admission.Unregister(server);
+                // Includes failed setup, unregister and asynchronous resource disposal.
                 Interlocked.Decrement(ref _activeClients);
                 Volatile.Write(ref _lastClientTicks, DateTime.UtcNow.Ticks);
             }

@@ -13,6 +13,10 @@ explicitly to query them. Submodules and ordinary folders named `.worktrees` rem
 
 ## Code Navigation (Phoenix MCP)
 
+`refresh_callback_failed` means a refresh callback failed, not that the pump died. Call
+`refresh_index` for a complete recovery sweep; do not treat affected results as exact until it
+converges. This is writer-local uncertainty, not a persisted follower-visible failure.
+
 Phoenix is the primary source-navigation tool for this repository. Prefer it to broad
 `rg`/`grep` and whole-file reads when answering questions about source symbols, callers,
 ownership, dependencies, or likely tests.

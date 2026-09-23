@@ -211,6 +211,8 @@ public sealed partial class NavigationTools
                     continue;
                 // Closed by design: known authority loss and every future unclassified cause
                 // remain conservative until deliberately admitted above.
+                case IndexManager.RefreshCallbackFailedCause:
+                    return "indexed";
                 default:
                     return "indexed";
             }

@@ -617,7 +617,9 @@ internal sealed record Meta(
         }
         else if (h.RefreshIncompleteReason is not null)
         {
-            statusNote = h.RefreshIncompleteReason == IndexManager.RefreshSweepPendingCause
+            statusNote = h.RefreshIncompleteReason == IndexManager.RefreshCallbackFailedCause
+                ? "refresh callback failed — results may lag workspace changes; call refresh_index for a recovery sweep"
+                : h.RefreshIncompleteReason == IndexManager.RefreshSweepPendingCause
                 ? "freshness convergence pending — results may lag recent workspace edits; if this state persists, call refresh_index to retry"
                 : status == "refreshing"
                     ? "source capture retry in progress — results reflect the last complete index and cannot claim current source evidence"

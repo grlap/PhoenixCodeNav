@@ -19,7 +19,7 @@ workspace reparse points, scan index tables, or mutate the workspace. Per-line, 
 retained-object/byte, cursor-page, string, source-discovery, and response limits remain observable
 through the portal's completeness metadata.
 
-The same bounded file also carries two operational record types:
+The same bounded file also carries these operational record types:
 
 - `serverInfo`, emitted exactly once per MCP process startup, identifies the Phoenix version,
   build stamp, index schema, bounded feature-ID list, platform, process, and writer/follower mode;
@@ -27,10 +27,25 @@ The same bounded file also carries two operational record types:
   transition, approximately once per second during long phases, and once at terminal
   `completed`, `failed`, or `cancelled`. It reports only bounded counters: build identity,
   reason, phase, phase/build elapsed time, files done/total, skipped/failed counts, symbols
-  written, bytes read, measured file rate, and measured ETA.
+  written, bytes read, measured file rate, and measured ETA;
+- `refreshCallbackFailed` (v0.12.111), emitted when a Git HEAD or recovery-sweep callback
+  fails operationally. It contains only `ts`, `callback` (`git_head` or `recovery_sweep`),
+  and `exceptionType`, never the exception message. The IPC `index.refresh.snapshot`
+  also reports `state:failed`, `errorCode:refresh_callback_failed`, zero applied rows,
+  and zero mutation time: the callback itself does not mutate the index.
 
-Neither record includes paths, source text, symbols, queries, or prompts. Delta-refresh progress
+These records include no paths, source text, symbols, queries, or prompts. Delta-refresh progress
 remains outside this JSONL MVP.
+
+```json
+{"e":"refreshCallbackFailed","ts":"2026-09-23T20:00:00Z","callback":"git_head","exceptionType":"IOException"}
+```
+
+A broken diagnostic sink alone does not cancel callback work. JSONL serialization and file-error
+reporting also tolerate a throwing sink: file I/O failure leaves the bounded ring and consumer
+running; terminal consumer exit seals its channel. Callback failure is not a dead refresh pump.
+It adds writer-local `refresh_callback_failed` freshness uncertainty until a subsequent successful
+complete sweep, without automatically retrying. Existing incomplete-source reasons take precedence.
 
 ## Record: `serverInfo`
 

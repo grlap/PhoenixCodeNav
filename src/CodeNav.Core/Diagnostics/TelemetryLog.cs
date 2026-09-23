@@ -90,7 +90,7 @@ public sealed class TelemetryLog : IDisposable
         }
         catch (Exception ex)
         {
-            _log($"Telemetry serialization failed: {ex.GetType().Name}");
+            SafeDiagnosticLog.Write(_log, $"Telemetry serialization failed: {ex.GetType().Name}");
             return;
         }
         lock (_ringGate)
@@ -100,7 +100,7 @@ public sealed class TelemetryLog : IDisposable
         }
         if (!_pending.Writer.TryWrite(line))
         {
-            // Only reachable after Dispose completed the channel (DropOldest never rejects a
+            // Reachable after shutdown or terminal drainer failure (DropOldest never rejects a
             // live write — evictions surface via the itemDropped callback above).
             Interlocked.Increment(ref _dropped);
         }
@@ -151,12 +151,19 @@ public sealed class TelemetryLog : IDisposable
                 catch (Exception ex)
                 {
                     _ioFailed = true; // disk full / locked dir: telemetry dies quietly, server does not
-                    _log($"Telemetry file write failed ({ex.GetType().Name}) — telemetry disabled for this process.");
+                    SafeDiagnosticLog.Write(_log,
+                        $"Telemetry file write failed ({ex.GetType().Name}) — file telemetry disabled for this process.");
                 }
             }
         }
+        catch (Exception ex)
+        {
+            SafeDiagnosticLog.Write(_log, $"Telemetry drainer stopped: {ex.GetType().Name}");
+        }
         finally
         {
+            // No producer may enqueue into a stream whose consumer has exited.
+            _pending.Writer.TryComplete();
             try
             {
                 if (BeforeWriterCloseForTest is { } beforeWriterClose)
@@ -164,7 +171,11 @@ public sealed class TelemetryLog : IDisposable
             }
             finally
             {
-                writer?.Dispose();
+                try { writer?.Dispose(); }
+                catch (Exception ex)
+                {
+                    SafeDiagnosticLog.Write(_log, $"Telemetry writer close failed: {ex.GetType().Name}");
+                }
             }
         }
     }
