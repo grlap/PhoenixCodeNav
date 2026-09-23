@@ -98,6 +98,7 @@ public sealed class IndexManager : IDisposable
     public const string RefreshSweepPendingCause = "refresh_sweep_pending";
     public const string RefreshInputUnavailableCause = "refresh_input_unavailable";
     public const string RefreshInputOversizedCause = "refresh_input_oversized";
+    public const string RefreshWorkerFailedCause = "refresh_worker_failed";
 
     private sealed record FollowerPublication(
         IndexMetadataSnapshot? Metadata,
@@ -136,6 +137,7 @@ public sealed class IndexManager : IDisposable
     private GitWatcher? _gitWatcher;
     private string? _gitDir;
     private Task? _pump;
+    private int _refreshWorkerFailed;
     private Task? _startTask;
     // Serializes watcher publication (StartWatcher / InitGitTracking, on the start task) against
     // Dispose. Without it, a slow start task (big build) can create a watcher AFTER Dispose's
@@ -567,7 +569,11 @@ public sealed class IndexManager : IDisposable
     }
     public string State => IsFollower
         ? Volatile.Read(ref _followerPublication).State
-        : _state;
+        : RefreshWorkerFailed ? "failed" : _state;
+
+    public bool RefreshWorkerFailed => Volatile.Read(ref _refreshWorkerFailed) != 0;
+    internal Task RefreshWorkerCompletionForTest => _pump ?? Task.CompletedTask;
+    internal int QueuedRefreshCountForTest => _refreshQueue.Reader.Count;
 
     public WorktreeIndexResult EnsureWorktreeIndex(string worktreePath, string mode,
         Action<string> log)
@@ -1730,323 +1736,344 @@ public sealed class IndexManager : IDisposable
 
     private async Task PumpRefreshesAsync()
     {
-        await foreach (var queuedRequest in _refreshQueue.Reader.ReadAllAsync())
+        TaskCompletionSource? activeCompletion = null;
+        try
         {
-            RefreshRequest req = queuedRequest;
-            if (req.TimerInitiatedRecovery &&
-                !req.PublishRevalidatedGitSnapshot &&
-                !string.Equals(_refreshIncompleteReason, RefreshInputUnavailableCause,
-                    StringComparison.Ordinal))
+            await foreach (var queuedRequest in _refreshQueue.Reader.ReadAllAsync())
             {
-                continue;
-            }
-            if (req.PublishRevalidatedGitSnapshot &&
-                req.RecoveryGitSnapshotGeneration <= Volatile.Read(
-                    ref _refreshRecoveryGitSnapshotRetiredThroughGeneration))
-            {
-                req.CompletionForTest?.TrySetResult();
-                continue;
-            }
-            if (req.ResolveGitPathsAtExecution && req.RecordCommit is { } gitTarget)
-            {
-                string? publishedCommit = _indexedCommit;
-                IReadOnlyCollection<string>? resolvedPaths;
-                if (publishedCommit is null)
+                activeCompletion = queuedRequest.CompletionForTest;
+                RefreshRequest req = queuedRequest;
+                if (req.TimerInitiatedRecovery &&
+                    !req.PublishRevalidatedGitSnapshot &&
+                    !string.Equals(_refreshIncompleteReason, RefreshInputUnavailableCause,
+                        StringComparison.Ordinal))
                 {
-                    resolvedPaths = null;
+                    continue;
                 }
-                else if (string.Equals(publishedCommit, gitTarget,
-                             StringComparison.OrdinalIgnoreCase))
+                if (req.PublishRevalidatedGitSnapshot &&
+                    req.RecoveryGitSnapshotGeneration <= Volatile.Read(
+                        ref _refreshRecoveryGitSnapshotRetiredThroughGeneration))
                 {
-                    resolvedPaths = Array.Empty<string>();
-                }
-                else
-                {
-                    List<string>? changed = GitInfo.ChangedFiles(
-                        _workspaceRoot, publishedCommit, gitTarget);
-                    resolvedPaths = changed is null || changed.Count > GitDiffCap
-                        ? null
-                        : changed;
-                }
-                req = req with
-                {
-                    Paths = resolvedPaths,
-                    ResolveGitPathsAtExecution = false,
-                };
-            }
-            if (_refreshIncompleteReason is not null && !req.FullRebuild &&
-                req.Paths is not null)
-            {
-                // A later narrow notification cannot prove recovery of the source whose event
-                // exhausted its retry budget. Widen the next request before opening a transaction;
-                // the single pump still preserves FIFO order and one recovery sweep covers all
-                // paths queued behind the failed request.
-                req = req with { Paths = null, Reason = "recovery_sweep" };
-            }
-            if (_refreshIncompleteReason is not null && !req.FullRebuild &&
-                !req.PublishRevalidatedGitSnapshot &&
-                _refreshRecoveryPendingGitCommit is { } pendingGitCommit &&
-                (req.RecordCommit is null ||
-                 Volatile.Read(ref _refreshRecoveryGitRevalidationRequiredGeneration) != 0))
-            {
-                // A failed recovery HEAD read invalidates every tuple captured before it. Revalidate
-                // those queued requests too: otherwise one can publish its older commit, clear the
-                // stale latch, and cancel the paced retry that was promised for the unknown HEAD.
-                req = req with
-                {
-                    RecordCommit = req.RecordCommit ?? pendingGitCommit,
-                    RevalidateRecordCommit = true,
-                };
-            }
-            RefreshRequestDequeuedForTest?.Invoke();
-            await _startupComplete.Task.ConfigureAwait(false);
-            RefreshRequestPassedStartupBarrierForTest?.Invoke();
-            if (req.FullRebuild)
-            {
-                // The channel continuation may run on the shared ThreadPool. Never execute the
-                // synchronous repository build on that continuation: the builder's unrestricted
-                // parser fan-out must coexist with lightweight MCP status requests.
-                await Task.Factory.StartNew(FullRebuildInPump, CancellationToken.None,
-                        TaskCreationOptions.LongRunning, TaskScheduler.Default)
-                    .ConfigureAwait(false);
-                FullRebuildCompletedForTest?.Invoke();
-                continue;
-            }
-            if (req.RevalidateRecordCommit)
-            {
-                GitInfo.HeadSnapshot current;
-                bool requeued;
-                long recoveryGitSnapshotGeneration;
-                lock (_gitHeadObservationGate)
-                {
-                    current = ReadGitHeadSnapshot();
-                    recoveryGitSnapshotGeneration =
-                        ++_refreshRecoveryGitSnapshotGeneration;
-                    if (current.IsResolved)
-                    {
-                        string currentHead = current.Commit!;
-                        // The request is already active, while older Git observations may be
-                        // waiting in the channel. Publish this newly sampled tuple only by
-                        // appending it under the same observation gate; applying it in-place would
-                        // let an older queued request overwrite it afterward.
-                        RefreshRequest orderedRecovery = req with
-                        {
-                            RecordCommit = currentHead,
-                            RevalidateRecordCommit = false,
-                            RecordBranch = current.Branch,
-                            RecordBranchKnown = true,
-                            PublishRevalidatedGitSnapshot = true,
-                            RecoveryGitSnapshotGeneration =
-                                recoveryGitSnapshotGeneration,
-                        };
-                        requeued = _refreshQueue.Writer.TryWrite(orderedRecovery);
-                        if (requeued)
-                        {
-                            _refreshRecoveryPendingGitCommit = currentHead;
-                            _latestObservedGitHead = current;
-                        }
-                    }
-                    else
-                    {
-                        requeued = false;
-                    }
-                }
-                if (!current.IsResolved)
-                {
-                    Volatile.Write(
-                        ref _refreshRecoveryGitRevalidationRequiredGeneration,
-                        recoveryGitSnapshotGeneration);
-                    _error = RefreshInputUnavailableCause;
-                    _state = "stale";
-                    _log("Git HEAD is temporarily unavailable during stale-index recovery; " +
-                         "the pending baseline remains uncommitted and recovery stays paced.");
-                    ScheduleRefreshRecoverySweep(
-                        _refreshIncompletePaths?.FirstOrDefault()
-                        ?? "unavailable workspace input");
                     req.CompletionForTest?.TrySetResult();
                     continue;
                 }
-                if (!requeued)
+                if (req.ResolveGitPathsAtExecution && req.RecordCommit is { } gitTarget)
+                {
+                    string? publishedCommit = _indexedCommit;
+                    IReadOnlyCollection<string>? resolvedPaths;
+                    if (publishedCommit is null)
+                    {
+                        resolvedPaths = null;
+                    }
+                    else if (string.Equals(publishedCommit, gitTarget,
+                                 StringComparison.OrdinalIgnoreCase))
+                    {
+                        resolvedPaths = Array.Empty<string>();
+                    }
+                    else
+                    {
+                        List<string>? changed = GitInfo.ChangedFiles(
+                            _workspaceRoot, publishedCommit, gitTarget);
+                        resolvedPaths = changed is null || changed.Count > GitDiffCap
+                            ? null
+                            : changed;
+                    }
+                    req = req with
+                    {
+                        Paths = resolvedPaths,
+                        ResolveGitPathsAtExecution = false,
+                    };
+                }
+                if (_refreshIncompleteReason is not null && !req.FullRebuild &&
+                    req.Paths is not null)
+                {
+                    // A later narrow notification cannot prove recovery of the source whose event
+                    // exhausted its retry budget. Widen the next request before opening a transaction;
+                    // the single pump still preserves FIFO order and one recovery sweep covers all
+                    // paths queued behind the failed request.
+                    req = req with { Paths = null, Reason = "recovery_sweep" };
+                }
+                if (_refreshIncompleteReason is not null && !req.FullRebuild &&
+                    !req.PublishRevalidatedGitSnapshot &&
+                    _refreshRecoveryPendingGitCommit is { } pendingGitCommit &&
+                    (req.RecordCommit is null ||
+                     Volatile.Read(ref _refreshRecoveryGitRevalidationRequiredGeneration) != 0))
+                {
+                    // A failed recovery HEAD read invalidates every tuple captured before it. Revalidate
+                    // those queued requests too: otherwise one can publish its older commit, clear the
+                    // stale latch, and cancel the paced retry that was promised for the unknown HEAD.
+                    req = req with
+                    {
+                        RecordCommit = req.RecordCommit ?? pendingGitCommit,
+                        RevalidateRecordCommit = true,
+                    };
+                }
+                RefreshRequestDequeuedForTest?.Invoke();
+                await _startupComplete.Task.ConfigureAwait(false);
+                RefreshRequestPassedStartupBarrierForTest?.Invoke();
+                if (req.FullRebuild)
+                {
+                    // The channel continuation may run on the shared ThreadPool. Never execute the
+                    // synchronous repository build on that continuation: the builder's unrestricted
+                    // parser fan-out must coexist with lightweight MCP status requests.
+                    await Task.Factory.StartNew(FullRebuildInPump, CancellationToken.None,
+                            TaskCreationOptions.LongRunning, TaskScheduler.Default)
+                        .ConfigureAwait(false);
+                    FullRebuildCompletedForTest?.Invoke();
+                    continue;
+                }
+                if (req.RevalidateRecordCommit)
+                {
+                    GitInfo.HeadSnapshot current;
+                    bool requeued;
+                    long recoveryGitSnapshotGeneration;
+                    lock (_gitHeadObservationGate)
+                    {
+                        current = ReadGitHeadSnapshot();
+                        recoveryGitSnapshotGeneration =
+                            ++_refreshRecoveryGitSnapshotGeneration;
+                        if (current.IsResolved)
+                        {
+                            string currentHead = current.Commit!;
+                            // The request is already active, while older Git observations may be
+                            // waiting in the channel. Publish this newly sampled tuple only by
+                            // appending it under the same observation gate; applying it in-place would
+                            // let an older queued request overwrite it afterward.
+                            RefreshRequest orderedRecovery = req with
+                            {
+                                RecordCommit = currentHead,
+                                RevalidateRecordCommit = false,
+                                RecordBranch = current.Branch,
+                                RecordBranchKnown = true,
+                                PublishRevalidatedGitSnapshot = true,
+                                RecoveryGitSnapshotGeneration =
+                                    recoveryGitSnapshotGeneration,
+                            };
+                            requeued = _refreshQueue.Writer.TryWrite(orderedRecovery);
+                            if (requeued)
+                            {
+                                _refreshRecoveryPendingGitCommit = currentHead;
+                                _latestObservedGitHead = current;
+                            }
+                        }
+                        else
+                        {
+                            requeued = false;
+                        }
+                    }
+                    if (!current.IsResolved)
+                    {
+                        Volatile.Write(
+                            ref _refreshRecoveryGitRevalidationRequiredGeneration,
+                            recoveryGitSnapshotGeneration);
+                        _error = RefreshInputUnavailableCause;
+                        _state = "stale";
+                        _log("Git HEAD is temporarily unavailable during stale-index recovery; " +
+                             "the pending baseline remains uncommitted and recovery stays paced.");
+                        ScheduleRefreshRecoverySweep(
+                            _refreshIncompletePaths?.FirstOrDefault()
+                            ?? "unavailable workspace input");
+                        req.CompletionForTest?.TrySetResult();
+                        continue;
+                    }
+                    if (!requeued)
+                    {
+                        req.CompletionForTest?.TrySetResult();
+                    }
+                    continue;
+                }
+                if (_store is null)
                 {
                     req.CompletionForTest?.TrySetResult();
+                    continue;
                 }
-                continue;
-            }
-            if (_store is null)
-            {
-                req.CompletionForTest?.TrySetResult();
-                continue;
-            }
-            string previous = _state;
-            // x5ls.1.2: one outcome frame per refresh batch. The reason comes from the
-            // PRODUCER's explicit label (review B2: shape-derivation mislabeled tool requests
-            // as watcher batches and git fallback sweeps as plain sweeps) — the shape mapping
-            // below is only a fallback for unlabeled future sites, not sanctioned semantics.
-            string refreshId = Guid.NewGuid().ToString();
-            string refreshReason = req.Reason ?? (req.Paths is null ? "full_sweep"
-                : req.RecordCommit is not null ? "git_head" : "watcher_batch");
-            var refreshWall = System.Diagnostics.Stopwatch.StartNew(); // review B3: failures report MEASURED elapsed
-            int captureRetry = 0;
-            if (Volatile.Read(ref _refreshIncompletePersisted) == 0 &&
-                !MarkRefreshIncomplete(RefreshSweepPendingCause, Array.Empty<string>(),
-                    pathCountIsLowerBound: false))
-            {
-                // Do not mutate rows when followers cannot first observe that a refresh epoch is
-                // pending. The old committed database remains intact and the writer stays stale.
-                _error = RefreshSweepPendingCause;
-                _state = "stale";
-                _log("Refresh refused because its follower-visible pending marker could not be persisted.");
-                EmitRefreshSnapshot(refreshId, refreshReason, "failed", batchProcessed: 0,
-                    elapsedMs: refreshWall.ElapsedMilliseconds,
-                    errorCode: RefreshSweepPendingCause);
-                req.CompletionForTest?.TrySetResult();
-                continue;
-            }
-            while (true)
-            {
-                bool retryCapture = false;
-                BeginIndexMutation();
-                try
+                string previous = _state;
+                // x5ls.1.2: one outcome frame per refresh batch. The reason comes from the
+                // PRODUCER's explicit label (review B2: shape-derivation mislabeled tool requests
+                // as watcher batches and git fallback sweeps as plain sweeps) — the shape mapping
+                // below is only a fallback for unlabeled future sites, not sanctioned semantics.
+                string refreshId = Guid.NewGuid().ToString();
+                string refreshReason = req.Reason ?? (req.Paths is null ? "full_sweep"
+                    : req.RecordCommit is not null ? "git_head" : "watcher_batch");
+                var refreshWall = System.Diagnostics.Stopwatch.StartNew(); // review B3: failures report MEASURED elapsed
+                int captureRetry = 0;
+                if (Volatile.Read(ref _refreshIncompletePersisted) == 0 &&
+                    !MarkRefreshIncomplete(RefreshSweepPendingCause, Array.Empty<string>(),
+                        pathCountIsLowerBound: false))
                 {
-                    _state = "refreshing";
-                    var result = WorkspaceFileReaderForTest is { } reader
-                        ? DeltaRefresher.RefreshWithReaderForTest(_store, _workspaceRoot,
-                            req.Paths, reader, _log, recordCommit: req.RecordCommit,
-                            recordBranch: req.RecordBranch,
-                            recordBranchKnown: req.RecordBranchKnown,
-                            fsharpProjectModel: SelectedFSharpProjectModel)
-                        : DeltaRefresher.Refresh(_store, _workspaceRoot, req.Paths, _log,
-                            recordCommit: req.RecordCommit, recordBranch: req.RecordBranch,
-                            recordBranchKnown: req.RecordBranchKnown,
-                            fsharpProjectModel: SelectedFSharpProjectModel);
-                    // z4c: count what was ACTUALLY applied (the refresh result), not what was
-                    // requested — a sweep request has no path count, and hash-identical paths are
-                    // rightly skipped without being "processed".
-                    Interlocked.Add(ref _pendingProcessed, result.AddedFiles +
-                        result.ChangedFiles + result.DeletedFiles);
-                    _lastRefreshUtc = result.RefreshedAtUtc ?? DateTime.UtcNow.ToString("O");
-                    if (result.AddedFiles + result.ChangedFiles + result.DeletedFiles > 0)
+                    // Do not mutate rows when followers cannot first observe that a refresh epoch is
+                    // pending. The old committed database remains intact and the writer stays stale.
+                    _error = RefreshSweepPendingCause;
+                    _state = "stale";
+                    _log("Refresh refused because its follower-visible pending marker could not be persisted.");
+                    EmitRefreshSnapshot(refreshId, refreshReason, "failed", batchProcessed: 0,
+                        elapsedMs: refreshWall.ElapsedMilliseconds,
+                        errorCode: RefreshSweepPendingCause);
+                    req.CompletionForTest?.TrySetResult();
+                    continue;
+                }
+                while (true)
+                {
+                    bool retryCapture = false;
+                    BeginIndexMutation();
+                    try
                     {
-                        _log($"Delta refresh: +{result.AddedFiles} ~{result.ChangedFiles} -{result.DeletedFiles} " +
-                             $"(projects rebuilt: {result.ProjectsRefreshed}) in {result.Elapsed.TotalMilliseconds:F0}ms");
-                    }
-                    // Record the reflected commit only after a complete reconcile — so the diff
-                    // baseline never advances past what the index actually contains.
-                    if (req.RecordCommit is { } commit)
-                    {
-                        _indexedCommit = commit;
-                        if (req.RecordBranchKnown)
-                            _indexedBranch = req.RecordBranch;
-                        _log($"Git baseline recorded: {Short(commit)}."); // 17zd-b: close the loop visibly
-                    }
-                    long requiredGitGeneration = Volatile.Read(
-                        ref _refreshRecoveryGitRevalidationRequiredGeneration);
-                    bool gitRecoverySnapshotIsCurrent =
-                        requiredGitGeneration == 0 ||
-                        req.RecoveryGitSnapshotGeneration >= requiredGitGeneration;
-                    if (gitRecoverySnapshotIsCurrent && TryClearRefreshIncomplete())
-                    {
-                        ResetRefreshRecoverySweepBackoff();
-                        _error = null;
-                        _state = "ready";
-                        EmitRefreshSnapshot(refreshId, refreshReason, "completed", // x5ls.1.2
-                            result.AddedFiles + result.ChangedFiles + result.DeletedFiles,
-                            (long)result.Elapsed.TotalMilliseconds, errorCode: null);
-                    }
-                    else
-                    {
-                        // Row changes committed successfully, but either a newer unavailable Git
-                        // generation forbids clearing the latch or its durable delete failed. Keep
-                        // serving the result conservatively as stale; do not mislabel successful row
-                        // publication as refresh_failed.
-                        if (!gitRecoverySnapshotIsCurrent)
+                        _state = "refreshing";
+                        var result = WorkspaceFileReaderForTest is { } reader
+                            ? DeltaRefresher.RefreshWithReaderForTest(_store, _workspaceRoot,
+                                req.Paths, reader, _log, recordCommit: req.RecordCommit,
+                                recordBranch: req.RecordBranch,
+                                recordBranchKnown: req.RecordBranchKnown,
+                                fsharpProjectModel: SelectedFSharpProjectModel)
+                            : DeltaRefresher.Refresh(_store, _workspaceRoot, req.Paths, _log,
+                                recordCommit: req.RecordCommit, recordBranch: req.RecordBranch,
+                                recordBranchKnown: req.RecordBranchKnown,
+                                fsharpProjectModel: SelectedFSharpProjectModel);
+                        // z4c: count what was ACTUALLY applied (the refresh result), not what was
+                        // requested — a sweep request has no path count, and hash-identical paths are
+                        // rightly skipped without being "processed".
+                        Interlocked.Add(ref _pendingProcessed, result.AddedFiles +
+                            result.ChangedFiles + result.DeletedFiles);
+                        _lastRefreshUtc = result.RefreshedAtUtc ?? DateTime.UtcNow.ToString("O");
+                        if (result.AddedFiles + result.ChangedFiles + result.DeletedFiles > 0)
                         {
-                            _log("Refresh committed, but a newer unresolved Git HEAD recovery " +
-                                 "observation keeps the index stale and paced recovery armed.");
+                            _log($"Delta refresh: +{result.AddedFiles} ~{result.ChangedFiles} -{result.DeletedFiles} " +
+                                 $"(projects rebuilt: {result.ProjectsRefreshed}) in {result.Elapsed.TotalMilliseconds:F0}ms");
                         }
-                        _error = _refreshIncompleteReason;
-                        _state = "stale";
-                        EmitRefreshSnapshot(refreshId, refreshReason, "completed", // x5ls.1.2
-                            result.AddedFiles + result.ChangedFiles + result.DeletedFiles,
-                            (long)result.Elapsed.TotalMilliseconds,
-                            errorCode: _refreshIncompleteReason);
-                        if (string.Equals(_refreshIncompleteReason,
-                                RefreshInputUnavailableCause, StringComparison.Ordinal))
+                        // Record the reflected commit only after a complete reconcile — so the diff
+                        // baseline never advances past what the index actually contains.
+                        if (req.RecordCommit is { } commit)
                         {
-                            ScheduleRefreshRecoverySweep(
-                                _refreshIncompletePaths?.FirstOrDefault()
-                                ?? "unavailable workspace input");
+                            _indexedCommit = commit;
+                            if (req.RecordBranchKnown)
+                                _indexedBranch = req.RecordBranch;
+                            _log($"Git baseline recorded: {Short(commit)}."); // 17zd-b: close the loop visibly
+                        }
+                        long requiredGitGeneration = Volatile.Read(
+                            ref _refreshRecoveryGitRevalidationRequiredGeneration);
+                        bool gitRecoverySnapshotIsCurrent =
+                            requiredGitGeneration == 0 ||
+                            req.RecoveryGitSnapshotGeneration >= requiredGitGeneration;
+                        if (gitRecoverySnapshotIsCurrent && TryClearRefreshIncomplete())
+                        {
+                            ResetRefreshRecoverySweepBackoff();
+                            _error = null;
+                            _state = "ready";
+                            EmitRefreshSnapshot(refreshId, refreshReason, "completed", // x5ls.1.2
+                                result.AddedFiles + result.ChangedFiles + result.DeletedFiles,
+                                (long)result.Elapsed.TotalMilliseconds, errorCode: null);
+                        }
+                        else
+                        {
+                            // Row changes committed successfully, but either a newer unavailable Git
+                            // generation forbids clearing the latch or its durable delete failed. Keep
+                            // serving the result conservatively as stale; do not mislabel successful row
+                            // publication as refresh_failed.
+                            if (!gitRecoverySnapshotIsCurrent)
+                            {
+                                _log("Refresh committed, but a newer unresolved Git HEAD recovery " +
+                                     "observation keeps the index stale and paced recovery armed.");
+                            }
+                            _error = _refreshIncompleteReason;
+                            _state = "stale";
+                            EmitRefreshSnapshot(refreshId, refreshReason, "completed", // x5ls.1.2
+                                result.AddedFiles + result.ChangedFiles + result.DeletedFiles,
+                                (long)result.Elapsed.TotalMilliseconds,
+                                errorCode: _refreshIncompleteReason);
+                            if (string.Equals(_refreshIncompleteReason,
+                                    RefreshInputUnavailableCause, StringComparison.Ordinal))
+                            {
+                                ScheduleRefreshRecoverySweep(
+                                    _refreshIncompletePaths?.FirstOrDefault()
+                                    ?? "unavailable workspace input");
+                            }
                         }
                     }
-                }
-                catch (RefreshInputUnavailableException ex)
-                {
-                    RefreshInputFailureBeforeLatchForTest?.Invoke();
-                    MarkRefreshIncomplete(RefreshInputUnavailableCause, [ex.Path],
-                        pathCountIsLowerBound: true);
-                    _error = RefreshInputUnavailableCause;
-                    if (req.RecordCommit is { } failedGitCommit)
-                        _refreshRecoveryPendingGitCommit = failedGitCommit;
-                    bool timerInitiatedRecovery = req.TimerInitiatedRecovery;
-                    if (!timerInitiatedRecovery &&
-                        captureRetry < DeltaRefresher.RefreshInputRetryDelays.Length)
+                    catch (RefreshInputUnavailableException ex)
                     {
-                        retryCapture = true;
-                        _log($"Source capture unavailable for {ex.Path}; retrying complete " +
-                             $"refresh request after " +
-                             $"{DeltaRefresher.RefreshInputRetryDelays[captureRetry].TotalMilliseconds:F0}ms.");
+                        RefreshInputFailureBeforeLatchForTest?.Invoke();
+                        MarkRefreshIncomplete(RefreshInputUnavailableCause, [ex.Path],
+                            pathCountIsLowerBound: true);
+                        _error = RefreshInputUnavailableCause;
+                        if (req.RecordCommit is { } failedGitCommit)
+                            _refreshRecoveryPendingGitCommit = failedGitCommit;
+                        bool timerInitiatedRecovery = req.TimerInitiatedRecovery;
+                        if (!timerInitiatedRecovery &&
+                            captureRetry < DeltaRefresher.RefreshInputRetryDelays.Length)
+                        {
+                            retryCapture = true;
+                            _log($"Source capture unavailable for {ex.Path}; retrying complete " +
+                                 $"refresh request after " +
+                                 $"{DeltaRefresher.RefreshInputRetryDelays[captureRetry].TotalMilliseconds:F0}ms.");
+                        }
+                        else
+                        {
+                            _state = "stale";
+                            _log(timerInitiatedRecovery
+                                ? $"Source capture remains unavailable for {ex.Path}; scheduling " +
+                                  "the next paced recovery sweep."
+                                : $"Source capture unavailable for {ex.Path}; bounded refresh " +
+                                  "retries exhausted; scheduling a complete recovery sweep.");
+                            EmitRefreshSnapshot(refreshId, refreshReason, "failed",
+                                batchProcessed: 0, elapsedMs: refreshWall.ElapsedMilliseconds,
+                                errorCode: RefreshInputUnavailableCause);
+                            ScheduleRefreshRecoverySweep(ex.Path);
+                        }
                     }
-                    else
+                    catch (RefreshInputOversizedException ex)
                     {
+                        RefreshInputFailureBeforeLatchForTest?.Invoke();
+                        MarkRefreshIncomplete(RefreshInputOversizedCause, [ex.Path],
+                            pathCountIsLowerBound: true);
+                        _error = RefreshInputOversizedCause;
                         _state = "stale";
-                        _log(timerInitiatedRecovery
-                            ? $"Source capture remains unavailable for {ex.Path}; scheduling " +
-                              "the next paced recovery sweep."
-                            : $"Source capture unavailable for {ex.Path}; bounded refresh " +
-                              "retries exhausted; scheduling a complete recovery sweep.");
+                        _log($"Source capture exceeds the configured byte limit for {ex.Path}.");
                         EmitRefreshSnapshot(refreshId, refreshReason, "failed",
                             batchProcessed: 0, elapsedMs: refreshWall.ElapsedMilliseconds,
-                            errorCode: RefreshInputUnavailableCause);
-                        ScheduleRefreshRecoverySweep(ex.Path);
+                            errorCode: RefreshInputOversizedCause);
                     }
-                }
-                catch (RefreshInputOversizedException ex)
-                {
-                    RefreshInputFailureBeforeLatchForTest?.Invoke();
-                    MarkRefreshIncomplete(RefreshInputOversizedCause, [ex.Path],
-                        pathCountIsLowerBound: true);
-                    _error = RefreshInputOversizedCause;
-                    _state = "stale";
-                    _log($"Source capture exceeds the configured byte limit for {ex.Path}.");
-                    EmitRefreshSnapshot(refreshId, refreshReason, "failed",
-                        batchProcessed: 0, elapsedMs: refreshWall.ElapsedMilliseconds,
-                        errorCode: RefreshInputOversizedCause);
-                }
-                catch (Exception ex)
-                {
-                    // Type-name only, like the startup path (9vw) — no ex.Message internals to clients.
-                    _error = _refreshIncompleteReason ??
-                        $"{ex.GetType().Name} during delta refresh (see server log)";
-                    _state = _refreshIncompleteReason is not null
-                        ? "stale"
-                        : previous == "ready" ? "ready" : previous;
-                    _log($"Delta refresh failed: {ex}");
-                    // batchProcessed 0 is TRUE, not fabricated: DeltaRefresher runs one
-                    // transaction, so a throw rolls back to zero applied (review B3).
-                    EmitRefreshSnapshot(refreshId, refreshReason, "failed", // x5ls.1.2
-                        batchProcessed: 0, elapsedMs: refreshWall.ElapsedMilliseconds,
-                        errorCode: "refresh_failed");
-                }
-                finally
-                {
-                    EndIndexMutation();
-                }
+                    catch (Exception ex)
+                    {
+                        // Type-name only, like the startup path (9vw) — no ex.Message internals to clients.
+                        _error = _refreshIncompleteReason ??
+                            $"{ex.GetType().Name} during delta refresh (see server log)";
+                        _state = _refreshIncompleteReason is not null
+                            ? "stale"
+                            : previous == "ready" ? "ready" : previous;
+                        _log($"Delta refresh failed: {ex}");
+                        // batchProcessed 0 is TRUE, not fabricated: DeltaRefresher runs one
+                        // transaction, so a throw rolls back to zero applied (review B3).
+                        EmitRefreshSnapshot(refreshId, refreshReason, "failed", // x5ls.1.2
+                            batchProcessed: 0, elapsedMs: refreshWall.ElapsedMilliseconds,
+                            errorCode: "refresh_failed");
+                    }
+                    finally
+                    {
+                        EndIndexMutation();
+                    }
 
-                if (!retryCapture) break;
-                await Task.Delay(DeltaRefresher.RefreshInputRetryDelays[captureRetry++])
-                    .ConfigureAwait(false);
+                    if (!retryCapture) break;
+                    await Task.Delay(DeltaRefresher.RefreshInputRetryDelays[captureRetry++])
+                        .ConfigureAwait(false);
+                }
+                req.CompletionForTest?.TrySetResult();
             }
-            req.CompletionForTest?.TrySetResult();
+        }
+        catch (Exception ex)
+        {
+            // Seal ALL producers before draining; a write racing this transition is either
+            // rejected or belongs to this drain. Never restart a possibly broken mutation epoch.
+            Interlocked.Exchange(ref _refreshWorkerFailed, 1);
+            _refreshQueue.Writer.TryComplete();
+            activeCompletion?.TrySetException(ex);
+            while (_refreshQueue.Reader.TryRead(out var abandoned))
+                abandoned.CompletionForTest?.TrySetException(ex);
+
+            // Startup may still own the store. Do not touch it, clear a durable incomplete
+            // marker, release ownership, or force a publication/read gate open here. The health
+            // overlay survives subsequent startup writes. Diagnostics must not fault the observer.
+            try { _log($"Refresh worker terminated unexpectedly; restart the daemon: {ex}"); }
+            catch { /* Health remains authoritative even if the log sink itself failed. */ }
         }
     }
 
@@ -2578,7 +2605,7 @@ public sealed class IndexManager : IDisposable
     /// <summary>Queues a manual refresh (targeted paths, or full detection sweep when null).</summary>
     public bool RequestRefresh(IReadOnlyCollection<string>? paths = null)
     {
-        if (!IsWriter || _disposed) return false;
+        if (!IsWriter || _disposed || RefreshWorkerFailed) return false;
         return _refreshQueue.Writer.TryWrite(new RefreshRequest(paths, Reason: "explicit"));
     }
 
@@ -2618,7 +2645,8 @@ public sealed class IndexManager : IDisposable
 
     /// <summary>Queues a REBUILD-FROM-SCRATCH (tky): delete the db, run a full build, reopen.
     /// Serialized on the refresh pump like every other index mutation, so it can never race a
-    /// delta batch. This is the in-band recovery hatch for a corrupt/failed index — including
+    /// delta batch. A terminal refresh-worker failure refuses this hatch and requires a new
+    /// process. Otherwise this is the in-band recovery hatch for a corrupt/failed index — including
     /// from state 'failed', where the pump is idle and the store may never have opened. When
     /// startup itself was REFUSED (destination authority or ownership), no pump exists to drain
     /// the queue — the hatch re-runs the full startup acquisition instead, so a transient
@@ -2626,7 +2654,7 @@ public sealed class IndexManager : IDisposable
     /// fails closed with the same sanitized shape.</summary>
     public bool RequestFullRebuild()
     {
-        if (IsFollower || _disposed) return false;
+        if (IsFollower || _disposed || RefreshWorkerFailed) return false;
         lock (_disposeLock)
         {
             if (!_disposed && _pump is null && _startTask is null)
@@ -2659,6 +2687,7 @@ public sealed class IndexManager : IDisposable
 
     public IndexQueries OpenQueries()
     {
+        if (RefreshWorkerFailed) throw new IOException(RefreshWorkerFailedCause);
         if (!IsFollower)
         {
             lock (_reviewSnapshotGate)
@@ -2729,6 +2758,7 @@ public sealed class IndexManager : IDisposable
     /// </summary>
     public IndexReadSnapshot? TryOpenReviewSnapshot(CancellationToken cancellationToken = default)
     {
+        if (RefreshWorkerFailed) return null;
         // Ordinary delta refreshes are short. Give the serialized pump a bounded chance to reach
         // its next committed epoch so review_pack does not fail spuriously just after a caller's
         // own refresh; a long rebuild still returns the bounded retry response.
@@ -2865,11 +2895,13 @@ public sealed class IndexManager : IDisposable
         // Progress only while genuinely building — a background refresh must never show a
         // cold-build progress bar (field design note; refresh honesty is bead z4c).
         var bp = _buildProgress;
+        bool workerFailed = RefreshWorkerFailed;
         return new IndexHealth(
-            _state, _indexVersion, _indexedAtUtc, _lastRefreshUtc,
-            _watcher?.PendingCount ?? 0, _error, dbBytes, _workspaceRoot, _dbPath,
+            workerFailed ? "failed" : _state, _indexVersion, _indexedAtUtc, _lastRefreshUtc,
+            _watcher?.PendingCount ?? 0, workerFailed ? RefreshWorkerFailedCause : _error,
+            dbBytes, _workspaceRoot, _dbPath,
             _indexedCommit, _indexedBranch,
-            _state == "building" && bp is not null ? bp.Snapshot() : null,
+            !workerFailed && _state == "building" && bp is not null ? bp.Snapshot() : null,
             Interlocked.Read(ref _pendingProcessed), _accessMode,
             _refreshIncompleteReason, _refreshIncompletePaths,
             Volatile.Read(ref _refreshIncompletePathCount),

@@ -566,12 +566,15 @@ internal sealed record Meta(
     public static Meta From(IndexHealth h, string confidence, string layer)
     {
         // Pending watcher changes mean results may lag the working tree.
-        string status = h.State == "building"
+        string status = h.Error == IndexManager.RefreshWorkerFailedCause
+            ? "failed"
+            : h.State == "building"
             ? "building"
             : h.RefreshIncompleteReason is not null && h.State != "refreshing"
             ? "stale"
             : h.State == "ready" && h.PendingChanges > 0 ? "stale" : h.State;
-        string effectiveConfidence = h.RefreshIncompleteReason is not null &&
+        string effectiveConfidence = (h.RefreshIncompleteReason is not null ||
+                                     h.Error == IndexManager.RefreshWorkerFailedCause) &&
                                      confidence == "exact"
             ? "indexed"
             : confidence;
@@ -585,7 +588,11 @@ internal sealed record Meta(
         // 9z4 (field: couldn't tell whether 'refreshing' meant "results may be wrong" or "background
         // catch-up, results fine"): one line of meaning, only when the status needs it.
         string? statusNote;
-        if (h.AccessMode == IndexManager.FollowerAccessMode)
+        if (h.Error == IndexManager.RefreshWorkerFailedCause)
+        {
+            statusNote = "refresh worker failed — restart the daemon; refresh_index cannot recover this process";
+        }
+        else if (h.AccessMode == IndexManager.FollowerAccessMode)
         {
             statusNote = h.RefreshIncompleteReason is null
                 ? "non-writer compatibility reader — index-backed evidence reflects committed writer state; live source, Git, and semantic evidence may be newer; this process cannot observe the writer's pending queue"

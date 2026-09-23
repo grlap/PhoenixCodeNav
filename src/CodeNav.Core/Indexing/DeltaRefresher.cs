@@ -73,6 +73,11 @@ public static class DeltaRefresher
     {
         var sw = Stopwatch.StartNew();
         var stored = store.AllFilesByPath();
+        var boundaries = new WorkspaceExclusions(workspaceRoot, publishedWorkspaceRoot);
+        var originalReader = readWorkspaceFile;
+        readWorkspaceFile = (root, path, limit) => boundaries.Contains(path)
+            ? new(GitInfo.WorkspaceFileReadDisposition.Missing, null)
+            : originalReader(root, path, limit);
 
         List<string> candidates;
         bool detectAll = changedRelPaths is null;
@@ -80,7 +85,7 @@ public static class DeltaRefresher
 
         if (detectAll)
         {
-            scan = WorkspaceScanner.Scan(workspaceRoot);
+            scan = WorkspaceScanner.Scan(workspaceRoot, boundaries);
             var seen = new HashSet<string>(WorkspacePaths.FileSystemPathComparer);
             candidates = new List<string>();
             foreach (var f in scan.CsFiles.Concat(scan.FsFiles)
@@ -319,7 +324,7 @@ public static class DeltaRefresher
             if (projectDataDirty)
             {
                 log?.Invoke("Project files changed — rebuilding project graph ...");
-                RefreshProjectDataCore(store, workspaceRoot, tx, readWorkspaceFile, log);
+                RefreshProjectDataCore(store, workspaceRoot, tx, readWorkspaceFile, log, boundaries);
             }
 
             if (preparedFSharp.ParsedFiles.Count > 0 || preparedFSharp.CoverageOnly.Count > 0)
@@ -661,7 +666,7 @@ public static class DeltaRefresher
     private static void RefreshProjectDataCore(IndexStore store, string workspaceRoot,
         Microsoft.Data.Sqlite.SqliteTransaction tx,
         Func<string, string, int, GitInfo.WorkspaceFileReadResult> readWorkspaceFile,
-        Action<string>? log)
+        Action<string>? log, WorkspaceExclusions? boundaries = null)
     {
         List<(long Id, string Path, string Lang)> rows = store.FileIdPathLang(tx);
         Dictionary<string, IndexStore.StoredFile> stored = store.AllFilesByPath(tx);
@@ -740,7 +745,8 @@ public static class DeltaRefresher
         // Assembly-ref edge recovery must mirror the full build (lhg) — a csproj touch rebuilds
         // the whole graph here, and losing the recovered edges would silently re-break
         // cross-project implementations/references until the next full rebuild.
-        AssemblyRefEdges.Write(store, tx, parsedProjects, projectIds);
+        AssemblyRefEdges.Write(store, tx, parsedProjects, projectIds,
+            boundaries ?? new WorkspaceExclusions(workspaceRoot));
         CompileItemResolver.Write(store, tx, parsedProjects, projectIds, sourceFileIds);
         // isTest R3 parity with the full build (a .cs file GAINING [TestFixture] converges on the
         // next graph rebuild — csproj-touch or full — an accepted staleness, same as ownership).

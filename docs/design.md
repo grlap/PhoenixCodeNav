@@ -3,6 +3,37 @@
 This document describes how PhoenixCodeNav is built. For *why* it exists and how it
 compares to grep / Cursor / other tools, see [`intro.md`](./intro.md).
 
+## Nested worktrees and refresh-worker failure (v0.12.110, schema 43)
+
+A nested linked Git worktree is a separate indexing boundary, regardless of its folder name
+or which repository owns it. The scanner recognizes the regular `.git` pointer, `commondir`,
+and reciprocal `gitdir` registration. Ordinary `.worktrees` folders, nested independent
+repositories and submodules remain traversable. An explicitly opened worktree root is indexed
+normally. Unrecognizable or unavailable registration metadata does not establish a boundary.
+Each scan/refresh caches ancestor classification for that operation; the watcher checks current
+metadata and requests a sweep on nested `.git` creation/removal. A concurrent registration can
+temporarily precede/follow a scan; subsequent convergence applies the current boundary.
+After registration changes, unknown absent paths under that directory conservatively request
+sweeps: the original directory seed may have skipped descendants, including dotted directories.
+Both full sweeps and targeted refreshes treat excluded stored files as missing, removing their
+file, symbol and ownership rows. Schema 43 rebuilds older stored output; row deletion alone does
+not promise an immediate reduction in SQLite's allocated file size.
+
+The single refresh pump has an outer exception supervisor in addition to ordinary per-delta
+handling. An unexpected outer fault seals its channel before draining queued requests and logs
+the exception through a guarded sink. Health and query readiness report terminal `failed` with
+`refresh_worker_failed`, even if startup subsequently writes its own state. Such faults can involve
+mutation/publication invariants: the supervisor does not reset epochs, open read gates, touch the
+startup-owned store, erase the committed database, clear an incomplete marker or release the lease.
+It does not start another worker. `refresh_index` (including `force='full'`) refuses with
+`queued:false`, `retryRecommended:false` and daemon-restart advice. A new process uses normal
+startup ownership and freshness convergence. Handled delta exceptions retain existing stale-index
+and recovery behavior. A hang without an exception is not diagnosed by this supervisor.
+
+Flat `pendingProcessed` and `pendingChanges` counters are not proof of a dead worker: the latter
+counts watcher backlog, not the refresh channel. Refresh snapshot events use telemetry IPC, not
+the workspace JSONL semantic-operation stream; absence from JSONL is not failure evidence.
+
 ## Solution layout
 
 ```

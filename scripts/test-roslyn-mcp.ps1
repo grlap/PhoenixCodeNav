@@ -947,6 +947,171 @@ function Request-McpDaemonRetirement($Client) {
     }
 }
 
+function Test-MultiWorkspaceMcpIntegration {
+    # Product integration through real MCP/daemon processes, not a test of this script.
+    # All Git mutations and indexes belong to this fresh run; pinned checkouts stay untouched.
+    $fixtureRoot = Join-Path $freshIndexRoot "workspaces"
+    Assert-True (-not (Test-Path -LiteralPath $fixtureRoot)) "Workspace fixture already exists"
+    Assert-VerifiedDirectoryChain $repoRoot $fixtureRoot "Workspace fixture" $true
+    $clients = [Collections.Generic.List[object]]::new()
+    $fixtureEvidence = [ordered]@{ root = $fixtureRoot; workspaces = @(); cleanup = "pending" }
+    $evidence.results.multiWorkspace = $fixtureEvidence
+    try {
+        $parentRoot = Join-Path $fixtureRoot "parent"
+        $vendorRoot = Join-Path $fixtureRoot "vendor-origin"
+        foreach ($root in @($parentRoot, $vendorRoot)) {
+            [IO.Directory]::CreateDirectory($root) | Out-Null
+            Invoke-Git $root @("init", "-q") | Out-Null
+            Invoke-Git $root @("config", "user.name", "Phoenix integration") | Out-Null
+            Invoke-Git $root @("config", "user.email", "integration@example.invalid") | Out-Null
+            Invoke-Git $root @("config", "commit.gpgsign", "false") | Out-Null
+            Invoke-Git $root @("config", "core.autocrlf", "false") | Out-Null
+        }
+        $project = '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>'
+        [IO.File]::WriteAllText((Join-Path $vendorRoot "Vendor.csproj"), $project)
+        [IO.File]::WriteAllText((Join-Path $vendorRoot "Vendor.cs"), "public class IntegrationVendor { }")
+        Invoke-Git $vendorRoot @("add", ".") | Out-Null
+        Invoke-Git $vendorRoot @("commit", "-qm", "vendor fixture") | Out-Null
+        Invoke-Git $parentRoot @("-c", "protocol.file.allow=always", "submodule", "add", "-q", $vendorRoot, "vendor") | Out-Null
+        [IO.File]::WriteAllText((Join-Path $parentRoot "App.csproj"), $project)
+        [IO.File]::WriteAllText((Join-Path $parentRoot ".gitignore"), ".codenav/`n.worktrees/one/`nreviews/two/`n")
+        $ordinaryRoot = Join-Path $parentRoot ".worktrees/ordinary"
+        [IO.Directory]::CreateDirectory($ordinaryRoot) | Out-Null
+        [IO.File]::WriteAllText((Join-Path $ordinaryRoot "Ordinary.cs"), "public class IntegrationOrdinary { }")
+        $symbols = @("IntegrationRevisionOne", "IntegrationRevisionTwo", "IntegrationRevisionThree")
+        $commits = @()
+        foreach ($symbol in $symbols) {
+            [IO.File]::WriteAllText((Join-Path $parentRoot "Variant.cs"), "public class $symbol { }")
+            Invoke-Git $parentRoot @("add", ".") | Out-Null
+            Invoke-Git $parentRoot @("commit", "-qm", $symbol) | Out-Null
+            $commits += [string](@(Invoke-Git $parentRoot @("rev-parse", "HEAD"))[0])
+        }
+        Assert-Equal 3 @($commits | Select-Object -Unique).Count "Fixture commits are not distinct"
+        $roots = @((Join-Path $parentRoot ".worktrees/one"), (Join-Path $parentRoot "reviews/two"), $parentRoot)
+        for ($i = 0; $i -lt 2; $i++) {
+            Invoke-Git $parentRoot @("worktree", "add", "-q", "--detach", $roots[$i], $commits[$i]) | Out-Null
+            Invoke-Git $roots[$i] @("-c", "protocol.file.allow=always", "submodule", "update", "--init", "--quiet") | Out-Null
+        }
+        # Keep all three daemons alive while querying them, so accidental session reuse
+        # cannot be concealed by serial teardown/restart of a shared owner.
+        for ($i = 0; $i -lt 3; $i++) {
+            $db = Join-Path $freshIndexRoot "workspace-$i.db"
+            $defaultDatabasePaths.Add($db)
+            Initialize-FreshIndexPath "workspace-$i" $db
+            $record = [ordered]@{
+                root = $roots[$i]; commit = $commits[$i]; symbol = $symbols[$i]; indexDb = $db
+                capabilities = $null; overview = $null; searches = [ordered]@{}; files = $null
+            }
+            $fixtureEvidence.workspaces += $record
+            $client = Start-McpClient "workspace-$i" $roots[$i] $db
+            $clients.Add($client)
+            $session = Initialize-McpClient $client "writer"
+            $record.capabilities = $session.Capabilities
+            Assert-Equal "startup_missing" ([string]$session.Capabilities.index.startupBuildReason) "workspace-$i did not build a fresh index"
+            Assert-True (Test-Path -LiteralPath $db -PathType Leaf) "workspace-$i did not create its own database"
+            Assert-Equal ([IO.Path]::GetFullPath($roots[$i])) ([string]$session.Capabilities.index.workspaceRoot) "workspace-$i attached to the wrong root"
+        }
+        Test-IntegrationCase "fixture workspaces have separate daemon and index identities" {
+            Assert-Equal 3 @($clients | ForEach-Object { $_.RuntimeProcessId } | Select-Object -Unique).Count "Distinct workspaces shared a daemon"
+            $versions = @($fixtureEvidence.workspaces | ForEach-Object { [string]$_.capabilities.index.indexVersion })
+            Assert-True (@($versions | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -eq 0) "Fixture index identity missing"
+            Assert-Equal 3 @($versions | Select-Object -Unique).Count "Distinct workspaces shared an index identity"
+        }
+        for ($i = 0; $i -lt 3; $i++) {
+            Test-IntegrationCase "fixture workspace-$i commit, symbols and file boundaries" {
+            $client = $clients[$i]
+            $record = $fixtureEvidence.workspaces[$i]
+            $overview = Invoke-McpTool $client "repo_overview" @{}
+            $record.overview = $overview
+            Assert-Equal ([IO.Path]::GetFullPath($roots[$i])) ([string]$overview.workspaceRoot) "workspace-$i overview root mismatch"
+            Assert-Equal $commits[$i] ([string]$overview.git.headCommit) "workspace-$i HEAD mismatch"
+            Assert-Equal $commits[$i] ([string]$overview.git.indexedCommit) "workspace-$i indexed a different revision"
+            Assert-True ([bool]$overview.git.headMatchesIndex) "workspace-$i has not converged to its commit"
+            foreach ($symbol in @($symbols) + @("IntegrationOrdinary", "IntegrationVendor")) {
+                $search = Invoke-McpTool $client "search_symbol" @{ query = $symbol; match = "exact" }
+                $record.searches[$symbol] = $search
+                Assert-True ($null -eq $search.error) "workspace-$i search failed: $($search.error)"
+                Assert-True (-not [bool]$search.truncated) "workspace-$i symbol evidence was truncated"
+                $expected = if ($symbol -in @($symbols[$i], "IntegrationOrdinary", "IntegrationVendor")) { 1 } else { 0 }
+                Assert-Equal $expected @($search.symbols).Count "workspace-$i revision isolation failed for $symbol"
+                if ($expected -eq 1) {
+                    $expectedPath = if ($symbol -eq "IntegrationOrdinary") { ".worktrees/ordinary/Ordinary.cs" }
+                        elseif ($symbol -eq "IntegrationVendor") { "vendor/Vendor.cs" } else { "Variant.cs" }
+                    Assert-Equal $symbol ([string]$search.symbols[0].name) "workspace-$i returned the wrong declaration"
+                    Assert-Equal $expectedPath ([string]$search.symbols[0].path) "workspace-$i returned a nested or foreign declaration"
+                }
+            }
+            $files = Invoke-McpTool $client "find_file" @{ nameOrGlob = "*.cs" }
+            $record.files = $files
+            Assert-True ($null -eq $files.error) "workspace-$i file query failed"
+            Assert-True (-not [bool]$files.truncated) "workspace-$i file evidence was truncated"
+            $actualPaths = @($files.files | ForEach-Object { [string]$_.path } | Sort-Object)
+            $expectedPaths = @("Variant.cs", ".worktrees/ordinary/Ordinary.cs", "vendor/Vendor.cs" | Sort-Object)
+            Assert-Equal ($expectedPaths -join "|") ($actualPaths -join "|") "workspace-$i indexed missing or foreign source paths"
+            $projectFile = Invoke-McpTool $client "find_file" @{ nameOrGlob = "App.csproj" }
+            Assert-Equal 1 @($projectFile.files).Count "workspace-$i project missing or duplicated"
+            Assert-Equal "App.csproj" ([string]$projectFile.files[0].path) "workspace-$i project belongs to a nested workspace"
+            }
+        }
+        Test-IntegrationCase "refresh follows one fixture checkout without changing other workspaces" {
+            Invoke-Git $roots[0] @("checkout", "--quiet", "--detach", $commits[1]) | Out-Null
+            $refresh = Invoke-McpTool $clients[0] "refresh_index" @{ force = "auto" }
+            $transition = [ordered]@{ refresh = $refresh; overview = $null; searches = [ordered]@{}; peers = @() }
+            $fixtureEvidence["transition"] = $transition
+            Assert-True ([bool]$refresh.queued) "Changed fixture checkout refused refresh"
+            $readyObservations = 0
+            # Same readiness bound as Initialize-McpClient; require the requested commit,
+            # not merely a transient ready state before the queued refresh starts.
+            for ($attempt = 0; $attempt -lt 600; $attempt++) {
+                $capabilities = Invoke-McpTool $clients[0] "server_capabilities" @{}
+                $current = Invoke-McpTool $clients[0] "repo_overview" @{}
+                $transition.overview = $current
+                if ($capabilities.index.state -eq "ready" -and
+                    [string]$current.git.indexedCommit -eq $commits[1] -and [bool]$current.git.headMatchesIndex) {
+                    $readyObservations++
+                    if ($readyObservations -eq 2) { break }
+                } else { $readyObservations = 0 }
+                Start-Sleep -Seconds 1
+            }
+            Assert-Equal 2 $readyObservations "Changed fixture checkout never converged to the new commit"
+            foreach ($symbol in $symbols) {
+                $search = Invoke-McpTool $clients[0] "search_symbol" @{ query = $symbol; match = "exact" }
+                $transition.searches[$symbol] = $search
+                Assert-True ($null -eq $search.error -and -not [bool]$search.truncated) "Refreshed fixture search failed or was truncated"
+                $expected = if ($symbol -eq $symbols[1]) { 1 } else { 0 }
+                Assert-Equal $expected @($search.symbols).Count "Refreshed fixture leaked revision $symbol"
+                if ($expected -eq 1) { Assert-Equal "Variant.cs" ([string]$search.symbols[0].path) "Refreshed fixture result path changed" }
+            }
+            for ($peer = 1; $peer -lt 3; $peer++) {
+                $overview = Invoke-McpTool $clients[$peer] "repo_overview" @{}
+                $search = Invoke-McpTool $clients[$peer] "search_symbol" @{ query = $symbols[$peer]; match = "exact" }
+                $transition.peers += [ordered]@{ overview = $overview; search = $search }
+                Assert-Equal $commits[$peer] ([string]$overview.git.indexedCommit) "Refreshing one workspace changed peer-$peer revision"
+                Assert-True ([bool]$overview.git.headMatchesIndex) "Peer-$peer no longer matches its checkout"
+                Assert-True ($null -eq $search.error -and -not [bool]$search.truncated) "Peer-$peer search failed or was truncated"
+                Assert-Equal 1 @($search.symbols).Count "Refreshing one workspace changed peer-$peer symbols"
+                Assert-Equal "Variant.cs" ([string]$search.symbols[0].path) "Peer-$peer returned nested workspace data"
+            }
+        }
+    } finally {
+        $cleanupErrors = [Collections.Generic.List[string]]::new()
+        foreach ($client in $clients) {
+            try { Stop-McpClient $client } catch { $cleanupErrors.Add($_.Exception.Message) }
+            try { Request-McpDaemonRetirement $client } catch { $cleanupErrors.Add($_.Exception.Message) }
+        }
+        # Never remove files beneath a daemon whose retirement was not confirmed.
+        if ($cleanupErrors.Count -eq 0) {
+            Assert-VerifiedDirectoryChain $repoRoot $fixtureRoot "Workspace fixture cleanup"
+            Assert-Equal ([IO.Path]::GetFullPath($freshIndexRoot)) ([IO.Path]::GetFullPath((Split-Path -Parent $fixtureRoot))) "Workspace fixture cleanup escaped its run"
+            Remove-SelfTestEntryNoFollow $fixtureRoot
+            $fixtureEvidence.cleanup = "removed"
+        } else {
+            $fixtureEvidence.cleanup = @($cleanupErrors)
+            foreach ($cleanupError in $cleanupErrors) { $failures.Add("workspace teardown: $cleanupError") }
+        }
+    }
+}
+
 function Test-RetryableSemanticPayload($Payload) {
     $reason = [string]$Payload.reason
     $partialReason = [string]$Payload.partialReason
@@ -2036,6 +2201,9 @@ try {
         Assert-True ($null -eq $secondImplementations.error) "Second-client implementations returned $($secondImplementations.error): $($secondImplementations.reason)"
         Assert-Equal ([string]$implementations.meta.confidence) ([string]$secondImplementations.meta.confidence) "Shared-client confidence diverged"
         Assert-Equal ($implementationNames -join "|") $secondImplementationNames "Shared-client implementation membership diverged"
+    }
+    Test-IntegrationCase "multi-workspace fixture setup and teardown" {
+        Test-MultiWorkspaceMcpIntegration
     }
 } finally {
     $stopErrors = New-Object System.Collections.Generic.List[string]

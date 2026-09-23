@@ -296,6 +296,8 @@ public sealed partial class NavigationTools
         if (readSnapshot is null)
         {
             IndexHealth health = _manager.Health();
+            if (health.Error == IndexManager.RefreshWorkerFailedCause)
+                return BoundedReviewNotReady(health, maxBytes);
             return BoundedReviewError("index_refresh_in_progress",
                 "The index changed while review_pack was pinning a read snapshot; retry after the current refresh completes.",
                 maxBytes, Meta.From(health, "indexed", "text"));
@@ -2127,7 +2129,9 @@ public sealed partial class NavigationTools
         int cap = Math.Clamp(maxBytes, 2048, Json.HardBudgetBytes);
         string error = health.State == "building" ? "index_building" : "index_unavailable";
         bool retryRecommended = IndexRetryRecommended(health);
-        string hint = health.State == "building"
+        string hint = health.Error == IndexManager.RefreshWorkerFailedCause
+            ? RefreshWorkerRestartHint
+            : health.State == "building"
             ? "The workspace index is still building (first run). Inspect server_capabilities index.progress, wait while it advances, and retry after index.state is ready."
             : "The workspace index is unavailable. Inspect server_capabilities for the cause and recovery before retrying.";
         string json = Json.Serialize(new

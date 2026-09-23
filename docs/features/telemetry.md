@@ -6,6 +6,12 @@ Phoenix writes one JSONL record per semantic operation to a bounded, privacy-saf
 per-process file. This is the live semantic-operations data layer consumed by the local Operations
 Portal and remains useful directly.
 
+Refresh outcome snapshots (`index.refresh.snapshot`) use telemetry IPC, not this JSONL stream.
+Missing JSONL refresh records or flat watcher counters do not establish a dead pump. Since
+v0.12.110, an unexpected refresh-worker exception is logged and exposes `refresh_worker_failed`
+in index health; restart the daemon. This detects termination, not a worker hanging without an
+exception. The terminal handler preserves the database and refuses incremental and full refresh.
+
 Since v0.12.26, that independent loopback portal reads telemetry through anchored no-follow
 regular-file handles and reports only an equally anchored `index.db` file's presence and size.
 It does not open SQLite by workspace pathname, load Core/MCP implementation assemblies, follow

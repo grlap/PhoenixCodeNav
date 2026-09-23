@@ -12,7 +12,7 @@ public sealed partial class NavigationTools
     // ---------------------------------------------------------------- maintenance
 
     [McpServerTool(Name = "refresh_index")]
-    [Description("Queue an index refresh through the shared daemon. A diagnostics-only non-writer instance returns index_writer_required. force='auto'/'incremental': targeted paths or a change-detection sweep — hash-identical files are SKIPPED, so this never rebuilds an intact-looking index. force='full': the 'I know the db is wrong' hatch — delete the index and REBUILD FROM SCRATCH (works even from state 'failed'; watch server_capabilities.index.progress). Normally unnecessary — the daemon's file watcher keeps the index fresh.")]
+    [Description("Queue an index refresh through the shared daemon. A diagnostics-only non-writer instance returns index_writer_required. force='auto'/'incremental': targeted paths or a change-detection sweep — hash-identical files are SKIPPED, so this never rebuilds an intact-looking index. force='full': delete the index and REBUILD FROM SCRATCH (works from state 'failed' unless the worker died; watch server_capabilities.index.progress). refresh_worker_failed requires a daemon restart, not another refresh. Normally unnecessary — the daemon's file watcher keeps the index fresh.")]
     public string RefreshIndex(
         [Description("Optional EXACT workspace-relative paths as comma-separated text or a JSON-array string (maximum 256 paths and 64 KiB input) — no globs (a glob silently matches nothing). Rooted, traversing, malformed, or control-character paths return bad_request. Use '/' on Unix, where a single backslash remains a legal filename character; Windows accepts either separator. Ignored with force='full'.")] string? paths = null,
         [Description("'auto' (default) / 'incremental': delta refresh, unchanged files skipped. 'full': rebuild from scratch — corruption/recovery hatch.")] string force = "auto")
@@ -29,6 +29,7 @@ public sealed partial class NavigationTools
             });
         }
         if (_manager.IsFollower) return IndexWriterRequired();
+        if (_manager.RefreshWorkerFailed) return RefreshWorkerUnavailable();
         if (force == "full")
         {
             if (!_manager.RequestFullRebuild())

@@ -160,7 +160,7 @@ public static class IndexBuilder
     /// v41: assumed-empty import markers and live-item property-read tracking allow additional
     /// F# imports and later properties; rebuild to harvest their persisted Exists dependencies.
     /// v42: simple is the default; evaluated Exists facts carry transactional readiness.</summary>
-    public const string SchemaVersion = "42";
+    public const string SchemaVersion = "43";
     internal static Action? BeforeAnchoredDestinationOpenForTest { get; set; }
     internal static Action<string>? AnchoredStageReadyForTest { get; set; }
     internal static Action<string>? AnchoredStageCompletedForTest { get; set; }
@@ -476,7 +476,8 @@ public static class IndexBuilder
         progress?.Invoke($"Scanning {workspaceRoot} ...");
 
         var sw = Stopwatch.StartNew();
-        var scan = WorkspaceScanner.Scan(workspaceRoot);
+        var boundaries = new WorkspaceExclusions(workspaceRoot, publishedWorkspaceRoot);
+        var scan = WorkspaceScanner.Scan(workspaceRoot, boundaries);
         var scanTime = sw.Elapsed;
         progress?.Invoke($"Scanned: {scan.CsFiles.Count} C# source, {scan.FsFiles.Count} F# source, " +
                          $"{scan.MarkdownFiles.Count} Markdown, {scan.SqlFiles.Count} SQL, " +
@@ -630,7 +631,7 @@ public static class IndexBuilder
             }
             // Multi-staged builds reference ASSEMBLIES from a common output folder, not projects
             // (lhg) — recover those as graph edges or the dependency graph is blind to them.
-            var (recovered, nameCollisions) = AssemblyRefEdges.Write(store, tx, parsedProjects, projectIds);
+            var (recovered, nameCollisions) = AssemblyRefEdges.Write(store, tx, parsedProjects, projectIds, boundaries);
             if (recovered + nameCollisions > 0)
             {
                 progress?.Invoke($"Assembly-ref edges: {recovered} recovered ({nameCollisions} assembly-name collisions resolved to their first project row)");

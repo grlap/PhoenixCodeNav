@@ -231,7 +231,9 @@ internal sealed class DaemonServer
                 return;
             }
             if (request is null) return;
-            if (request.Rebuild) manager.RequestFullRebuild();
+            if (request.Rebuild && !manager.RequestFullRebuild())
+                services.GetRequiredService<ILoggerFactory>().CreateLogger("PhoenixCodeNav.Daemon")
+                    .LogWarning("Client rebuild request refused: {Cause}.", manager.Health().Error);
 
             Interlocked.Increment(ref _activeClients);
             Volatile.Write(ref _lastClientTicks, DateTime.UtcNow.Ticks);

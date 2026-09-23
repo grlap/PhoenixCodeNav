@@ -27,6 +27,7 @@ public sealed class WorkspaceWatcher : IDisposable
     private readonly FileSystemWatcher _fsw;
     private readonly ConcurrentDictionary<string, byte> _pending = new(WorkspacePaths.FileSystemPathComparer);
     private readonly ConcurrentDictionary<string, byte> _knownDirs = new(WorkspacePaths.FileSystemPathComparer);
+    private readonly ConcurrentDictionary<string, byte> _unseededRoots = new(WorkspacePaths.FileSystemPathComparer);
     private readonly System.Threading.Timer _debounce;
     private readonly Task _seed;
     private readonly object _sync = new();
@@ -65,6 +66,10 @@ public sealed class WorkspaceWatcher : IDisposable
     }
 
     public int PendingCount => _pending.Count;
+    internal void NotifyPathForTest(string path, WatcherChangeTypes change) => Handle(path, change);
+    internal void FlushForTest() => Flush();
+    internal Task SeedCompletionForTest => _seed;
+    internal void DisableNativeEventsForTest() => _fsw.EnableRaisingEvents = false;
 
     private void Handle(string fullPath, WatcherChangeTypes change)
     {
@@ -78,6 +83,17 @@ public sealed class WorkspaceWatcher : IDisposable
             return;
         }
         if (rel.StartsWith("..", StringComparison.Ordinal)) return;
+        // Registration/removal can happen AFTER the directory-create event's sweep. The
+        // nested .git pointer itself must request another sweep, although it isn't indexed.
+        if (rel.EndsWith("/.git", StringComparison.Ordinal))
+        {
+            // The initial seed may have skipped this whole subtree. A sweep repairs the
+            // index, not directory knowledge. Keep absent paths here conservative even if
+            // the initial seed finishes after this notification; no second walker is needed.
+            _unseededRoots.TryAdd(rel[..^5], 0);
+            RequestSweep();
+            return;
+        }
         if (IsExcluded(rel)) return;
 
         // Directory that currently exists (create / rename-in / mtime bump).
@@ -108,6 +124,13 @@ public sealed class WorkspaceWatcher : IDisposable
             RequestSweep(); // a known directory vanished — reconcile its subtree
             return;
         }
+        if (HasUnseededAncestor(rel))
+        {
+            // Even a watched extension may belong to an unobserved directory (e.g. A.cs).
+            // A directory-only rename-away must not be reduced to one deleted file.
+            RequestSweep();
+            return;
+        }
         if (IsWatchedFile(rel))
         {
             _pending.TryAdd(rel, 0); // deleted watched file — the per-file batch marks it removed
@@ -126,6 +149,17 @@ public sealed class WorkspaceWatcher : IDisposable
 
     internal static bool IsWatchedFile(string rel) =>
         WatchedExtensions.Contains(Path.GetExtension(rel), StringComparer.OrdinalIgnoreCase);
+
+    private bool HasUnseededAncestor(string rel)
+    {
+        while (true)
+        {
+            if (_unseededRoots.ContainsKey(rel)) return true;
+            int slash = rel.LastIndexOf('/');
+            if (slash < 0) return false;
+            rel = rel[..slash];
+        }
+    }
 
     private static bool SafeDirectoryExists(string fullPath)
     {
@@ -147,6 +181,7 @@ public sealed class WorkspaceWatcher : IDisposable
     private void SeedKnownDirs()
     {
         bool clean = true;
+        var boundaries = new WorkspaceExclusions(_root);
         try
         {
             var stack = new Stack<string>();
@@ -167,6 +202,8 @@ public sealed class WorkspaceWatcher : IDisposable
                         string name = Path.GetFileName(sub);
                         if (WorkspaceScanner.DefaultExcludedDirs.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
                         if (WorkspacePaths.IsReparsePoint(sub)) continue; // don't follow links
+                        if (boundaries.ExcludesDirectory(WorkspacePaths.ToGitPath(
+                                Path.GetRelativePath(_root, sub)))) continue;
                     }
                     catch { clean = false; continue; }
                     string rel = WorkspacePaths.ToGitPath(Path.GetRelativePath(_root, sub));
@@ -206,7 +243,9 @@ public sealed class WorkspaceWatcher : IDisposable
         }
     }
 
-    private static bool IsExcluded(string relPath) => WorkspaceScanner.IsExcludedPath(relPath);
+    private bool IsExcluded(string relPath) =>
+        WorkspaceScanner.IsExcludedPath(relPath) ||
+        new WorkspaceExclusions(_root).ExcludesDirectory(relPath);
 
     private void Flush()
     {

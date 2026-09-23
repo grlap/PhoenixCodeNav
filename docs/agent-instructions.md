@@ -4,6 +4,11 @@ Paste the section below into the target repository's `CLAUDE.md` or `AGENTS.md`.
 It is intentionally short: the MCP response metadata is the authority for exceptional
 cases, budgets, and recovery.
 
+`refresh_worker_failed` is terminal for the current process: restart the shared daemon, rather
+than retrying `refresh_index` or `force='full'`. The failure handler preserves the committed index.
+Nested registered linked worktrees are excluded from the parent index; open their workspace root
+explicitly to query them. Submodules and ordinary folders named `.worktrees` remain indexable.
+
 ---
 
 ## Code Navigation (Phoenix MCP)

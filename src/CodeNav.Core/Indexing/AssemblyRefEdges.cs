@@ -32,7 +32,8 @@ internal static class AssemblyRefEdges
     public static (int Recovered, int NameCollisions) Write(
         IndexStore store, SqliteTransaction tx,
         IReadOnlyList<ParsedProject> parsedProjects,
-        IReadOnlyDictionary<string, long> projectIdsByRelPath)
+        IReadOnlyDictionary<string, long> projectIdsByRelPath,
+        WorkspaceExclusions? boundaries = null)
     {
         // Assembly-name -> physical project candidates. ParsedProject.Name already prefers
         // <AssemblyName> over the
@@ -83,7 +84,8 @@ internal static class AssemblyRefEdges
                 // Multi-stage common output folders are regular indexed dirs, so the field
                 // shape passes this gate. No-hint references keep name-only matching (the bare
                 // <Reference Include="ET.SomeLib"/> output-dir-probing legacy idiom).
-                if (hint is not null && Discovery.WorkspaceScanner.IsExcludedPath(hint)) continue;
+                if (hint is not null && (boundaries?.Contains(hint) ??
+                        WorkspaceScanner.IsExcludedPath(hint))) continue;
                 // Simple name only ("ET.Api.Generated, Version=..." was split by the parser).
                 // No basename fallback: mapping an aliased Include via its dll file name was
                 // speculative and review-reproduced as a false-edge source (Include="VendorLib"

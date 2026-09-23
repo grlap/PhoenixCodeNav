@@ -72,7 +72,9 @@ public static class WorkspaceScanner
                fileName.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase);
     }
 
-    public static ScanResult Scan(string root)
+    public static ScanResult Scan(string root) => Scan(root, new WorkspaceExclusions(root));
+
+    internal static ScanResult Scan(string root, WorkspaceExclusions boundaries)
     {
         root = Path.GetFullPath(root);
         var excluded = new HashSet<string>(DefaultExcludedDirs, StringComparer.OrdinalIgnoreCase);
@@ -108,6 +110,8 @@ public static class WorkspaceScanner
                     // Attributes bit gates the handle-opening LinkTarget read so ordinary
                     // dirs cost nothing; cloud-synced dirs (bit set, null LinkTarget) are walked.
                     if ((di.Attributes & FileAttributes.ReparsePoint) != 0 && di.LinkTarget is not null) continue;
+                    if (boundaries.ExcludesDirectory(WorkspacePaths.ToGitPath(
+                            Path.GetRelativePath(root, di.FullName)))) continue;
                     stack.Push(di.FullName);
                     continue;
                 }

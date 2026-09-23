@@ -293,7 +293,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
         Assert.False(string.IsNullOrWhiteSpace(commit)); // a SHA when built in a repo, else "unknown"
         Assert.Equal(BuildInfo.Commit, commit);           // round-trips the build-time stamp
         Assert.Equal(IndexBuilder.SchemaVersion, build.GetProperty("indexSchema").GetString());
-        Assert.Equal("42", build.GetProperty("indexSchema").GetString());
+        Assert.Equal("43", build.GetProperty("indexSchema").GetString());
         Assert.Equal(64 * 1024,
             json.GetProperty("budgets").GetProperty("hardBytes").GetInt32());
         Assert.Contains("complete compiler identity",
@@ -1683,7 +1683,7 @@ public class Batch4SearchGradingTests : IClassFixture<IndexFixture>, IAsyncLifet
                      "scanning|parsing_projects|indexing_files|finalizing", "filesIndexed/filesTotal/elapsedMs",
                      "monotonic counts, no fake percent", "no ready/background-refresh bar", "filesSkipped/projectsFailed only >0",
                      "filesPerSecond/estimatedRemainingMs only after >=100 files over >=1s in indexing_files",
-                     "pendingProcessed=monotonic applied deltas", "pendingChanges both flat means stuck pump" })
+                     "pendingProcessed=monotonic applied deltas", "pendingChanges is watcher backlog, not worker liveness" })
             Assert.Contains(token, Summary("build-progress"));
         foreach (string token in new[] { "refresh_index", "force:auto|incremental", "delta", "skip hash-identical files",
                      "never rebuild intact-looking index", "full = delete/rebuild from scratch", "pump-serialized", "even in failed state",

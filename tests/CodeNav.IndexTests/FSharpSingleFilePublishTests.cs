@@ -156,7 +156,7 @@ public sealed class FSharpSingleFilePublishTests
                 cancellationToken: mcpTimeout.Token);
             JsonElement capabilities = await WaitForReadyAsync(client, TimeSpan.FromSeconds(60),
                 mcpTimeout.Token);
-            Assert.Equal("0.12.109", capabilities.GetProperty("version").GetString());
+            Assert.Equal("0.12.110", capabilities.GetProperty("version").GetString());
             int mcpPid = capabilities.GetProperty("runtime").GetProperty("processId").GetInt32();
             JsonElement detailedCapabilities = await CallJsonAsync(client,
                 "server_capabilities", new Dictionary<string, object?>

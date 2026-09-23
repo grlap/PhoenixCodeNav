@@ -82,12 +82,26 @@ public sealed partial class NavigationTools
         meta = Meta.From(_manager.Health(), "indexed", "text"),
     });
 
-    private string IndexMutationUnavailable() => NotReady() ?? Json.Serialize(new
+    private string RefreshWorkerUnavailable() => Json.Serialize(new
     {
-        error = "index_unavailable",
-        detail = "The index writer is not available to accept this operation.",
+        error = IndexManager.RefreshWorkerFailedCause,
+        queued = false,
+        detail = RefreshWorkerRestartHint,
+        retryRecommended = false,
         meta = Meta.From(_manager.Health(), "indexed", "text"),
     });
+
+    private const string RefreshWorkerRestartHint =
+        "The refresh worker stopped unexpectedly; its mutation state cannot be trusted. Restart the shared daemon (or this standalone Phoenix process); neither incremental refresh nor force='full' can run here. The failure handler does not delete the committed index. Inspect the server log.";
+
+    private string IndexMutationUnavailable() => _manager.RefreshWorkerFailed
+        ? RefreshWorkerUnavailable()
+        : NotReady() ?? Json.Serialize(new
+        {
+            error = "index_unavailable",
+            detail = "The index writer is not available to accept this operation.",
+            meta = Meta.From(_manager.Health(), "indexed", "text"),
+        });
 
     // ---------------------------------------------------------------- helpers
 
@@ -598,7 +612,9 @@ public sealed partial class NavigationTools
             // poll server_capabilities separately") — phase + monotonic counters + elapsed,
             // filesTotal omitted until the scan knows it, no fabricated ETA/percent (bead two).
             progress = ProgressJson(h),
-            hint = h.State == "building"
+            hint = h.Error == IndexManager.RefreshWorkerFailedCause
+                ? RefreshWorkerRestartHint
+                : h.State == "building"
                 ? "The workspace index is still building (first run). Inspect server_capabilities index.progress, wait while it advances, and retry after index.state is ready."
                 : "The workspace index is unavailable. Inspect server_capabilities for the cause and recovery before retrying.",
             retryRecommended,
