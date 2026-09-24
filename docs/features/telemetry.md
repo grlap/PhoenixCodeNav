@@ -21,6 +21,9 @@ shutdown, the final record includes index state, shutdown reason, uptime and dro
 
 Caught daemon failures and best-effort `AppDomain.UnhandledException` diagnostics retain
 full exception detail; the latter requests a durable flush before runtime termination.
+Since v0.12.114, requested shutdown cancellation (an `OperationCanceledException`, or a
+nonempty aggregate containing only cancellation exceptions) is not logged as `daemon_run_failed`;
+unexpected cancellation, mixed aggregates and other failures still are.
 `TaskScheduler.UnobservedTaskException` is logged and marked observed when the runtime raises
 it, not for every faulted task. These hooks cannot guarantee a record for hard kills,
 FailFast, stack overflow, severe memory exhaustion or storage failure. No crash dump is

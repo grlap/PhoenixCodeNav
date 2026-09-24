@@ -228,7 +228,7 @@ try
         }
         catch (Exception ex)
         {
-            daemonLog.Failure("daemon_run_failed", ex);
+            daemonLog.ReportRunFailure(ex, shutdown.IsCancellationRequested);
             if (shutdown.IsCancellationRequested) throw;
             await reporter.ReportAsync(DaemonStartupReport.Refused(
                 Environment.ProcessId,

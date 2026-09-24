@@ -101,6 +101,83 @@ public sealed class DaemonFileLogTests
         });
     }
 
+    [Theory]
+    [InlineData("cancel", true, false)]
+    [InlineData("task-cancel", true, false)]
+    [InlineData("cancel", false, true)]
+    [InlineData("io", true, true)]
+    [InlineData("aggregate", true, false)]
+    [InlineData("aggregate", false, true)]
+    [InlineData("nested", true, false)]
+    [InlineData("mixed", true, true)]
+    [InlineData("wrapped", true, true)]
+    [InlineData("empty", true, true)]
+    [InlineData("nested-empty", true, true)]
+    public void RunFailureReportsOnlyUnexpectedFailures(string kind, bool requested, bool expectedFailure)
+    {
+        Exception failure = kind switch
+        {
+            "cancel" => new OperationCanceledException("cancel marker"),
+            "task-cancel" => new TaskCanceledException("task cancel marker"),
+            "io" => new IOException("io marker"),
+            "aggregate" => new AggregateException(new OperationCanceledException("aggregate marker")),
+            "nested" => new AggregateException(new OperationCanceledException(),
+                new AggregateException(new TaskCanceledException("nested marker"))),
+            "mixed" => new AggregateException(new OperationCanceledException(), new IOException("mixed marker")),
+            "wrapped" => new IOException("wrapped marker", new OperationCanceledException()),
+            "empty" => new AggregateException("empty marker"),
+            "nested-empty" => new AggregateException(new OperationCanceledException(), new AggregateException()),
+            _ => throw new ArgumentException(kind),
+        };
+        WithWorkspace(root =>
+        {
+            using var log = DaemonFileLog.Start(root, null);
+            log.ReportRunFailure(failure, requested);
+            log.Shutdown("not_started", requested ? "cancelled" : "startup_failed");
+            string text = ReadLog(log.FilePath!);
+            if (expectedFailure)
+            {
+                Assert.Single(text.Split('\n'), line => line.Contains("[Error] PhoenixCodeNav.Daemon: daemon_run_failed"));
+                Assert.Contains(failure.ToString(), text);
+            }
+            else
+            {
+                Assert.DoesNotContain("daemon_run_failed", text);
+                Assert.DoesNotContain("[Error]", text);
+            }
+            Assert.Contains("daemon_stop state=not_started reason=" + (requested ? "cancelled" : "startup_failed"), text);
+            Assert.Equal(0, log.Dropped);
+        });
+    }
+
+    [Fact]
+    public async Task UnwritableLogDirectoryAnnouncesExactlyOneDiagnosticBeforeDetach()
+    {
+        string root = Directory.CreateTempSubdirectory("pcn-log-unwritable").FullName;
+        try
+        {
+            var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (string arg in new[] { typeof(DaemonFileLogTests).Assembly.Location, "--daemon-log-canary", root, "unwritable" })
+                start.ArgumentList.Add(arg);
+            using var child = Process.Start(start)!;
+            var captured = await TestProcessLifecycle.WaitForExitAndDrainAsync(child,
+                child.StandardOutput.ReadToEndAsync(), child.StandardError.ReadToEndAsync(),
+                TimeSpan.FromSeconds(30), "unwritable daemon log diagnostic");
+            Assert.True(captured.ExitCode == 0, captured.Error);
+            string[] lines = captured.Error.Split('\n');
+            Assert.Single(lines, line => line.StartsWith("Phoenix daemon file logging disabled", StringComparison.Ordinal));
+            Assert.DoesNotContain(lines, line => line.StartsWith("Phoenix daemon log:", StringComparison.Ordinal));
+            Assert.Equal("not a directory", File.ReadAllText(Path.Combine(root, ".codenav", "logs")));
+        }
+        finally { TestWorkspaceCleanup.DeleteWorkspace(root); }
+    }
+
     [Fact]
     public void PrunesOnlyOldOwnedLogFiles()
     {
@@ -172,8 +249,14 @@ public sealed class DaemonFileLogTests
 
     internal static int RunCanary(string root, string mode)
     {
+        if (mode == "unwritable")
+        {
+            Directory.CreateDirectory(Path.Combine(root, ".codenav"));
+            File.WriteAllText(Path.Combine(root, ".codenav", "logs"), "not a directory");
+        }
         using var log = DaemonFileLog.Start(root, null);
         DaemonProcessIsolation.DetachStandardStreams();
+        if (mode == "unwritable") return 0;
         if (mode == "unhandled")
         {
             new Thread(ThrowCanaryFailure).Start();

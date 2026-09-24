@@ -1581,7 +1581,9 @@ adaptation, discovery, autostart, the pre-MCP handshake, liveness, and reconnect
 session is initialized.
 The short-lived bootstrap severs caller stdout/stderr handle inheritance as well as process-tree
 ancestry before it launches the daemon; the daemon receives fresh private startup output streams
-and detaches its inherited stdin immediately on entry.
+and initializes the persistent log before detaching its standard streams. Logging opens and
+announces its path on stderr and attempts retention first, or fails open with a diagnostic;
+the daemon then detaches its standard streams immediately.
 Each accepted stream is dispatched before any session handler runs, so a first client whose MCP
 reads and requests keep completing synchronously cannot monopolize the accept loop and starve a
 second client's preamble. If a connected endpoint nevertheless fails to answer the bounded preamble,
@@ -1848,8 +1850,12 @@ In shared-daemon mode, a process-owned synchronous file logger is initialized be
 streams are detached and remains alive through host disposal. It receives server diagnostics
 through an MCP-local non-owning ILoggerProvider and records best-effort unhandled/unobserved
 exceptions directly. Full details go to `.codenav/logs/phoenix-{pid}-{startUtc}.log`, not to
-privacy-safe telemetry. Startup prunes only its own regular log files older than 14 days;
-I/O failures disable logging without failing the daemon. See
+privacy-safe telemetry. Startup prunes regular `phoenix-*.log` files written by any Phoenix
+daemon process for this workspace whose mtime is older than 14 days. This includes a live
+daemon's log if it has not been written for over 14 days: Unix can unlink the file while that
+process continues writing to the orphaned inode until close; on Windows, the writer's
+`FileShare.Read` prevents deletion and the failure is logged as `daemon_log_prune_failed`.
+Pruning failures do not stop startup; sink I/O failures disable logging without failing the daemon. See
 [`features/telemetry.md`](features/telemetry.md#persistent-daemon-error-log-v012113) for lifecycle,
 retention, privacy and crash-capture limitations. Explicit standalone logging is unchanged.
 

@@ -61,6 +61,20 @@ internal sealed class DaemonFileLog : IDisposable
     internal void Failure(string context, Exception exception) =>
         Write(LogLevel.Error, "PhoenixCodeNav.Daemon", () => context, exception);
 
+    internal void ReportRunFailure(Exception exception, bool cancellationRequested)
+    {
+        if (cancellationRequested && IsCancellationOnly(exception)) return;
+        Failure("daemon_run_failed", exception);
+    }
+
+    private static bool IsCancellationOnly(Exception exception) => exception switch
+    {
+        OperationCanceledException => true,
+        AggregateException aggregate => aggregate.InnerExceptions.Count > 0 &&
+            aggregate.InnerExceptions.All(IsCancellationOnly),
+        _ => false,
+    };
+
     internal void Shutdown(string state, string reason) =>
         Write(LogLevel.Information, "PhoenixCodeNav.Daemon", () =>
             $"daemon_stop state={state} reason={reason} uptimeMs={_uptime.ElapsedMilliseconds} dropped={Dropped}");
