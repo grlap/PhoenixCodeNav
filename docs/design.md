@@ -1844,6 +1844,15 @@ the same committed index and semantic model identity.
 
 ## Deployment
 
+In shared-daemon mode, a process-owned synchronous file logger is initialized before standard
+streams are detached and remains alive through host disposal. It receives server diagnostics
+through an MCP-local non-owning ILoggerProvider and records best-effort unhandled/unobserved
+exceptions directly. Full details go to `.codenav/logs/phoenix-{pid}-{startUtc}.log`, not to
+privacy-safe telemetry. Startup prunes only its own regular log files older than 14 days;
+I/O failures disable logging without failing the daemon. See
+[`features/telemetry.md`](features/telemetry.md#persistent-daemon-error-log-v012113) for lifecycle,
+retention, privacy and crash-capture limitations. Explicit standalone logging is unchanged.
+
 Published as a self-contained `PhoenixCodeNav.Mcp.exe` plus adjacent `FSharp.Core.dll` reference
 sidecar and a separate `portal/` companion directory (no installed runtime prerequisite), or a
 framework-dependent build (needs .NET 10). Attach over MCP (`.mcp.json` for Claude Code,

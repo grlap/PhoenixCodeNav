@@ -29,6 +29,8 @@ internal static class SemanticPersistenceCanary
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--daemon-log-canary")
+            return DaemonFileLogTests.RunCanary(args[1], args[2]);
         if (args.Length == 4 && args[0] == "--refresh-timer-canary")
             return await RefreshTimerFailureTests.RunCanaryAsync(args[1], args[2], bool.Parse(args[3]));
         if (args.Length == 4 && args[0] == "--roslyn-persistence-graph-canary")

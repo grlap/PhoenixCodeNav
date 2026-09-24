@@ -23,6 +23,9 @@ internal sealed class DaemonServer
     private readonly Action<IndexManager>? _configureIndexForTest;
     private readonly Action? _beforeConnectionHandshakeForTest;
     private readonly DaemonStartupReporter? _startupReporter;
+    private readonly DaemonFileLog? _fileLog;
+    internal string ShutdownIndexState { get; private set; } = "not_started";
+    internal string ShutdownReason { get; private set; } = "failed";
     private readonly ConcurrentDictionary<long, Task> _sessions = new();
     private readonly CancellationTokenSource _retire = new();
     private long _nextSessionId;
@@ -39,7 +42,8 @@ internal sealed class DaemonServer
         TimeSpan? idleLinger = null,
         Action<IndexManager>? configureIndexForTest = null,
         Action? beforeConnectionHandshakeForTest = null,
-        DaemonStartupReporter? startupReporter = null)
+        DaemonStartupReporter? startupReporter = null,
+        DaemonFileLog? fileLog = null)
     {
         _endpoint = endpoint;
         _indexDb = indexDb;
@@ -49,6 +53,7 @@ internal sealed class DaemonServer
         _configureIndexForTest = configureIndexForTest;
         _beforeConnectionHandshakeForTest = beforeConnectionHandshakeForTest;
         _startupReporter = startupReporter;
+        _fileLog = fileLog;
         if (_idleLinger <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(idleLinger));
     }
@@ -58,19 +63,21 @@ internal sealed class DaemonServer
         PhoenixRuntimeMode.Set(PhoenixProcessMode.Daemon);
         var admission = new DaemonRequestAdmission();
         IHost host = McpApplication.BuildHost(
-            _endpoint.WorkspaceRoot, _indexDb, stdio: false, admission);
+            _endpoint.WorkspaceRoot, _indexDb, stdio: false, admission, _fileLog);
         bool hostStarted = false;
+        IndexManager? manager = null;
         try
         {
             await host.StartAsync(cancellationToken).ConfigureAwait(false);
             hostStarted = true;
             _configureIndexForTest?.Invoke(
                 host.Services.GetRequiredService<IndexManager>());
-            IndexManager manager = McpApplication.StartIndex(host, _rebuild);
+            manager = McpApplication.StartIndex(host, _rebuild);
             ILogger logger = host.Services.GetRequiredService<ILoggerFactory>()
                 .CreateLogger("PhoenixCodeNav.Daemon");
             if (!manager.IsWriter)
             {
+                ShutdownReason = "writer_unavailable";
                 logger.LogError("Shared daemon requires writer ownership; access mode is {Mode}.",
                     manager.Health().AccessMode);
                 if (_startupReporter is not null)
@@ -149,6 +156,7 @@ internal sealed class DaemonServer
                 acceptLifetime.Cancel();
                 await DrainSessionsAsync(logger, sessionLifetime, admission).ConfigureAwait(false);
             }
+            ShutdownReason = cancellationToken.IsCancellationRequested ? "cancelled" : "retired";
             return 0;
         }
         finally
@@ -158,6 +166,7 @@ internal sealed class DaemonServer
                 try { await host.StopAsync(CancellationToken.None).ConfigureAwait(false); }
                 catch { }
             }
+            ShutdownIndexState = manager?.State ?? "not_started";
             host.Dispose();
             DaemonDescriptor.DeleteOwn(_endpoint);
         }

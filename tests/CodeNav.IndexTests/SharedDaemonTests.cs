@@ -2944,8 +2944,16 @@ public sealed partial class SharedDaemonTests
         string diagnostics = captured.Error;
         string[] diagnosticLines = diagnostics.Split(
             ['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        Assert.All(diagnosticLines, line => Assert.Equal(
-            DaemonRuntimeDiagnostics.DiscoveryFallbackWarning, line));
+        const string logPrefix = "Phoenix daemon log: ";
+        Assert.InRange(diagnosticLines.Count(line => line.StartsWith(logPrefix, StringComparison.Ordinal)), 0, 1);
+        Assert.All(diagnosticLines, line =>
+        {
+            if (line == DaemonRuntimeDiagnostics.DiscoveryFallbackWarning) return;
+            Assert.StartsWith(logPrefix, line);
+            string logPath = line[logPrefix.Length..];
+            Assert.Equal(Path.Combine(root, ".codenav", "logs"), Path.GetDirectoryName(logPath));
+            Assert.Matches(@"^phoenix-\d+-\d{8}T\d{6}\d{7}Z\.log$", Path.GetFileName(logPath));
+        });
         string compact = output.TrimEnd('\r', '\n');
         bool pretty = arguments.Contains("--pretty", StringComparer.Ordinal);
         if (!pretty)

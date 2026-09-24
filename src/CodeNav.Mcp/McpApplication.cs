@@ -27,12 +27,14 @@ internal static class McpApplication
         string workspaceRoot,
         string? indexDb,
         bool stdio,
-        DaemonRequestAdmission? daemonAdmission = null)
+        DaemonRequestAdmission? daemonAdmission = null,
+        DaemonFileLog? daemonLog = null)
     {
         HostApplicationBuilder builder = Host.CreateApplicationBuilder();
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
         builder.Logging.SetMinimumLevel(LogLevel.Information);
+        if (!stdio && daemonLog is not null) builder.Logging.AddProvider(daemonLog.CreateProvider());
 
         builder.Services.AddSingleton(sp =>
         {

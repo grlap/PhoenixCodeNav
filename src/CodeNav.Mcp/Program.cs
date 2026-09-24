@@ -207,28 +207,38 @@ try
 
     if (command.Mode == McpLaunchMode.Daemon)
     {
-        // Keep this first: detach the dedicated startup diagnostics stream immediately; only
-        // stdout survives long enough to carry the single startup frame.
-        DaemonProcessIsolation.DetachStandardStreams(preserveStandardOutput: true);
+        // Open/announce the persistent log before stderr is detached. Only stdout then
+        // survives long enough to carry the single startup frame.
+        using var daemonLog = DaemonFileLog.Start(workspaceRoot, indexDb);
         var reporter = new DaemonStartupReporter(Console.OpenStandardOutput());
+        DaemonServer? daemon = null;
         try
         {
+            DaemonProcessIsolation.DetachStandardStreams(preserveStandardOutput: true);
             DaemonEndpoint endpoint = DaemonEndpoint.Create(workspaceRoot, indexDb);
-            var daemon = new DaemonServer(
+            daemon = new DaemonServer(
                 endpoint,
                 indexDb,
                 command.Rebuild,
                 command.KeepAlive,
                 command.DaemonIdle,
-                startupReporter: reporter);
+                startupReporter: reporter,
+                fileLog: daemonLog);
             return await daemon.RunAsync(shutdown.Token);
         }
-        catch (Exception ex) when (!shutdown.IsCancellationRequested)
+        catch (Exception ex)
         {
+            daemonLog.Failure("daemon_run_failed", ex);
+            if (shutdown.IsCancellationRequested) throw;
             await reporter.ReportAsync(DaemonStartupReport.Refused(
                 Environment.ProcessId,
                 DaemonStartupFailures.Unexpected(ex)), CancellationToken.None);
             return 3;
+        }
+        finally
+        {
+            daemonLog.Shutdown(daemon?.ShutdownIndexState ?? "not_started",
+                shutdown.IsCancellationRequested ? "cancelled" : daemon?.ShutdownReason ?? "startup_failed");
         }
     }
 

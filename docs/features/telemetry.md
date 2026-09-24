@@ -2,6 +2,36 @@
 
 Consumed live by: [`../internal-operations-portal.md`](../internal-operations-portal.md)
 
+## Persistent daemon error log (v0.12.113)
+
+The shared daemon additionally writes a plain-text server log to
+`{workspace}/.codenav/logs/phoenix-{pid}-{startUtc}.log`. The path is announced on stderr
+before stream detachment. CodeNav/PhoenixCodeNav categories retain Information and above;
+framework and MCP SDK categories retain Warning and above. Explicit standalone stdio
+logging is unchanged. This file is separate from the privacy-safe JSONL/IPC telemetry:
+it contains full exception messages and stacks, and can contain workspace paths or other
+sensitive diagnostic details. Copy it before sharing or resetting `.codenav`: deleting
+that directory also deletes these logs. The Operations Portal does not read this log.
+
+Each process writes and flushes records synchronously, with no background queue or size
+rotation. At daemon startup, only regular `phoenix-*.log` files in this directory with
+mtime older than 14 days are pruned; deletion failures are logged and do not prevent startup.
+The first record identifies build, PID, workspace, index database and mode. On orderly
+shutdown, the final record includes index state, shutdown reason, uptime and dropped count.
+
+Caught daemon failures and best-effort `AppDomain.UnhandledException` diagnostics retain
+full exception detail; the latter requests a durable flush before runtime termination.
+`TaskScheduler.UnobservedTaskException` is logged and marked observed when the runtime raises
+it, not for every faulted task. These hooks cannot guarantee a record for hard kills,
+FailFast, stack overflow, severe memory exhaustion or storage failure. No crash dump is
+enabled by this feature. A log is evidence to inspect, not proof that every failure was captured.
+
+An unwritable log directory disables file logging with one stderr diagnostic before detach;
+the daemon continues. Mid-run I/O failure disables the sink and counts subsequent dropped
+records; stderr reporting is best effort and may be invisible after detach. Formatting and
+sink exceptions never replace the operational failure. The log remains alive through host
+disposal so daemon startup, session and shutdown failures can still be reported.
+
 Phoenix writes one JSONL record per semantic operation to a bounded, privacy-safe,
 per-process file. This is the live semantic-operations data layer consumed by the local Operations
 Portal and remains useful directly.
