@@ -118,7 +118,6 @@ public static partial class ProjectFileParser
         private readonly string? _directoryBuildPropsPath;
         private readonly string? _directoryBuildTargetsPath;
         private readonly string? _directoryPackagesPropsPath;
-        private readonly CancellationToken _cancellationToken;
         private readonly FSharpSemanticEvaluationBudget _budget;
         private readonly Dictionary<string, BoundedMsBuildProperty> _properties =
             new(StringComparer.OrdinalIgnoreCase);
@@ -189,7 +188,6 @@ public static partial class ProjectFileParser
                 directoryPackagesPropsPath);
             _directoryBuildPropsPath = NormalizeOptionalWorkspacePath(directoryBuildPropsPath);
             _directoryBuildTargetsPath = NormalizeOptionalWorkspacePath(directoryBuildTargetsPath);
-            _cancellationToken = cancellationToken;
             _budget = budget;
             _diagnostics = diagnostics;
             _pathContext = new BoundedMsBuildProjectContext(_projectPath, workspaceRoot);
@@ -207,14 +205,14 @@ public static partial class ProjectFileParser
                     ? new BoundedMsBuildExpansion(true, output)
                     : new BoundedMsBuildExpansion(false, ""),
                 EvaluateExists,
-                cancellationToken,
+                EvaluationCancellationToken,
                 MaxFSharpSemanticPropertyValueChars,
                 MaxFSharpSemanticConditionDepth,
                 _pathContext, diagnostics);
             _packages = new(_properties,
                 (string value, string document, out string expanded) =>
                     TryExpandProperties(value, document, null, out expanded, out bool complete) && complete,
-                TryExpandItemSpecs, ShouldProcess, _budget.TryReserveItemListEntry, cancellationToken);
+                TryExpandItemSpecs, ShouldProcess, _budget.TryReserveItemListEntry, EvaluationCancellationToken);
         }
 
         private static string? NormalizeOptionalWorkspacePath(string? path) =>
@@ -224,7 +222,7 @@ public static partial class ProjectFileParser
 
         public FSharpSemanticEvaluation Evaluate(XElement root)
         {
-            CheckCancellation();
+            CheckEvaluationCancellation();
             if (root.Name.LocalName != "Project")
                 return Failure("fsharp_project_options_unavailable");
 
@@ -252,7 +250,7 @@ public static partial class ProjectFileParser
             if (_error is null && _directoryBuildTargetsPath is not null)
                 ProcessResolvedImport(_directoryBuildTargetsPath,
                     FSharpSemanticDocumentRole.DirectoryBuildTargets, depth: 0);
-            CheckCancellation();
+            CheckEvaluationCancellation();
             if (_error is not null) return Failure(_error);
 
             if (!_packages.Evaluate())
@@ -313,7 +311,7 @@ public static partial class ProjectFileParser
                 languageVersion.Length == 0 ? null : languageVersion,
                 otherFlags, additionalArgs, disableImplicitFrameworkDefines,
                 _partialReasons);
-            CheckCancellation();
+            CheckEvaluationCancellation();
             if (parsing.Error is not null)
                 return Failure(parsing.Error, assemblyName);
 
@@ -332,9 +330,6 @@ public static partial class ProjectFileParser
                 assemblyName, projectReferencesTransitive, _existsDependencies,
                 parsing.PartialReason);
         }
-
-        private void CheckCancellation() =>
-            _cancellationToken.ThrowIfCancellationRequested();
 
         protected override bool HasEvaluationError => _error is not null;
 
@@ -430,7 +425,7 @@ public static partial class ProjectFileParser
         private bool ValidateSdkAuthority(XElement root, bool allowStandardSdk,
             out BoundedMsBuildSdkContext sdkContext)
         {
-            if (!BoundedMsBuildSdkContext.TryRead(root, _cancellationToken, out sdkContext)) return false;
+            if (!BoundedMsBuildSdkContext.TryRead(root, EvaluationCancellationToken, out sdkContext)) return false;
             if (sdkContext.UsesMicrosoftNetSdk)
             {
                 if (!allowStandardSdk) return false;
@@ -463,7 +458,7 @@ public static partial class ProjectFileParser
         private void ProcessPropertyGroup(XElement group, string documentPath,
             FSharpSemanticDocumentRole role)
         {
-            CheckCancellation();
+            CheckEvaluationCancellation();
             bool filterToReferenceInputs =
                 role == FSharpSemanticDocumentRole.DirectoryBuildTargets;
             bool IsReferenceInputProperty(XElement property) =>
@@ -482,7 +477,7 @@ public static partial class ProjectFileParser
             foreach (XElement schedulingProperty in group.Elements().Where(property =>
                          IsCompilerSchedulingPropertyName(property.Name.LocalName)))
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 if (!ShouldProcess(schedulingProperty, documentPath, out process)) return;
                 if (!process) continue;
                 _error = "fsharp_semantic_target_evaluation_unsupported";
@@ -500,7 +495,7 @@ public static partial class ProjectFileParser
 
             foreach (XElement property in group.Elements())
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 if (filterToReferenceInputs && !IsReferenceInputProperty(property))
                     continue;
                 if (!ShouldProcess(property, documentPath, out process)) return;
@@ -545,7 +540,7 @@ public static partial class ProjectFileParser
         private void ProcessItemGroup(XElement group, string documentPath,
             FSharpSemanticDocumentRole role)
         {
-            CheckCancellation();
+            CheckEvaluationCancellation();
             bool hasSemanticItems = group.Elements().Any(item =>
                 IsSemanticItemName(item.Name.LocalName) &&
                 !BoundedMsBuildPackageEvaluator.IsPackageItem(item.Name.LocalName));
@@ -563,7 +558,7 @@ public static partial class ProjectFileParser
 
             foreach (XElement item in group.Elements())
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 string itemName = item.Name.LocalName;
                 if (BoundedMsBuildPackageEvaluator.IsPackageItem(itemName))
                 {
@@ -644,7 +639,7 @@ public static partial class ProjectFileParser
             void Read(string? expression)
             {
                 if (string.IsNullOrEmpty(expression)) return;
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 // Supported helper aliases have already captured their property inputs when
                 // processed. Anything more elaborate than an exact @() token stays conservative.
                 string scalar = ItemReferenceOccurrence.Replace(expression, "");
@@ -686,7 +681,7 @@ public static partial class ProjectFileParser
 
             foreach (XElement metadata in item.Elements())
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 if (metadata.HasElements || metadata.Attributes().Any(attribute =>
                         !attribute.Name.LocalName.Equals("Condition",
                             StringComparison.OrdinalIgnoreCase) &&
@@ -740,7 +735,7 @@ public static partial class ProjectFileParser
             }
             foreach (string spec in specs)
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 if (!_budget.TryReserveItemListEntry())
                 {
                     _error = "fsharp_semantic_item_list_limit";
@@ -904,7 +899,7 @@ public static partial class ProjectFileParser
             foreach (string spec in include.Split(';',
                          StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 if (spec.Contains('*') || spec.Contains('?'))
                 {
                     _error = "fsharp_semantic_compile_order_unavailable";
@@ -966,7 +961,7 @@ public static partial class ProjectFileParser
             foreach (XElement hint in item.Elements().Where(element =>
                          element.Name.LocalName == "HintPath"))
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 if (!ShouldProcess(hint, documentPath, out bool process)) return;
                 if (process) activeHints.Add(hint);
             }
@@ -1050,7 +1045,7 @@ public static partial class ProjectFileParser
             string[] pathTokens = expanded.ForPath.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             for (int index = 0; index < tokens.Length; index++)
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 string token = tokens[index];
                 if (token.Contains('*') || token.Contains('?'))
                 {
@@ -1115,7 +1110,7 @@ public static partial class ProjectFileParser
         private void ProcessImportCore(XElement import, string documentPath,
             FSharpSemanticDocumentRole role, int depth)
         {
-            CheckCancellation();
+            CheckEvaluationCancellation();
             if (import.Attributes().Any(attribute => attribute.Name.LocalName.Equals("Sdk",
                     StringComparison.OrdinalIgnoreCase)))
             {
@@ -1271,12 +1266,12 @@ public static partial class ProjectFileParser
 
         private bool TryResolveImportRoot(string importPath, out XElement? importedRoot)
         {
-            CheckCancellation();
+            CheckEvaluationCancellation();
             if (_importRoots.TryGetValue(importPath, out importedRoot)) return true;
             if (!TryResolveImport(importPath, out string? content)) return false;
-            CheckCancellation();
+            CheckEvaluationCancellation();
             if (content is null || !TryLoadProjectXml(content,
-                    MaxFSharpSemanticImportBytes, _cancellationToken, out importedRoot) ||
+                    MaxFSharpSemanticImportBytes, EvaluationCancellationToken, out importedRoot) ||
                 importedRoot is null)
             {
                 _error = "fsharp_semantic_import_unavailable";
@@ -1376,7 +1371,7 @@ public static partial class ProjectFileParser
 
             foreach (XElement element in elements)
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 if (IsSemanticItemName(element.Name.LocalName) ||
                     element.Name.LocalName.Equals("Import", StringComparison.OrdinalIgnoreCase))
                     AddElementInputs(element);
@@ -1387,10 +1382,10 @@ public static partial class ProjectFileParser
 
             while (pendingNames.TryDequeue(out string? name))
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 foreach (XElement element in elementsByName[name])
                 {
-                    CheckCancellation();
+                    CheckEvaluationCancellation();
                     AddElementInputs(element);
                     if (_error is not null) return;
                 }
@@ -1402,7 +1397,7 @@ public static partial class ProjectFileParser
             if (HasCompilerSchedulingProjectAttribute(root)) return true;
             foreach (XElement element in root.Descendants())
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 string name = element.Name.LocalName;
                 if (IsSemanticItemName(name) || IsSemanticPropertyName(name) ||
                     IsCompilerSchedulingPropertyName(name) ||
@@ -1571,7 +1566,7 @@ public static partial class ProjectFileParser
 
         private bool TryResolveImport(string path, out string? content)
         {
-            CheckCancellation();
+            CheckEvaluationCancellation();
             if (_importSnapshots.TryGetValue(path, out content)) return true;
             if (!_budget.TryReserveImportFile())
             {
@@ -1581,7 +1576,7 @@ public static partial class ProjectFileParser
             }
 
             long? indexedBytes = _importSizeResolver?.Invoke(path);
-            CheckCancellation();
+            CheckEvaluationCancellation();
             if (indexedBytes is < 0 or > MaxFSharpSemanticImportBytes)
             {
                 _error = indexedBytes < 0
@@ -1592,7 +1587,7 @@ public static partial class ProjectFileParser
             }
 
             content = _importResolver?.Invoke(path);
-            CheckCancellation();
+            CheckEvaluationCancellation();
             if (content is not null)
             {
                 int actualBytes = Encoding.UTF8.GetByteCount(content);
@@ -1644,7 +1639,7 @@ public static partial class ProjectFileParser
             bool hasReferenceInputFacts = false;
             foreach (XElement element in choose.Descendants())
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 if (IsSemanticItemName(element.Name.LocalName) ||
                     element.Name.LocalName.Equals("Target", StringComparison.OrdinalIgnoreCase) &&
                     ContainsSemanticTargetFacts(element))
@@ -1673,7 +1668,7 @@ public static partial class ProjectFileParser
 
             foreach (XElement element in target.Descendants())
             {
-                CheckCancellation();
+                CheckEvaluationCancellation();
                 if (element.Name.LocalName.Equals("Fsc", StringComparison.OrdinalIgnoreCase) ||
                     IsSemanticItemName(element.Name.LocalName) ||
                     IsSemanticPropertyName(element.Name.LocalName) ||

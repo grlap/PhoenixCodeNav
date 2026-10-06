@@ -1658,8 +1658,9 @@ public partial class FSharpSemanticStage2Tests
     {
         using var preCancelled = new CancellationTokenSource();
         preCancelled.Cancel();
-        Assert.Throws<OperationCanceledException>(() =>
+        var beforeEvaluation = Assert.Throws<OperationCanceledException>(() =>
             EvaluateBoundedProject("", cancellationToken: preCancelled.Token));
+        Assert.Equal(preCancelled.Token, beforeEvaluation.CancellationToken);
 
         const string project = """
             <Project>
@@ -1671,7 +1672,7 @@ public partial class FSharpSemanticStage2Tests
             """;
         using var midEvaluation = new CancellationTokenSource();
         int resolverCalls = 0;
-        Assert.Throws<OperationCanceledException>(() =>
+        var duringEvaluation = Assert.Throws<OperationCanceledException>(() =>
             ProjectFileParser.ParseFSharpSemanticOptionsSnapshot(
                 "Core/Core.fsproj", project, "net10.0", "net10.0",
                 importResolver: _ =>
@@ -1681,6 +1682,7 @@ public partial class FSharpSemanticStage2Tests
                     return "<Project />";
                 },
                 cancellationToken: midEvaluation.Token));
+        Assert.Equal(midEvaluation.Token, duringEvaluation.CancellationToken);
         Assert.Equal(1, resolverCalls);
     }
 

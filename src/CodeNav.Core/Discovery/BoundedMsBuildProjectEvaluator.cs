@@ -45,6 +45,8 @@ internal abstract class BoundedMsBuildProjectEvaluator<TRole, TChooseState>
     protected abstract void OnChooseSkipped(XElement choose, TChooseState state);
     protected abstract void OnChooseCompleted(XElement choose, TChooseState state);
 
+    protected CancellationToken EvaluationCancellationToken => _cancellationToken;
+
     protected void CheckEvaluationCancellation() =>
         _cancellationToken.ThrowIfCancellationRequested();
 

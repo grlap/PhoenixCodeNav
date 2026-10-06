@@ -7,7 +7,12 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $solutionPath = Join-Path $repoRoot "PhoenixCodeNav.sln"
-$resultsDirectory = Join-Path $repoRoot "artifacts\gate-results"
+$runId = [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
+$resultsDirectory = Join-Path $repoRoot "artifacts/gate-results/$runId"
+[IO.Directory]::CreateDirectory($resultsDirectory) | Out-Null
+$logPath = Join-Path $resultsDirectory "gate.log"
+Start-Transcript -LiteralPath $logPath | Out-Null
+Write-Host "Gate evidence: $resultsDirectory"
 $maxFailureLines = 200
 $failedGates = [Collections.Generic.List[string]]::new()
 $incompleteGates = [Collections.Generic.List[string]]::new()
@@ -21,24 +26,18 @@ function Convert-ToLines([object[]]$InputObject) {
     return @($InputObject | ForEach-Object { [string]$_ })
 }
 
-function Assert-Prerequisite([string]$Name, [string]$Path, [bool]$Required = $true) {
-    if (-not $Required) { return $true }
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        Write-Host "prerequisite: missing $Name at $Path"
-        $failedGates.Add("missing prerequisite: $Name")
-        return $false
-    }
-    return $true
-}
-
-function Assert-Command([string]$Name, [bool]$Required = $true) {
-    if (-not $Required) { return $true }
-    if ($null -eq (Get-Command $Name -ErrorAction SilentlyContinue)) {
-        Write-Host "prerequisite: command '$Name' is unavailable"
-        $failedGates.Add("missing prerequisite: $Name")
-        return $false
-    }
-    return $true
+function Complete-GateRun([int]$ExitCode, [string]$Status) {
+    Write-Host $Status
+    [ordered]@{
+        exitCode = $ExitCode
+        status = $Status
+        completedAtUtc = [DateTime]::UtcNow.ToString("o")
+        failedGates = @($failedGates | Select-Object -Unique)
+        incompleteGates = @($incompleteGates | Select-Object -Unique)
+        logPath = $logPath
+        resultsDirectory = $resultsDirectory
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $resultsDirectory "result.json") -Encoding utf8
+    Stop-Transcript | Out-Null
 }
 
 function Write-BoundedFailure(
@@ -378,25 +377,19 @@ try {
         try {
             Set-Location -LiteralPath $repoRoot
 
-$hasDotnet = Assert-Command "dotnet"
-$hasSolution = Assert-Prerequisite "solution" $solutionPath
-$hasMcpScript = Assert-Prerequisite "external MCP gate" `
-    (Join-Path $repoRoot "scripts\test-roslyn-mcp.ps1") (-not $SkipMcp)
-$hasNode = Assert-Command "node" (-not $SkipWebsite)
-$hasWebsiteVerifier = Assert-Prerequisite "website verifier" `
-    (Join-Path $repoRoot "website\verify.mjs") (-not $SkipWebsite)
+Write-Host "prerequisites: preparing"
+$preparationOutput = Convert-ToLines @(& pwsh -NoProfile -File `
+    (Join-Path $repoRoot "scripts/prepare-test-prerequisites.ps1") `
+    -SkipMcp:$SkipMcp -SkipWebsite:$SkipWebsite 2>&1)
+$preparationExit = $LASTEXITCODE
+foreach ($line in $preparationOutput) { Write-Host $line }
+if ($preparationExit -ne 0) {
+    $failedGates.Add("prerequisites")
+    $incompleteGates.Add("gates not run: prerequisite preparation failed")
+}
 
-if ($hasDotnet -and $hasSolution) {
-    $restoreOutput = Convert-ToLines @(& dotnet restore $solutionPath --nologo -v:q 2>&1)
-    $restoreExit = $LASTEXITCODE
-    if ($restoreExit -eq 0) {
-        Write-Host "restore: ok"
-    } else {
-        Write-Host "restore failures:"
-        foreach ($line in $restoreOutput) { Write-Host $line }
-        $failedGates.Add("restore")
-    }
-
+if ($preparationExit -eq 0) {
+    Write-Host "format: running"
     $formatOutput = Convert-ToLines @(& dotnet format $solutionPath --verify-no-changes `
         --no-restore --verbosity diagnostic 2>&1)
     $formatExit = $LASTEXITCODE
@@ -415,6 +408,7 @@ if ($hasDotnet -and $hasSolution) {
         $failedGates.Add("format")
     }
 
+    Write-Host "build: running"
     $buildOutput = Convert-ToLines @(& dotnet build $solutionPath -c Release --nologo `
         --no-restore -v:m 2>&1)
     $buildExit = $LASTEXITCODE
@@ -451,9 +445,7 @@ if ($hasDotnet -and $hasSolution) {
     }
 
     [IO.Directory]::CreateDirectory($resultsDirectory) | Out-Null
-    Get-ChildItem -LiteralPath $resultsDirectory -File -Filter "*.trx" |
-        ForEach-Object { Remove-Item -Force -LiteralPath $_.FullName }
-
+    Write-Host "tests: running complete solution suite"
     $testOutput = Convert-ToLines @(& dotnet test $solutionPath -c Release --no-build `
         --no-restore --nologo -v:q --logger "trx;LogFilePrefix=gate" `
         --results-directory $resultsDirectory 2>&1)
@@ -565,12 +557,12 @@ if ($hasDotnet -and $hasSolution) {
         }
         $failedGates.Add("tests")
     }
-}
 
 if ($SkipMcp) {
     Write-Host "mcp: SKIPPED"
     $incompleteGates.Add("external MCP skipped")
-} elseif ($hasMcpScript) {
+} else {
+    Write-Host "mcp: running external integration gate"
     $mcpOutput = Convert-ToLines @(& pwsh -NoProfile -File `
         (Join-Path $repoRoot "scripts\test-roslyn-mcp.ps1") 2>&1)
     $mcpExit = $LASTEXITCODE
@@ -600,7 +592,8 @@ if ($SkipMcp) {
 if ($SkipWebsite) {
     Write-Host "website: SKIPPED"
     $incompleteGates.Add("website skipped")
-} elseif ($hasNode -and $hasWebsiteVerifier) {
+} else {
+    Write-Host "website: running"
     $websiteOutput = Convert-ToLines @(& node (Join-Path $repoRoot "website\verify.mjs") 2>&1)
     $websiteExit = $LASTEXITCODE
     if ($websiteExit -eq 0) {
@@ -612,6 +605,7 @@ if ($SkipWebsite) {
         foreach ($line in $websiteOutput) { Write-Host $line }
         $failedGates.Add("website")
     }
+}
 }
         } finally {
             if ($null -ne $privateTempRoot) {
@@ -628,6 +622,9 @@ if ($SkipWebsite) {
             }
         }
     }
+} catch {
+    Write-Host "runner failure: $($_.Exception.Message)"
+    $failedGates.Add("runner")
 } finally {
     [Environment]::SetEnvironmentVariable("TEMP", $originalTemp, "Process")
     [Environment]::SetEnvironmentVariable("TMP", $originalTmp, "Process")
@@ -636,7 +633,7 @@ if ($SkipWebsite) {
 }
 
 if ($failedGates.Count -eq 0 -and $incompleteGates.Count -eq 0) {
-    Write-Host "GATES GREEN"
+    Complete-GateRun 0 "GATES GREEN"
     exit 0
 }
 
@@ -650,10 +647,10 @@ if ($failedGates.Count -eq 0) {
     if ($onlyPostRunCleanupReasons) {
         $incomplete = "gates passed; $incomplete"
     }
-    Write-Host "GATES INCOMPLETE: $incomplete"
+    Complete-GateRun 1 "GATES INCOMPLETE: $incomplete"
     exit 1
 }
 
 $failed = @($failedGates | Select-Object -Unique) -join ", "
-Write-Host "GATES RED: $failed"
+Complete-GateRun 1 "GATES RED: $failed"
 exit 1

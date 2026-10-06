@@ -79,10 +79,11 @@ The loop, in order — no step skipped or reordered:
 1. Implement.
 2. Add focused regression or contract tests for changed behavior. Tests must exercise the
    decisive behavior and assertions, not merely prove that the code does not throw.
-3. `dotnet build` at **0 warnings**; `dotnet test` green;
-   `pwsh -NoProfile -File ./scripts/test-roslyn-mcp.ps1` green against the pinned Roslyn/F#
-   submodules; and `node ./website/verify.mjs` green. The MCP harness first requires each external
-   checkout to match its pinned commit, then builds new isolated Roslyn and F# indexes through
+3. Run `pwsh -NoProfile -File ./scripts/gate-summary.ps1` once for complete validation.
+   The script prepares prerequisites and runs formatting, the Release build with literal zero
+   warnings, the complete test suite, the external Roslyn/F# MCP integration gate, and the
+   website verifier automatically. Require `GATES GREEN` and exit code 0. The MCP harness first
+   requires each external checkout to match its pinned commit, then builds new isolated Roslyn and F# indexes through
    normal MCP startup and runs every assertion against those fresh indexes. It never updates a
    submodule, repairs an old index, or learns a new baseline automatically. A mismatched checkout,
    pre-existing explicit index path, baseline mismatch, missing prerequisite, integration failure,
@@ -126,18 +127,33 @@ failures is not a finished turn.
 
 ## Build & Test
 
-Run the complete check-in gate through the deterministic summary wrapper. It keeps a green run
-compact while preserving warnings, failures, skipped-test reasons, and the TRX locations needed
-for diagnosis:
+Run routine complete validation with this single PowerShell command. The script owns
+prerequisite preparation and gate sequencing; individual stage commands are for focused
+diagnosis. It saves the transcript, TRX files, and machine-readable result in a unique
+`artifacts/gate-results/<run>/` directory. Exit code 0 and `GATES GREEN` mean every gate
+passed; a prerequisite failure stops validation upfront:
 
-```bash
+```powershell
 pwsh -NoProfile -File ./scripts/gate-summary.ps1
 ```
 
+For prerequisite preparation alone, including before running `dotnet test` directly:
+
+```powershell
+pwsh -NoProfile -File ./scripts/prepare-test-prerequisites.ps1
+```
+
+Preparation restores solution dependencies and the `netstandard2.0` fixture references into
+Phoenix's active NuGet cache. The small `scripts/TestPrerequisites.csproj` is restored only;
+it is outside the solution and is never built or tested. Preparation checks the .NET 10
+SDK/runtime, exact .NET 8/9/10 and .NET Standard 2.1 reference packs, directory-link support
+in the test TEMP filesystem, and pinned external checkouts. Missing SDK packs or changed
+external checkouts produce setup instructions; preparation never changes checkout revisions.
+
 The wrapper runs these raw commands; keep them available for focused diagnosis:
 
-```bash
-dotnet restore PhoenixCodeNav.sln --nologo -v:q
+```powershell
+pwsh -NoProfile -File ./scripts/prepare-test-prerequisites.ps1
 dotnet format PhoenixCodeNav.sln --verify-no-changes --no-restore --verbosity diagnostic
 dotnet build PhoenixCodeNav.sln -c Release --nologo --no-restore -v:m  # must be 0 warnings
 dotnet test PhoenixCodeNav.sln -c Release --no-build --no-restore --nologo -v:q  # full suite; every test must pass
