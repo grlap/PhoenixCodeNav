@@ -91,6 +91,17 @@ try {
             if ($gitlink -ne $baseline."${name}Commit" -or $head -ne $gitlink) {
                 $failures.Add("$name checkout/gitlink differs from the locked baseline; initialize the pinned submodule before running gates")
             }
+            # Submodules do not inherit Phoenix's .gitignore. Keep generated runtime files
+            # self-ignored without changing the pinned upstream tree or Git configuration.
+            $runtimeDirectory = Join-Path $checkout ".codenav"
+            $runtimeIgnore = Join-Path $runtimeDirectory ".gitignore"
+            if (-not (Test-Path -LiteralPath $runtimeIgnore)) {
+                [IO.Directory]::CreateDirectory($runtimeDirectory) | Out-Null
+                [IO.File]::WriteAllText($runtimeIgnore, "*`n", [Text.UTF8Encoding]::new($false))
+            }
+            foreach ($runtimePath in @(".codenav/index.db", ".codenav/telemetry/probe.jsonl", ".codenav/.gitignore")) {
+                Invoke-PreparationCommand "$name runtime ignore ($runtimePath)" "git" @("-C", $checkout, "check-ignore", "--quiet", "--", $runtimePath) | Out-Null
+            }
             $status = Invoke-PreparationCommand "$name checkout status" "git" @("-C", $checkout, "--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all")
             if (@($status | Where-Object { $_ -and $_ -notmatch '^\?\? \.codenav/' }).Count -gt 0) {
                 $failures.Add("$name checkout has changes outside .codenav; restore its pinned clean checkout before running gates")
