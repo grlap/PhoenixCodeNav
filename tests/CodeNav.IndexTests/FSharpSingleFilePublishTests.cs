@@ -123,7 +123,7 @@ public sealed class FSharpSingleFilePublishTests
             File.WriteAllText(Path.Combine(workspace, "Canary.fsproj"), """
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup>
-                    <TargetFramework>net9.0</TargetFramework>
+                    <TargetFramework>net10.0</TargetFramework>
                     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
                   </PropertyGroup>
                   <ItemGroup><Compile Include="Canary.fs" /></ItemGroup>
@@ -135,7 +135,7 @@ public sealed class FSharpSingleFilePublishTests
             // This does not add a flush endpoint or change the empty-cache F# authority case.
             File.WriteAllText(Path.Combine(workspace, "Fence.csproj"), """
                 <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>
-                  <TargetFramework>net9.0</TargetFramework>
+                  <TargetFramework>net10.0</TargetFramework>
                 </PropertyGroup></Project>
                 """);
             File.WriteAllText(Path.Combine(workspace, "Fence.cs"), "public class TelemetryFence { }\n");

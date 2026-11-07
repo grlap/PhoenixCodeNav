@@ -129,7 +129,7 @@ public partial class FSharpSemanticStage2Tests
             "codenav-fsharp-semantic-netstandard-compatibility").FullName;
         try
         {
-            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net8.0", """
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
                 <ItemGroup>
                   <Compile Include="App.fs" />
                   <ProjectReference Include="../Dependency/Dependency.fsproj" />
@@ -160,7 +160,7 @@ public partial class FSharpSemanticStage2Tests
             }
 
             WriteProject(root, "Dependency/Dependency.fsproj",
-                SdkProject("net8.0;netstandard2.0", "Dependency.fs"));
+                SdkProject("net10.0;netstandard2.0", "Dependency.fs"));
             using var exactFixture = Fixture.Create(root);
             string exactRaw = CallSemantic(() => exactFixture.Tools.Definition(
                 path: "App/App.fs", line: 2, column: 28, mode: "semantic",
@@ -192,7 +192,7 @@ public partial class FSharpSemanticStage2Tests
             "codenav-fsharp-semantic-netstandard-defines").FullName;
         try
         {
-            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net8.0", """
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
                 <ItemGroup>
                   <Compile Include="App.fs" />
                   <ProjectReference Include="../Dependency/Dependency.fsproj" />
@@ -288,7 +288,7 @@ public partial class FSharpSemanticStage2Tests
             Assert.True(File.Exists(Path.Combine(packagesRoot, "fsharp.core",
                 fsharpCoreVersion, "lib", "netstandard2.0", "FSharp.Core.dll")));
 
-            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net8.0", """
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
                 <ItemGroup>
                   <Compile Include="App.fs" />
                   <ProjectReference Include="../Dependency/Dependency.fsproj" />
@@ -345,7 +345,7 @@ public partial class FSharpSemanticStage2Tests
             "codenav-fsharp-semantic-netstandard-assembly-conflict").FullName;
         try
         {
-            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net8.0", """
+            WriteProject(root, "App/App.fsproj", SdkProjectWithBody("net10.0", """
                 <ItemGroup>
                   <Compile Include="App.fs" />
                   <ProjectReference Include="../Left/Left.fsproj" />

@@ -157,7 +157,7 @@ public partial class FSharpSemanticStage2Tests
                   <Import Project="$(FSharpTargetsPath)" />
                 </Project>
                 """);
-            WriteProject(root, "Paired/Project.Net.fsproj", SdkProject("net472;net8.0",
+            WriteProject(root, "Paired/Project.Net.fsproj", SdkProject("net472;net10.0",
                 "Shared.fs"));
 
             using var fixture = Fixture.Create(root);

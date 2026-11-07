@@ -146,8 +146,11 @@ pwsh -NoProfile -File ./scripts/prepare-test-prerequisites.ps1
 Preparation restores solution dependencies and the `netstandard2.0` fixture references into
 Phoenix's active NuGet cache. The small `scripts/TestPrerequisites.csproj` is restored only;
 it is outside the solution and is never built or tested. Preparation checks the .NET 10
-SDK/runtime, exact .NET 8/9/10 and .NET Standard 2.1 reference packs, directory-link support
-in the test TEMP filesystem, and pinned external checkouts. Missing SDK packs or changed
+SDK/runtime and its .NET 10 and .NET Standard 2.1 reference packs, directory-link support
+in the test TEMP filesystem, and pinned external checkouts. No .NET 8/9 SDK, runtime, or
+targeting-pack installation is required. Older-framework
+compatibility tests use pinned reference-only NuGet fixtures restored automatically, without
+installing those frameworks. Missing SDK packs or changed
 external checkouts produce setup instructions; preparation never changes checkout revisions.
 
 The wrapper runs these raw commands; keep them available for focused diagnosis:

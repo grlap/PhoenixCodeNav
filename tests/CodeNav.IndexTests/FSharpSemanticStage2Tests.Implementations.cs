@@ -433,7 +433,7 @@ public partial class FSharpSemanticStage2Tests
         try
         {
             WriteProject(root, "Contracts/Contracts.fsproj",
-                SdkProject("net8.0;net10.0", "Contracts.fs"));
+                SdkProject("netstandard2.1;net10.0", "Contracts.fs"));
             WriteProject(root, "Contracts/Contracts.fs", """
                 namespace Contracts
                 type IService =
@@ -441,7 +441,7 @@ public partial class FSharpSemanticStage2Tests
                 """);
             WriteProject(root, "Consumer.Tests/Consumer.Tests.fsproj", """
                 <Project Sdk="Microsoft.NET.Sdk">
-                  <PropertyGroup><TargetFrameworks>net8.0;net10.0</TargetFrameworks></PropertyGroup>
+                  <PropertyGroup><TargetFrameworks>netstandard2.1;net10.0</TargetFrameworks></PropertyGroup>
                   <ItemGroup>
                     <Compile Include="Normal.fs" />
                     <Compile Include="Generated.g.fs" />
@@ -476,7 +476,7 @@ public partial class FSharpSemanticStage2Tests
             JsonElement normal = Assert.Single(generatedExcluded.GetProperty("implementations")
                 .EnumerateArray());
             Assert.Equal("Normal", normal.GetProperty("symbol").GetProperty("name").GetString());
-            Assert.Equal(["net10.0", "net8.0"], normal.GetProperty("targetFrameworksScanned")
+            Assert.Equal(["net10.0", "netstandard2.1"], normal.GetProperty("targetFrameworksScanned")
                 .EnumerateArray().Select(value => value.GetString()!).ToArray());
             Assert.Contains("Generated files were excluded before counting",
                 generatedExcluded.GetProperty("summary").GetString());

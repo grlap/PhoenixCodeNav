@@ -862,12 +862,12 @@ public partial class FSharpSemanticStage2Tests
         try
         {
             WriteProject(root, "Contracts/Contracts.fsproj",
-                SdkProject("net8.0;net10.0", "Contracts.fs"));
+                SdkProject("netstandard2.1;net10.0", "Contracts.fs"));
             WriteProject(root, "Contracts/Contracts.fs",
                 "module Contracts\nlet target value = value + 1\n");
             WriteProject(root, "Consumer.Tests/Consumer.Tests.fsproj", """
                 <Project Sdk="Microsoft.NET.Sdk">
-                  <PropertyGroup><TargetFrameworks>net8.0;net10.0</TargetFrameworks></PropertyGroup>
+                  <PropertyGroup><TargetFrameworks>netstandard2.1;net10.0</TargetFrameworks></PropertyGroup>
                   <ItemGroup>
                     <Compile Include="Normal.fs" />
                     <Compile Include="Generated.g.fs" />
@@ -892,7 +892,7 @@ public partial class FSharpSemanticStage2Tests
                 .EnumerateArray());
             Assert.Equal("normalUse", normal.GetProperty("caller").GetProperty("name")
                 .GetString());
-            Assert.Equal(["net10.0", "net8.0"], Assert.Single(normal
+            Assert.Equal(["net10.0", "netstandard2.1"], Assert.Single(normal
                 .GetProperty("callSites").EnumerateArray())
                 .GetProperty("targetFrameworksScanned").EnumerateArray()
                 .Select(value => value.GetString()!).ToArray());

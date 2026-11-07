@@ -508,11 +508,11 @@ public partial class FSharpSemanticStage2Tests
         try
         {
             WriteProject(root, "Library/Library.fsproj",
-                SdkProject("net8.0;net10.0", "Library.fs"));
+                SdkProject("netstandard2.1;net10.0", "Library.fs"));
             WriteProject(root, "Library/Library.fs", "module Library\nlet value = 1\n");
             WriteProject(root, "App/App.fsproj", """
                 <Project Sdk="Microsoft.NET.Sdk">
-                  <PropertyGroup><TargetFrameworks>net8.0;net10.0</TargetFrameworks></PropertyGroup>
+                  <PropertyGroup><TargetFrameworks>netstandard2.1;net10.0</TargetFrameworks></PropertyGroup>
                   <ItemGroup>
                     <Compile Include="App.fs" />
                     <ProjectReference Include="../Library/Library.fsproj" />
@@ -525,7 +525,7 @@ public partial class FSharpSemanticStage2Tests
             using var fixture = Fixture.Create(root);
             string raw = CallSemantic(() => fixture.Tools.References(
                 path: "Library/Library.fs", line: 2, column: 5, mode: "semantic",
-                projectPath: "Library/Library.fsproj", targetFramework: "net8.0",
+                projectPath: "Library/Library.fsproj", targetFramework: "netstandard2.1",
                 samplesPerGroup: 10, timeoutMs: 60_000));
             JsonElement response = Parse(raw);
 
@@ -534,7 +534,7 @@ public partial class FSharpSemanticStage2Tests
             JsonElement app = Assert.Single(response.GetProperty("groups").EnumerateArray(),
                 group => group.GetProperty("project").GetString() == "App/App.fsproj");
             Assert.Equal(1, app.GetProperty("count").GetInt32());
-            Assert.Equal(["net10.0", "net8.0"], app.GetProperty("targetFrameworksScanned")
+            Assert.Equal(["net10.0", "netstandard2.1"], app.GetProperty("targetFrameworksScanned")
                 .EnumerateArray().Select(value => value.GetString()!).ToArray());
             JsonElement sample = Assert.Single(app.GetProperty("samples").EnumerateArray());
             Assert.Equal("App/App.fs", sample.GetProperty("path").GetString());
@@ -1172,9 +1172,9 @@ public partial class FSharpSemanticStage2Tests
                 module NetUse
                 let modern = Shared.value
                 """);
-            WriteProject(root, "Paired/Project.fsproj", SdkProject("net8.0",
+            WriteProject(root, "Paired/Project.fsproj", SdkProject("net10.0",
                 "Shared.fs", "LegacyUse.fs"));
-            WriteProject(root, "Paired/Project.Net.fsproj", SdkProject("net8.0",
+            WriteProject(root, "Paired/Project.Net.fsproj", SdkProject("net10.0",
                 "Shared.fs", "NetUse.fs"));
 
             using var fixture = Fixture.Create(root);
@@ -1187,7 +1187,7 @@ public partial class FSharpSemanticStage2Tests
 
             JsonElement legacy = Parse(CallSemantic(() => fixture.Tools.References(
                 path: "Paired/Shared.fs", line: 2, column: 5, mode: "semantic",
-                projectPath: "Paired/Project.fsproj", targetFramework: "net8.0",
+                projectPath: "Paired/Project.fsproj", targetFramework: "net10.0",
                 samplesPerGroup: 10, timeoutMs: 60_000)));
             Assert.Equal(1, legacy.GetProperty("totalReferences").GetInt32());
             JsonElement legacyGroup = Assert.Single(legacy.GetProperty("groups").EnumerateArray());
@@ -1197,7 +1197,7 @@ public partial class FSharpSemanticStage2Tests
 
             JsonElement modern = Parse(CallSemantic(() => fixture.Tools.References(
                 path: "Paired/Shared.fs", line: 2, column: 5, mode: "semantic",
-                projectPath: "Paired/Project.Net.fsproj", targetFramework: "net8.0",
+                projectPath: "Paired/Project.Net.fsproj", targetFramework: "net10.0",
                 samplesPerGroup: 10, timeoutMs: 60_000)));
             Assert.Equal(1, modern.GetProperty("totalReferences").GetInt32());
             JsonElement modernGroup = Assert.Single(modern.GetProperty("groups").EnumerateArray());

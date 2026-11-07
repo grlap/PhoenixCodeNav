@@ -57,7 +57,8 @@ try {
         $failures.Add(".NET 10 runtime is required to run the test assemblies")
     }
 
-    # Use exact target-framework references, never newer references as a substitute.
+    # Require only reference packs supplied by the .NET 10 SDK. Legacy compatibility
+    # fixtures restore their pinned reference-only NuGet packages separately.
     $dotnetRoots = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     if (-not [string]::IsNullOrWhiteSpace($env:DOTNET_ROOT)) { $dotnetRoots.Add($env:DOTNET_ROOT) | Out-Null }
     $programFiles = [Environment]::GetFolderPath("ProgramFiles")
@@ -67,7 +68,7 @@ try {
     foreach ($sdk in (Invoke-PreparationCommand "SDK paths" "dotnet" @("--list-sdks"))) {
         if ($sdk -match '\[(.+)\]$') { $dotnetRoots.Add((Split-Path -Parent $Matches[1])) | Out-Null }
     }
-    foreach ($framework in @("net8.0", "net9.0", "net10.0", "netstandard2.1")) {
+    foreach ($framework in @("net10.0", "netstandard2.1")) {
         $pack = if ($framework -eq "netstandard2.1") { "NETStandard.Library.Ref" } else { "Microsoft.NETCore.App.Ref" }
         $found = $false
         foreach ($root in $dotnetRoots) {
